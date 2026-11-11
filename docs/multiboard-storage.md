@@ -15,7 +15,7 @@ they do not introduce another project, session or undo history.
 
 ```text
 my-project/
-  project.pc
+  project.json
   sheets/
     <sheet-definition-id>.json
     <sheet-definition-id>.json
@@ -62,14 +62,14 @@ schema. Schematic exports can also be filtered to a particular board and placed
 with that board's outputs. Shared assets and pinned definitions should have one
 stored copy rather than being copied into every board folder.
 
-`project.pc` registers each board's stable ID, display name and one relative
+`project.json` registers each board's stable ID, display name and one relative
 board folder, together with shared circuit and
 sheet definitions. Board-local `instances.json` records circuit uses, sheet
 occurrences, component instance mappings, references and sparse overrides. Its
 header names the board ID, which must match the registry. Physical `board.json`
 owns layout, setup, the accepted physical baseline and board export configuration.
 Schematic-only uses, occurrences, component mappings/overrides and logical net
-registry live once in `project.pc` under `schematic_instances`. The empty board
+registry live once in `project.json` under `schematic_instances`. The empty board
 registry `boards: []` is valid; do not create a dummy board or an `instances.json`
 file requiring a board ID. System overview/assembly records are separate from
 this ordinary schematic scope.
@@ -135,7 +135,7 @@ board or put the only copy in physical `board.json`.
 
 ### Persisted incomplete intent
 
-`project.pc` owns `pending_pcb_assignments` and `pending_boundary_resolutions`,
+`project.json` owns `pending_pcb_assignments` and `pending_boundary_resolutions`,
 separate from `schematic_instances`. Schematic-only work creates neither merely
 because no board exists. These are authored intent records, not permission to
 adopt malformed project data or an alternative source of connectivity.
@@ -173,7 +173,7 @@ dots/spaces, in addition to the existing traversal/type rules. The suffix means
 names such as `aux` become portable ordinary segments rather than `aux` itself.
 The implementation must test `con`, `aux`, case-only names and non-ASCII names.
 
-Register a `layout_root` in `project.pc` for the owned board, build, document and
+Register a `layout_root` in `project.json` for the owned board, build, document and
 output areas. For a new empty project it is `.`. When migrating an existing
 folder, do not claim unregistered `boards/`, `builds/`, `documents/` or `outputs/`
 directories, even if their names or contents look useful. If any is user-owned, choose
@@ -215,7 +215,7 @@ IDs, not those folder strings, establish ownership.
 ## Retired-board preservation
 
 Before removing an active board registration, register a `retired_board_areas`
-entry in `project.pc` with its own stable ID, former board ID/name and the same
+entry in `project.json` with its own stable ID, former board ID/name and the same
 single-segment folder. Its root is derived by the same
 `join(layout_root, "boards", folder)` helper. In the successor snapshot that area
 is owned by the retirement record, not by an active board or the project document
@@ -246,7 +246,7 @@ while bypassing the normal project document-path rule.
 
 ## Numeric ID allocation
 
-Persist a project-wide `numeric_id_high_water` in `project.pc`, covering every
+Persist a project-wide `numeric_id_high_water` in `project.json`, covering every
 numeric design-object ID ever allocated under the new format, including objects
 later deleted or undone. Allocation reserves IDs strictly above this watermark
 and all live/referenced numeric IDs, with checked exhaustion. Save the watermark
@@ -358,14 +358,14 @@ component IDs remain numeric. They are not hand-editable project fixtures.
 
 | Document | Required relationships |
 | --- | --- |
-| `project.pc` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; schematic instances/net registry; typed pending PCB assignments and boundary resolutions; sheet/circuit definitions; system parts/connections/net registry; associated-file, retired-board-area, board-variant and system-build registrations |
+| `project.json` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; schematic instances/net registry; typed pending PCB assignments and boundary resolutions; sheet/circuit definitions; system parts/connections/net registry; associated-file, retired-board-area, board-variant and system-build registrations |
 | `sheets/<id>.json` | Shared geometry, local symbol/unit references to circuit component definitions, local labels and stable child-use or subsheet slots |
 | `<board_root>/instances.json` | Board ID; circuit uses; sheet occurrences with use and optional parent/slot; component instances with references and overrides; logical net registry, anchors, lineage and unresolved logical rule assignments |
 | `<board_root>/board.json` | Same board ID; setup and physical objects; package/terminal-to-pad mappings and accepted update baseline |
 | `<board_root>/variants/<id>.json` | Board and variant IDs; name; sparse assembly population and compatible BOM differences keyed by component instance ID |
 | `<layout_root>/builds/<id>.json` | System build identity; explicit board-to-variant selections and system-component population/compatible BOM selections |
 
-An abbreviated board registry in `project.pc` makes file ownership explicit:
+An abbreviated board registry in `project.json` makes file ownership explicit:
 
 ```json
 {

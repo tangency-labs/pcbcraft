@@ -41,7 +41,7 @@ including workspace choices and footprint selection.
 At `b028afa555bba85e2ad479d83c268aaf6e2bce8b`, the engine separates components
 from schematic placements and supports a generic two-pad footprint with explicit
 pin-to-pad lookup. The [storage format](native-project-storage.md) separates
-`project.pc`, sheets, `board.json` and pinned symbol definitions while retaining
+`project.json`, sheets, `board.json` and pinned symbol definitions while retaining
 one runtime project. Later local slices add movement, rotation and original
 [pinned SMD definitions](footprint-library.md), without inferring physical geometry
 for legacy markers. General footprint authoring/assignment UI and routing remain

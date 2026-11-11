@@ -20,7 +20,7 @@ Each board's `instances.json` owns its logical `net_registry`, including stable
 net IDs, primary and fallback anchors, lineage, explicit net/class bindings and
 unresolved reconciliation records. Its physical `board.json` owns that board's
 accepted net/terminal baseline and pending physical removal information.
-`project.pc` owns the schematic-only registry under
+`project.json` owns the schematic-only registry under
 `schematic_instances.net_registry`, plus a distinct system registry for system
 connections when required. System continuity does not merge the separate board copper-net records.
 

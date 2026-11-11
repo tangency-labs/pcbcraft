@@ -272,7 +272,7 @@ fn geometry_only_copy_cut_and_paste_do_not_create_components() {
     assert_eq!(s.project().unwrap().numeric_id_high_water, before.numeric_id_high_water);
     let source_docs = encode_documents(before).unwrap();
     let after_docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(source_docs["project.pc"], after_docs["project.pc"]);
+    assert_eq!(source_docs["project.json"], after_docs["project.json"]);
 }
 
 /// Foreign layers map by typed role/side, never by display name. Ambiguous internal copper

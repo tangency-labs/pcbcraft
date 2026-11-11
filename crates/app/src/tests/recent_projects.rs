@@ -72,7 +72,7 @@ fn restore(storage: &dyn eframe::Storage) -> PcbApp {
     PcbApp::new(&cc)
 }
 
-/// Successful save and reopen are remembered across app launches, and folder/project.pc opens
+/// Successful save and reopen are remembered across app launches, and folder/project.json opens
 /// converge on one row. Removing history leaves both the open session and disk data intact.
 #[test]
 fn saved_projects_reopen_from_home_and_history_survives_restart() {
@@ -100,7 +100,7 @@ fn saved_projects_reopen_from_home_and_history_survives_restart() {
     assert_eq!(h.state().session.project().unwrap().name, "Power controller");
     let ctx = h.ctx.clone();
     let revision = h.state().session.revision();
-    h.state_mut().files.open_path(path.join("project.pc"), revision, &ctx).unwrap();
+    h.state_mut().files.open_path(path.join("project.json"), revision, &ctx).unwrap();
     finish_file(&mut h);
     assert_eq!(h.state().files.recent.entries().len(), 1);
     open_home(&mut h);
@@ -108,33 +108,36 @@ fn saved_projects_reopen_from_home_and_history_survives_restart() {
     click(&mut h, &format!("Remove Power controller ({}) from recent projects", path.display()));
     h.get_by_label("No recent projects yet");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-    assert!(path.join("project.pc").is_file());
+    assert!(path.join("project.json").is_file());
     let mut cleared_storage = Storage::default();
     eframe::App::save(h.state_mut(), &mut cleared_storage);
     assert!(restore(&cleared_storage).files.recent.entries().is_empty());
 }
 
-/// Archive and legacy paths use the same loader. A missing recent stays removable, reports its
-/// error, and leaves the existing project and Home intact instead of replacing either.
+/// Current archives reopen, while obsolete and missing recents remain removable and leave
+/// the active project and Home intact when their opens fail.
 #[test]
-fn archives_and_legacy_files_reopen_and_missing_files_preserve_the_session() {
+fn current_archives_reopen_and_legacy_or_missing_files_preserve_the_session() {
     let dir = tempfile::tempdir().unwrap();
     let legacy = dir.path().join("original.pc");
     std::fs::write(&legacy, include_bytes!("../../tests/fixtures/two-resistors.pc")).unwrap();
-    let archive = dir.path().join("archive.pc.zip");
-    std::fs::copy("tests/fixtures/split/two-resistors.pc.zip", &archive).unwrap();
+    let archive = dir.path().join("archive.pc");
+    std::fs::copy("tests/fixtures/split/two-resistors.pc", &archive).unwrap();
     let mut h = harness();
     h.state_mut().show_home();
     h.state_mut().files.recent.remember("Legacy", legacy.clone());
     h.state_mut().files.recent.remember("Archive", archive.clone());
     h.run();
-    open_recent(&mut h, "Legacy", &legacy);
-    finish_file(&mut h);
-    assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
-    open_home(&mut h);
     open_recent(&mut h, "Archive", &archive);
     finish_file(&mut h);
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
+    open_home(&mut h);
+    let before_legacy = h.state().session.snapshot().unwrap();
+    open_recent(&mut h, "Legacy", &legacy);
+    finish_file(&mut h);
+    assert!(h.state().home);
+    assert!(h.state().message.as_ref().unwrap().contains("Unsupported project layout"));
+    assert!(Arc::ptr_eq(&before_legacy, &h.state().session.snapshot().unwrap()));
     let name = h.state().files.recent.entries()[0].name.clone();
     std::fs::remove_file(&archive).unwrap();
     open_home(&mut h);
@@ -176,7 +179,7 @@ fn recent_open_asks_before_replacing_unsaved_work_and_keeps_its_target_through_s
     assert_eq!(h.state().session.project().unwrap().name, "Target");
     assert_eq!(h.state().files.recent.entries()[0].path, target);
     assert_eq!(h.state().files.recent.entries()[1].path, draft);
-    assert!(draft.join("project.pc").is_file());
+    assert!(draft.join("project.json").is_file());
 }
 
 /// Long, equal names remain distinguishable by full paths. The narrow layout can scroll to the
@@ -188,11 +191,11 @@ fn narrow_history_keeps_long_paths_reachable_and_duplicate_names_distinct() {
     h.set_size(egui::vec2(420.0, 700.0));
     let name = "A very long Unicode project name — Power controller";
     for index in 0..12 {
-        h.state_mut().files.recent.remember(name, dir.path().join(format!("a-long-parent-directory/project-{index}.pc.zip")));
+        h.state_mut().files.recent.remember(name, dir.path().join(format!("a-long-parent-directory/project-{index}.pc")));
     }
     h.state_mut().show_home();
     finish_previews(&mut h);
-    let path = dir.path().join("a-long-parent-directory/project-0.pc.zip");
+    let path = dir.path().join("a-long-parent-directory/project-0.pc");
     let label = format!("Remove {name} ({}) from recent projects", path.display());
     h.get_by_label(&label).scroll_to_me();
     h.run();
@@ -238,8 +241,8 @@ fn cancelled_and_failed_saves_do_not_open_the_recent_target() {
 #[test]
 fn restored_home_cards_preview_saved_schematics_without_opening_them() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("two-resistors.pc.zip");
-    std::fs::copy("tests/fixtures/split/two-resistors.pc.zip", &path).unwrap();
+    let path = dir.path().join("two-resistors.pc");
+    std::fs::copy("tests/fixtures/split/two-resistors.pc", &path).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     let mut h = harness();
     let empty = dir.path().join("empty");

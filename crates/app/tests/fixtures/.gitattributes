@@ -1,1 +1,2 @@
-two-resistors.pc text eol=lf
+# Historical single-document inputs used only by diagnostic codec tests.
+/two-resistors*.pc text diff merge eol=lf

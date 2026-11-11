@@ -258,12 +258,12 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
 }
 
 /// Fail with a message naming the first document whose path Windows reads as a device (#156),
-/// suggesting a `.pc.zip` archive, which stores documents as ZIP entries rather than files.
+/// suggesting a `.pc` archive, which stores documents as ZIP entries rather than files.
 fn refuse_windows_device_names(documents: &Documents) -> Result<(), String> {
     match documents.keys().find_map(|path| windows_device_name(path).map(|device| (path, device))) {
         Some((path, device)) => Err(format!(
             "{path}: Windows reserves the name \"{device}\" for a device, so this project can't be saved as a folder here. \
-             Save it as a .pc.zip archive, or change that library or item ID."
+             Save it as a .pc archive, or change that library or item ID."
         )),
         None => Ok(()),
     }
@@ -281,12 +281,16 @@ fn windows_device_name(relative: &str) -> Option<&str> {
 
 /// Read the managed files only. Root-level README/Git files are left alone; files under
 /// sheets, library and assets must belong to the supported schema, apart from regular OS metadata
-/// files. Links and special files are refused even when named like OS metadata.
+/// files. Links and special files are refused even when named like OS metadata. A folder
+/// containing only the old `project.pc` entry point is refused before reading managed data.
 fn read_documents(root: &Path, recovering: bool) -> Result<Documents, String> {
     // An interrupted save may temporarily contain both removed and added definitions.
     let multiplier = if recovering { 2 } else { 1 };
     let mut entries = 0;
     regular_directory(root)?;
+    if !root.join(ENTRY_POINT).try_exists().map_err(error)? && root.join("project.pc").try_exists().map_err(error)? {
+        return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
+    }
     let mut documents = Documents::new();
     for name in [ENTRY_POINT, "board.json"] {
         if let Some(bytes) = existing(&root.join(name))? {
@@ -581,7 +585,7 @@ mod tests {
             let root = base.join("board");
             for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
                 let error = save(&root, None, &pinning(library, symbol), &mut |_| Ok(())).unwrap_err();
-                assert!(error.contains("Windows reserves the name") && error.contains(".pc.zip"), "{error}");
+                assert!(error.contains("Windows reserves the name") && error.contains(".pc"), "{error}");
                 assert!(tree(parent.path()).is_empty(), "{library}/{symbol} wrote {:?}", tree(parent.path()));
             }
             let ordinary = pinning("workshop", "resistor");
@@ -618,7 +622,7 @@ mod tests {
         for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor"), ("con", "aux")] {
             let parent = tempfile::tempdir().unwrap();
             let project = pinned_project(library, symbol);
-            let archive = parent.path().join("board.pc.zip");
+            let archive = parent.path().join("board.pc");
             fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
             assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
         }

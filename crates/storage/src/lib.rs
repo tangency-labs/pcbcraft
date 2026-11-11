@@ -2,7 +2,7 @@
 
 use pcbcraft_engine::{
     Project,
-    persistence::{ENTRY_POINT, Encoding, decode_documents, decode_file, read_bytes},
+    persistence::{ENTRY_POINT, Encoding, decode_documents, decode_packed, read_bytes},
 };
 use std::{
     fs::{self, File, OpenOptions},
@@ -18,12 +18,12 @@ pub use folder::{load, save};
 /// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
 /// `\\?\` form, which people don't recognise. It stays where the plain spelling would name
 /// something else: names ending in a dot or space, very long paths, and, on Windows 10 and
-/// earlier, device names such as `CON.pc.zip`. Paths on other platforms never carry the prefix
+/// earlier, device names such as `CON.pc`. Paths on other platforms never carry the prefix
 /// and pass through unchanged.
 pub fn plain_path_if_equivalent(path: PathBuf) -> PathBuf {
     let plain = dunce::simplified(&path);
     // dunce looks only at the text before a name's last dot when it checks device names, so
-    // `CON.pc.zip` passes it. Windows 10's parser (GetFullPathNameW, behind `std::path::absolute`)
+    // a multi-dot name such as `CON.board.pc` can pass it. Windows 10's parser (GetFullPathNameW, behind `std::path::absolute`)
     // reads that name as `\\.\CON`; Windows 11's reads it as a file. Asking the parser covers
     // both, so the plain form is used only if the parser returns it as is.
     if plain != path && std::path::absolute(plain).is_ok_and(|parsed| parsed == plain) {
@@ -52,7 +52,7 @@ pub fn open_lock_file(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
-/// Open a folder, its project.pc entry point, a packed archive or a legacy single-file project.
+/// Open a folder, its project.json entry point, or a packed archive.
 /// Interrupted folder saves recover under the writer lock before any documents are adopted.
 pub fn open(path: &Path) -> Result<Arc<Project>, String> {
     open_with(path, load)
@@ -84,26 +84,12 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     }
     let bytes = read_bytes(File::open(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     if Encoding::detect(&bytes) == Encoding::Json {
-        let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if matches!(
-            header["format"].as_str(),
-            Some(
-                "pcbcraft-project/5"
-                    | "pcbcraft-project/6"
-                    | "pcbcraft-project/7"
-                    | "pcbcraft-project/9"
-                    | "pcbcraft-project/11"
-                    | "pcbcraft-project/12"
-                    | "pcbcraft-project/13"
-            )
-        ) {
-            if name != ENTRY_POINT {
-                return Err("A split project's entry point must be named project.pc.".to_owned());
-            }
+        if name == ENTRY_POINT {
             return decode_documents(&folder(&parent)?);
         }
+        return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
-    decode_file(&bytes).map(|(project, _)| project)
+    decode_packed(&bytes).map(|packed| packed.project)
 }
 
 #[cfg(test)]
@@ -182,7 +168,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, bytes).unwrap();
         }
-        let archive = dir.path().join("project.pc.zip");
+        let archive = dir.path().join("project.pc");
         fs::write(&archive, encode_packed(project()).unwrap()).unwrap();
         let before = tree(dir.path());
         for path in [&root, &root.join(ENTRY_POINT), &archive] {

@@ -1,4 +1,4 @@
-//! Filesystem and worker acceptance tests for folder saves and v2 archive saves.
+//! Filesystem and worker acceptance tests for folder saves and v3 archive saves.
 use super::*;
 use crate::project_files::{Job, ProjectFiles, Update};
 use pcbcraft_engine::persistence::encode_packed;
@@ -59,7 +59,7 @@ fn schematic_package_choices_open_and_save_through_native_paths() {
     let snapshot = s.snapshot().unwrap();
     let documents = encode_documents(snapshot.clone()).unwrap();
     let root = dir.path().join("schematic-packages");
-    let archive = dir.path().join("schematic-packages.pc.zip");
+    let archive = dir.path().join("schematic-packages.pc");
     folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
     fs::write(root.join("README.md"), b"User notes").unwrap();
     fs::write(&archive, encode_packed(snapshot).unwrap()).unwrap();
@@ -110,7 +110,7 @@ fn component_metadata_opens_and_saves_through_every_native_entry_path() {
         let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
         assert_eq!(entry["format"], if explicit.is_some() { "pcbcraft-project/12" } else { "pcbcraft-project/11" });
         let root = dir.path().join("metadata");
-        let archive = dir.path().join("metadata.pc.zip");
+        let archive = dir.path().join("metadata.pc");
         folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
         fs::write(&archive, encode_packed(snapshot).unwrap()).unwrap();
         for path in [&root, &root.join(ENTRY_POINT), &archive] {
@@ -206,7 +206,7 @@ fn every_interrupted_folder_save_reopens_as_old_or_new() {
     }
 }
 
-/// Recovery also works when the first save crashed before project.pc itself was installed.
+/// Recovery also works when the first save crashed before project.json itself was installed.
 #[test]
 fn recover_first_save_through_the_entry_point() {
     let dir = tempfile::tempdir().unwrap();
@@ -253,8 +253,7 @@ fn unchanged_documents_are_never_rewritten() {
 fn version_five_no_op_and_sheet_upgrade_preserve_unaffected_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
-    let original =
-        pcbcraft_engine::persistence::decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc.zip")).unwrap().documents.unwrap();
+    let original = pcbcraft_engine::persistence::decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc")).unwrap().documents;
     folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
     let loaded = load(&root.join(ENTRY_POINT)).unwrap();
     let old = loaded.snapshot.clone();
@@ -569,7 +568,7 @@ fn folder_load_never_bypasses_a_busy_or_invalid_lock() {
 
 /// No-op archive saves retain exact imported bytes, and folder/archive conversion retains IDs.
 #[test]
-fn v2_archive_saves_and_folder_conversion_preserve_the_project() {
+fn v3_archive_saves_and_folder_conversion_preserve_the_project() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     let s = session();
@@ -578,10 +577,9 @@ fn v2_archive_saves_and_folder_conversion_preserve_the_project() {
     let length = bytes.len();
     bytes[length - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
     bytes.extend_from_slice(comment);
-    let path = dir.path().join("project.pc.zip");
+    let path = dir.path().join("project.pc");
     fs::write(&path, &bytes).unwrap();
     let loaded = load(&path).unwrap();
-    assert!(!loaded.target.legacy);
     save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| panic!("unchanged archive must not stage")).unwrap();
     assert_eq!(fs::read(&path).unwrap(), bytes);
     let d = encode_documents(loaded.snapshot).unwrap();
@@ -625,8 +623,8 @@ fn independent_edits_merge_in_a_split_sheet() {
 #[test]
 fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("hand-zipped.pc.zip");
-    fs::write(&path, include_bytes!("../../../tests/fixtures/split/two-resistors-no-manifest.pc.zip")).unwrap();
+    let path = dir.path().join("hand-zipped.pc");
+    fs::write(&path, include_bytes!("../../../tests/fixtures/split/two-resistors-no-manifest.pc")).unwrap();
     let loaded = load(&path).unwrap();
     assert!(loaded.target.needs_manifest);
     assert!(loaded.target.open_notice().contains("without a manifest"));
@@ -644,7 +642,7 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     let loaded = load(&root).unwrap();
     let converted = working_documents(&loaded.snapshot, Some(&loaded.snapshot), loaded.target.documents.as_deref()).unwrap();
     let packed = encode_packed_documents(converted).unwrap();
-    assert_eq!(decode_packed(&packed).unwrap().documents.as_ref(), Some(&custom));
+    assert_eq!(decode_packed(&packed).unwrap().documents, custom);
 }
 
 /// The shared headless reader accepts the same folder, entry point and archive as desktop.
@@ -654,9 +652,9 @@ fn headless_and_desktop_read_the_same_split_project() {
     let expected = encode_documents(session().snapshot().unwrap()).unwrap();
     for path in [
         fixture.join("two-resistors"),
-        fixture.join("two-resistors/project.pc"),
-        fixture.join("two-resistors.pc.zip"),
-        fixture.join("two-resistors-no-manifest.pc.zip"),
+        fixture.join("two-resistors/project.json"),
+        fixture.join("two-resistors.pc"),
+        fixture.join("two-resistors-no-manifest.pc"),
     ] {
         assert_eq!(encode_documents(pcbcraft_storage::open(&path).unwrap()).unwrap(), expected);
     }
@@ -680,7 +678,7 @@ fn material_setup_survives_native_folder_and_archive_saves() {
     let snapshot = s.snapshot().unwrap();
     let documents = encode_documents(snapshot.clone()).unwrap();
     let root = dir.path().join("material-board");
-    let archive = dir.path().join("material-board.pc.zip");
+    let archive = dir.path().join("material-board.pc");
     folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
     fs::write(&archive, encode_packed(snapshot.clone()).unwrap()).unwrap();
     for path in [&root, &archive] {
@@ -754,7 +752,7 @@ fn untitled() -> Session {
 fn first_save_names_an_untitled_project_after_its_destination() {
     let dir = tempfile::tempdir().unwrap();
     for (format, chosen, file) in
-        [(SaveFormat::Folder, "blinky", "blinky"), (SaveFormat::Archive, "board", "board.pc.zip"), (SaveFormat::Archive, "led.pc.zip", "led.pc.zip")]
+        [(SaveFormat::Folder, "blinky", "blinky"), (SaveFormat::Archive, "board", "board.pc"), (SaveFormat::Archive, "led.pc", "led.pc")]
     {
         let mut s = untitled();
         let mut files = ProjectFiles::default();
@@ -762,7 +760,7 @@ fn first_save_names_an_untitled_project_after_its_destination() {
         let (revision, depth) = (s.revision(), s.inspect()["can_undo"].clone());
         let result = save_new(s.snapshot().unwrap(), None, format, dir.path().join(chosen));
         assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Message(text)) if text == "Project saved"));
-        let name = file.strip_suffix(".pc.zip").unwrap_or(file);
+        let name = file.strip_suffix(".pc").unwrap_or(file);
         assert_eq!(s.project().unwrap().name, name);
         assert_eq!((s.revision(), s.inspect()["can_undo"].clone()), (revision, depth));
         assert!(!files.dirty(&s), "taking the file's name is part of the save");
@@ -800,7 +798,7 @@ fn first_save_keeps_later_edits_and_failures_change_nothing() {
     s.apply("edit.undo", &serde_json::Value::Null).unwrap();
     assert!(!files.dirty(&s), "the saved snapshot is the one before the move");
 
-    fs::write(dir.path().join("taken.pc.zip"), b"someone else's file").unwrap();
+    fs::write(dir.path().join("taken.pc"), b"someone else's file").unwrap();
     for result in [
         save_new(untitled().snapshot().unwrap(), None, SaveFormat::Archive, dir.path().join("taken")),
         save_new(untitled().snapshot().unwrap(), None, SaveFormat::Folder, dir.path().join("missing").join("board")),
@@ -816,7 +814,7 @@ fn first_save_keeps_later_edits_and_failures_change_nothing() {
         assert_eq!(s.project().unwrap().name, "Untitled");
         assert!(files.dirty(&s));
     }
-    assert_eq!(fs::read(dir.path().join("taken.pc.zip")).unwrap(), b"someone else's file");
+    assert_eq!(fs::read(dir.path().join("taken.pc")).unwrap(), b"someone else's file");
 }
 
 /// The first save's suggested file name is the project's, with characters a file name can't hold
@@ -833,7 +831,7 @@ fn first_save_suggests_the_project_name() {
 #[test]
 fn recent_history_records_only_successful_file_jobs() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("project.pc.zip");
+    let path = dir.path().join("project.pc");
     let mut session = session();
     fs::write(&path, encode_packed(session.snapshot().unwrap()).unwrap()).unwrap();
     let mut files = ProjectFiles::default();
@@ -874,7 +872,7 @@ fn footprint_transform_saves_offline_in_folders_and_archives() {
     let snapshot = s.snapshot().unwrap();
     let documents = encode_documents(snapshot.clone()).unwrap();
     let root = dir.path().join("rotated-board");
-    let archive = dir.path().join("rotated-board.pc.zip");
+    let archive = dir.path().join("rotated-board.pc");
     folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
     fs::write(&archive, encode_packed(snapshot.clone()).unwrap()).unwrap();
     for path in [&root, &archive] {

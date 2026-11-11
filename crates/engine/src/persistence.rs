@@ -27,10 +27,13 @@ pub use packed::{PackedEncoder, PackedProject, decode_packed, encode_packed, enc
 #[cfg(test)]
 mod split_tests;
 
+/// Explain the intentional app 0.1.0 break when a legacy standalone document is opened.
+pub const UNSUPPORTED_PROJECT_LAYOUT: &str = "Unsupported project layout. PCBcraft 0.1.0 opens project folders through project.json and packed .pc ZIP files; legacy standalone JSON projects and project.pc entry points are no longer supported.";
+
 /// Maximum number of bytes in a supported project ZIP.
 pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 
-/// The encoding of a native .pc file, independent of its filename.
+/// JSON document or ZIP package encoding, detected independently of the filename.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Encoding {
     #[default]
@@ -53,7 +56,8 @@ impl Encoding {
     }
 }
 
-/// Read and validate a native project using the encoding detected from its content.
+/// Read a diagnostic single-document fixture or current packed project.
+/// App and CLI loaders accept only folders with `project.json` and current ZIP packages.
 pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
     let encoding = Encoding::detect(bytes);
     if bytes.len() > encoding.input_limit() {
@@ -61,7 +65,13 @@ pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
     }
     let project = match encoding {
         Encoding::Json => decode(bytes)?,
-        Encoding::Zip => decode_packed(bytes)?.project,
+        Encoding::Zip => {
+            if let Ok(payload) = archive::unpack(bytes) {
+                decode(&payload)?
+            } else {
+                decode_packed(bytes)?.project
+            }
+        }
     };
     Ok((project, encoding))
 }

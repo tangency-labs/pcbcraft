@@ -83,7 +83,7 @@ GUI and MCP enforce the same role restrictions.
 
 ### Off-board components and BOM ownership
 
-Store `system_components` in `project.pc` for physical parts owned by the system
+Store `system_components` in `project.json` for physical parts owned by the system
 assembly rather than a PCB: cables/harnesses, panel switches, batteries and other
 off-board items. Each has a stable component instance ID, system-scoped reference,
 pinned part definition, value metadata and explicit terminal interfaces
@@ -117,7 +117,7 @@ The separate [net-identity design](net-identity.md) covers ordinary single-board
 continuations as well as multiboard nets, anchors, splits, merges and rule
 reconciliation. Each board's logical registry lives in its `instances.json`;
 accepted physical net state lives in `board.json`. The boardless schematic
-registry lives in `project.pc` under `schematic_instances.net_registry`; any
+registry lives in `project.json` under `schematic_instances.net_registry`; any
 system registry is a separate project-level record. These storage owners include lineage and unresolved
 assignments, not just the current IDs.
 
@@ -169,7 +169,7 @@ does not authorize recursive deletion of arbitrary user files.
 
 Register authored associated files by stable ID, tagged board, project or
 [retired-area owner](multiboard-storage.md#retired-board-preservation), relative
-path and media type in `project.pc`. A normal packed design and Save As copy the
+path and media type in `project.json`. A normal packed design and Save As copy the
 editable design, its referenced pinned libraries/assets and registered associated
 documents. They exclude generated output history by default. A release-package
 operation explicitly selects export runs and documents to accompany the design.
@@ -221,7 +221,7 @@ neither automatically. A hand-copied matching run may be shown as another
 artifact location, but copying cannot grant it registered status, make it the
 current release or change its recorded provenance. Release packaging explicitly
 selects a validated run; it does not recursively include arbitrary neighbors.
-No run is added to `project.pc` merely by generation or discovery, so those
+No run is added to `project.json` merely by generation or discovery, so those
 operations do not dirty authored project data. The projected input digest covers
 the relevant board's resolved schematic, physical state, rules, pinned dependencies
 and configuration, including unsaved edits. Within a validated identity lineage,
@@ -243,12 +243,12 @@ For a folder project, default board exports beneath `join(board_root, "outputs")
 and system exports beneath `join(layout_root, "outputs")`. All paths use the
 [single-segment folder contract](multiboard-storage.md#portable-board-folder-names);
 root-level user `documents/` or `outputs/` are not implicitly adopted. For an opened
-`name.pc.zip`, the archive is the design save target, not a writable directory.
+`name.pc`, the archive is the design save target, not a writable directory.
 Suggest a free sibling `name.outputs/` directory with the same board/system run
 layout, or let the user choose another external destination. If that default
 name already contains unrelated user files, choose a free project-suffixed name
 rather than mixing runs into it. Reusing an existing external directory is an
-explicit destination choice. Strip the complete `.pc.zip`
+explicit destination choice. Strip the complete `.pc`
 suffix when forming that suggested name. Saving the archive never incorporates
 external output history automatically or truncates that directory. A release
 package explicitly includes selected artifacts. Browser operation downloads a

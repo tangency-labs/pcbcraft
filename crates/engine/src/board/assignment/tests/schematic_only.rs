@@ -24,7 +24,7 @@ fn choices_roundtrip_without_a_board_and_follow_explicit_creation() {
     let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
     assert!(!assigned.contains_key("board.json"));
     assert!(assigned.keys().any(|path| path.starts_with("library/footprints/")));
-    let entry: Value = serde_json::from_slice(&assigned["project.pc"]).unwrap();
+    let entry: Value = serde_json::from_slice(&assigned["project.json"]).unwrap();
     assert_eq!(entry["format"], "pcbcraft-project/13");
     assert_eq!(entry["boards"], json!([]));
     assert_eq!(entry["footprint_choices"][0]["mapping"], params["mapping"]);
@@ -143,7 +143,7 @@ fn retiring_schematic_components_releases_only_unused_packages() {
     let empty = encode_documents(s.snapshot().unwrap()).unwrap();
     assert!(s.project().unwrap().footprint_assignments().is_empty());
     assert!(!empty.keys().any(|path| path.starts_with("library/footprints/")));
-    assert_eq!(serde_json::from_slice::<Value>(&empty["project.pc"]).unwrap()["format"], "pcbcraft-project/9");
+    assert_eq!(serde_json::from_slice::<Value>(&empty["project.json"]).unwrap()["format"], "pcbcraft-project/9");
     s.apply("edit.undo", &json!({})).unwrap();
     crate::assert_same_content(&decode_documents(&one).unwrap(), &s.snapshot().unwrap());
 }
@@ -155,7 +155,7 @@ fn schematic_choice_codec_rejects_invalid_or_lossy_documents() {
     let (mut s, params) = schematic();
     s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
-    let entry: Value = serde_json::from_slice(&documents["project.pc"]).unwrap();
+    let entry: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
     for (field, value) in [
         ("format", json!("pcbcraft-project/9")),
         ("format", json!("pcbcraft-project/12")),
@@ -167,21 +167,21 @@ fn schematic_choice_codec_rejects_invalid_or_lossy_documents() {
         let mut invalid = documents.clone();
         let mut changed = entry.clone();
         changed[field] = value;
-        invalid.insert("project.pc".into(), serde_json::to_vec(&changed).unwrap());
+        invalid.insert("project.json".into(), serde_json::to_vec(&changed).unwrap());
         assert!(decode_documents(&invalid).is_err(), "{changed}");
     }
     for field in ["footprint_choices", "numeric_id_high_water", "boards"] {
         let mut invalid = documents.clone();
         let mut changed = entry.clone();
         changed.as_object_mut().unwrap().remove(field);
-        invalid.insert("project.pc".into(), serde_json::to_vec(&changed).unwrap());
+        invalid.insert("project.json".into(), serde_json::to_vec(&changed).unwrap());
         assert!(decode_documents(&invalid).is_err());
     }
     for (field, value) in [("component", json!(999999)), ("mapping", json!({"1":"1","2":"1"})), ("definition_revision", json!(42))] {
         let mut invalid = documents.clone();
         let mut changed = entry.clone();
         changed["footprint_choices"][0][field] = value;
-        invalid.insert("project.pc".into(), serde_json::to_vec(&changed).unwrap());
+        invalid.insert("project.json".into(), serde_json::to_vec(&changed).unwrap());
         assert!(decode_documents(&invalid).is_err());
     }
     let mut missing = documents.clone();

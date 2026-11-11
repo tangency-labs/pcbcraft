@@ -56,7 +56,7 @@ fn attaching_a_branched_junction_to_a_pin_is_one_persistent_edit() {
     assert_eq!(persistence::encode_documents(loaded).unwrap(), documents);
     let packed = persistence::encode_packed(after.clone()).unwrap();
     let loaded = persistence::decode_packed(&packed).unwrap();
-    assert_eq!(loaded.documents.as_ref(), Some(&documents));
+    assert_eq!(&loaded.documents, &documents);
     assert_eq!(persistence::encode_packed(loaded.project).unwrap(), packed);
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));

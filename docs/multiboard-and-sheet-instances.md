@@ -36,7 +36,7 @@ rules remain unchanged.
 | Electrical globals | Global names join within their board or project schematic scope; inter-board connectivity requires explicit connector mappings |
 | Shared edits | One transaction updates all logical schematic uses; physical updates are reviewed independently for each board |
 | Instance identities | Persist occurrence and component mappings; one common circuit-use scope resolves multi-unit packages across sheets |
-| Instance storage | Schematic-only instances live once in `project.pc`; board-assigned instances live in that board's `instances.json`, separate from physical `board.json` |
+| Instance storage | Schematic-only instances live once in `project.json`; board-assigned instances live in that board's `instances.json`, separate from physical `board.json` |
 | Schematic-only projects | Start without a board; normal schematic editing and future simulation require no layout, footprint or stackup |
 | Flat and hierarchical sheets | Board assignment is explicit in both arrangements; a parent sheet or system overview is optional |
 | Net identity | Follow the separate net-identity design, preserving ordinary pin-disconnect continuations and reviewing only genuinely ambiguous assignments |
@@ -59,7 +59,7 @@ Intended behavior is distinguished from current capabilities below.
 | Board setup | One setup on the sole board; the dialog already captures a board target | Independent layers, stackup, materials and output settings for each board |
 | Named connections | Global, power and ground names resolve across the current project | Resolve globals within the board; resolve ordinary local names within the sheet occurrence |
 | Cross-probing | Identity-based correspondence with board addresses; reveal across sheets is still planned | Include sheet occurrence and circuit-use context and navigate to the exact physical instance |
-| Storage | `project.pc`, `sheets/`, optional root `board.json` and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
+| Storage | `project.json`, `sheets/`, optional root `board.json` and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
 
 The [representation plan](pcb-representation.md#board-addresses-and-multiboard-migration),
 [storage contract](native-project-storage.md),
@@ -545,7 +545,7 @@ These scenarios should guide the tests and review for the relevant slices:
   registered off-board parts once. Per-window previews cannot alter its BOM.
 - `con`, `aux`, non-ASCII names and case-only names produce distinct portable
   board folders; no variant or design path can escape its registered board folder.
-- An archive export writes outside the `.pc.zip`. External/read-only exports take
+- An archive export writes outside the `.pc`. External/read-only exports take
   only the destination writer lock; internal publication uses source-then-output
   ordering and recovery. Failures leave old complete results.
 - A copied, foreign, malformed or conflicting export record cannot register design

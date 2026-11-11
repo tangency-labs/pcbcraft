@@ -47,7 +47,7 @@ fn sheet(d: &Documents) -> String {
 fn round_trip_and_legacy_migrations_have_identical_documents() {
     let expected = documents(&session());
     let fixtures = [
-        (ENTRY_POINT, include_bytes!("../../../app/tests/fixtures/split/two-resistors/project.pc").as_slice()),
+        (ENTRY_POINT, include_bytes!("../../../app/tests/fixtures/split/two-resistors/project.json").as_slice()),
         ("board.json", include_bytes!("../../../app/tests/fixtures/split/two-resistors/board.json").as_slice()),
         (
             "sheets/0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989.json",
@@ -60,7 +60,7 @@ fn round_trip_and_legacy_migrations_have_identical_documents() {
     ];
     let old_documents = fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect();
     assert_eq!(expected, encode_documents(decode_documents(&old_documents).unwrap()).unwrap());
-    let old_archive = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc.zip")).unwrap();
+    let old_archive = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap();
     assert_eq!(expected, encode_documents(old_archive.project).unwrap());
     for bytes in [
         include_bytes!("../../../app/tests/fixtures/two-resistors-format-1.pc").as_slice(),
@@ -185,7 +185,7 @@ fn reject_incomplete_or_inconsistent_document_sets() {
     edit(&mut d, &library, |v| v["revision"] = json!(999));
     assert!(decode_documents(&d).unwrap_err().contains(&library));
     let mut d = original.clone();
-    d.insert("../project.pc".to_owned(), b"{}".to_vec());
+    d.insert("../project.json".to_owned(), b"{}".to_vec());
     assert!(decode_documents(&d).is_err());
     let mut s = session();
     apply(&mut s, PLACE_FOOTPRINT, json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0}));
@@ -219,11 +219,42 @@ fn accepts_missing_manifest_and_adds_one_on_export() {
         let bytes = zip_files(&expected, prefix, true);
         let opened = decode_packed(&bytes).unwrap();
         assert!(opened.needs_manifest);
-        assert!(!opened.legacy);
         assert_eq!(encode_documents(opened.project.clone()).unwrap(), expected);
         let packed = encode_packed(opened.project.clone()).unwrap();
         assert!(!decode_packed(&packed).unwrap().needs_manifest);
         assert_eq!(packed, encode_packed(opened.project).unwrap());
+    }
+}
+
+/// The new inventory names the fixed JSON entry point, while earlier manifested containers
+/// and hand-zipped old layouts fail even when the outer archive is renamed to `.pc`.
+#[test]
+fn container_three_inventory_and_breaking_layout_boundary() {
+    let expected = documents(&session());
+    let packed = encode_packed_documents(expected.clone()).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(&packed)).unwrap();
+    let mut manifest = String::new();
+    zip.by_name("manifest.json").unwrap().read_to_string(&mut manifest).unwrap();
+    let manifest: Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(manifest["format"], "pcbcraft-container/3");
+    let entry = manifest["parts"].as_array().unwrap().iter().find(|part| part["path"] == "project.json").unwrap();
+    assert_eq!(entry["size_bytes"], expected[ENTRY_POINT].len());
+    assert!(zip.by_name("project.pc").is_err());
+    assert_eq!(decode_packed(&packed).unwrap().documents, expected);
+
+    for version in ["pcbcraft-container/1", "pcbcraft-container/2"] {
+        let mut old = expected.clone();
+        let mut header = manifest.clone();
+        header["format"] = json!(version);
+        old.insert("manifest.json".to_owned(), serde_json::to_vec(&header).unwrap());
+        let error = decode_packed(&zip_files(&old, "", false)).err().unwrap();
+        assert!(error.contains("unsupported container format") && error.contains(version), "{error}");
+    }
+    let mut old = expected;
+    let entry = old.remove(ENTRY_POINT).unwrap();
+    old.insert("project.pc".to_owned(), entry);
+    for prefix in ["", "myproject/"] {
+        assert!(decode_packed(&zip_files(&old, prefix, true)).err().unwrap().contains("project.json"));
     }
 }
 
@@ -245,7 +276,7 @@ fn manifestless_archives_ignore_os_metadata_before_root_discovery() {
             writer.write_all(bytes).unwrap();
         }
         let mut metadata =
-            vec!["__MACOSX/._my-board".to_owned(), "__MACOSX/project.pc".to_owned(), "__MACOSX/my-board/sheets/._sheet.json".to_owned()];
+            vec!["__MACOSX/._my-board".to_owned(), "__MACOSX/project.json".to_owned(), "__MACOSX/my-board/sheets/._sheet.json".to_owned()];
         for name in [".DS_Store", "Thumbs.db", "desktop.ini"] {
             metadata.extend([name.to_owned(), format!("{prefix}sheets/{name}"), format!("{prefix}library/symbols/starter/{name}")]);
         }
@@ -255,11 +286,11 @@ fn manifestless_archives_ignore_os_metadata_before_root_discovery() {
         }
         let opened = decode_packed(&writer.finish().unwrap().into_inner()).unwrap();
         assert!(opened.needs_manifest);
-        assert_eq!(opened.documents.as_ref(), Some(&expected));
-        let saved = encode_packed_documents(opened.documents.unwrap()).unwrap();
+        assert_eq!(&opened.documents, &expected);
+        let saved = encode_packed_documents(opened.documents).unwrap();
         let reopened = decode_packed(&saved).unwrap();
         assert!(!reopened.needs_manifest);
-        assert_eq!(reopened.documents.as_ref(), Some(&expected));
+        assert_eq!(&reopened.documents, &expected);
     }
 }
 
@@ -286,7 +317,7 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
         assert!(decode_packed(&zip_files(&bad, "", false)).is_err());
     }
     for prefix in ["", "wrapped/"] {
-        for path in [".DS_Store", "sheets/Thumbs.db", "library/desktop.ini", "__MACOSX/._project.pc"] {
+        for path in [".DS_Store", "sheets/Thumbs.db", "library/desktop.ini", "__MACOSX/._project.json"] {
             let mut bad = d.clone();
             bad.insert(path.to_owned(), b"OS metadata".to_vec());
             assert!(decode_packed(&zip_files(&bad, prefix, false)).is_err(), "manifest must reject {prefix}{path}");
@@ -297,7 +328,7 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
         value["assets"] = json!([{"path":format!("assets/{}", "0".repeat(64)), "size_bytes":0, "sha256":"0".repeat(64)}]);
     });
     assert!(decode_packed(&zip_files(&unsupported, "", false)).err().unwrap().contains("bundled assets are not yet supported"));
-    for path in ["notes.txt", "__MACOSX", "../evil", "/evil", "C:/evil", "library/symbols/starter/unused.r1.json", "second/project.pc"] {
+    for path in ["notes.txt", "__MACOSX", "../evil", "/evil", "C:/evil", "library/symbols/starter/unused.r1.json", "second/project.json"] {
         let mut bad = documents(&session());
         bad.insert(path.to_owned(), b"{}".to_vec());
         assert!(decode_packed(&zip_files(&bad, "", false)).is_err());
@@ -317,12 +348,12 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
 /// ZIP links and payloads over per-part limits are refused before document adoption.
 #[test]
 fn rejects_links_oversized_parts_and_truncated_archives() {
-    for path in ["project.pc", "__MACOSX/._project.pc", "sheets/.DS_Store"] {
+    for path in ["project.json", "__MACOSX/._project.json", "sheets/.DS_Store"] {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         writer.add_symlink(path, "/tmp/elsewhere", SimpleFileOptions::default()).unwrap();
         assert!(decode_packed(&writer.finish().unwrap().into_inner()).err().unwrap().contains("unsupported ZIP entry"));
     }
-    for path in ["board.json", "__MACOSX/._project.pc", "sheets/.DS_Store"] {
+    for path in ["board.json", "__MACOSX/._project.json", "sheets/.DS_Store"] {
         let mut d = documents(&session());
         d.insert(path.to_owned(), vec![b' '; MAX_DOCUMENT_BYTES + 1]);
         assert!(decode_packed(&zip_files(&d, "", false)).err().unwrap().contains("size limit"));
@@ -345,10 +376,12 @@ fn rejects_zip64_duplicates_and_crc_corruption() {
         writer.write_all(&bytes).unwrap();
     }
     assert!(decode_packed(&writer.finish().unwrap().into_inner()).is_err());
-    let mut duplicate = encode_packed(session().snapshot().unwrap()).unwrap();
+    let mut entries = documents(&session());
+    entries.insert("other.json".to_owned(), b"{}".to_vec());
+    let mut duplicate = zip_files(&entries, "", false);
     for index in (0..duplicate.len() - 10).rev() {
-        if &duplicate[index..index + 10] == b"board.json" {
-            duplicate[index..index + 10].copy_from_slice(b"project.pc");
+        if &duplicate[index..index + 10] == b"other.json" {
+            duplicate[index..index + 10].copy_from_slice(b"board.json");
         }
     }
     assert!(decode_packed(&duplicate).is_err());

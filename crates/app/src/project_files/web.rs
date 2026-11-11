@@ -5,7 +5,7 @@ use std::sync::{Arc, mpsc::Sender};
 use js_sys::{Promise, Uint8Array};
 use pcbcraft_engine::{
     Project,
-    persistence::{Documents, DocumentsEncoder, Encoding, MAX_ARCHIVE_BYTES, MAX_PROJECT_BYTES, PackedEncoder, decode_file, decode_packed},
+    persistence::{Documents, DocumentsEncoder, Encoding, MAX_ARCHIVE_BYTES, PackedEncoder, decode_packed},
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -13,23 +13,17 @@ use wasm_bindgen_futures::JsFuture;
 use super::{Outcome, Saved};
 
 #[wasm_bindgen(inline_js = "
-export function pickProject(jsonLimit, zipLimit) {
+export function pickProject(zipLimit) {
     return new Promise((resolve, reject) => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.pc,.zip,.json';
+        input.accept = '.pc';
         input.oncancel = () => resolve(null);
         input.onchange = async () => {
             const file = input.files[0];
             if (!file) return resolve(null);
             try {
                 if (file.size > zipLimit) throw new Error('Project ZIP exceeds the file size limit.');
-                if (file.size > jsonLimit) {
-                    const header = new DataView(await file.slice(0, 4).arrayBuffer()).getUint32(0);
-                    if (![0x504b0304, 0x504b0506, 0x504b0708].includes(header)) {
-                        throw new Error('Project JSON exceeds the file size limit.');
-                    }
-                }
                 resolve(await file.arrayBuffer());
             } catch (error) { reject(error); }
         };
@@ -65,20 +59,20 @@ export function downloadProject(bytes, name) {
 ")]
 extern "C" {
     #[wasm_bindgen(js_name = pickProject)]
-    fn pick_project(json_limit: u32, zip_limit: u32) -> Promise;
+    fn pick_project(zip_limit: u32) -> Promise;
 
     /// Record whether leaving the page would lose unsaved changes, so the browser asks first.
     #[wasm_bindgen(js_name = setUnsaved)]
     pub(super) fn set_unsaved(unsaved: bool);
 
-    /// Offer `bytes` to the browser's download UI as a `.pc.zip` archive named `name`.
+    /// Offer `bytes` to the browser's download UI as a `.pc` archive named `name`.
     #[wasm_bindgen(catch, js_name = downloadProject)]
     fn download_project(bytes: &[u8], name: &str) -> Result<(), JsValue>;
 }
 
 /// Open the picker during the triggering interaction to retain browser permission.
 pub(super) fn pick_file() -> Promise {
-    pick_project(MAX_PROJECT_BYTES as u32, MAX_ARCHIVE_BYTES as u32)
+    pick_project(MAX_ARCHIVE_BYTES as u32)
 }
 
 /// Validate the bounded picked payload before returning it to the editor.
@@ -93,13 +87,12 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
     }
     let bytes: Arc<[u8]> = bytes.to_vec().into();
     let encoding = Encoding::detect(&bytes);
-    let (snapshot, documents, needs_manifest, legacy) = if encoding == Encoding::Zip {
-        let packed = decode_packed(&bytes)?;
-        (packed.project, packed.documents.map(Arc::new), packed.needs_manifest, packed.legacy)
-    } else {
-        (decode_file(&bytes)?.0, None, false, true)
-    };
-    Ok(Outcome::Opened(Saved { snapshot, bytes, encoding, needs_manifest, legacy, documents }))
+    if encoding != Encoding::Zip {
+        return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
+    }
+    let packed = decode_packed(&bytes)?;
+    let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
+    Ok(Outcome::Opened(Saved { snapshot, bytes, encoding, needs_manifest, documents }))
 }
 
 pub(super) struct Download {

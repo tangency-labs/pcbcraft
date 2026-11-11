@@ -10,7 +10,7 @@ use std::{
 };
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-const FORMAT: &str = "pcbcraft-container/2";
+const FORMAT: &str = "pcbcraft-container/3";
 const MANIFEST: &str = "manifest.json";
 const MANIFEST_LIMIT: usize = 1024 * 1024;
 const CHUNK: usize = 256 * 1024;
@@ -31,16 +31,17 @@ struct Part {
     sha256: String,
 }
 
-/// A fully validated archive. Missing manifests and legacy containers need an upgrade on save.
+/// A fully validated current archive. A missing manifest is added on the next save.
 pub struct PackedProject {
+    /// The project after schema and cross-document validation.
     pub project: Arc<Project>,
-    /// Exact split-document bytes for lossless conversion; absent in legacy containers.
-    pub documents: Option<Documents>,
+    /// Exact split-document bytes for lossless conversion.
+    pub documents: Documents,
+    /// Whether an accepted hand-zipped project must receive a manifest on its next save.
     pub needs_manifest: bool,
-    pub legacy: bool,
 }
 
-/// Encode a portable container v2 using the same bytes as the working folder.
+/// Encode a portable container v3 with a fixed `project.json` entry point.
 pub fn encode_packed(project: Arc<Project>) -> Result<Vec<u8>, String> {
     encode_packed_documents(encode_documents(project)?)
 }
@@ -133,8 +134,8 @@ fn options() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Stored).last_modified_time(zip::DateTime::default()).unix_permissions(0o644)
 }
 
-/// Read containers v1/v2 or a hand-zipped folder. A missing manifest is allowed, but malformed
-/// or mismatched manifests are never ignored. Only manifest-less archives discard ordinary OS
+/// Read container v3 or a hand-zipped folder, refusing earlier containers. Missing manifests
+/// are allowed, but malformed or mismatched ones are never ignored. Only manifest-less archives discard ordinary OS
 /// metadata, after validating its ZIP paths, types, CRCs and size limits along with every entry.
 pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     if bytes.len() > MAX_ARCHIVE_BYTES {
@@ -192,13 +193,12 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
         total += size;
         entries.insert(name, payload);
     }
-    // Legacy containers have a different manifest and one project.json payload. Their existing
-    // strict decoder remains the authority; malformed v1 containers cannot fall back to v2.
+    // Establish the container boundary before root discovery: neither an old entry point nor
+    // a missing new entry point may disguise a present unsupported or malformed manifest.
     if let Some(manifest) = entries.get(MANIFEST) {
         let header: serde_json::Value = serde_json::from_slice(manifest).map_err(error)?;
-        if header["format"] == "pcbcraft-container/1" {
-            let project = super::decode(&super::archive::unpack(bytes)?)?;
-            return Ok(PackedProject { project, documents: None, needs_manifest: false, legacy: true });
+        if header["format"].as_str() != Some(FORMAT) {
+            return Err(format!("manifest.json: unsupported container format {}; expected {FORMAT}", header["format"]));
         }
     }
     // Any manifest prevents metadata filtering, including malformed or misplaced manifests.
@@ -211,9 +211,9 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     let prefix = if entries.contains_key(super::ENTRY_POINT) {
         String::new()
     } else {
-        let roots: Vec<_> = entries.keys().filter_map(|name| name.strip_suffix("/project.pc")).filter(|root| !root.contains('/')).collect();
+        let roots: Vec<_> = entries.keys().filter_map(|name| name.strip_suffix("/project.json")).filter(|root| !root.contains('/')).collect();
         if roots.len() != 1 {
-            return Err("project.pc: ZIP must contain one project root".to_owned());
+            return Err("project.json: ZIP must contain one project root".to_owned());
         }
         format!("{}/", roots[0])
     };
@@ -255,7 +255,7 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
         }
     }
     let project = decode_documents(&documents)?;
-    Ok(PackedProject { project, documents: Some(documents), needs_manifest: manifest.is_none(), legacy: false })
+    Ok(PackedProject { project, documents, needs_manifest: manifest.is_none() })
 }
 
 /// Recognize Apple's reserved sidecar directory at the archive root or inside its wrapper.

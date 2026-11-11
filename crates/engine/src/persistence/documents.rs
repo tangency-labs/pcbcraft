@@ -3,7 +3,7 @@
 use super::*;
 
 /// The fixed, plain-text entry point inside a project folder.
-pub const ENTRY_POINT: &str = "project.pc";
+pub const ENTRY_POINT: &str = "project.json";
 /// Each JSON document is bounded independently; large projects need not fit in one legacy file.
 pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 /// Bound total decoded documents below the packed-file limit, leaving room for ZIP metadata.
@@ -569,7 +569,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     for assignment in footprint_choices.into_iter().flatten() {
         if !assignment.valid(project_data) || project_data.schematic_packages.assignments.contains_key(&assignment.component) {
-            return Err("project.pc: duplicate, unresolved or incompatible footprint choice".into());
+            return Err("project.json: duplicate, unresolved or incompatible footprint choice".into());
         }
         Arc::make_mut(&mut project_data.schematic_packages).assignments.insert(assignment.component, assignment);
     }
