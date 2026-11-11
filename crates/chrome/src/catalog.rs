@@ -81,10 +81,33 @@ pub fn footprint_form(ctx: &egui::Context, enabled: bool, place: Option<bool>, a
     )
 }
 
-/// Settings editors share the catalog header/footer but reserve a taller body for navigation
-/// and physical data; their primary action remains fixed while individual pages scroll.
+/// Keep shared window actions fixed around a bounded page editor. Navigation, validation
+/// and page scrolling fit inside the body while the caller controls primary action availability.
 pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
-    form_body(ctx, "board_setup_form", title, Tokens::get().form_card_width * 4., primary, enabled, false, true, 20., None, "Cancel", add)
+    let t = Tokens::get();
+    let id = egui::Id::unique("board_setup_form");
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let mut closed = false;
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
+        let width = (t.form_card_width * 4.0).min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        ui.set_width(width);
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            kit::panel::header(ui, "settings", title, || closed = true);
+            let height =
+                (ctx.content_rect().height() - kit::header_height() - t.form_footer_height - t.space_24 * 2.0).clamp(0.0, t.control_height * 20.0);
+            let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            let mut content = ui.new_child(UiBuilder::new().id_salt("setup_body").max_rect(body));
+            content.set_clip_rect(ui.clip_rect().intersect(body));
+            content.set_style(field_style);
+            add(&mut content);
+            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            kit::footer(ui, primary, "Cancel", enabled, kit::Footer::default())
+        })
+    });
+    let cancelled = modal.inner == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    FormAction { close: closed || cancelled || modal.should_close(), primary: modal.inner == kit::Action::Ok, ..Default::default() }
 }
 
 /// Render the common shell with a bounded body, preserving modal input and dismissal behavior.

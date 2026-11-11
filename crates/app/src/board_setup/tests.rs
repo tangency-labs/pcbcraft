@@ -80,8 +80,8 @@ fn board_setup_creation_cancel_and_undo_use_real_controls() {
     }
 }
 
-/// Long catalogs scroll inside a short modal while Apply/Cancel remain visible and names
-/// retain a practical editing width rather than shrinking to the column heading's width.
+/// Short modals keep actions and editable names reachable. Escape dismisses the page chooser
+/// before the draft, and dismissing the draft preserves the applied board setup.
 #[test]
 fn short_board_setup_forms_keep_actions_and_names_reachable() {
     let mut h = harness(700.0);
@@ -98,6 +98,17 @@ fn short_board_setup_forms_keep_actions_and_names_reachable() {
     page(&mut h, "Physical stackup");
     assert!(h.get_by_label("Top thickness").rect().width() > 100.0);
     assert!(viewport.contains_rect(h.get_by_label("Apply board setup").rect()));
+    let before = h.state().session.inspect();
+    click(&mut h, "Board setup page");
+    h.get_by_label("Profiles");
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    assert!(h.query_by_label("Profiles").is_none());
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
 }
 
 /// Invalid names cannot commit, while one valid name/thickness edit retains all IDs and is one undo step.

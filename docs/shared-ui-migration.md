@@ -108,6 +108,11 @@ Enter actions, validation and document changes. Escape, Cancel and backdrop
 clicks dismiss the draft. An open dropdown handles Escape before the dialog
 does.
 
+Board Setup uses the shared modal host, header and action footer around a
+bounded page editor. Its navigation and validation message sit outside the
+page's scrolling fields. The primary action follows the draft's validation and
+profile-loading state, and dropdowns handle Escape before the enclosing modal.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface
@@ -168,6 +173,11 @@ compilation also passed. An isolated X11 run verified the mixed checkbox and
 branch folding at 1280×800 in dark mode, with a layout check at 800×650 in
 light mode.
 
-The property dialog migration passed the same workspace, formatting, Clippy and
-WebAssembly checks. The net label regression exercises Escape with a dropdown
-open, Escape from the draft, and backdrop dismissal over Home at both widths.
+The property dialog and Board Setup migrations passed the same workspace,
+formatting, Clippy and WebAssembly checks. The net label regression exercises
+Escape with a dropdown open, Escape from the draft, and backdrop dismissal over
+Home at both widths. Board Setup's compact regression checks that Escape closes
+the page chooser before the draft. Its desktop layout was inspected at
+1280×800 in dark mode and 760×520 in light mode, with the action footer visible
+below the scrolling page editor. Dependency license, source and ban checks
+also passed.
