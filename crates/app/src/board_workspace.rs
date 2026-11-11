@@ -300,24 +300,25 @@ impl PcbApp {
         workspace::ribbon_separator(ui);
 
         let selected = enabled && self.views.active.board.selection.len() == 1;
+        let reference = enabled && self.views.active.board.reference.selected.is_some();
         // Move also starts a copper move when tracks or vias are selected and no footprint is.
         let copper = enabled && self.views.active.board.selection.is_empty() && !self.views.active.board.tracks.selected.is_empty();
         let modify = [
             RibbonTool {
                 icon: ToolIcon::Move,
                 label: "Move",
-                description: "Move footprint",
+                description: "Move selected footprint, text or copper",
                 shortcut: "M",
-                enabled: (selected || copper) && !editing,
+                enabled: (selected || reference || copper) && !editing,
                 active: editing,
                 menu_check: None,
             },
             RibbonTool {
                 icon: ToolIcon::Rotate,
                 label: "Rotate",
-                description: "Rotate footprint counterclockwise",
+                description: "Rotate selected footprint or text counterclockwise",
                 shortcut: "R",
-                enabled: selected || editing,
+                enabled: selected || reference || editing,
                 active: false,
                 menu_check: None,
             },
@@ -326,7 +327,7 @@ impl PcbApp {
                 label: "Flip",
                 description: "Flip footprint to the other side",
                 shortcut: "F",
-                enabled: selected || editing,
+                enabled: selected || self.views.active.board.draft.is_some(),
                 active: false,
                 menu_check: None,
             },
@@ -336,7 +337,7 @@ impl PcbApp {
             label: "Delete",
             description: "Delete selected PCB items",
             shortcut: "Delete",
-            enabled: idle && selected_items,
+            enabled: idle && (selected_items || reference),
             active: false,
             menu_check: None,
         };
@@ -643,6 +644,7 @@ impl PcbApp {
             || pick.selection.is_some()
             || pick.edit.is_some()
             || pick.reference_edit.is_some()
+            || pick.reference_pick.is_some()
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
@@ -657,6 +659,9 @@ impl PcbApp {
             }
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(footprint) = pick.reference_pick {
+                self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
             }
             if let Some(mut edit) = pick.drawing_edit
                 && self.views.active.accepts(edit.source, &self.session)
@@ -704,8 +709,8 @@ impl PcbApp {
                 && let Some(target) = self.views.active.board.target
             {
                 self.run(
-                    pcbcraft_engine::SET_FOOTPRINT_REFERENCE_OFFSET,
-                    &serde_json::json!({"board":target.board,"footprint":draft.footprint,"offset":draft.offset,"expected_revision":draft.source.revision}),
+                    pcbcraft_engine::SET_FOOTPRINT_REFERENCE_TEXT,
+                    &serde_json::json!({"board":target.board,"footprint":draft.footprint,"appearance":draft.appearance,"offset":draft.offset,"expected_revision":draft.source.revision}),
                 );
             }
             self.repaint_editors(ui.ctx());

@@ -767,8 +767,8 @@ fn right_click_cancels_and_ribbon_starts_copper_moves() {
     assert_eq!(h.state().session.revision(), revision, "the next click does not commit a cancelled move");
 
     click_canvas_at(&mut h, middle);
-    assert!(!h.get_by_label("Move footprint").accesskit_node().is_disabled(), "Move is offered for selected copper");
-    click(&mut h, "Move footprint");
+    assert!(!h.get_by_label("Move selected footprint, text or copper").accesskit_node().is_disabled(), "Move is offered for selected copper");
+    click(&mut h, "Move selected footprint, text or copper");
     assert!(h.state().views.active.board.tracks.busy(), "the ribbon started a copper move");
 }
 

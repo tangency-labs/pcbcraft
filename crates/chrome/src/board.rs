@@ -27,6 +27,19 @@ pub fn airwire(p: &Painter, from: Pos2, to: Pos2) {
     p.line_segment([from, to], Stroke::new(1., Tokens::get().board_ink.gamma_multiply(0.55)));
 }
 
+/// Emphasize an existing unrouted connection belonging to the selected reference's component.
+pub fn selected_airwire(p: &Painter, from: Pos2, to: Pos2) {
+    p.line_segment([from, to], Stroke::new(1.5, Tokens::get().accent));
+}
+
+/// Outline visible reference ink for hover or selection without expanding the footprint body bounds.
+pub fn reference_outline(p: &Painter, bounds: Rect, selected: bool, color: Color32) {
+    if bounds.is_finite() && bounds.is_positive() {
+        let color = copper_emphasis(color, Some(true)).gamma_multiply(if selected { 1.0 } else { 0.6 });
+        p.rect_stroke(bounds.expand(2.0), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Outside);
+    }
+}
+
 /// The ratsnest is a view overlay, separate from physical drawing layers.
 pub fn ratsnest_visibility(ui: &mut egui::Ui, visible: &mut bool) -> egui::Response {
     ui.checkbox(visible, "Ratsnest")

@@ -167,6 +167,15 @@ schematic and board views. The component's stable ID and local literal survive
 that rename. A literal `R2` remains literal even when the component becomes R12.
 Removing the `text` override restores the current component reference.
 
+The Properties card shows the component reference alongside local print controls.
+**Use component reference** removes the literal override while retaining other
+appearance settings. **Reset silkscreen** removes all local print overrides and
+the placement offset. Reference selection has its own edit target and uses the
+owner only for correspondence, pad emphasis and existing unrouted connections.
+Delete hides the selected reference's ink, and R rotates its local text. Selecting
+the footprint body provides **Edit silkscreen text** for references whose ink is
+hidden. Text selection never grants physical-footprint edit authority.
+
 Board canvas rendering and Gerber silkscreen export use the same generated and
 clipped paths. The editor-only fallback label on a retained marker footprint
 continues to use its placement offset through the legacy rendering path.

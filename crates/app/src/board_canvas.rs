@@ -61,11 +61,43 @@ pub(super) struct ReferenceDrag {
     pub(super) source: ViewInput,
     pub(super) footprint: String,
     pub(super) offset: Point,
+    pub(super) appearance: Option<pcbcraft_engine::board::reference::Text>,
     original: Point,
+    original_appearance: Option<pcbcraft_engine::board::reference::Text>,
     anchor: Point,
     rotation: u16,
     bottom: bool,
     dragging: bool,
+    physical: bool,
+}
+
+impl ReferenceDrag {
+    /// Capture local appearance and the pointer anchor independently of the footprint's physical pose.
+    fn new(source: ViewInput, footprint: &FootprintView<'_>, anchor: Point, dragging: bool) -> Self {
+        Self {
+            source,
+            footprint: footprint.id.clone(),
+            offset: footprint.reference_offset,
+            original: footprint.reference_offset,
+            appearance: footprint.reference_text.clone(),
+            original_appearance: footprint.reference_text.clone(),
+            anchor,
+            rotation: footprint.rotation,
+            bottom: footprint.bottom,
+            dragging,
+            physical: footprint.physical_reference,
+        }
+    }
+
+    /// Rotate generated print in board space, reversing the local turn for a mirrored bottom placement.
+    /// Retain the change with an in-progress move so completing it remains one authored transaction.
+    fn rotate_text(&mut self, degrees: u16) {
+        if degrees != 0 && self.physical {
+            let appearance = self.appearance.get_or_insert_with(Default::default);
+            let local = if self.bottom { (360 - degrees) % 360 } else { degrees };
+            appearance.rotation = Some((appearance.rotation.unwrap_or(0) + local) % 360);
+        }
+    }
 }
 
 /// Selection and authored intent are handled after the renderer releases its view/session borrows.
@@ -78,6 +110,7 @@ pub(super) struct Interaction {
     pub(super) items: Option<pcbcraft_engine::board::clipboard::BoardSelection>,
     pub(super) edit: Option<Draft>,
     pub(super) reference_edit: Option<ReferenceDrag>,
+    pub(super) reference_pick: Option<String>,
     pub(super) placement: Option<Placement>,
 }
 
@@ -178,20 +211,46 @@ pub(super) fn show(
             response.hover_pos().filter(|_| state.move_requested)
         };
         pointer.and_then(|pointer| {
-            footprints
+            let hovered = footprints
                 .iter()
                 .zip(&hit_bounds)
                 .rev()
                 .find(|(footprint, bounds)| {
                     reference_bounds(ui.painter(), camera, rect, project, state, footprint, **bounds, appearance).contains(pointer)
                 })
-                .map(|(footprint, _)| (pointer, footprint))
+                .map(|(footprint, _)| footprint);
+            hovered
+                .or_else(|| {
+                    state
+                        .move_requested
+                        .then(|| footprints.iter().find(|footprint| state.reference.selected.as_ref() == Some(&footprint.id)))
+                        .flatten()
+                })
+                .map(|footprint| (pointer, footprint))
         })
     } else {
         None
     };
-    let (reference_consumed, reference_edit) =
-        move_reference(&response, camera, state, source.filter(|_| reference_enabled), start, reference_press || drag_start);
+    let reference_pick = start.map(|(_, footprint)| footprint.id.clone());
+    let reference_rotation = camera.model_rotation(state.rotate_requested);
+    let (mut reference_consumed, mut reference_edit) =
+        move_reference(&response, camera, state, source.filter(|_| reference_enabled), start, reference_press || drag_start, reference_rotation);
+    if reference_enabled
+        && !reference_consumed
+        && reference_rotation != 0
+        && let Some(footprint) = footprints.iter().find(|footprint| state.reference.selected.as_ref() == Some(&footprint.id))
+        && footprint.physical_reference
+        && let Some(source) = source
+    {
+        let mut edit = ReferenceDrag::new(source, footprint, Point { x_nm: 0, y_nm: 0 }, false);
+        edit.rotate_text(reference_rotation);
+        reference_edit = Some(edit);
+        reference_consumed = true;
+    }
+    if reference_consumed || state.reference.selected.is_some() {
+        state.flip_requested = false;
+        state.rotate_requested = 0;
+    }
     let enabled = enabled && !reference_consumed;
     // A footprint gesture owns its completion and overlapping drag origin. Explicit drawing
     // tools and existing drawing edits keep their own input even when crossing a footprint.
@@ -240,8 +299,8 @@ pub(super) fn show(
         filters.graphics,
     );
     let enabled = enabled && !edge.consumed && !route.consumed;
-    let mut out = Interaction { drawing_edit: edge.command, track_edit: route.command, reference_edit, ..Interaction::default() };
-    if (edge.consumed || route.consumed) && !state.selection.is_empty() {
+    let mut out = Interaction { drawing_edit: edge.command, track_edit: route.command, reference_edit, reference_pick, ..Interaction::default() };
+    if (edge.consumed || route.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some()) {
         out.selection = Some(BTreeSet::new());
     }
     if route.consumed {
@@ -408,11 +467,16 @@ pub(super) fn show(
         focus,
         &carried,
     );
-    if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
+    let selected_reference = out.reference_pick.clone().or_else(|| out.selection.is_none().then(|| state.reference.selected.clone()).flatten());
+    if (!state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) || selected_reference.is_some())
         && let Some(ratsnest) = ratsnest
     {
         let draft = shown.and_then(|draft| footprints.iter().find(|footprint| footprint.id == draft.footprint).map(|footprint| (draft, footprint)));
         for line in &ratsnest.lines {
+            let selected = selected_reference.as_ref().is_some_and(|id| line.from.footprint == *id || line.to.footprint == *id);
+            if state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) && !selected {
+                continue;
+            }
             let at = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
                 let point = match draft {
                     Some((draft, footprint)) if endpoint.footprint == footprint.id => {
@@ -422,7 +486,11 @@ pub(super) fn show(
                 };
                 camera.screen(point, rect)
             };
-            board::airwire(&context, at(&line.from), at(&line.to));
+            if selected {
+                board::selected_airwire(&p, at(&line.from), at(&line.to));
+            } else {
+                board::airwire(&context, at(&line.from), at(&line.to));
+            }
         }
     }
     for mut footprint in footprints {
@@ -431,6 +499,7 @@ pub(super) fn show(
         }
         if let Some(draft) = state.reference_drag.as_ref().or(out.reference_edit.as_ref()).filter(|draft| draft.footprint == footprint.id) {
             footprint.reference_offset = draft.offset;
+            footprint.reference_text = draft.appearance.clone();
             if footprint.physical_reference {
                 let reference = project.reference_preview(&footprint, draft.offset);
                 footprint.graphics.retain(|graphic| !graphic.reference);
@@ -455,6 +524,12 @@ pub(super) fn show(
                 pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
             }
         }
+        let reference_bounds = reference_bounds(&p, camera, rect, project, state, &footprint, bounds, appearance);
+        let selected = selected_reference.as_ref() == Some(&footprint.id);
+        let reference_color = graphics
+            .iter()
+            .find(|graphic| graphic.reference)
+            .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |graphic| graphic.color.unwrap_or_else(|| board::graphic_color(graphic.style)));
         board::footprint(
             &p,
             &pads,
@@ -462,11 +537,16 @@ pub(super) fn show(
             if footprint.physical_reference { "" } else { footprint.reference },
             center,
             color,
-            state.selection.contains(&footprint.id) || shown.is_some_and(|d| d.footprint == footprint.id),
+            state.selection.contains(&footprint.id)
+                || shown.is_some_and(|d| d.footprint == footprint.id)
+                || selected_reference.as_ref() == Some(&footprint.id),
             highlighted.contains(&footprint.id),
             focus.is_some(),
             shift,
         );
+        if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
+            board::reference_outline(&p, reference_bounds, selected, reference_color);
+        }
     }
     for (at, focused) in markers {
         let at = camera.screen(*at, rect);
@@ -716,6 +796,7 @@ fn move_reference(
     source: Option<ViewInput>,
     start: Option<(Pos2, &FootprintView<'_>)>,
     dragging: bool,
+    rotation: u16,
 ) -> (bool, Option<ReferenceDrag>) {
     let rect = response.rect;
     let mut draft = if let Some(draft) = state.reference_drag.take() {
@@ -725,21 +806,16 @@ fn move_reference(
         draft
     } else if let (Some(source), Some((pointer, footprint))) = (source, start) {
         state.move_requested = false;
-        let draft = ReferenceDrag {
-            source,
-            footprint: footprint.id.clone(),
-            offset: footprint.reference_offset,
-            original: footprint.reference_offset,
-            anchor: camera.unsnapped(pointer, rect),
-            rotation: footprint.rotation,
-            bottom: footprint.bottom,
-            dragging,
-        };
+        let mut draft = ReferenceDrag::new(source, footprint, camera.unsnapped(pointer, rect), dragging);
+        if footprint.physical_reference {
+            draft.rotate_text(rotation);
+        }
         state.reference_drag = Some(draft);
         return (true, None);
     } else {
         return (false, None);
     };
+    draft.rotate_text(rotation);
     let complete = if draft.dragging { response.drag_stopped_by(PointerButton::Primary) } else { response.clicked() };
     let pointer = if complete || draft.dragging { response.interact_pointer_pos().or_else(|| response.hover_pos()) } else { response.hover_pos() };
     if let Some(pointer) = pointer.filter(|pointer| rect.contains(*pointer)) {
@@ -749,7 +825,10 @@ fn move_reference(
         draft.offset = Point { x_nm: (draft.original.x_nm + x).clamp(-limit, limit), y_nm: (draft.original.y_nm + y).clamp(-limit, limit) };
     }
     if complete {
-        return (true, (response.contains_pointer() && draft.offset != draft.original).then_some(draft));
+        return (
+            true,
+            (response.contains_pointer() && (draft.offset != draft.original || draft.appearance != draft.original_appearance)).then_some(draft),
+        );
     }
     if !draft.dragging || response.ctx.input(|input| input.pointer.primary_down()) {
         state.reference_drag = Some(draft);

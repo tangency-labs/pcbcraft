@@ -19,6 +19,7 @@ mod board_drc;
 mod board_measure;
 mod board_outputs;
 mod board_panels;
+mod board_reference;
 mod board_setup;
 mod board_tracks;
 mod board_update;

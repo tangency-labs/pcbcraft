@@ -591,7 +591,7 @@ fn footprint_rotation_follows_the_screen_in_both_board_views() {
             h.run();
             assert_eq!(placement(&h)["rotation"], 0, "Shift+R reverses R");
             assert!((pad_direction(&h) - initial).length() < 0.01);
-            click(&mut h, "Rotate footprint counterclockwise");
+            click(&mut h, "Rotate selected footprint or text counterclockwise");
             assert_eq!(placement(&h)["rotation"], if flipped { 270 } else { 90 });
             let before_move = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
             h.hover_at(origin);
@@ -727,7 +727,7 @@ fn footprint_hotkeys_and_ribbon_preserve_exact_quarter_turns() {
     assert_eq!(changed["y_nm"], 1_270_000);
     assert_eq!(changed["rotation"], 90);
     for _ in 0..3 {
-        click(&mut h, "Rotate footprint counterclockwise");
+        click(&mut h, "Rotate selected footprint or text counterclockwise");
     }
     assert_eq!(placement(&h)["rotation"], 0);
     let center = board_point(&h, Point { x_nm: -2_540_000, y_nm: 1_270_000 });
@@ -739,7 +739,7 @@ fn footprint_hotkeys_and_ribbon_preserve_exact_quarter_turns() {
     h.key_press(Key::R);
     h.run();
     assert_eq!(placement(&h)["rotation"], 0);
-    click(&mut h, "Move footprint");
+    click(&mut h, "Move selected footprint, text or copper");
     assert!(h.state().views.active.board.draft.is_some());
     h.key_press(Key::Escape);
     h.run();

@@ -462,6 +462,9 @@ impl PcbApp {
         {
             return;
         }
+        if self.hide_selected_reference() {
+            return;
+        }
         let Some(source) = self.views.active.input(&self.session) else { return };
         let Some(project) = self.session.project() else { return };
         let Some(target) = self.views.active.board.target else { return };

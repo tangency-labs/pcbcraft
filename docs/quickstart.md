@@ -389,10 +389,17 @@ next reviewed update. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
 
-To move a placed reference designator, drag its lettering or hover over it,
-press **M**, and click at the new position. To set a library default, open the
-footprint in **Footprint Editor**, select **Definition**, and edit the reference
-offsets in Properties.
+Click a placed reference designator to select its text and open **Properties**.
+The owning footprint highlights and its remaining airwires appear. Drag the
+lettering, or press **M** and click, to move it; **R** rotates the text and
+**Delete** hides it. Properties offers local printed words, the bundled fonts,
+size/stroke, rotation, alignment, visibility and offsets. Clear **Use component
+reference** to print other words without changing the component's identity.
+**Rename…** explicitly changes the shared component reference, including the
+schematic. **Reset silkscreen** restores inherited text, appearance and position;
+select the footprint body and **Edit silkscreen text** to recover hidden text.
+To set a library default position, open the footprint in **Footprint Editor**,
+select **Definition**, and edit the reference offsets in Properties.
 
 To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
 layout use **Layout → Design → Sync**. **Create board** explicitly adds

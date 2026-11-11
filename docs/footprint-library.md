@@ -212,6 +212,22 @@ silkscreen reference**, and set the offsets in Properties. The canvas previews
 the template as `REF`. A board placement can add its own offset, and its
 component still supplies the printed reference text.
 
+Selecting reference lettering opens **Silkscreen text** in PCB Properties. The
+component reference remains visible alongside **Printed text**, font, size,
+stroke width, local rotation, alignment, visibility and offsets. Clear **Use
+component reference** to print local words such as `Power input`. These edits
+belong to the placed footprint and its Gerber ink. **Rename… → Rename component**
+explicitly changes the shared component reference through its validated command,
+including the schematic. A local text literal retains its wording across a
+component rename. **Reset silkscreen** restores inherited wording and appearance.
+Body selection offers **Edit silkscreen text** to recover hidden lettering.
+The Properties fields use aligned label/value columns; position offsets expand
+under **Position**, and Apply/Reset remain below the scrolling fields in short
+windows. Editing a dimension creates its local size override automatically.
+Fixed footprint silkscreen paths and artwork still belong to the pinned library
+definition; these reference controls do not provide individual board-instance
+editing of those objects.
+
 Passive footprints use two short silk lines outside the pads, LEDs a cathode
 bar, and SOT-23 a clipped body outline and an external triangular pad-1 marker.
 The earlier 0.08 mm hollow polarity boxes are absent from these revisions.

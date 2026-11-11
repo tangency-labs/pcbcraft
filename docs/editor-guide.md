@@ -556,6 +556,14 @@ registration, arcs and slots remain planned.
 Drag a reference designator or hover over it and press **M**, then click to
 place it. The reference position is stored on that footprint and follows its
 rotation and side. The board view and silkscreen export use the moved position.
+Clicking the lettering selects the text, highlights its owning footprint and
+shows remaining airwires and text Properties. **R** rotates the selected text;
+**Delete** hides it. Local printed words, font, paired height/stroke, rotation,
+alignment, visibility and offsets are undoable placement edits. Clear **Use
+component reference** to enter literal printed words; **Rename…** explicitly
+renames the shared component in the schematic and outputs. **Reset silkscreen**
+removes local appearance and position overrides. A footprint body's **Edit
+silkscreen text** button opens these controls even when its text is hidden.
 To author the default for future placements, edit the definition's reference
 offset in the Footprint Editor.
 

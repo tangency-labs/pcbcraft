@@ -200,6 +200,7 @@ pub(super) struct BoardState {
     pub(super) measure: crate::board_measure::Measure,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) reference_drag: Option<crate::board_canvas::ReferenceDrag>,
+    pub(super) reference: crate::board_reference::State,
     pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
@@ -226,6 +227,10 @@ pub(super) struct BoardState {
 }
 
 impl BoardState {
+    /// Footprints used only for correspondence include a selected reference's owning placement.
+    pub(super) fn probe_footprints(&self) -> std::collections::BTreeSet<String> {
+        self.selection.iter().cloned().chain(self.reference.selected.iter().cloned()).collect()
+    }
     /// Whether a footprint or its reference currently owns a placement gesture.
     pub(super) fn editing_footprint(&self) -> bool {
         self.draft.is_some() || self.reference_drag.is_some()
@@ -711,6 +716,7 @@ impl EditorView {
             self.binding = None;
             self.schematic = SchematicState::default();
             self.board.selection.clear();
+            self.board.reference = Default::default();
             return true;
         }
         let binding = Binding::current(session, self.workspace, board_target, self.sheet);
@@ -792,6 +798,9 @@ impl EditorView {
                 .map(|footprint| footprint.id)
                 .collect();
             self.board.selection.retain(|id| placed.contains(id));
+            if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
+                self.board.reference = Default::default();
+            }
             let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> = self
                 .board

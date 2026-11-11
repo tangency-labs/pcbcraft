@@ -59,6 +59,33 @@ pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, option
     .inner
 }
 
+/// Align a typed selector with the inspector's text fields, using the full value column and shared control height.
+pub fn select(ui: &mut Ui, label: &str, id: egui::Id, selected: &str, add: impl FnOnce(&mut Ui)) -> egui::Response {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        let label = ui.add_sized(vec2(72., t.control_height), egui::Label::new(label).halign(Align::Min));
+        ui.spacing_mut().interact_size.y = t.control_height;
+        egui::ComboBox::from_id_salt(id).width(ui.available_width()).selected_text(selected).show_ui(ui, add).response.labelled_by(label.id)
+    })
+    .inner
+}
+
+/// Present a whole-degree angle with the same label column, width and height as adjacent inputs.
+pub fn angle(ui: &mut Ui, label: &str, degrees: &mut u16) -> egui::Response {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        let label = ui.add_sized(vec2(72., t.control_height), egui::Label::new(label).halign(Align::Min));
+        ui.add_sized(vec2(ui.available_width(), t.control_height), egui::DragValue::new(degrees).range(0..=359).suffix("°")).labelled_by(label.id)
+    })
+    .inner
+}
+
+/// Reserve the inspector's heading and action footer when scrolling a form in a short host.
+pub fn form_body_height(area: egui::Rect) -> f32 {
+    let height = Tokens::get().control_height;
+    (area.height() - 6. * height).max(2. * height)
+}
+
 /// Distinguish symbol terminal identities from footprint pad identities above mapping rows.
 /// Both columns keep the same proportions as [`mapping_choice`] in narrow and wide previews.
 pub fn mapping_header(ui: &mut Ui) {

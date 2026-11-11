@@ -656,7 +656,7 @@ mod live {
         WindowCommand {
             id: "view.select_footprints",
             title: "Select Footprints",
-            summary: "Replace a PCB view's selection with these footprints, as clicking them or their Browser rows does. An empty list clears it. Other views highlight the counterpart symbols under the Follow selection setting.",
+            summary: "Replace a PCB view's selection with these footprints, or select one footprint's reference text using element=reference. An empty footprint list clears selection. Other views highlight the counterpart symbols under the Follow selection setting.",
             params: &[
                 VIEW,
                 Param {
@@ -664,6 +664,12 @@ mod live {
                     summary: "Footprint IDs on the view's board, from inspect_project",
                     required: true,
                     kind: Kind::Footprints,
+                },
+                Param {
+                    name: "element",
+                    summary: "Select footprint bodies (default) or one placement's reference text and Properties",
+                    required: false,
+                    kind: Kind::Choice(&["footprint", "reference"]),
                 },
             ],
         },
@@ -935,6 +941,7 @@ mod live {
                     "tool": view.schematic.tool.as_ref().map(tool_name),
                     "board": (view.workspace == Workspace::Board).then(|| json!({
                         "selection": view.board.selection,
+                        "reference_selection": view.board.reference.selected,
                         "hidden_layers": view.board.hidden_layers,
                         "ratsnest_visible": view.board.target.and_then(|target| app.session.project().and_then(|project| project.board_view(target)))
                             .filter(|board| board.has_accepted_connectivity()).map(|_| !view.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)),
@@ -1262,6 +1269,10 @@ mod live {
                 }
                 ("view.select_footprints", Some((view, _)), _) => {
                     let wanted = footprints(&params["footprints"]).ok_or("`footprints` must be a list of distinct footprint IDs")?;
+                    let reference = params["element"].as_str() == Some("reference");
+                    if reference && wanted.len() != 1 {
+                        return Err("Reference selection requires exactly one footprint ID".into());
+                    }
                     let placed: std::collections::BTreeSet<String> = self
                         .views
                         .view(view)
@@ -1281,7 +1292,13 @@ mod live {
                     let previous = self.views.active.id();
                     self.views.bind(view);
                     self.views.active.cancel_gesture();
-                    self.views.select_board(wanted, &self.session, self.preferences.selection_follow);
+                    if reference {
+                        if let Some(footprint) = wanted.into_iter().next() {
+                            self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
+                        }
+                    } else {
+                        self.views.select_board(wanted, &self.session, self.preferences.selection_follow);
+                    }
                     self.views.bind(previous);
                 }
                 ("view.open_sheet", Some((view, _)), _) => {

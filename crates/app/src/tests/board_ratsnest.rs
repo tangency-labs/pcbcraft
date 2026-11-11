@@ -52,6 +52,236 @@ fn airwires(h: &Harness<'_, PcbApp>) -> Vec<[egui::Pos2; 2]> {
         .collect()
 }
 
+/// Replace a draft text field through its actual input control.
+fn type_field(h: &mut Harness<'_, PcbApp>, label: &str, value: &str) {
+    use egui::accesskit::Role;
+    h.get_by_role_and_label(Role::TextInput, label).click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, label).type_text(value);
+    h.run();
+}
+/// Text selection exposes local properties and owner airwires while physical edit selection stays empty.
+#[test]
+fn reference_selection_highlights_its_owner_and_protects_footprint_geometry() {
+    let mut h = board(true);
+    h.state_mut().browser.open = false;
+    h.state_mut().views.active.board.set_ratsnest_visibility(false);
+    h.run();
+    let project = h.state().session.snapshot().unwrap();
+    let target = project.board_target().unwrap();
+    let footprint = project.board_view(target).unwrap().footprints().next().unwrap();
+    let id = footprint.id.clone();
+    let pads = footprint.pads.clone();
+    let pose = (footprint.position, footprint.rotation, footprint.bottom);
+    let model_point = footprint.graphics.iter().find(|graphic| graphic.reference).unwrap().points[0];
+    let canvas = h.get_by_label("PCB canvas").rect();
+    let point = h.state().views.active.camera.screen(model_point, canvas);
+    let revision = h.state().session.revision();
+    click_canvas_at(&mut h, point);
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(h.state().views.active.board.reference.selected.as_ref(), Some(&id));
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.get_by_label("Silkscreen text");
+    assert!(h.query_all_by_label("Printed text").next().is_none());
+    assert!(
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape,egui::Shape::LineSegment {stroke,..} if stroke.width == 1.5 && stroke.color == Tokens::get().accent))
+    );
+    assert!(h.state().views.active.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY));
+    let schematic = h.state().session.inspect()["project"]["schematic"].clone();
+    click(&mut h, "Use component reference");
+    type_field(&mut h, "Printed text", "Power input");
+    type_field(&mut h, "Height", "1.6 mm");
+    type_field(&mut h, "Stroke", "0.16 mm");
+    assert_eq!(h.state().session.revision(), revision, "typed fields remain a draft");
+    click(&mut h, "Apply changes");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(h.state().session.inspect()["project"]["schematic"], schematic);
+    let snapshot = h.state().session.snapshot().unwrap();
+    let changed = snapshot.board_view(target).unwrap().footprints().find(|footprint| footprint.id == id).unwrap();
+    assert_eq!(changed.reference_appearance.text, "Power input");
+    assert_eq!(changed.reference_appearance.size.height_nm, 1_600_000);
+    assert_eq!(changed.pads, pads);
+    click(&mut h, "Rename…");
+    type_field(&mut h, "Reference", "R99");
+    click(&mut h, "Rename component");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let snapshot = h.state().session.snapshot().unwrap();
+    let changed = snapshot.board_view(target).unwrap().footprints().find(|footprint| footprint.id == id).unwrap();
+    assert_eq!(changed.reference, "R99");
+    assert_eq!(changed.reference_appearance.text, "Power input");
+    h.key_press(Key::R);
+    h.run();
+    let snapshot = h.state().session.snapshot().unwrap();
+    let rotated = snapshot.board_view(target).unwrap().footprints().find(|footprint| footprint.id == id).unwrap();
+    assert_eq!(rotated.reference_appearance.rotation, 90);
+    assert_eq!((rotated.position, rotated.rotation, rotated.bottom), pose);
+    assert_eq!(rotated.pads, pads);
+    h.key_press(Key::Delete);
+    h.run();
+    let snapshot = h.state().session.snapshot().unwrap();
+    let hidden = snapshot.board_view(target).unwrap().footprints().find(|footprint| footprint.id == id).unwrap();
+    assert!(!hidden.reference_appearance.visible);
+    assert_eq!(hidden.pads, pads);
+    assert_eq!(snapshot.board_view(target).unwrap().footprints().count(), 2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    click(&mut h, "Reset silkscreen");
+    let snapshot = h.state().session.snapshot().unwrap();
+    let reset = snapshot.board_view(target).unwrap().footprints().find(|footprint| footprint.id == id).unwrap();
+    assert!(reset.reference_text.is_none());
+    assert_eq!(reset.reference_appearance.text, "R99");
+    assert_eq!(reset.reference_appearance.size.height_nm, 1_000_000);
+    assert_eq!((reset.position, reset.rotation, reset.bottom), pose);
+    click(&mut h, "Draw lines on Board Outline");
+    let canvas = h.get_by_label("PCB canvas").rect();
+    click_canvas_at(&mut h, canvas.center_top() + egui::vec2(0., 100.));
+    assert!(h.state().views.active.board.reference.selected.is_none(), "An outline tool replaces the text edit target");
+}
+
+/// Text rotation follows the screen on both placement sides and in a mirrored board view.
+#[test]
+fn reference_rotation_is_counterclockwise_on_screen_for_both_sides() {
+    for bottom in [false, true] {
+        for flipped in [false, true] {
+            let mut h = board(true);
+            let snapshot = h.state().session.snapshot().unwrap();
+            let footprint = snapshot.board_view(snapshot.board_target().unwrap()).unwrap().footprints().next().unwrap().id;
+            let revision = h.state().session.revision();
+            h.state_mut().run(
+                SET_FOOTPRINT_TRANSFORM,
+                &json!({"footprint":footprint,"x_nm":0,"y_nm":0,"rotation":0,"side":if bottom {"back"} else {"front"},"expected_revision":revision}),
+            );
+            let revision = h.state().session.revision();
+            h.state_mut().run(
+                pcbcraft_engine::SET_FOOTPRINT_REFERENCE_TEXT,
+                &json!({"footprint":footprint,"appearance":null,"offset":{"x_nm":-10_000_000,"y_nm":-10_000_000},"expected_revision":revision}),
+            );
+            assert!(h.state().message.is_none(), "{:?}", h.state().message);
+            let policy = h.state().preferences.selection_follow;
+            let app = h.state_mut();
+            app.views.active.camera.set_mirrored(flipped);
+            app.views.select_board_reference(footprint, &app.session, policy);
+            h.run();
+            let direction = |h: &Harness<'_, PcbApp>| {
+                let snapshot = h.state().session.snapshot().unwrap();
+                let placement = snapshot.board_view(snapshot.board_target().unwrap()).unwrap().footprints().next().unwrap();
+                let points = &placement.graphics.iter().find(|graphic| graphic.reference).unwrap().points;
+                let rect = h.get_by_label("PCB canvas").rect();
+                let camera = &h.state().views.active.camera;
+                camera.screen(points[1], rect) - camera.screen(points[0], rect)
+            };
+            let before = direction(&h);
+            h.key_press(Key::R);
+            h.run();
+            let after = direction(&h);
+            assert!(before.x * after.y - before.y * after.x < 0., "bottom={bottom}, flipped={flipped}");
+            h.key_press_modifiers(Modifiers::SHIFT, Key::R);
+            h.run();
+            assert!((direction(&h) - before).length() < 0.01);
+        }
+    }
+}
+
+/// Dirty property drafts survive unrelated edits, refuse stale submission and retain rename errors.
+#[test]
+fn reference_properties_refuse_stale_drafts_and_duplicate_component_names() {
+    let mut h = board(true);
+    let id = h
+        .state()
+        .session
+        .snapshot()
+        .unwrap()
+        .board_view(h.state().session.project().unwrap().board_target().unwrap())
+        .unwrap()
+        .footprints()
+        .next()
+        .unwrap()
+        .id;
+    let policy = h.state().preferences.selection_follow;
+    let app = h.state_mut();
+    app.views.select_board_reference(id.clone(), &app.session, policy);
+    h.run();
+    click(&mut h, "Use component reference");
+    type_field(&mut h, "Printed text", "Pending print");
+    let revision = h.state().session.revision();
+    h.state_mut().run(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":1_000_000,"y_nm":0,"rotation":0,"expected_revision":revision}));
+    h.run();
+    h.get_by_label("The board changed. Reload properties to continue.");
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    assert!(h.query_all_by_label("Apply changes").next().is_none());
+    click(&mut h, "Reload properties");
+    h.run();
+    click(&mut h, "Rename…");
+    type_field(&mut h, "Reference", "R2");
+    click(&mut h, "Rename component");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    assert!(h.state().message.is_some());
+    h.get_by_label("Cancel rename");
+    type_field(&mut h, "Reference", "R42");
+    click(&mut h, "Rename component");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.get_by_label("Silkscreen text");
+}
+
+/// Addressed reference selection uses stable correspondence, and renaming finds its owning sheet.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn live_reference_selection_and_rename_reach_a_component_on_another_sheet() {
+    let mut h = board(false);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Power","expected_revision":revision}));
+    let snapshot = h.state().session.snapshot().unwrap();
+    let main = snapshot.sheet_target();
+    let power = snapshot.sheets().nth(1).unwrap().target;
+    let revision = h.state().session.revision();
+    h.state_mut().run(PLACE_SYMBOL, &json!({"sheet":power.id(),"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    let snapshot = h.state().session.snapshot().unwrap();
+    let scoped = snapshot.for_sheet(power).unwrap();
+    let symbol = scoped.symbols().last().unwrap().id();
+    let revision = h.state().session.revision();
+    h.state_mut().run(PLACE_FOOTPRINT, &json!({"sheet":power.id(),"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":20_000_000,"y_nm":0,"expected_revision":revision}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let snapshot = h.state().session.snapshot().unwrap();
+    let footprint = snapshot.board_view(snapshot.board_target().unwrap()).unwrap().footprints().last().unwrap().id;
+    let main_symbols = snapshot.for_sheet(main).unwrap().symbols().to_vec();
+    let board = h.state().views.active.id();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "view.set_workspace", &json!({"view":board.0,"workspace":"schematic","placement":"beside"})).unwrap();
+    h.run();
+    let schematic =
+        h.state_mut().views.all_mut().find(|view| view.workspace == crate::editor_view::Workspace::Schematic && view.id() != board).unwrap().id();
+    h.state_mut().run_window_command(&ctx, "view.open_sheet", &json!({"view":schematic.0,"sheet":power.id()})).unwrap();
+    let schematic = h.state_mut().views.all_mut().find(|view| view.target() == Some(crate::editor_view::DocumentTarget::Sheet(power))).unwrap().id();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    assert!(
+        h.state_mut().run_window_command(&ctx, "view.select_footprints", &json!({"view":board.0,"footprints":[],"element":"reference"})).is_err()
+    );
+    h.state_mut()
+        .run_window_command(&ctx, "view.select_footprints", &json!({"view":board.0,"footprints":[footprint],"element":"reference"}))
+        .unwrap();
+    h.run();
+    assert!(h.state().views.view(board).unwrap().board.selection.is_empty());
+    assert_eq!(h.state().views.view(board).unwrap().board.reference.selected.as_ref(), Some(&footprint));
+    assert_eq!(h.state().views.highlight_for(schematic, &h.state().session).single_symbol(), Some(symbol.as_str()));
+    assert!(h.state().views.view(schematic).unwrap().schematic.selection.is_empty());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    h.state_mut().views.bind(board);
+    h.run();
+    click(&mut h, "Rename…");
+    type_field(&mut h, "Reference", "R88");
+    click(&mut h, "Rename component");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let snapshot = h.state().session.snapshot().unwrap();
+    let scoped = snapshot.for_sheet(power).unwrap();
+    assert_eq!(scoped.reference(scoped.symbols().last().unwrap()), "R88");
+    assert_eq!(snapshot.for_sheet(main).unwrap().symbols(), main_symbols);
+}
+
 /// Real canvas strokes use engine-mapped centers, remain behind pads and track authored transforms/Undo.
 #[test]
 fn ratsnest_projects_accepted_pad_centers_and_recomputes_after_move_and_undo() {
@@ -147,4 +377,27 @@ fn ratsnest_controls_and_counts_are_unavailable_before_acceptance() {
     let before = h.state().session.inspect();
     assert!(h.state_mut().run_window_command(&ctx, "view.set_ratsnest_visibility", &json!({"view":view,"visible":true})).is_err());
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Compact forms align labels and controls and retain their actions below the scrolling fields.
+#[test]
+fn reference_properties_align_controls_and_keep_actions_visible_in_short_hosts() {
+    let mut h = board(true);
+    h.state_mut().browser.open = false;
+    let snapshot = h.state().session.snapshot().unwrap();
+    let id = snapshot.board_view(snapshot.board_target().unwrap()).unwrap().footprints().next().unwrap().id;
+    let policy = h.state().preferences.selection_follow;
+    let app = h.state_mut();
+    app.views.select_board_reference(id, &app.session, policy);
+    h.set_size(egui::vec2(1000., 520.));
+    h.run();
+    let height = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Height").rect();
+    let font = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font").rect();
+    assert!((height.left() - font.left()).abs() < 1.);
+    assert!((height.right() - font.right()).abs() < 1.);
+    for label in ["Apply changes", "Reset silkscreen"] {
+        let rect = h.get_by_label(label).rect();
+        assert!(rect.top() > height.bottom() && rect.bottom() < 500., "{label}: {rect:?}");
+    }
+    assert!(h.query_all_by_label("Override text size").next().is_none());
 }
