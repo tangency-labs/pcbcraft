@@ -199,6 +199,7 @@ pub(super) struct BoardState {
     /// The view-only ruler and whether its tool is armed.
     pub(super) measure: crate::board_measure::Measure,
     pub(super) draft: Option<crate::board_canvas::Draft>,
+    pub(super) reference_drag: Option<crate::board_canvas::ReferenceDrag>,
     pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
@@ -225,6 +226,11 @@ pub(super) struct BoardState {
 }
 
 impl BoardState {
+    /// Whether a footprint or its reference currently owns a placement gesture.
+    pub(super) fn editing_footprint(&self) -> bool {
+        self.draft.is_some() || self.reference_drag.is_some()
+    }
+
     /// Reuse connectivity for the same board and view/revision authority. Missing authority
     /// recomputes without caching, so disposable previews cannot borrow another opening's data.
     pub(super) fn copper_connectivity(
@@ -633,6 +639,7 @@ impl EditorView {
         self.board.tracks.cancel();
         self.board.measure.cancel();
         self.board.draft = None;
+        self.board.reference_drag = None;
         self.board.placement = None;
         self.board.box_drag = None;
         self.board.move_requested = false;
@@ -750,6 +757,9 @@ impl EditorView {
         }
         if self.board.draft.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
             self.cancel_gesture();
+        }
+        if self.board.reference_drag.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
+            self.board.reference_drag = None;
         }
         if self.board.drawing.source().is_some_and(|source| !self.accepts(source, session)) {
             self.cancel_gesture();

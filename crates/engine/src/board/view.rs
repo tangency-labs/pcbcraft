@@ -98,6 +98,8 @@ pub struct GraphicView {
     pub points: Vec<Point>,
     pub stroke_nm: Option<i64>,
     pub closed: bool,
+    /// This path belongs to the generated reference text rather than fixed footprint artwork.
+    pub reference: bool,
 }
 
 /// A placement resolved in one addressed board, including its logical component association.
@@ -115,6 +117,8 @@ pub struct FootprintView<'a> {
     pub pads: Vec<PadView>,
     pub graphics: Vec<GraphicView>,
     pub physical_reference: bool,
+    /// Additional local displacement from the library reference default, before rotation or side mirroring.
+    pub reference_offset: Point,
     /// The accepted source was removed from the schematic; physical removal is pending.
     pub pending_removal: bool,
     /// Placed on the bottom side, mirrored and on the back layers.
@@ -249,10 +253,20 @@ impl<'a> BoardView<'a> {
                     .collect(),
                 graphics: graphics(self.project, footprint, reference),
                 physical_reference: self.project.board.definition_for(footprint).is_some_and(|d| d.reference.is_some()),
+                reference_offset: footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
                 bottom: footprint.bottom,
             })
         })
+    }
+
+    /// Project a disposable reference move through the same silk clipping and transform as export.
+    /// The view must belong to this board. Editor-only legacy labels have no physical paths.
+    pub fn reference_preview(self, view: &FootprintView<'_>, offset: Point) -> Vec<GraphicView> {
+        let Some(id) = crate::schematic::wiring::parse_id(&view.id, "footprint-").filter(|_| view.board == self.target) else { return Vec::new() };
+        let placements = self.project.board.footprints();
+        let Ok(index) = placements.binary_search_by_key(&id, |footprint| footprint.id) else { return Vec::new() };
+        reference_graphics(self.project, &placements[index], view.reference, offset)
     }
 
     /// Project schematic component selection into this board's placement IDs. Wires and missing
@@ -313,6 +327,7 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
             points: rectangle_points(footprint, g.center, g.width_nm, g.height_nm, g.rotation).to_vec(),
             stroke_nm: None,
             closed: true,
+            reference: false,
         })
         .collect();
     for artwork in &definition.artwork {
@@ -331,6 +346,7 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
                     points: path.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: false,
+                    reference: false,
                 }));
             } else {
                 result.push(GraphicView {
@@ -339,11 +355,12 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
                     points: points.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: artwork.graphic.closed(),
+                    reference: false,
                 });
             }
         }
     }
-    let mut paths: Vec<_> = definition
+    let paths: Vec<_> = definition
         .silkscreen
         .iter()
         .map(|path| {
@@ -354,30 +371,36 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
             points
         })
         .collect();
-    if definition.reference.is_some() {
-        let top_pad = definition.pads.iter().map(|p| p.center.y_nm - p.width_nm.max(p.height_nm) / 2).min().unwrap_or(0);
-        let top_line = paths.iter().flatten().map(|p| p.y_nm - style.stroke_width_nm / 2).min().unwrap_or(top_pad);
-        let lettering = if definition.reference.as_deref() == Some("pcbcraft-technical-1") {
-            super::silkscreen::lettering
-        } else {
-            super::silkscreen::legacy_lettering
-        };
-        let mut text = lettering(reference, 0, style);
-        let bottom = text.iter().flatten().map(|p| p.y_nm).max().unwrap_or(0) + (style.stroke_width_nm + 1) / 2;
-        let offset = top_pad.min(top_line) - style.pad_clearance_nm - bottom;
-        for point in text.iter_mut().flatten() {
-            point.y_nm += offset;
-        }
-        paths.extend(text);
-    }
     result.extend(super::silkscreen::clipped(paths, &definition.pads, style).into_iter().map(|path| GraphicView {
         purpose: super::definition::GraphicPurpose::Silkscreen,
         side,
         points: path.into_iter().map(|point| footprint.point(point)).collect(),
         stroke_nm: Some(style.stroke_width_nm),
         closed: false,
+        reference: false,
     }));
+    result.extend(reference_graphics(project, footprint, reference, footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET)));
     result
+}
+
+/// Place generated lettering at the automatic anchor plus the library and placement offsets. Clip after moving
+/// so the displayed paths and fabrication both use the actual position relative to copper.
+fn reference_graphics(project: &Project, footprint: &super::Footprint, reference: &str, offset: Point) -> Vec<GraphicView> {
+    let Some(definition) = project.board.definition_for(footprint) else { return Vec::new() };
+    let style = project.board.silkscreen.unwrap_or_default();
+    let side = if footprint.bottom { super::setup::Side::Back } else { super::setup::Side::Front };
+    definition
+        .reference_paths(reference, style, offset)
+        .into_iter()
+        .map(|path| GraphicView {
+            purpose: super::definition::GraphicPurpose::Silkscreen,
+            side,
+            points: path.into_iter().map(|point| footprint.point(point)).collect(),
+            stroke_nm: Some(style.stroke_width_nm),
+            closed: false,
+            reference: true,
+        })
+        .collect()
 }
 
 /// Resolve rectangle corners from immutable local geometry, preserving exact odd dimensions

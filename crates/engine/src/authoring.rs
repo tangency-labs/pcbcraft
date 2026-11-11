@@ -33,6 +33,14 @@ pub struct SymbolSettings {
     pub defaults: Option<library::Defaults>,
 }
 
+/// Generated reference settings owned by the footprint definition, independent of board instances.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintReferenceSettings {
+    pub enabled: bool,
+    pub offset: Point,
+}
+
 /// Primitive identity survives renumbering; terminal/pad numbers remain electrical metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -184,6 +192,8 @@ pub struct Item {
     pub defaults: Option<library::Defaults>,
     pub unit: String,
     pub reference_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_offset: Option<Point>,
     /// Read-only provenance from a forked footprint, independent of its editable source summary.
     pub original_source: Option<footprint::Source>,
     allocation: Allocation,
@@ -269,6 +279,8 @@ pub enum Action {
         default_value: String,
         #[serde(default)]
         symbol_settings: Option<SymbolSettings>,
+        #[serde(default)]
+        footprint_reference: Option<FootprintReferenceSettings>,
     },
     Undo,
     Redo,
@@ -312,6 +324,7 @@ impl Item {
             defaults: None,
             unit: "main".into(),
             reference_font: None,
+            reference_offset: None,
             original_source: None,
             allocation: Allocation { object: 3, revision: 1 },
             objects: BTreeMap::new(),
@@ -438,6 +451,7 @@ impl Item {
         item.license = definition.license.clone();
         item.source = format!("Fork of {}/{} r{}; {}", definition.library, definition.id, definition.revision, definition.source.reference);
         item.reference_font = definition.reference.clone();
+        item.reference_offset = definition.reference_offset;
         item.original_source = Some(definition.source.clone());
         for primitive in definition
             .pads
@@ -530,6 +544,7 @@ impl Item {
                 artwork,
                 silkscreen,
                 reference: self.reference_font.clone(),
+                reference_offset: self.reference_offset,
             };
             if draft {
                 definition.validate_draft()?;
@@ -554,6 +569,7 @@ impl Item {
             || self.reference_prefix.len() > 4
             || self.default_value.len() > 256
             || self.unit.len() > 64
+            || (self.kind == Kind::Symbol && self.reference_offset.is_some())
             || serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?.len() >= MAX_BYTES
         {
             return Err("Invalid or oversized native library item.".into());
@@ -725,7 +741,7 @@ impl Session {
                             }
                         }
                     }
-                    Action::Metadata { name, license, source, reference_prefix, default_value, symbol_settings } => {
+                    Action::Metadata { name, license, source, reference_prefix, default_value, symbol_settings, footprint_reference } => {
                         next.name = name;
                         next.license = license;
                         next.source = source;
@@ -737,6 +753,18 @@ impl Session {
                             }
                             next.behavior = settings.behavior;
                             next.defaults = settings.defaults;
+                        }
+                        if let Some(settings) = footprint_reference {
+                            if next.kind != Kind::Footprint {
+                                return Err("Reference settings require a footprint document.".into());
+                            }
+                            if settings.enabled {
+                                next.reference_font.get_or_insert_with(|| "pcbcraft-technical-1".into());
+                                next.reference_offset = (settings.offset != crate::board::DEFAULT_REFERENCE_OFFSET).then_some(settings.offset);
+                            } else {
+                                next.reference_font = None;
+                                next.reference_offset = None;
+                            }
                         }
                     }
                     Action::Undo | Action::Redo => return Err("History operation cannot be nested.".into()),

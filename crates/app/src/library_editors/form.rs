@@ -18,6 +18,12 @@ impl Draft {
         if object.is_none() && item.kind == Kind::Symbol {
             value["symbol_settings"] = json!({"behavior":item.behavior,"defaults":item.defaults});
         }
+        if object.is_none() && item.kind == Kind::Footprint {
+            value["footprint_reference"] = json!({
+                "enabled": item.reference_font.is_some(),
+                "offset": item.reference_offset.unwrap_or(pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET),
+            });
+        }
         if let Some(pad) = value.get_mut("pad").and_then(Value::as_object_mut) {
             pad.entry("corner_radius_nm").or_insert(json!(0));
             pad.entry("drill_nm").or_insert(Value::Null);
@@ -39,7 +45,18 @@ impl Draft {
             hidden.push("fill");
         }
         if self.kind == Kind::Footprint && self.object.is_none() {
-            hidden.extend(["reference_prefix", "default_value"]);
+            hidden.extend(["reference_prefix", "default_value", "footprint_reference"]);
+            let reference = &mut self.value["footprint_reference"];
+            let mut enabled = reference["enabled"].as_bool().unwrap_or_default();
+            if ui.checkbox(&mut enabled, "Generate silkscreen reference").changed() {
+                reference["enabled"] = json!(enabled);
+            }
+            if enabled {
+                fields(ui, &mut reference["offset"], &mut self.numbers, ".footprint_reference.offset", expanded, &[]);
+            } else {
+                self.numbers.remove(".footprint_reference.offset.x_nm");
+                self.numbers.remove(".footprint_reference.offset.y_nm");
+            }
         }
         if pad {
             hidden.push("copper");
@@ -111,6 +128,9 @@ pub(super) fn title(draft: &Draft) -> String {
 /// Labels follow geometry semantics; explicit units remain beside length input.
 fn label(path: &str) -> String {
     let path = path.trim_start_matches('.');
+    if let Some(axis) = path.strip_prefix("footprint_reference.offset.") {
+        return if axis == "x_nm" { "Reference X offset (mm)" } else { "Reference Y offset (mm)" }.into();
+    }
     let names = path
         .split('.')
         .map(|part| match part {

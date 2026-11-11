@@ -117,6 +117,97 @@ fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
+/// Canvas grabs move only the rendered reference and commit once, with cancellation and undo.
+#[test]
+fn pcb_reference_can_move_with_m_or_primary_drag() {
+    for rotation in [0, 180] {
+        fn read<'a>(h: &'a Harness<'_, PcbApp>) -> pcbcraft_engine::board::view::FootprintView<'a> {
+            h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap()
+        }
+        let mut h = harness();
+        h.set_size(egui::vec2(1400.0, 900.0));
+        resistor_with_board_at_origin(&mut h);
+        h.state_mut().browser.open = false;
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            &json!({"symbol":"symbol-2","definition":"resistor-0402","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+        );
+        h.run();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        let revision = h.state().session.revision();
+        let id = read(&h).id.clone();
+        h.state_mut().run(
+            pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":0,"y_nm":0,"rotation":rotation,"expected_revision":revision}),
+        );
+        h.run();
+        let snapshot = h.state().session.snapshot().unwrap();
+        let footprint = read(&h);
+        let origin = footprint.position;
+        let pads = footprint.pads.clone();
+        let point = footprint.graphics.iter().find(|g| g.reference).unwrap().points[0];
+        let from = board_point(&h, point);
+        let to = from + egui::vec2(70.0, -55.0);
+        h.hover_at(from);
+        h.run();
+        h.key_press(Key::M);
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_some());
+        h.hover_at(to);
+        h.run();
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_none());
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+
+        h.hover_at(from);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        assert!(h.state().views.active.board.reference_drag.is_some(), "mouse-down must capture the reference before the drag threshold");
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_none());
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()), "a plain click makes no edit");
+
+        for (dragging, quick) in [(false, false), (true, false), (true, true)] {
+            let revision = h.state().session.revision();
+            h.hover_at(from);
+            h.run();
+            if dragging {
+                h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.step();
+                assert!(h.state().views.active.board.reference_drag.is_some());
+                if !quick {
+                    h.event(egui::Event::PointerMoved(from + egui::vec2(1.0, 0.0)));
+                    h.run();
+                    h.event(egui::Event::PointerMoved(from + egui::vec2(10.0, 0.0)));
+                    h.run();
+                }
+                h.event(egui::Event::PointerMoved(to));
+                h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                h.run();
+            } else {
+                h.key_press(Key::M);
+                h.run();
+                click_canvas_at(&mut h, to);
+            }
+            let moved = read(&h);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!(moved.position, origin);
+            assert_eq!(moved.pads, pads);
+            let moved_point = moved.graphics.iter().find(|g| g.reference).unwrap().points[0];
+            assert!(board_point(&h, moved_point).distance(to) < 0.01);
+            h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            h.run();
+            assert_eq!(read(&h).reference_offset, pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET);
+        }
+    }
+}
+
 /// Opening the board beside a schematic retains both targets. Selection paints actual counterpart
 /// ink in each direction; receiver edit selections and camera transforms remain independent.
 #[test]

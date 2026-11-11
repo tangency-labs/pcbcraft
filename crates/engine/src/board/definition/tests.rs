@@ -24,6 +24,46 @@ fn assign(s: &mut Session, symbol: &str, definition: &str, mapping: Value) -> St
     s.inspect()["project"]["board"]["footprints"].as_array().unwrap().last().unwrap()["id"].as_str().unwrap().into()
 }
 
+/// Library defaults and board adjustments compose before clipping, while authoring preserves pads.
+#[test]
+fn library_and_board_reference_offsets_are_additive() {
+    use crate::authoring::{Action, FootprintReferenceSettings, Item};
+    let original = starter("resistor-0402").unwrap();
+    let mut editor = crate::authoring::Session::new(Item::from_footprint(&original).unwrap(), false).unwrap();
+    let before = editor.snapshot();
+    let default = Point { x_nm: 2_000_000, y_nm: -1_000_000 };
+    editor
+        .execute(
+            editor.revision(),
+            Action::Metadata {
+                name: before.name.clone(),
+                license: before.license.clone(),
+                source: before.source.clone(),
+                reference_prefix: before.reference_prefix.clone(),
+                default_value: before.default_value.clone(),
+                symbol_settings: None,
+                footprint_reference: Some(FootprintReferenceSettings { enabled: true, offset: default }),
+            },
+        )
+        .unwrap();
+    let changed = editor.snapshot().footprint().unwrap();
+    assert_eq!(changed.pads, original.pads);
+    assert_eq!(changed.graphics, original.graphics);
+    assert_eq!(changed.silkscreen, original.silkscreen);
+    let offset = Point { x_nm: -1_000_000, y_nm: -2_000_000 };
+    let baseline = original.reference_paths("R12", Default::default(), super::super::DEFAULT_REFERENCE_OFFSET);
+    let expected: Vec<Vec<Point>> = baseline
+        .iter()
+        .map(|path| path.iter().map(|p| Point { x_nm: p.x_nm + default.x_nm + offset.x_nm, y_nm: p.y_nm + default.y_nm + offset.y_nm }).collect())
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(changed.reference_paths("R12", Default::default(), offset), expected);
+    let exported = editor.snapshot().export_native().unwrap();
+    let parsed = read_saved(&serde_json::to_vec(&exported).unwrap()).unwrap();
+    assert_eq!(parsed.reference_offset, Some(default));
+    assert_eq!(parsed.reference_paths("R12", Default::default(), offset), expected);
+}
+
 /// All original definitions validate; rectangular geometry and a three-pin bijection survive
 /// rotation, history and offline folder/archive decoding without changing schematic intent.
 #[test]

@@ -172,7 +172,7 @@ impl PcbApp {
     /// units, for this view only. Modify's menu holds Delete, as in Capture; Inspect's holds Reveal.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
-        let editing = self.views.active.board.draft.is_some();
+        let editing = self.views.active.board.editing_footprint();
         let planned =
             |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, menu_check: None };
 
@@ -546,7 +546,7 @@ impl PcbApp {
     /// Arm Place › Via (Ctrl+Shift+X) in the focused board view when the board has two copper
     /// layers and no footprint transform is in progress. Drawing and route tools are dropped first.
     pub(super) fn start_via(&mut self) {
-        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_place_via() {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.editing_footprint() || !self.can_place_via() {
             return;
         }
         self.views.active.board.drawing.cancel();
@@ -557,7 +557,7 @@ impl PcbApp {
     /// Arm Inspect › Measure (Ctrl+Shift+M) in the focused board view, dropping other tools.
     /// Drops clipboard and placement previews without editing the project or selection.
     pub(super) fn start_measure(&mut self) {
-        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.editing_footprint() {
             return;
         }
         self.views.active.cancel_gesture();
@@ -567,7 +567,7 @@ impl PcbApp {
     /// Arm the route tool (KiCad: X) in the focused board view when its active layer is visible
     /// copper and no footprint transform is in progress. Drawing tools are dropped first.
     pub(super) fn start_route(&mut self) {
-        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_route() {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.editing_footprint() || !self.can_route() {
             return;
         }
         self.views.active.board.drawing.cancel();
@@ -642,6 +642,7 @@ impl PcbApp {
             || pick.items.is_some()
             || pick.selection.is_some()
             || pick.edit.is_some()
+            || pick.reference_edit.is_some()
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
@@ -696,6 +697,15 @@ impl PcbApp {
                         "rotation": draft.rotation, "side": if draft.bottom { "back" } else { "front" },
                         "expected_revision": draft.source.revision,
                     }),
+                );
+            }
+            if let Some(draft) = pick.reference_edit
+                && self.views.active.accepts(draft.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                self.run(
+                    pcbcraft_engine::SET_FOOTPRINT_REFERENCE_OFFSET,
+                    &serde_json::json!({"board":target.board,"footprint":draft.footprint,"offset":draft.offset,"expected_revision":draft.source.revision}),
                 );
             }
             self.repaint_editors(ui.ctx());

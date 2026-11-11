@@ -84,6 +84,7 @@ fn authored_tool(state: &BoardState) -> bool {
         || state.rotate_requested != 0
         || state.flip_requested
         || state.draft.is_some()
+        || state.reference_drag.is_some()
         || state.placement.is_some()
         || state.box_drag.is_some()
         || state.drawing.tool.is_some()

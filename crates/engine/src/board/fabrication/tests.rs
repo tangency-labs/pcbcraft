@@ -26,6 +26,97 @@ fn outputs_require_setup_and_a_closed_outline() {
     assert!(error.contains("closed Board Outline"), "{error}");
 }
 
+/// A local reference move affects only that footprint's silk and round-trips through native storage.
+#[test]
+fn moved_reference_changes_only_its_gerber_silkscreen() {
+    use crate::persistence::{decode_documents, encode_documents};
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let before = view(&s).fabrication_outputs().unwrap();
+    let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    let footprint = view(&s).footprints().next().unwrap();
+    let id = footprint.id.clone();
+    let pads = footprint.pads;
+    let offset = Point { x_nm: 2_000_000, y_nm: -1_000_000 };
+    let revision = s.revision();
+    let params = json!({"footprint":id,"offset":offset,"expected_revision":revision});
+    s.apply(crate::SET_FOOTPRINT_REFERENCE_OFFSET, &params).unwrap();
+    assert!(s.apply(crate::SET_FOOTPRINT_REFERENCE_OFFSET, &params).is_err());
+    assert_eq!(view(&s).footprints().next().unwrap().pads, pads);
+    let after = view(&s).fabrication_outputs().unwrap();
+    assert_eq!(
+        before.iter().zip(&after).filter(|(a, b)| a != b).map(|(_, b)| b.name.as_str()).collect::<Vec<_>>(),
+        [after.iter().find(|output| output.name.ends_with("-Silkscreen_Top.gbr")).unwrap().name.as_str()]
+    );
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert!(String::from_utf8_lossy(&documents["board.json"]).contains("pcbcraft-board/15"));
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
+    s.apply("edit.redo", &json!({})).unwrap();
+    let revision = s.revision();
+    s.apply(
+        crate::SET_FOOTPRINT_REFERENCE_OFFSET,
+        &json!({"footprint":id,"offset":crate::board::DEFAULT_REFERENCE_OFFSET,"expected_revision":revision}),
+    )
+    .unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
+}
+
+/// Format 15 retains routes, vias and bottom-side geometry, with reference offsets transformed locally.
+#[test]
+fn moved_reference_round_trips_with_bottom_tracks_and_vias() {
+    use crate::persistence::{decode_documents, encode_documents};
+    let mut session = routed_fixture();
+    let [front, back] = copper_layers(&session)[..] else { panic!("two copper layers") };
+    route_with_vias(
+        &mut session,
+        front,
+        &[Point { x_nm: 0, y_nm: 20_000_000 }, Point { x_nm: 3_000_000, y_nm: 20_000_000 }, Point { x_nm: 6_000_000, y_nm: 20_000_000 }],
+        &[(1, back)],
+    )
+    .unwrap();
+    let footprint = view(&session).footprints().next().unwrap();
+    let id = footprint.id.clone();
+    let origin = footprint.position;
+    session
+        .apply(
+            crate::SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":origin.x_nm,"y_nm":origin.y_nm,"rotation":90,"side":"back","expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let original = encode_documents(session.snapshot().unwrap()).unwrap();
+    let before = view(&session).footprints().find(|f| f.id == id).unwrap();
+    let points: Vec<_> = before.graphics.iter().filter(|g| g.reference).flat_map(|g| g.points.iter().copied()).collect();
+    let pads = before.pads;
+    session
+        .apply(
+            crate::SET_FOOTPRINT_REFERENCE_OFFSET,
+            &json!({"footprint":id,"offset":{"x_nm":2_000_000,"y_nm":-1_000_000},"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let moved = view(&session).footprints().find(|f| f.id == id).unwrap();
+    assert_eq!(moved.pads, pads);
+    let actual: Vec<_> = moved.graphics.iter().filter(|g| g.reference).flat_map(|g| g.points.iter().copied()).collect();
+    let expected: Vec<_> = points.iter().map(|p| Point { x_nm: p.x_nm - 1_000_000, y_nm: p.y_nm + 2_000_000 }).collect();
+    assert!(!expected.is_empty());
+    assert_eq!(actual, expected, "mirror local X before the quarter turn");
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let board: serde_json::Value = serde_json::from_slice(&saved["board.json"]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/15");
+    assert!(!board["tracks"].as_array().unwrap().is_empty());
+    assert!(!board["vias"].as_array().unwrap().is_empty());
+    assert!(board["footprints"].as_array().unwrap().iter().any(|f| f["bottom"] == true));
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    session
+        .apply(
+            crate::SET_FOOTPRINT_REFERENCE_OFFSET,
+            &json!({"footprint":id,"offset":crate::board::DEFAULT_REFERENCE_OFFSET,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
+}
+
 /// A routed two-layer board produces each layer file with the right content: pad regions and
 /// tracks on their copper, vias on both layers, mask and paste openings for front SMD pads,
 /// the silkscreen, the outline, and one drill tool per hole size. Y is negated throughout.

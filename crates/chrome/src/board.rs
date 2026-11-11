@@ -289,9 +289,18 @@ pub struct GraphicDrawing {
     pub color: Option<Color32>,
     pub closed: bool,
     pub stroke_width: Option<f32>,
+    /// Reference paths do not expand the footprint's selection bounds.
+    pub reference: bool,
 }
 
-/// Bounds include real pad extents and visible technical graphics. Legacy markers retain their
+impl GraphicDrawing {
+    /// Screen-space ink bounds including physical stroke width.
+    pub fn bounds(&self) -> Rect {
+        self.points.iter().fold(Rect::NOTHING, |rect, point| rect.union(Rect::from_pos(*point))).expand(self.stroke_width.unwrap_or(0.0) / 2.0)
+    }
+}
+
+/// Bounds include pads and fixed technical graphics. Legacy markers retain their
 /// generous selection affordance; physical dimensions are never inflated to match that affordance.
 pub fn footprint_bounds(pads: &[PadDrawing], graphics: &[GraphicDrawing], center: Pos2) -> Rect {
     if pads.iter().all(|p| p.copper.is_none()) && graphics.is_empty() {
@@ -306,11 +315,22 @@ pub fn footprint_bounds(pads: &[PadDrawing], graphics: &[GraphicDrawing], center
             }
         }
     }
-    for graphic in graphics {
-        let extent = graphic.points.iter().fold(Rect::NOTHING, |rect, point| rect.union(Rect::from_pos(*point)));
-        bounds = bounds.union(extent.expand(graphic.stroke_width.unwrap_or(0.) / 2.));
+    for graphic in graphics.iter().filter(|graphic| !graphic.reference) {
+        bounds = bounds.union(graphic.bounds());
     }
     bounds.expand(4.0)
+}
+
+/// Anchor for the editor-only reference on footprints without generated silkscreen lettering.
+fn reference_anchor(bounds: Rect, shift: egui::Vec2) -> Pos2 {
+    bounds.center_top() - vec2(0., Tokens::get().space_2) + shift
+}
+
+/// Hit bounds for the editor-only reference, using the same font and anchor as its painter.
+pub fn footprint_reference_bounds(p: &Painter, bounds: Rect, text: &str, shift: egui::Vec2) -> Rect {
+    let t = Tokens::get();
+    let size = p.layout_no_wrap(text.to_owned(), FontId::proportional(t.font_body), t.board_ink).size();
+    Align2::CENTER_BOTTOM.anchor_size(reference_anchor(bounds, shift), size)
 }
 
 /// Paint physical land contours and plated drills at their projected dimensions, with separate
@@ -328,6 +348,7 @@ pub fn footprint(
     selected: bool,
     highlighted: bool,
     copper_focused: bool,
+    reference_shift: egui::Vec2,
 ) {
     let t = Tokens::get();
     let ink = if selected {
@@ -383,7 +404,7 @@ pub fn footprint(
         }
     }
     context.text(
-        bounds.center_top() - vec2(0., t.space_2),
+        reference_anchor(bounds, reference_shift),
         Align2::CENTER_BOTTOM,
         reference,
         FontId::proportional(t.font_body),

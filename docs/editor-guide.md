@@ -553,6 +553,12 @@ X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs and slots remain planned.
 
+Drag a reference designator or hover over it and press **M**, then click to
+place it. The reference position is stored on that footprint and follows its
+rotation and side. The board view and silkscreen export use the moved position.
+To author the default for future placements, edit the definition's reference
+offset in the Footprint Editor.
+
 **Layout → Design → Setup** and **Layers → Board setup…** share a revision-bound
 Craft settings form, including on a board with no saved stackup. The first opening
 shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.

@@ -1744,6 +1744,7 @@ impl PcbApp {
                         && !self.views.active.board.tracks.escape()
                         && !self.views.active.board.drawing.escape()
                         && self.views.active.board.draft.take().is_none()
+                        && self.views.active.board.reference_drag.take().is_none()
                         && self.views.active.board.placement.take().is_none()
                         && self.views.active.board.box_drag.take().is_none()))
             {
@@ -2360,6 +2361,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
     list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
+    list.push(("PCB layout", "Move reference designator", "M or left drag over the reference".to_owned()));
     list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Flip footprint to the other side", "F".to_owned()));

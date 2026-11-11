@@ -141,6 +141,33 @@ fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Result<Vec<(i64, i64)>, Com
 }
 
 impl Session {
+    /// Move only a placed footprint's reference. A zero offset restores the library default.
+    pub(crate) fn set_footprint_reference_offset(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let id = params["footprint"].as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-"));
+        let index = project
+            .board
+            .footprints
+            .binary_search_by_key(&id.unwrap_or_default(), |footprint| footprint.id)
+            .map_err(|_| CommandError::InvalidParams("unknown footprint ID".into()))?;
+        let offset: Point =
+            serde_json::from_value(params["offset"].clone()).map_err(|_| CommandError::InvalidParams("invalid footprint reference offset".into()))?;
+        let mut footprint = project.board.footprints[index].clone();
+        let offset = (offset != super::DEFAULT_REFERENCE_OFFSET).then_some(offset);
+        if footprint.reference_offset == offset {
+            return Ok(());
+        }
+        footprint.reference_offset = offset;
+        if !footprint.valid() {
+            return Err(CommandError::InvalidParams("footprint reference offset is outside the local coordinate range".into()));
+        }
+        let mut project = project.clone();
+        Arc::make_mut(&mut project.board).footprints[index] = footprint;
+        self.change(project);
+        Ok(())
+    }
+
     /// Validate every selected placement and the source revision before deleting any. Physical
     /// placements retain their pinned package assignment for re-placement; schematic geometry,
     /// components, drawings and setup remain unchanged. Undo restores exact placement identities.

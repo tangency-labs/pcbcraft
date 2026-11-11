@@ -389,6 +389,11 @@ next reviewed update. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
 
+To move a placed reference designator, drag its lettering or hover over it,
+press **M**, and click at the new position. To set a library default, open the
+footprint in **Footprint Editor**, select **Definition**, and edit the reference
+offsets in Properties.
+
 To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
 layout use **Layout → Design → Sync**. **Create board** explicitly adds
 the first PCB when needed. Existing footprints without recorded accepted state
