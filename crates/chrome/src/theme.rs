@@ -84,6 +84,7 @@ pub struct Tokens {
     pub stack_copper_highlight: Color32,
     pub stack_dielectric: Color32,
     pub stack_dielectric_weave: Color32,
+    /// Visible grid marks against the near-black board canvas, shared by dots and lines.
     pub board_grid: Color32,
     pub board_highlight: Color32,
     /// Copper colors for front, back, plated through-hole and internal board lands.
@@ -220,7 +221,7 @@ impl Tokens {
             stack_copper_highlight: Color32::from_rgb(231, 170, 110),
             stack_dielectric: Color32::from_rgb(177, 202, 192),
             stack_dielectric_weave: Color32::from_rgb(143, 176, 163),
-            board_grid: Color32::from_rgb(29, 39, 43),
+            board_grid: Color32::from_rgb(96, 112, 128),
             board_highlight: Color32::from_rgb(245, 195, 91),
             board_front: Color32::from_rgb(255, 48, 48),
             board_back: Color32::from_rgb(64, 96, 255),
@@ -468,6 +469,7 @@ mod tests {
             assert!(contrast(t.ribbon_tab_text, t.accent_soft) >= 4.5);
             assert!(contrast(t.text_dim, t.panel) >= 4.5);
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
+            assert!(contrast(t.board_grid, t.board_canvas) >= 3.0);
             assert!(contrast(t.schematic_highlight, t.canvas) >= 4.5);
             assert!(contrast(t.error, t.panel) >= 4.5);
         }
