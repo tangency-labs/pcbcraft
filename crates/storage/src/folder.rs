@@ -127,15 +127,9 @@ fn probe_preview_lock(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// Stage and flush every changed payload and its backup before atomically publishing a
-/// recovery journal. Once published, recovery completes the transaction before any open.
-/// A checkpoint failure simulates interruption; committed journals remain available for recovery.
-pub fn save(
-    root: &Path,
-    expected: Option<&Documents>,
-    documents: &Documents,
-    checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
-) -> Result<(), String> {
+/// Validate document schemas and platform filenames before creating any destination or lock.
+/// Folder saves and explicit conversion share this preflight; portable ZIPs retain ZIP rules.
+pub(super) fn preflight(documents: &Documents) -> Result<(), String> {
     decode_documents(documents)?;
     // The app saves through canonical `\\?\` paths, where Windows writes these names as ordinary
     // files, but Git for Windows then can't add them and programs that open them by their usual
@@ -145,6 +139,19 @@ pub fn save(
     if cfg!(windows) {
         refuse_windows_device_names(documents)?;
     }
+    Ok(())
+}
+
+/// Stage and flush every changed payload and its backup before atomically publishing a
+/// recovery journal. Once published, recovery completes the transaction before any open.
+/// A checkpoint failure simulates interruption; committed journals remain available for recovery.
+pub fn save(
+    root: &Path,
+    expected: Option<&Documents>,
+    documents: &Documents,
+    checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    preflight(documents)?;
     let _lock = lock(root, false)?;
     if !root.exists() {
         fs::create_dir(root).map_err(error)?;
@@ -603,6 +610,19 @@ mod tests {
             "library/footprints/workshop/lpt0.r1.json",
         ] {
             assert_eq!(windows_device_name(path), None, "{path}");
+        }
+    }
+
+    /// Conversion runs the same Windows preflight before exclusively creating its destination.
+    #[cfg(windows)]
+    #[test]
+    fn windows_conversion_refuses_device_names_before_destination_creation() {
+        let parent = tempfile::tempdir().unwrap();
+        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
+            let root = parent.path().join("converted");
+            let error = crate::conversion::publish(&root, pinning(library, symbol), pcbcraft_engine::persistence::Encoding::Json).unwrap_err();
+            assert!(error.contains("Windows reserves the name"), "{error}");
+            assert!(tree(parent.path()).is_empty());
         }
     }
 

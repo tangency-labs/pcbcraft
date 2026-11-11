@@ -119,3 +119,12 @@ fn conversion_refuses_symlink_sources_and_nested_destination_aliases() {
     symlink(root.join("project.pc"), &file_alias).unwrap();
     assert!(convert(&file_alias, &dir.path().join("new.pc"), Encoding::Zip).is_err());
 }
+
+/// A preflight rejection must not leave a new folder or lock that would prevent a corrected retry.
+#[test]
+fn conversion_preflight_failure_leaves_no_destination() {
+    let parent = tempfile::tempdir().unwrap();
+    let destination = parent.path().join("converted");
+    assert!(publish(&destination, Documents::new(), Encoding::Json).is_err());
+    assert!(fs::read_dir(parent.path()).unwrap().next().is_none());
+}

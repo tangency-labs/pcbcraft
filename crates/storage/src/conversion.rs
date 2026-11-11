@@ -53,7 +53,7 @@ pub fn convert(source: &Path, destination: &Path, encoding: Encoding) -> Result<
 
 /// Publish only validated documents at an unused destination. Archive installation is atomic
 /// and refuses a racing destination; a newly created folder uses journaled publication.
-fn publish(destination: &Path, documents: Documents, encoding: Encoding) -> Result<(), String> {
+pub(super) fn publish(destination: &Path, documents: Documents, encoding: Encoding) -> Result<(), String> {
     if encoding == Encoding::Zip {
         let bytes = encode_packed_documents(documents)?;
         let parent = destination.parent().ok_or("Conversion destination has no parent")?;
@@ -62,6 +62,7 @@ fn publish(destination: &Path, documents: Documents, encoding: Encoding) -> Resu
         staged.persist_noclobber(destination).map_err(error)?;
         super::folder::sync_dir(parent)
     } else {
+        super::folder::preflight(&documents)?;
         fs::create_dir(destination).map_err(error)?;
         super::folder::sync_dir(destination.parent().ok_or("Conversion destination has no parent")?)?;
         super::folder::save(destination, None, &documents, &mut |_| Ok(()))
