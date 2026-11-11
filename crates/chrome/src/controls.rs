@@ -7,9 +7,81 @@ pub fn button(ui: &mut Ui, label: impl Into<WidgetText>) -> Response {
     kit::button(ui, label, Button::Normal)
 }
 
+/// Compact command action using shared button styling and native small-button sizing.
+pub fn small_button(ui: &mut Ui, label: impl Into<WidgetText>) -> Response {
+    kit::button(ui, label, Button::Small)
+}
+
+/// Shared plain text field; the caller retains focus, validation and Enter submission.
+pub fn text(ui: &mut Ui, value: &mut String) -> Response {
+    kit::text_field_reserving(ui, value, "", 0.0).1
+}
+
+/// Shared section disclosure with native persisted collapse state and an indented body.
+/// `open` forces the state for a reveal; ordinary clicks toggle it without editing documents.
+pub fn collapsing<R>(
+    ui: &mut Ui,
+    id: impl egui::AsIdSalt,
+    title: &str,
+    default_open: bool,
+    open: Option<bool>,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let id = ui.make_persistent_id(id);
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+    if let Some(open) = open {
+        state.set_open(open);
+    }
+    let height = crate::Tokens::get().control_height;
+    let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), height));
+    let arrow = egui::Rect::from_min_size(rect.min, egui::vec2(height.min(rect.width()), height));
+    let label = egui::Rect::from_min_max(arrow.right_top(), rect.max);
+    let response = kit::panel_host_control(
+        ui,
+        id.with("title"),
+        label,
+        kit::HostChrome {
+            label: title,
+            icon: None,
+            icon_only: false,
+            attention: false,
+            selected: false,
+            enabled: ui.is_enabled(),
+            drag: false,
+            title: false,
+            grip_only: false,
+            rtl: false,
+        },
+    );
+    let expanded = state.is_open();
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), expanded, title));
+    let action = format!("{} {title}", if expanded { "Collapse" } else { "Expand" });
+    let disclosure = kit::panel_disclosure_button_at(ui, arrow, expanded, &action);
+    if response.clicked() || disclosure.clicked() {
+        state.toggle(ui);
+    }
+    state.show_body_indented(&response, ui, add).map(|body| body.inner)
+}
+
 /// Render an enabled or disabled command action without changing its command ownership.
 pub fn enabled_button(ui: &mut Ui, enabled: bool, label: impl Into<WidgetText>) -> Response {
     ui.add_enabled_ui(enabled, |ui| button(ui, label)).inner
+}
+
+/// Width-bounded command field with full accessible text; long labels truncate visually.
+pub fn bounded_button(ui: &mut Ui, id: impl egui::AsIdSalt, label: &str, width: f32, enabled: bool) -> Response {
+    ui.push_id(id, |ui| {
+        let (_, rect) = ui.allocate_space(egui::vec2(width.max(0.0).min(ui.available_width().max(0.0)), crate::Tokens::get().control_height));
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.scope(|ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                kit::button_at(ui, "command", rect, label, Button::Normal)
+            })
+            .inner
+        })
+        .inner
+    })
+    .inner
 }
 
 /// Supply a shared action for sized/enabled layouts, retaining their minimum control height.

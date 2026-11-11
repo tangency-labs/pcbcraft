@@ -34,7 +34,7 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
-        ui.add(input(value).desired_width(ui.available_width())).labelled_by(label.id)
+        crate::controls::text(ui, value).labelled_by(label.id)
     })
     .inner
 }
@@ -240,12 +240,12 @@ pub fn field_action(ui: &mut Ui, name: &str, action: &str, enabled: bool) -> egu
     let label_width = field_label_width(width);
     ui.horizontal(|ui| {
         field_name(ui, name, label_width, false);
-        ui.add_enabled(
+        crate::controls::bounded_button(
+            ui,
+            ("field_action", name),
+            action,
+            (width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.),
             enabled,
-            egui::Button::new(action)
-                .right_text(())
-                .truncate()
-                .min_size(vec2((width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.), t.control_height)),
         )
     })
     .inner
@@ -330,24 +330,10 @@ fn field_label_width(width: f32) -> f32 {
     if width >= 600. { Tokens::get().form_label_width * 2. + Tokens::get().space_8 } else { 112. }
 }
 
-/// Property navigation uses a quiet underline instead of another row of filled buttons.
+/// Property navigation uses shared segmented choices, falling back to a dropdown in narrow rows.
 pub fn tabs<T: Copy + PartialEq>(ui: &mut Ui, current: &mut T, options: &[(T, &str)]) {
-    let t = Tokens::get();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = t.space_16;
-        for (value, label) in options {
-            let selected = *current == *value;
-            let response =
-                ui.add(egui::Button::selectable(selected, RichText::new(*label).color(if selected { t.text } else { t.text_dim })).frame(false));
-            if selected {
-                ui.painter().hline(response.rect.x_range(), response.rect.bottom() + t.space_4, egui::Stroke::new(2., t.accent));
-            }
-            if response.clicked() {
-                *current = *value;
-            }
-        }
-    });
-    ui.add_space(t.space_8);
+    crate::settings::segmented(ui, current, options);
+    ui.add_space(Tokens::get().space_8);
 }
 
 /// Recognize absolute HTTP(S) field links with a nonempty authority. Whitespace, control

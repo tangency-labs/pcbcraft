@@ -163,7 +163,7 @@ fn unsaved_marker(ui: &mut Ui, rect: egui::Rect, t: Tokens) {
 pub fn status_bar(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui)) {
     let t = Tokens::get();
     egui::Panel::bottom("chrome_status_bar")
-        .exact_size(t.control_height - t.space_4)
+        .exact_size(t.control_height.max(solidcraft_theme::Tokens::get().control_height))
         .resizable(false)
         .frame(Frame::new().fill(t.panel).inner_margin(Margin::symmetric(t.space_8 as i8, 0)))
         .show(ui, |ui| {

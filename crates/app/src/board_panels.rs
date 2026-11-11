@@ -58,8 +58,8 @@ impl PcbApp {
             |ui| {
                 setup_open = pcbcraft_chrome::board_setup::open_button(ui, settings_enabled).clicked();
                 ui.horizontal(|ui| {
-                    show_all = ui.small_button("Show all").clicked();
-                    isolate = ui.add_enabled(can_isolate, egui::Button::new("Isolate active").small()).clicked();
+                    show_all = pcbcraft_chrome::controls::small_button(ui, "Show all").clicked();
+                    isolate = ui.add_enabled_ui(can_isolate, |ui| pcbcraft_chrome::controls::small_button(ui, "Isolate active")).inner.clicked();
                     if target.has_accepted_connectivity() {
                         pcbcraft_chrome::board::ratsnest_visibility(ui, &mut ratsnest_visible);
                     }
@@ -414,16 +414,13 @@ fn layer_groups(
             continue;
         }
         let contains_active = items.iter().any(|layer| state.active_layer.as_deref() == Some(layer.id.to_string().as_str()));
-        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index <= 1).open((reveal && contains_active).then_some(true)).show(
-            ui,
-            |ui| {
-                for layer in items {
-                    if layer_row(ui, layer, &layers, state, reveal, board, appearance) {
-                        *pick = Some(layer.id.to_string());
-                    }
+        pcbcraft_chrome::controls::collapsing(ui, id.with(index), title, index <= 1, (reveal && contains_active).then_some(true), |ui| {
+            for layer in items {
+                if layer_row(ui, layer, &layers, state, reveal, board, appearance) {
+                    *pick = Some(layer.id.to_string());
                 }
-            },
-        );
+            }
+        });
     }
 }
 

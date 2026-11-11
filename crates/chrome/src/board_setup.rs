@@ -56,10 +56,13 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
         heading(&mut nav, "Board setup");
         for value in [Page::Layers, Page::Stackup, Page::Materials, Page::Silkscreen, Page::Profiles] {
             if nav
-                .add_sized(
-                    vec2(nav.available_width(), t.control_height + t.space_8),
-                    egui::Button::new(value.title()).selected(*page == value).frame(*page == value),
-                )
+                .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
+                    solidcraft_ui_kit::button(
+                        ui,
+                        value.title(),
+                        if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
+                    )
+                })
                 .clicked()
             {
                 *page = value;

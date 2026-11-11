@@ -902,7 +902,7 @@ fn conversation_item(ui: &mut Ui, item: &Item, agent: &str) {
                 Some(craft_agents::acp::ToolStatus::InProgress) => "Running",
                 Some(craft_agents::acp::ToolStatus::Pending) | None => "Waiting",
             };
-            egui::CollapsingHeader::new(format!("{title} · {status}")).id_salt(("assistant_tool", id)).show(ui, |ui| {
+            pcbcraft_chrome::controls::collapsing(ui, ("assistant_tool", id), &format!("{title} · {status}"), false, None, |ui| {
                 if let Some(input) = input {
                     ui.monospace(input.to_string().chars().take(MAX_TOOL_DETAIL).collect::<String>());
                 }

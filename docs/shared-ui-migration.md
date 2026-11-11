@@ -1,10 +1,16 @@
 # Shared Craft UI migration
 
-This local branch starts adoption of SolidCraft's extracted interface crates at
+This local branch adopts SolidCraft's extracted interface crates at
 `f56114219b2d7f6d16de8dd58700479646948f8a`. It is based on PCBcraft
 `16e7bab`. The first slice establishes dependencies, fonts and toolkit
 compatibility. The shared kit also draws menus and Preferences choices through
 `pcbcraft-chrome`.
+
+The component migration is complete at this pinned revision: shared chrome
+adapters cover dialogs, command controls, choices, common text fields,
+disclosures, ribbon groups, panel surfaces and Assistant presentation. The
+adoption boundary below records the native editing and host responsibilities
+that remain in PCBcraft.
 
 ## Dependency boundary
 
@@ -191,6 +197,32 @@ Inline ribbon fields align with the shared group height. App-bar quick actions
 and arrangement tabs use shared button presentation within PCBcraft's existing
 native title-bar placement.
 
+Common labelled plain-text fields and property tabs use shared field and
+segmented controls. Layer groups, text appearance and Assistant tool details
+use shared disclosures over native persisted collapse state. Compact command
+actions and source-category choices also use shared controls.
+
+## Adoption boundary
+
+Reusable UI presentation is supplied through the shared kit and chrome adapters.
+PCBcraft retains its electrical canvases, previews, window/view identities,
+pane and panel placement, input routing and document/connection lifecycles.
+The app bar and ribbon compose shared controls around those host contracts.
+They do not adopt SolidCraft's application-level panel runtime.
+
+Native egui primitives remain where PCBcraft needs builder features absent from
+the pinned standalone kit: password/length-limited text, cursor-controlled
+inline edits, multiline clipboard input, coordinate tables, radio choices and
+the opaque colour picker. Numeric parsing, snapping and delayed scale application
+remain PCBcraft behavior. These are intentional adapter boundaries rather than
+replacement copies of shared dialog or command-control components.
+
+Status-bar unit/grid actions, filter reset, setup page navigation and bounded
+footprint actions also use shared controls. Native selection rows remain inside
+the shared menus and domain-specific preview lists.
+The status bar accommodates the shared controls' minimum height so its grid
+and unit targets stay below the canvas, including at larger interface scales.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through
@@ -230,6 +262,17 @@ revisions. The retained licence texts are available in About; exact provenance
 and hashes are in [ATTRIBUTION.md](../ATTRIBUTION.md).
 
 ## Validation
+
+The completion pass on November 11, 2026 passed formatting, workspace Clippy
+with warnings denied, all 1,284 workspace tests (eight ignored), WebAssembly
+compilation and dependency license/source/ban checks. The opt-in native window
+lifecycle regression also passed on isolated X11, covering root retirement,
+recreation, cancelled close and final-child shutdown. Desktop screenshots cover
+wide/compact schematic and PCB ribbons, Assistant and property controls in both
+themes. A packaged development web build from `trunk build --locked` was tested
+in isolated headless Chrome: Home, both workspaces, grid toggles, compact layout
+and Preferences theme changes rendered without observed JavaScript exceptions
+or console errors. Windows, macOS and direct Wayland remain untested here.
 
 On November 10, 2026, this slice passed `cargo fmt --all --check`,
 `cargo clippy --locked --workspace --all-targets -- -D warnings`,

@@ -176,7 +176,7 @@ impl Assistant {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(name);
                             ui.label(dim(install));
-                            if ui.small_button("Copy").on_hover_text("Copy the install command").clicked() {
+                            if pcbcraft_chrome::controls::small_button(ui, "Copy").on_hover_text("Copy the install command").clicked() {
                                 ui.ctx().copy_text(install.to_owned());
                             }
                         });
@@ -344,7 +344,7 @@ impl Assistant {
                 if let Some(protocol) = form.kind.protocol() {
                     ui.horizontal_wrapped(|ui| {
                         for preset in agents::presets(protocol) {
-                            if ui.small_button(preset.name).on_hover_text(preset.base_url).clicked() {
+                            if pcbcraft_chrome::controls::small_button(ui, preset.name).on_hover_text(preset.base_url).clicked() {
                                 form.name = preset.name.to_owned();
                                 form.base_url = preset.base_url.to_owned();
                             }

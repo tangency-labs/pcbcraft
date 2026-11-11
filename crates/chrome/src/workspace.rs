@@ -273,7 +273,7 @@ pub fn ribbon(
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
                         if !wide {
                             let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                            let tile = ui.small_button(format!("{workspace}    "));
+                            let tile = crate::controls::small_button(ui, format!("{workspace}    "));
                             let c = tile.rect.right_center() - vec2(t.space_6, 0.0);
                             ui.painter()
                                 .add(Shape::line(vec![c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], Stroke::new(1.0, t.text_dim)));
@@ -1144,7 +1144,7 @@ fn card_contents(ui: &mut Ui, title: &str, max_body_height: f32, closable: bool,
         .allocate_ui_with_layout(header_size, Layout::right_to_left(Align::Center), |ui| {
             // Named after the card, so a screen reader can tell several cards apart.
             let close = closable && {
-                let close = ui.small_button("Close");
+                let close = crate::controls::small_button(ui, "Close");
                 close.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("Close {title}")));
                 close.clicked()
             };

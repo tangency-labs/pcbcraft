@@ -37,9 +37,7 @@ pub fn controls(ui: &mut Ui, filters: &mut [Filter<'_>]) -> bool {
     let width = ui.available_width().min((ui.clip_rect().right() - ui.cursor().left()).max(1.0));
     ui.horizontal(|ui| {
         let toggle = checkbox(ui, &mut all, mixed, "All items", "All items", (width - 48.0 - ui.spacing().item_spacing.x).max(1.0));
-        let reset = ui
-            .add_sized(vec2(48.0, t.control_height), egui::Button::new(egui::RichText::new("Reset").size(t.font_body).color(t.text_dim)).frame(false))
-            .clicked();
+        let reset = ui.add_sized(vec2(48.0, t.control_height), |ui: &mut Ui| solidcraft_ui_kit::text_button(ui, "Reset", true)).clicked();
         if toggle.changed() || reset {
             for row in filters.iter_mut().filter(|row| row.enabled) {
                 row.checked = reset || all;

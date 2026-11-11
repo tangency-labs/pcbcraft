@@ -228,7 +228,9 @@ impl PcbApp {
                 }
                 apply |= edit.fields(ui);
                 chrome::field(ui, "Footprint", |ui| {
-                    choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).on_hover_text("Choose footprint").clicked();
+                    choose = pcbcraft_chrome::controls::bounded_button(ui, "choose_footprint", &footprint, ui.available_width(), can_choose)
+                        .on_hover_text("Choose footprint")
+                        .clicked();
                 });
                 if let Some(error) = &edit.error {
                     ui.label(shell::error(error));
@@ -319,7 +321,7 @@ impl PcbApp {
                     chrome::group(ui, "Component fields", |ui| {
                         apply |= edit.metadata_fields(ui);
                         choose = chrome::field_action(ui, "Footprint", &footprint, can_choose).clicked();
-                        egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
+                        pcbcraft_chrome::controls::collapsing(ui, "text_appearance", "Text appearance", false, None, |ui| edit.field_appearance(ui));
                     });
                     ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
                     let mut position_apply = false;

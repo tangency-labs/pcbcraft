@@ -47,7 +47,7 @@ pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, usize)) {
             ui.new_child(UiBuilder::new().max_rect(tabs.shrink2(vec2(t.space_16, t.space_8))).layout(Layout::left_to_right(Align::Center)));
         tab_ui.spacing_mut().item_spacing.x = t.space_8;
         for (index, title) in ["Sources", "Catalog"].into_iter().enumerate() {
-            if tab_ui.add(button(title, pane == index).selected(pane == index)).clicked() {
+            if kit::button(&mut tab_ui, title, if pane == index { kit::Button::SmallSelected } else { kit::Button::Small }).clicked() {
                 pane = index;
             }
         }
@@ -90,16 +90,6 @@ pub fn heading(ui: &mut Ui, title: &str, count: usize) {
 pub fn list(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
     scrollbar(ui);
     egui::ScrollArea::vertical().id_salt(id).max_height(ui.available_height()).auto_shrink([false, false]).show(ui, add);
-}
-
-/// A consistent control surface for source actions and the dialog footer.
-fn button(label: &str, primary: bool) -> egui::Button<'_> {
-    let t = Tokens::get();
-    egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
-        .fill(if primary { t.selected_bg } else { t.dialog_body })
-        .stroke(Stroke::new(1.0, if primary { t.form_primary } else { t.border }))
-        .corner_radius(t.control_radius)
-        .min_size(vec2(0.0, t.control_height))
 }
 
 /// Source import actions retain readable control height and can wrap on compact hosts.
@@ -243,7 +233,7 @@ pub fn filters(ui: &mut Ui, kind: &mut Filter) {
         ui.spacing_mut().item_spacing.x = t.space_4;
         for (value, label) in [(Filter::All, "All items"), (Filter::Symbols, "Symbols"), (Filter::Footprints, "Footprints")] {
             let selected = *kind == value;
-            let response = ui.add(button(label, selected).selected(selected));
+            let response = kit::button(ui, label, if selected { kit::Button::SmallSelected } else { kit::Button::Small });
             response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, format!("Show {}", label.to_lowercase())));
             if response.clicked() {
                 *kind = value;
