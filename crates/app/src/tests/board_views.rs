@@ -223,7 +223,7 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     click_canvas_at(&mut h, at);
     assert!(h.state().views.board_highlight_for(ViewId(2), &h.state().session).contains("footprint-3"));
     let board_rect = h.get_by_label("PCB canvas 3").rect();
-    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && board_rect.contains(text.pos) && text.fallback_color==Tokens::get().board_highlight)));
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && board_rect.contains(text.pos) && text.fallback_color==pcbcraft_chrome::board::copper_emphasis(Tokens::get().board_ink, Some(true)))));
     h.key_press(Key::Escape);
     h.run();
     click_canvas_at(&mut h, board_rect.center());
@@ -1009,7 +1009,7 @@ fn smd_pads_render_physical_geometry_and_respect_layer_visibility() {
     assert_eq!(footprint.rotation, 90);
     for pad in footprint.pads {
         let expected = pad.copper.unwrap().map(|point| h.state().views.active.camera.screen(point, rect));
-        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.fill==Tokens::get().accent && {
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.fill==pcbcraft_chrome::board::copper_emphasis(Tokens::get().board_front, Some(true)) && {
             let bounds = path.points.iter().fold(egui::Rect::NOTHING, |rect, p| rect.union(egui::Rect::from_pos(*p)));
             let expected = expected.into_iter().fold(egui::Rect::NOTHING, |rect, p| rect.union(egui::Rect::from_pos(p)));
             bounds.min.distance(expected.min) < 0.01 && bounds.max.distance(expected.max) < 0.01

@@ -4,7 +4,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
 
 const CONTEXT_OPACITY: f32 = 0.42;
 
-/// Preserve the layer hue while emphasizing or dimming copper during a net highlight.
+/// Preserve layer hues when lightening selections or dimming copper during a net highlight.
 pub fn copper_emphasis(color: Color32, emphasized: Option<bool>) -> Color32 {
     match emphasized {
         Some(true) => color.lerp_to_gamma(Color32::WHITE, 0.35),
@@ -347,7 +347,7 @@ pub fn footprint_reference_bounds(p: &Painter, bounds: Rect, text: &str, shift: 
 }
 
 /// Paint physical land contours and plated drills at their projected dimensions, with separate
-/// technical graphics and selection ink. Only legacy definitions use center markers. Small
+/// technical graphics and lighter layer-colored selection ink. Only legacy definitions use center markers. Small
 /// lands omit labels before they become illegible; physical dimensions never depend on zoom.
 /// With copper emphasis active, use the caller's pad colors and dim technical graphics and text.
 #[allow(clippy::too_many_arguments)]
@@ -364,13 +364,7 @@ pub fn footprint(
     reference_shift: egui::Vec2,
 ) {
     let t = Tokens::get();
-    let ink = if selected {
-        t.accent
-    } else if highlighted {
-        t.board_highlight
-    } else {
-        copper
-    };
+    let ink = copper_emphasis(pads.first().and_then(|pad| pad.color).unwrap_or(copper), (selected || highlighted).then_some(true));
     let bounds = footprint_bounds(pads, graphics, center);
     let context = context_painter(p, copper_focused);
     for graphic in graphics {
@@ -379,7 +373,8 @@ pub fn footprint(
             GraphicStyle::Silkscreen => 1.2,
             GraphicStyle::Courtyard => 0.7,
         };
-        let color = graphic.color.unwrap_or_else(|| graphic_color(graphic.style));
+        let base = graphic.color.unwrap_or_else(|| graphic_color(graphic.style));
+        let color = copper_emphasis(base, (selected || highlighted).then_some(true));
         let stroke = Stroke::new(graphic.stroke_width.unwrap_or(width), color);
         context.add(if graphic.closed {
             egui::Shape::closed_line(graphic.points.clone(), stroke)
@@ -398,7 +393,7 @@ pub fn footprint(
     let extent = pads.iter().fold(Rect::from_pos(center), |r, p| r.union(Rect::from_pos(p.center)));
     let (offset, align) = if extent.height() > extent.width() { (vec2(9., 0.), Align2::LEFT_CENTER) } else { (vec2(0., 9.), Align2::CENTER_TOP) };
     for pad in pads {
-        let color = if !copper_focused && (selected || highlighted) { ink } else { pad.color.unwrap_or(copper) };
+        let color = copper_emphasis(pad.color.unwrap_or(copper), (!copper_focused && (selected || highlighted)).then_some(true));
         if let Some(points) = pad.copper {
             p.add(egui::Shape::convex_polygon(pad_contour(pad), color, Stroke::NONE));
             if let Some(radius) = pad.drill_radius {
@@ -409,7 +404,6 @@ pub fn footprint(
             label_painter.multiply_opacity(f32::from(color.a()) / 255.0);
             pad_label(&label_painter, pad, points, color);
         } else {
-            let color = if copper_focused { color } else { ink };
             p.circle_stroke(pad.center, 5., Stroke::new(1.5, color));
             p.line_segment([pad.center - vec2(2., 0.), pad.center + vec2(2., 0.)], Stroke::new(1., color));
             p.line_segment([pad.center - vec2(0., 2.), pad.center + vec2(0., 2.)], Stroke::new(1., color));
@@ -421,7 +415,7 @@ pub fn footprint(
         Align2::CENTER_BOTTOM,
         reference,
         FontId::proportional(t.font_body),
-        if selected || highlighted { ink } else { t.board_ink },
+        copper_emphasis(t.board_ink, (selected || highlighted).then_some(true)),
     );
 }
 

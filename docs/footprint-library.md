@@ -221,6 +221,8 @@ explicitly changes the shared component reference through its validated command,
 including the schematic. A local text literal retains its wording across a
 component rename. **Reset silkscreen** restores inherited wording and appearance.
 Body selection offers **Edit silkscreen text** to recover hidden lettering.
+Selection lightens the copper and technical-layer colors, including the
+generated reference and fixed silkscreen.
 The Properties fields use aligned label/value columns; position offsets expand
 under **Position**, and Apply/Reset remain below the scrolling fields in short
 windows. Editing a dimension creates its local size override automatically.
