@@ -1,8 +1,9 @@
 # Shared Craft UI migration
 
 This local branch adopts SolidCraft's extracted interface crates at
-`f56114219b2d7f6d16de8dd58700479646948f8a`. It is based on PCBcraft
-`16e7bab`. The first slice establishes dependencies, fonts and toolkit
+`f56114219b2d7f6d16de8dd58700479646948f8a`. The migration began at PCBcraft
+`16e7bab` and was rebased onto upstream main `6895130` on November 11, 2026.
+The first slice establishes dependencies, fonts and toolkit
 compatibility. The shared kit also draws menus and Preferences choices through
 `pcbcraft-chrome`.
 
@@ -262,6 +263,11 @@ revisions. The retained licence texts are available in About; exact provenance
 and hashes are in [ATTRIBUTION.md](../ATTRIBUTION.md).
 
 ## Validation
+
+After rebasing onto `6895130`, the same formatting, Clippy, WebAssembly and
+dependency checks passed again, and the workspace suite passed 1,286 tests with
+eight ignored. All 18 migration patches replayed unchanged, preserving their
+author and co-author records.
 
 The completion pass on November 11, 2026 passed formatting, workspace Clippy
 with warnings denied, all 1,284 workspace tests (eight ignored), WebAssembly
