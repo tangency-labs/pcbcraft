@@ -14,6 +14,7 @@ With Git and Rust 1.95 or later installed, clone a checkout you can edit:
 ```sh
 git clone https://github.com/tangency-labs/pcbcraft.git
 cd pcbcraft
+cargo build --locked -p pcbcraft -p pcbcraft-cli
 cargo run --locked -p pcbcraft
 ```
 
@@ -21,6 +22,10 @@ GitHub access is required while the repository is private. The desktop app needs
 a working graphical session; a headless shell can run the checks and MCP example
 described below. See [Contributing](../CONTRIBUTING.md) for the toolchain and
 browser build commands.
+
+The Assistant uses `pcbcraft-cli` beside the desktop app to reach the open
+project. Build both binaries in the same profile; for a release build, add
+`--release` to both Cargo commands.
 
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.pc` from your checkout.
