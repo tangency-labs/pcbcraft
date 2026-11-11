@@ -1,11 +1,11 @@
 //! Document-addressed view state. Hosts own placement; the session owns authored data.
 
 use crate::{
-    canvas_camera::Camera,
+    canvas_camera::{Camera, MAX_BOARD_ZOOM, MAX_ZOOM},
     schematic_canvas::{Draft, LegTarget, Tool},
 };
 use pcbcraft_engine::{Session, SheetTarget, board::view::BoardTarget, selection::Selection};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +32,14 @@ impl Workspace {
         match self {
             Self::Schematic => "Schematic",
             Self::Board => "PCB layout",
+        }
+    }
+
+    /// Maximum manual camera zoom for this workspace.
+    pub(super) fn max_zoom(self) -> f32 {
+        match self {
+            Self::Schematic => MAX_ZOOM,
+            Self::Board => MAX_BOARD_ZOOM,
         }
     }
 }
@@ -63,6 +71,14 @@ pub(super) enum DocumentTarget {
 }
 
 impl DocumentTarget {
+    /// The workspace displaying this document or the project-scoped empty board.
+    fn workspace(self) -> Workspace {
+        match self {
+            Self::Sheet(_) => Workspace::Schematic,
+            Self::Board(_) | Self::BoardWorkspace(_) => Workspace::Board,
+        }
+    }
+
     /// Resolve an addressed document or project-scoped empty workspace; names are not identities.
     pub(super) fn available(self, session: &Session) -> bool {
         session.project().is_some_and(|project| match self {
@@ -107,10 +123,15 @@ fn filters_open_default() -> bool {
 impl ViewState {
     /// Bound layer data and validate transforms before replacing live views.
     pub(super) fn valid(&self) -> bool {
+        let workspace = self.target.workspace();
+        let parked = match workspace {
+            Workspace::Schematic => Workspace::Board,
+            Workspace::Board => Workspace::Schematic,
+        };
         self.title.len() <= 1024
             && self.panels.valid()
-            && self.camera.valid()
-            && self.parked_camera.valid()
+            && self.camera.valid(workspace.max_zoom())
+            && self.parked_camera.valid(parked.max_zoom())
             && self.hidden_layers.len() <= 128
             && self.hidden_layers.iter().chain(self.active_layer.iter()).all(|id| id.len() <= 128)
     }
@@ -141,10 +162,10 @@ impl Binding {
 
 /// Derived copper assignments belong to one board and captured view/revision authority.
 #[derive(Debug)]
-pub(super) struct CopperNetsCache {
+pub(super) struct CopperConnectivityCache {
     source: ViewInput,
     target: BoardTarget,
-    nets: Arc<BTreeMap<uuid::Uuid, String>>,
+    connectivity: Arc<crate::board_appearance::Connectivity>,
 }
 
 /// Schematic interaction state is separate from board selection and input handling.
@@ -178,6 +199,8 @@ pub(super) struct BoardState {
     /// The view-only ruler and whether its tool is armed.
     pub(super) measure: crate::board_measure::Measure,
     pub(super) draft: Option<crate::board_canvas::Draft>,
+    pub(super) reference_drag: Option<crate::board_canvas::ReferenceDrag>,
+    pub(super) reference: crate::board_reference::State,
     pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
@@ -192,7 +215,7 @@ pub(super) struct BoardState {
     /// The net whose pads and copper are drawn highlighted in this view.
     pub(super) highlight_net: Option<String>,
     /// Reuse derived copper connectivity while the addressed board and revision stay unchanged.
-    pub(super) copper_nets_cache: Option<CopperNetsCache>,
+    pub(super) copper_connectivity_cache: Option<CopperConnectivityCache>,
     pub(super) selection: std::collections::BTreeSet<String>,
     pub(super) hidden_layers: std::collections::BTreeSet<String>,
     pub(super) layer_defaults_applied: bool,
@@ -204,22 +227,33 @@ pub(super) struct BoardState {
 }
 
 impl BoardState {
+    /// Footprints used only for correspondence include a selected reference's owning placement.
+    pub(super) fn probe_footprints(&self) -> std::collections::BTreeSet<String> {
+        self.selection.iter().cloned().chain(self.reference.selected.iter().cloned()).collect()
+    }
+    /// Whether a footprint or its reference currently owns a placement gesture.
+    pub(super) fn editing_footprint(&self) -> bool {
+        self.draft.is_some() || self.reference_drag.is_some()
+    }
+
     /// Reuse connectivity for the same board and view/revision authority. Missing authority
     /// recomputes without caching, so disposable previews cannot borrow another opening's data.
-    pub(super) fn copper_nets(
+    pub(super) fn copper_connectivity(
         &mut self,
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
-    ) -> Arc<BTreeMap<uuid::Uuid, String>> {
-        if let Some(cache) = &self.copper_nets_cache
+    ) -> Arc<crate::board_appearance::Connectivity> {
+        if let Some(cache) = &self.copper_connectivity_cache
             && Some(cache.source) == source
             && cache.target == board.target
         {
-            return cache.nets.clone();
+            return cache.connectivity.clone();
         }
-        let nets = Arc::new(board.copper_nets());
-        self.copper_nets_cache = source.map(|source| CopperNetsCache { source, target: board.target, nets: nets.clone() });
-        nets
+        let (copper, nets) = board.copper_with_nets();
+        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets });
+        self.copper_connectivity_cache =
+            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
+        connectivity
     }
 
     /// Share revision-keyed accepted geometry between frames; navigation never invalidates it.
@@ -415,10 +449,7 @@ impl EditorView {
     /// Filter and card choices restore independently of selection, which always starts empty.
     pub(super) fn from_state(id: ViewId, state: &ViewState, session: &Session) -> Self {
         let mut view = Self::new(id);
-        view.workspace = match state.target {
-            DocumentTarget::Sheet(_) => Workspace::Schematic,
-            DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_) => Workspace::Board,
-        };
+        view.workspace = state.target.workspace();
         view.board.target = state.board;
         view.sheet = state.schematic;
         if let DocumentTarget::Sheet(sheet) = state.target {
@@ -613,6 +644,7 @@ impl EditorView {
         self.board.tracks.cancel();
         self.board.measure.cancel();
         self.board.draft = None;
+        self.board.reference_drag = None;
         self.board.placement = None;
         self.board.box_drag = None;
         self.board.move_requested = false;
@@ -684,6 +716,7 @@ impl EditorView {
             self.binding = None;
             self.schematic = SchematicState::default();
             self.board.selection.clear();
+            self.board.reference = Default::default();
             return true;
         }
         let binding = Binding::current(session, self.workspace, board_target, self.sheet);
@@ -731,6 +764,9 @@ impl EditorView {
         if self.board.draft.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
             self.cancel_gesture();
         }
+        if self.board.reference_drag.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
+            self.board.reference_drag = None;
+        }
         if self.board.drawing.source().is_some_and(|source| !self.accepts(source, session)) {
             self.cancel_gesture();
         }
@@ -762,6 +798,9 @@ impl EditorView {
                 .map(|footprint| footprint.id)
                 .collect();
             self.board.selection.retain(|id| placed.contains(id));
+            if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
+                self.board.reference = Default::default();
+            }
             let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> = self
                 .board

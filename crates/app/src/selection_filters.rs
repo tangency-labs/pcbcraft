@@ -123,6 +123,7 @@ impl PcbApp {
             }
             if !next.footprints {
                 view.board.selection.clear();
+                view.board.reference = Default::default();
             }
             if !next.tracks || !next.vias {
                 // Drop only the copper kinds that can no longer be picked.

@@ -515,11 +515,29 @@ impl Document {
         }
         primitive(item, kind, start, end)
     }
+    /// Preview the library's generated reference using default physical silkscreen settings.
+    /// Authoring revisions invalidate the paths, while zoom and pan only reproject them.
+    fn reference_preview(&mut self, item: &Item) -> Option<std::sync::Arc<[Vec<Point>]>> {
+        item.reference_font.as_ref()?;
+        let revision = self.session.revision();
+        if let Some((cached, paths)) = &self.reference_preview
+            && *cached == revision
+        {
+            return Some(paths.clone());
+        }
+        let definition = item.footprint().ok()?;
+        let paths: std::sync::Arc<[_]> =
+            definition.reference_paths("REF", Default::default(), pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET).into();
+        self.reference_preview = Some((revision, paths.clone()));
+        Some(paths)
+    }
+
     /// Navigate and edit the focused pane through revision-checked transactions. Directional
     /// boxes, modifier selection, clipboard placement and repeated drawing share stable IDs.
     pub(super) fn canvas(&mut self, ui: &mut Ui, area: Rect, covered: [Rect; 2], navigation: Navigation, active: bool) {
         use pcbcraft_engine::library_graphics::{Fill, Geometry, Graphic};
         let item = self.session.snapshot();
+        let reference = self.reference_preview(&item);
         let t = Tokens::get();
         let response = ui.interact(area, ui.id().with("library_canvas"), egui::Sense::click_and_drag());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), "Library canvas"));
@@ -536,7 +554,8 @@ impl Document {
                     && ui.ctx().layer_id_at(p).is_none_or(|layer| layer.order == egui::Order::Background)
             });
         self.camera.set_uncovered(area, workspace::catalog::uncovered(area, &covered));
-        self.camera.navigate_definition(&response, area, item.objects.values().flat_map(points), over, navigation);
+        let extents = item.objects.values().flat_map(points).chain(reference.iter().flat_map(|paths| paths.iter().flatten().copied()));
+        self.camera.navigate_definition(&response, area, extents, over, navigation);
         let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(area);
         painter.rect_filled(area, 0, if item.kind == Kind::Symbol { t.canvas } else { t.board_canvas });
         let origin = self.camera.screen(Point { x_nm: 0, y_nm: 0 }, area);
@@ -745,6 +764,14 @@ impl Document {
         for p in preview {
             paint(&painter, &p, &self.camera, area, true);
         }
+        if let Some(paths) = &reference {
+            let width = pcbcraft_engine::board::silkscreen::Settings::default().stroke_width_nm as f32 / pcbcraft_engine::schematic::GRID_NM as f32
+                * self.camera.unit_step();
+            let stroke = egui::Stroke::new(width, pcbcraft_chrome::board::graphic_color(pcbcraft_chrome::board::GraphicStyle::Silkscreen));
+            for path in paths.iter() {
+                painter.add(egui::Shape::line(path.iter().map(|point| self.camera.screen(*point, area)).collect(), stroke));
+            }
+        }
         if let Tool::Box { start, .. } = self.tool
             && let Some(point) = pointer
         {
@@ -895,6 +922,8 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
             board::copper_color(Some(true)),
             selected,
             false,
+            false,
+            egui::Vec2::ZERO,
         ),
         Primitive::Outline { graphic } => board::footprint(
             painter,
@@ -909,12 +938,15 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
                 },
                 closed: true,
                 stroke_width: None,
+                reference: false,
             }],
             "",
             at(graphic.center),
             board::copper_color(Some(true)),
             selected,
             false,
+            false,
+            egui::Vec2::ZERO,
         ),
         Primitive::Silkscreen { path } => board::footprint(
             painter,
@@ -925,12 +957,15 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
                 style: board::GraphicStyle::Silkscreen,
                 closed: path.closed,
                 stroke_width: None,
+                reference: false,
             }],
             "",
             at(primitive.anchor()),
             board::copper_color(Some(true)),
             selected,
             false,
+            false,
+            egui::Vec2::ZERO,
         ),
     }
     if selected {

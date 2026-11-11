@@ -82,6 +82,22 @@ for (const item of cases) {
 """
         subprocess.run(["node", "-e", program], input=json.dumps(cases), text=True, check=True, capture_output=True)
 
+    def test_local_print_overrides_are_sparse_and_typed(self):
+        """Saved placement print records agree with the runtime's sparse constraints."""
+        schema = json.loads((ROOT / "docs/schemas/footprint-placement-v15.schema.json").read_text())
+        validator = Draft202012Validator(schema["properties"]["reference_text"])
+        for value in [{"text": "Power input"}, {"visible": False}, {"rotation": 0},
+                      {"size": {"height_nm": 1500000, "stroke_width_nm": 150000}}]:
+            with self.subTest(valid=value):
+                validator.validate(value)
+        for value in [{}, None, {"text": ""}, {"text": "R1\n"}, {"text": "R" * 129},
+                      {"text": None}, {"visible": 1}, {"font": "unknown"},
+                      {"rotation": 360}, {"align": "left"}, {"unknown": True},
+                      {"size": {"height_nm": 1500000}},
+                      {"size": {"height_nm": 0, "stroke_width_nm": 1}}]:
+            with self.subTest(invalid=value):
+                self.assertFalse(validator.is_valid(value))
+
     def test_missing_dependency_has_a_setup_message(self):
         """A Python environment without site packages receives an installation hint."""
         result = subprocess.run([sys.executable, "-S", str(CHECKER)], capture_output=True, text=True)

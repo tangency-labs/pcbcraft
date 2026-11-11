@@ -58,6 +58,156 @@ fn switching_workspaces_restores_navigation_and_rejects_stale_schematic_input() 
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// Close PCB zoom holds the point under the mouse, survives arrangement restoration in either
+/// workspace, and works through the addressed window command. Fit returns to a board overview.
+#[test]
+fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
+    let mut h = board_harness();
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    let rect = h.get_by_label("PCB canvas").rect();
+    let pointer = rect.center() + egui::vec2(31.0, -27.0);
+    let anchor = h.state().views.active.camera.unsnapped(pointer, rect);
+    h.hover_at(pointer);
+    h.run();
+    for _ in 0..8 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 8.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    assert_eq!(h.state().views.active.camera.zoom(), 64.0);
+    assert!(h.state().views.active.camera.screen(anchor, rect).distance(pointer) < 0.01);
+
+    let restore = |view: &crate::editor_view::EditorView, session: &pcbcraft_engine::Session| {
+        let saved = view.saved_state(session).unwrap();
+        let decoded: crate::editor_view::ViewState = serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert!(decoded.valid());
+        crate::editor_view::EditorView::from_state(ViewId(900), &decoded, session)
+    };
+    let restored = restore(&h.state().views.active, &h.state().session);
+    assert_eq!(restored.camera.zoom(), 64.0);
+    assert!(restored.camera.screen(anchor, rect).distance(pointer) < 0.01);
+
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    let zoom = json!({"view":view,"zoom_percent":3200});
+    h.state_mut().run_window_command(&ctx, "view.zoom", &zoom).unwrap();
+    assert_eq!(h.state().views.active.camera.zoom(), 32.0);
+    let mut parked = restore(&h.state().views.active, &h.state().session);
+    parked.switch(Workspace::Schematic, &h.state().session);
+    let mut restored = restore(&parked, &h.state().session);
+    restored.switch(Workspace::Board, &h.state().session);
+    assert_eq!(restored.camera.zoom(), 32.0);
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Schematic");
+    let view = h.state().views.active.id().0;
+    assert!(h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view,"zoom_percent":3200})).is_err());
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    h.query_all_by_label("Fit board").next().unwrap().click();
+    h.run();
+    assert!(h.state().views.active.camera.zoom() <= 8.0);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Canvas grabs move only the rendered reference and commit once, with cancellation and undo.
+#[test]
+fn pcb_reference_can_move_with_m_or_primary_drag() {
+    for rotation in [0, 180] {
+        fn read<'a>(h: &'a Harness<'_, PcbApp>) -> pcbcraft_engine::board::view::FootprintView<'a> {
+            h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap()
+        }
+        let mut h = harness();
+        h.set_size(egui::vec2(1400.0, 900.0));
+        resistor_with_board_at_origin(&mut h);
+        h.state_mut().browser.open = false;
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            &json!({"symbol":"symbol-2","definition":"resistor-0402","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+        );
+        h.run();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        let revision = h.state().session.revision();
+        let id = read(&h).id.clone();
+        h.state_mut().run(
+            pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":0,"y_nm":0,"rotation":rotation,"expected_revision":revision}),
+        );
+        h.run();
+        let snapshot = h.state().session.snapshot().unwrap();
+        let footprint = read(&h);
+        let origin = footprint.position;
+        let pads = footprint.pads.clone();
+        let point = footprint.graphics.iter().find(|g| g.reference).unwrap().points[0];
+        let from = board_point(&h, point);
+        let to = from + egui::vec2(70.0, -55.0);
+        h.hover_at(from);
+        h.run();
+        h.key_press(Key::M);
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_some());
+        h.hover_at(to);
+        h.run();
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_none());
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+
+        h.hover_at(from);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        assert!(h.state().views.active.board.reference_drag.is_some(), "mouse-down must capture the reference before the drag threshold");
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_none());
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()), "a plain click makes no edit");
+
+        for (dragging, quick) in [(false, false), (true, false), (true, true)] {
+            let revision = h.state().session.revision();
+            h.hover_at(from);
+            h.run();
+            if dragging {
+                h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.step();
+                assert!(h.state().views.active.board.reference_drag.is_some());
+                if !quick {
+                    h.event(egui::Event::PointerMoved(from + egui::vec2(1.0, 0.0)));
+                    h.run();
+                    h.event(egui::Event::PointerMoved(from + egui::vec2(10.0, 0.0)));
+                    h.run();
+                }
+                h.event(egui::Event::PointerMoved(to));
+                h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                h.run();
+            } else {
+                h.key_press(Key::M);
+                h.run();
+                click_canvas_at(&mut h, to);
+            }
+            let moved = read(&h);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!(moved.position, origin);
+            assert_eq!(moved.pads, pads);
+            let moved_point = moved.graphics.iter().find(|g| g.reference).unwrap().points[0];
+            assert!(board_point(&h, moved_point).distance(to) < 0.01);
+            h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            h.run();
+            assert_eq!(read(&h).reference_offset, pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET);
+        }
+    }
+}
+
 /// Opening the board beside a schematic retains both targets. Selection paints actual counterpart
 /// ink in each direction; receiver edit selections and camera transforms remain independent.
 #[test]
@@ -73,7 +223,7 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     click_canvas_at(&mut h, at);
     assert!(h.state().views.board_highlight_for(ViewId(2), &h.state().session).contains("footprint-3"));
     let board_rect = h.get_by_label("PCB canvas 3").rect();
-    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && board_rect.contains(text.pos) && text.fallback_color==Tokens::get().board_highlight)));
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && board_rect.contains(text.pos) && text.fallback_color==pcbcraft_chrome::board::copper_emphasis(Tokens::get().board_ink, Some(true)))));
     h.key_press(Key::Escape);
     h.run();
     click_canvas_at(&mut h, board_rect.center());
@@ -441,7 +591,7 @@ fn footprint_rotation_follows_the_screen_in_both_board_views() {
             h.run();
             assert_eq!(placement(&h)["rotation"], 0, "Shift+R reverses R");
             assert!((pad_direction(&h) - initial).length() < 0.01);
-            click(&mut h, "Rotate footprint counterclockwise");
+            click(&mut h, "Rotate selected footprint or text counterclockwise");
             assert_eq!(placement(&h)["rotation"], if flipped { 270 } else { 90 });
             let before_move = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
             h.hover_at(origin);
@@ -577,7 +727,7 @@ fn footprint_hotkeys_and_ribbon_preserve_exact_quarter_turns() {
     assert_eq!(changed["y_nm"], 1_270_000);
     assert_eq!(changed["rotation"], 90);
     for _ in 0..3 {
-        click(&mut h, "Rotate footprint counterclockwise");
+        click(&mut h, "Rotate selected footprint or text counterclockwise");
     }
     assert_eq!(placement(&h)["rotation"], 0);
     let center = board_point(&h, Point { x_nm: -2_540_000, y_nm: 1_270_000 });
@@ -589,7 +739,7 @@ fn footprint_hotkeys_and_ribbon_preserve_exact_quarter_turns() {
     h.key_press(Key::R);
     h.run();
     assert_eq!(placement(&h)["rotation"], 0);
-    click(&mut h, "Move footprint");
+    click(&mut h, "Move selected footprint, text or copper");
     assert!(h.state().views.active.board.draft.is_some());
     h.key_press(Key::Escape);
     h.run();
@@ -859,7 +1009,7 @@ fn smd_pads_render_physical_geometry_and_respect_layer_visibility() {
     assert_eq!(footprint.rotation, 90);
     for pad in footprint.pads {
         let expected = pad.copper.unwrap().map(|point| h.state().views.active.camera.screen(point, rect));
-        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.fill==Tokens::get().accent && {
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.fill==pcbcraft_chrome::board::copper_emphasis(Tokens::get().board_front, Some(true)) && {
             let bounds = path.points.iter().fold(egui::Rect::NOTHING, |rect, p| rect.union(egui::Rect::from_pos(*p)));
             let expected = expected.into_iter().fold(egui::Rect::NOTHING, |rect, p| rect.union(egui::Rect::from_pos(p)));
             bounds.min.distance(expected.min) < 0.01 && bounds.max.distance(expected.max) < 0.01

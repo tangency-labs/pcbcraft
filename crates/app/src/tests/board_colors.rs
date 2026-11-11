@@ -265,6 +265,43 @@ fn app_settings_save_retains_palette_without_writing_engineering_data() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
 
+/// Body and reference selection lighten each configured layer, including fixed silk and generated letters.
+#[test]
+fn footprint_selection_preserves_custom_copper_and_silkscreen_colors() {
+    let mut h = board();
+    let view = h.state().views.active.id();
+    let copper = egui::Color32::from_rgb(160, 32, 48);
+    let silk = egui::Color32::from_rgb(176, 142, 34);
+    let top = layer(&h, "Top");
+    let front_silk = layer(&h, "Front silkscreen");
+    h.state_mut().set_layer_color(view, &top, Some([160, 32, 48])).unwrap();
+    h.state_mut().set_layer_color(view, &front_silk, Some([176, 142, 34])).unwrap();
+    let snapshot = h.state().session.snapshot().unwrap();
+    let footprint = snapshot.board_view(snapshot.board_target().unwrap()).unwrap().footprints().next().unwrap();
+    let id = footprint.id;
+    let before = encode_documents(snapshot.clone()).unwrap();
+    for reference in [false, true] {
+        let policy = h.state().preferences.selection_follow;
+        let app = h.state_mut();
+        if reference {
+            app.views.select_board_reference(id.clone(), &app.session, policy);
+        } else {
+            app.views.select_board(std::collections::BTreeSet::from([id.clone()]), &app.session, policy);
+        }
+        h.run();
+        assert_eq!(lands(&h, copper.lerp_to_gamma(egui::Color32::WHITE, 0.35)), 2);
+        let expected = silk.lerp_to_gamma(egui::Color32::WHITE, 0.35);
+        let paths = h
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.stroke.color==egui::epaint::ColorMode::Solid(expected)))
+            .count();
+        assert!(paths > 2, "Fixed silk and generated reference paths keep the silk hue");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// Every registered layer has an editable palette entry; supported technical graphics use it.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

@@ -293,6 +293,8 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
                 library: None,
                 mapping: None,
                 bottom: false,
+                reference_offset: None,
+                reference_text: None,
             })
             .collect(),
     });
@@ -465,10 +467,10 @@ impl Encoder {
             || !project.board.vias.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
-            || project.board.footprints().iter().any(|f| f.rotation != 0 || f.bottom)
+            || project.board.footprints().iter().any(|f| f.rotation != 0 || f.bottom || f.reference_offset.is_some() || f.reference_text.is_some())
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation or bottom-side footprints; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, reference offsets or print overrides; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
@@ -669,6 +671,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
+    }
+    if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.reference_offset.is_some() || f.reference_text.is_some())) {
+        return Err("footprint reference offsets and print overrides require split board format 15".into());
     }
     if document.board.as_ref().is_some_and(|board| board.baseline.is_some()) {
         return Err("accepted board baselines require split board format 10".into());

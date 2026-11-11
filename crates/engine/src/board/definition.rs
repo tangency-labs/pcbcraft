@@ -1,11 +1,11 @@
 //! Original native footprint definitions, pinned independently from symbol graphics and placements.
-use crate::schematic::Point;
+use crate::schematic::{Point, TextAlign};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Arc};
 
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
-const MAX_OFFSET_NM: i64 = 100_000_000;
+pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
 pub(crate) const STARTER_IDS: [&str; 7] =
     ["resistor-0402", "resistor-0603", "capacitor-0402", "capacitor-0603", "led-0402", "sot23", "header-1x02-254"];
 const STARTER: [&str; 7] = [
@@ -126,6 +126,9 @@ pub struct FootprintDefinition {
     pub silkscreen: Vec<SilkPath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+    /// Optional local displacement of the default reference from the automatic anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_offset: Option<Point>,
 }
 
 /// Validate portable identity segments before using them in a native relative filename.
@@ -169,6 +172,54 @@ impl RectPad {
 }
 
 impl FootprintDefinition {
+    /// Resolve generated reference strokes in local coordinates for editing and fabrication.
+    /// Apply both the library default and the placement displacement before clipping to copper.
+    pub fn reference_paths(&self, text: &str, style: super::silkscreen::Settings, offset: Point) -> Vec<Vec<Point>> {
+        self.reference_paths_with(text, style, offset, None)
+    }
+
+    /// Apply local print overrides at the reference anchor before footprint mirroring and rotation.
+    /// Visibility affects only generated ink; component identity and the physical pads remain separate.
+    pub(crate) fn reference_paths_with(
+        &self,
+        text: &str,
+        style: super::silkscreen::Settings,
+        offset: Point,
+        appearance: Option<&super::reference::Text>,
+    ) -> Vec<Vec<Point>> {
+        let appearance = super::reference::Resolved::new(Some(self), text, style, appearance);
+        if !appearance.visible {
+            return Vec::new();
+        }
+        let outline_stroke_nm = style.stroke_width_nm;
+        let style =
+            super::silkscreen::Settings { text_height_nm: appearance.size.height_nm, stroke_width_nm: appearance.size.stroke_width_nm, ..style };
+        if !super::valid_reference_offset(offset) {
+            return Vec::new();
+        }
+        let default = self.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET);
+        if !super::valid_reference_offset(default) {
+            return Vec::new();
+        }
+        let top_pad = self.pads.iter().map(|p| p.center.y_nm - p.width_nm.max(p.height_nm) / 2).min().unwrap_or(0);
+        let top_line = self.silkscreen.iter().flat_map(|path| &path.points).map(|p| p.y_nm - outline_stroke_nm / 2).min().unwrap_or(top_pad);
+        let lettering = if appearance.font == "pcbcraft-technical-1" { super::silkscreen::lettering } else { super::silkscreen::legacy_lettering };
+        let mut paths = lettering(&appearance.text, 0, style);
+        let bottom = paths.iter().flatten().map(|p| p.y_nm).max().unwrap_or(0) + (style.stroke_width_nm + 1) / 2;
+        let align = match appearance.align {
+            TextAlign::Start => paths.iter().flatten().map(|p| p.x_nm).min().unwrap_or(0) - style.stroke_width_nm / 2,
+            TextAlign::Middle => 0,
+            TextAlign::End => paths.iter().flatten().map(|p| p.x_nm).max().unwrap_or(0) + (style.stroke_width_nm + 1) / 2,
+        };
+        let y = top_pad.min(top_line) - style.pad_clearance_nm;
+        for point in paths.iter_mut().flatten() {
+            let (x, local_y) = super::rotate(point.x_nm - align, point.y_nm - bottom, appearance.rotation);
+            point.x_nm = x + default.x_nm + offset.x_nm;
+            point.y_nm = local_y + default.y_nm + y + offset.y_nm;
+        }
+        super::silkscreen::clipped(paths, &self.pads, style)
+    }
+
     /// Return the exact identity used by placements and pinned project copies.
     pub(crate) fn key(&self) -> Key {
         (self.library.clone(), self.id.clone(), self.revision)
@@ -204,6 +255,9 @@ impl FootprintDefinition {
             || self.graphics.len() > 64
             || self.silkscreen.len() > 64
             || self.reference.as_deref().is_some_and(|font| !matches!(font, "pcbcraft-stroke-1" | "pcbcraft-technical-1"))
+            || self
+                .reference_offset
+                .is_some_and(|offset| self.reference.is_none() || offset == super::DEFAULT_REFERENCE_OFFSET || !super::valid_reference_offset(offset))
             || self.silkscreen.iter().any(|path| {
                 !(2..=64).contains(&path.points.len())
                     || (path.closed && path.points.len() < 3)

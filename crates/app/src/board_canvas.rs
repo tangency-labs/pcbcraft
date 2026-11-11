@@ -1,14 +1,15 @@
 //! Board selection and transform previews over resolved engine geometry; commands own edits.
 use crate::{
+    board_appearance::CopperFocus,
     canvas_camera::Camera,
     editor_view::{BoardState, ViewInput},
     preferences::Navigation,
 };
-use egui::{PointerButton, Sense, Ui};
+use egui::{PointerButton, Pos2, Rect, Response, Sense, Ui, Vec2};
 use pcbcraft_chrome::board;
 use pcbcraft_engine::{
     board::{
-        rotate as rotate_board,
+        MAX_REFERENCE_OFFSET_NM, rotate as rotate_board,
         setup::{LayerPurpose, Side},
         view::{BoardView, CopperLayers, FootprintView, PadView},
     },
@@ -54,6 +55,51 @@ pub(super) struct BoxDrag {
     button: PointerButton,
 }
 
+/// A reference move owns input until its single release or placement click.
+#[derive(Clone, Debug)]
+pub(super) struct ReferenceDrag {
+    pub(super) source: ViewInput,
+    pub(super) footprint: String,
+    pub(super) offset: Point,
+    pub(super) appearance: Option<pcbcraft_engine::board::reference::Text>,
+    original: Point,
+    original_appearance: Option<pcbcraft_engine::board::reference::Text>,
+    anchor: Point,
+    rotation: u16,
+    bottom: bool,
+    dragging: bool,
+    physical: bool,
+}
+
+impl ReferenceDrag {
+    /// Capture local appearance and the pointer anchor independently of the footprint's physical pose.
+    fn new(source: ViewInput, footprint: &FootprintView<'_>, anchor: Point, dragging: bool) -> Self {
+        Self {
+            source,
+            footprint: footprint.id.clone(),
+            offset: footprint.reference_offset,
+            original: footprint.reference_offset,
+            appearance: footprint.reference_text.clone(),
+            original_appearance: footprint.reference_text.clone(),
+            anchor,
+            rotation: footprint.rotation,
+            bottom: footprint.bottom,
+            dragging,
+            physical: footprint.physical_reference,
+        }
+    }
+
+    /// Rotate generated print in board space, reversing the local turn for a mirrored bottom placement.
+    /// Retain the change with an in-progress move so completing it remains one authored transaction.
+    fn rotate_text(&mut self, degrees: u16) {
+        if degrees != 0 && self.physical {
+            let appearance = self.appearance.get_or_insert_with(Default::default);
+            let local = if self.bottom { (360 - degrees) % 360 } else { degrees };
+            appearance.rotation = Some((appearance.rotation.unwrap_or(0) + local) % 360);
+        }
+    }
+}
+
 /// Selection and authored intent are handled after the renderer releases its view/session borrows.
 #[derive(Default)]
 pub(super) struct Interaction {
@@ -63,6 +109,8 @@ pub(super) struct Interaction {
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) items: Option<pcbcraft_engine::board::clipboard::BoardSelection>,
     pub(super) edit: Option<Draft>,
+    pub(super) reference_edit: Option<ReferenceDrag>,
+    pub(super) reference_pick: Option<String>,
     pub(super) placement: Option<Placement>,
 }
 
@@ -89,7 +137,7 @@ pub(super) fn show(
     highlighted: &BTreeSet<String>,
     filters: crate::selection_filters::Filters,
     appearance: &crate::board_appearance::Appearance,
-    enabled: bool,
+    owner_enabled: bool,
     navigation: Navigation,
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
@@ -100,6 +148,8 @@ pub(super) fn show(
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+    let enabled = owner_enabled && !egui::Popup::is_any_open(ui.ctx());
+    let route_menu_open = state.tracks.tool && response.context_menu_opened();
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
         state.context_menu_allowed = idle;
     }
@@ -141,6 +191,67 @@ pub(super) fn show(
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
+    let reference_press = response.contains_pointer()
+        && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary))
+        && !modifiers.shift
+        && !modifiers.ctrl
+        && !modifiers.command;
+    let reference_enabled = enabled
+        && !lost_focus
+        && filters.footprints
+        && state.draft.is_none()
+        && state.box_drag.is_none()
+        && state.drawing.tool.is_none()
+        && state.drawing.source().is_none()
+        && !state.tracks.busy();
+    let start = if reference_enabled && state.reference_drag.is_none() {
+        let pointer = if reference_press || drag_start {
+            ui.input(|i| i.pointer.press_origin())
+        } else {
+            response.hover_pos().filter(|_| state.move_requested)
+        };
+        pointer.and_then(|pointer| {
+            let hovered = footprints
+                .iter()
+                .zip(&hit_bounds)
+                .rev()
+                .find(|(footprint, bounds)| {
+                    reference_bounds(ui.painter(), camera, rect, project, state, footprint, **bounds, appearance).contains(pointer)
+                })
+                .map(|(footprint, _)| footprint);
+            hovered
+                .or_else(|| {
+                    state
+                        .move_requested
+                        .then(|| footprints.iter().find(|footprint| state.reference.selected.as_ref() == Some(&footprint.id)))
+                        .flatten()
+                })
+                .map(|footprint| (pointer, footprint))
+        })
+    } else {
+        None
+    };
+    let reference_pick = start.map(|(_, footprint)| footprint.id.clone());
+    let reference_rotation = camera.model_rotation(state.rotate_requested);
+    let (mut reference_consumed, mut reference_edit) =
+        move_reference(&response, camera, state, source.filter(|_| reference_enabled), start, reference_press || drag_start, reference_rotation);
+    if reference_enabled
+        && !reference_consumed
+        && reference_rotation != 0
+        && let Some(footprint) = footprints.iter().find(|footprint| state.reference.selected.as_ref() == Some(&footprint.id))
+        && footprint.physical_reference
+        && let Some(source) = source
+    {
+        let mut edit = ReferenceDrag::new(source, footprint, Point { x_nm: 0, y_nm: 0 }, false);
+        edit.rotate_text(reference_rotation);
+        reference_edit = Some(edit);
+        reference_consumed = true;
+    }
+    if reference_consumed || state.reference.selected.is_some() {
+        state.flip_requested = false;
+        state.rotate_requested = 0;
+    }
+    let enabled = enabled && !reference_consumed;
     // A footprint gesture owns its completion and overlapping drag origin. Explicit drawing
     // tools and existing drawing edits keep their own input even when crossing a footprint.
     let footprint_drag = drag_start
@@ -165,7 +276,7 @@ pub(super) fn show(
         state.active_layer.as_deref(),
         &state.hidden_layers,
         source,
-        enabled
+        (enabled || owner_enabled && route_menu_open)
             && state.draft.is_none()
             && state.box_drag.is_none()
             && !footprint_drag
@@ -188,8 +299,8 @@ pub(super) fn show(
         filters.graphics,
     );
     let enabled = enabled && !edge.consumed && !route.consumed;
-    let mut out = Interaction { drawing_edit: edge.command, track_edit: route.command, ..Interaction::default() };
-    if (edge.consumed || route.consumed) && !state.selection.is_empty() {
+    let mut out = Interaction { drawing_edit: edge.command, track_edit: route.command, reference_edit, reference_pick, ..Interaction::default() };
+    if (edge.consumed || route.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some()) {
         out.selection = Some(BTreeSet::new());
     }
     if route.consumed {
@@ -327,20 +438,45 @@ pub(super) fn show(
     }
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
-    crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
+    let ratsnest = state.ratsnest(project, source);
+    let requested = std::mem::take(&mut state.net_highlight_requested);
+    let connectivity =
+        (requested || state.highlight_net.is_some() || state.tracks.route_contact().is_some()).then(|| state.copper_connectivity(project, source));
+    if requested && let Some(connectivity) = &connectivity {
+        state.highlight_net =
+            response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
+    }
+    let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
+    let context = board::context_painter(&p, focus.is_some());
+    crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
     // Tracks on its pads are painted where the move carries them.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
     let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
-    crate::board_tracks::paint(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref(), &state.hidden_layers, appearance, &carried);
-    let ratsnest = state.ratsnest(project, source);
-    if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
+    crate::board_tracks::paint(
+        ui,
+        rect,
+        camera,
+        project,
+        &state.tracks,
+        state.active_layer.as_deref(),
+        &state.hidden_layers,
+        appearance,
+        focus,
+        &carried,
+    );
+    let selected_reference = out.reference_pick.clone().or_else(|| out.selection.is_none().then(|| state.reference.selected.clone()).flatten());
+    if (!state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) || selected_reference.is_some())
         && let Some(ratsnest) = ratsnest
     {
         let draft = shown.and_then(|draft| footprints.iter().find(|footprint| footprint.id == draft.footprint).map(|footprint| (draft, footprint)));
         for line in &ratsnest.lines {
+            let selected = selected_reference.as_ref().is_some_and(|id| line.from.footprint == *id || line.to.footprint == *id);
+            if state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) && !selected {
+                continue;
+            }
             let at = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
                 let point = match draft {
                     Some((draft, footprint)) if endpoint.footprint == footprint.id => {
@@ -350,17 +486,52 @@ pub(super) fn show(
                 };
                 camera.screen(point, rect)
             };
-            board::airwire(&p, at(&line.from), at(&line.to));
+            if selected {
+                board::selected_airwire(&p, at(&line.from), at(&line.to));
+            } else {
+                board::airwire(&context, at(&line.from), at(&line.to));
+            }
         }
     }
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
         }
+        if let Some(draft) = state.reference_drag.as_ref().or(out.reference_edit.as_ref()).filter(|draft| draft.footprint == footprint.id) {
+            footprint.reference_offset = draft.offset;
+            footprint.reference_text = draft.appearance.clone();
+            if footprint.physical_reference {
+                let reference = project.reference_preview(&footprint, draft.offset);
+                footprint.graphics.retain(|graphic| !graphic.reference);
+                footprint.graphics.extend(reference);
+            }
+        }
         let center = camera.screen(footprint.position, rect);
-        let (pads, graphics) = drawing(&footprint, camera, rect, project, state, visible, appearance);
-        if (pads.is_empty() && graphics.is_empty()) || !rect.intersects(board::footprint_bounds(&pads, &graphics, center)) {
+        let (mut pads, graphics) = drawing(&footprint, camera, rect, project, state, visible, appearance);
+        let bounds = board::footprint_bounds(&pads, &graphics, center);
+        let shift = reference_shift(&footprint, camera, rect);
+        let label_visible = if footprint.physical_reference {
+            graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
+        } else {
+            rect.intersects(board::footprint_reference_bounds(&p, bounds, footprint.reference, shift))
+        };
+        if (pads.is_empty() && graphics.is_empty()) || !(rect.intersects(bounds) || label_visible) {
             continue;
+        }
+        if let Some(focus) = focus {
+            for pad in &mut pads {
+                let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
+                pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+            }
+        }
+        let reference_bounds = reference_bounds(&p, camera, rect, project, state, &footprint, bounds, appearance);
+        let selected = selected_reference.as_ref() == Some(&footprint.id);
+        let reference_color = graphics
+            .iter()
+            .find(|graphic| graphic.reference)
+            .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |graphic| graphic.color.unwrap_or_else(|| board::graphic_color(graphic.style)));
+        if selected {
+            board::reference_owner_link(&p, reference_bounds, center, reference_color);
         }
         board::footprint(
             &p,
@@ -369,17 +540,15 @@ pub(super) fn show(
             if footprint.physical_reference { "" } else { footprint.reference },
             center,
             color,
-            state.selection.contains(&footprint.id) || shown.is_some_and(|d| d.footprint == footprint.id),
+            state.selection.contains(&footprint.id)
+                || shown.is_some_and(|d| d.footprint == footprint.id)
+                || selected_reference.as_ref() == Some(&footprint.id),
             highlighted.contains(&footprint.id),
+            focus.is_some(),
+            shift,
         );
-    }
-    if state.net_highlight_requested || state.highlight_net.is_some() {
-        let nets = state.copper_nets(project, source);
-        if std::mem::take(&mut state.net_highlight_requested) {
-            state.highlight_net = response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &nets));
-        }
-        if let Some(net) = &state.highlight_net {
-            paint_net(&p, camera, rect, project, net, &nets, &state.hidden_layers);
+        if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
+            board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
     }
     for (at, focused) in markers {
@@ -406,7 +575,9 @@ pub(super) fn show(
             state.box_drag = None;
         }
     }
-    crate::board_tracks::paint_draft(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref());
+    if route.consumed {
+        crate::board_tracks::paint_draft(&p, &response, camera, project, &state.tracks, state.active_layer.as_deref(), appearance);
+    }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if project.footprints().next().is_none()
         && project.drawings().is_empty()
@@ -437,7 +608,7 @@ pub(super) fn show(
             .find_map(|(label, key, action, available)| MenuItem::new(label).shortcut(key).enabled(available).show(ui).then_some(action));
         });
     }
-    if state.draft.is_some() || state.placement.is_some() {
+    if state.draft.is_some() || state.placement.is_some() || state.reference_drag.is_some() {
         response.on_hover_cursor(egui::CursorIcon::Grabbing);
     }
     out
@@ -523,6 +694,8 @@ fn place_group(
                 color,
                 true,
                 false,
+                false,
+                reference_shift(&footprint, camera, response.rect),
             );
         }
     }
@@ -578,31 +751,92 @@ fn net_under(
         })
 }
 
-/// Outline visible pads and tracks assigned to `net`, reusing cached copper assignments.
-/// Vias retain normal rendering's layer-independent visibility policy.
-fn paint_net(
-    p: &egui::Painter,
+/// Resolve the visible reference hit area, excluding pad, body and fixed silkscreen geometry.
+#[allow(clippy::too_many_arguments)]
+fn reference_bounds(
+    painter: &egui::Painter,
     camera: &Camera,
-    rect: egui::Rect,
-    view: BoardView<'_>,
-    net: &str,
-    nets: &BTreeMap<uuid::Uuid, String>,
-    hidden: &BTreeSet<String>,
-) {
-    let width = |nm: i64| (camera.screen(Point { x_nm: nm, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length();
-    for pad in view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.net.as_deref() == Some(net) && pad_visible(pad, view, hidden))
-    {
-        match pad.copper {
-            Some(land) => board::net_highlight(p, &land.map(|corner| camera.screen(corner, rect)), true, 2.),
-            None => board::net_highlight(p, &[camera.screen(pad.center, rect)], false, 6.),
+    rect: Rect,
+    project: BoardView<'_>,
+    state: &BoardState,
+    footprint: &FootprintView<'_>,
+    bounds: Rect,
+    appearance: &crate::board_appearance::Appearance,
+) -> Rect {
+    if !footprint.physical_reference {
+        return if bounds.is_finite() {
+            board::footprint_reference_bounds(painter, bounds, footprint.reference, reference_shift(footprint, camera, rect))
+        } else {
+            Rect::NOTHING
+        };
+    }
+    let side = if footprint.bottom { Side::Back } else { Side::Front };
+    if appearance.technical(project, LayerPurpose::Silkscreen, side, state.active_layer.as_deref(), &state.hidden_layers).is_none() {
+        return Rect::NOTHING;
+    }
+    footprint.graphics.iter().filter(|graphic| graphic.reference).fold(Rect::NOTHING, |bounds, graphic| {
+        let extent = graphic.points.iter().fold(Rect::NOTHING, |extent, point| extent.union(Rect::from_pos(camera.screen(*point, rect))));
+        let half_stroke = graphic.stroke_nm.unwrap_or_default() as f32 / pcbcraft_engine::schematic::GRID_NM as f32 * camera.unit_step() / 2.0;
+        bounds.union(extent.expand(half_stroke + 2.0))
+    })
+}
+
+/// Project a local reference displacement into the editor-only label's screen coordinates.
+fn reference_shift(footprint: &FootprintView<'_>, camera: &Camera, rect: Rect) -> Vec2 {
+    let local = footprint.reference_offset;
+    let (x_nm, y_nm) = repose(local.x_nm, local.y_nm, (0, false), (footprint.rotation, footprint.bottom));
+    let origin = pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET;
+    camera.screen(Point { x_nm, y_nm }, rect) - camera.screen(origin, rect)
+}
+
+/// Capture a visible reference on mouse-down or M, keeping the grab point stable under mirroring
+/// and rotation. A mouse move commits only after a real drag; plain clicks discard the draft.
+/// Completion requires a canvas release or click with the original edit authority.
+fn move_reference(
+    response: &Response,
+    camera: &Camera,
+    state: &mut BoardState,
+    source: Option<ViewInput>,
+    start: Option<(Pos2, &FootprintView<'_>)>,
+    dragging: bool,
+    rotation: u16,
+) -> (bool, Option<ReferenceDrag>) {
+    let rect = response.rect;
+    let mut draft = if let Some(draft) = state.reference_drag.take() {
+        if Some(draft.source) != source || response.ctx.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+            return (true, None);
         }
+        draft
+    } else if let (Some(source), Some((pointer, footprint))) = (source, start) {
+        state.move_requested = false;
+        let mut draft = ReferenceDrag::new(source, footprint, camera.unsnapped(pointer, rect), dragging);
+        if footprint.physical_reference {
+            draft.rotate_text(rotation);
+        }
+        state.reference_drag = Some(draft);
+        return (true, None);
+    } else {
+        return (false, None);
+    };
+    draft.rotate_text(rotation);
+    let complete = if draft.dragging { response.drag_stopped_by(PointerButton::Primary) } else { response.clicked() };
+    let pointer = if complete || draft.dragging { response.interact_pointer_pos().or_else(|| response.hover_pos()) } else { response.hover_pos() };
+    if let Some(pointer) = pointer.filter(|pointer| rect.contains(*pointer)) {
+        let at = camera.unsnapped(pointer, rect);
+        let (x, y) = repose(at.x_nm - draft.anchor.x_nm, at.y_nm - draft.anchor.y_nm, (draft.rotation, draft.bottom), (0, false));
+        let limit = MAX_REFERENCE_OFFSET_NM;
+        draft.offset = Point { x_nm: (draft.original.x_nm + x).clamp(-limit, limit), y_nm: (draft.original.y_nm + y).clamp(-limit, limit) };
     }
-    for track in view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string()) && nets.get(&track.id).is_some_and(|n| n == net)) {
-        board::net_highlight(p, &[camera.screen(track.start, rect), camera.screen(track.end, rect)], false, width(track.width_nm) * 0.4);
+    if complete {
+        return (
+            true,
+            (response.contains_pointer() && (draft.offset != draft.original || draft.appearance != draft.original_appearance)).then_some(draft),
+        );
     }
-    for via in view.vias().iter().filter(|via| nets.get(&via.id).is_some_and(|n| n == net)) {
-        board::net_highlight(p, &[camera.screen(via.at, rect)], false, width(via.diameter_nm) / 2.);
+    if !draft.dragging || response.ctx.input(|input| input.pointer.primary_down()) {
+        state.reference_drag = Some(draft);
     }
+    (true, None)
 }
 
 /// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.
@@ -705,6 +939,7 @@ fn drawing(
                     style,
                     color: Some(color),
                     closed: graphic.closed,
+                    reference: graphic.reference,
                     stroke_width: graphic.stroke_nm.map(|width| {
                         (camera.screen(Point { x_nm: width, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length()
                     }),

@@ -2,9 +2,53 @@
 use crate::Tokens;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
 
+const CONTEXT_OPACITY: f32 = 0.42;
+
+/// Preserve layer hues when lightening selections or dimming copper during a net highlight.
+pub fn copper_emphasis(color: Color32, emphasized: Option<bool>) -> Color32 {
+    match emphasized {
+        Some(true) => color.lerp_to_gamma(Color32::WHITE, 0.35),
+        Some(false) => color.gamma_multiply(CONTEXT_OPACITY),
+        None => color,
+    }
+}
+
+/// Keep non-copper context visible at reduced opacity while copper is emphasized.
+pub fn context_painter(painter: &Painter, dimmed: bool) -> Painter {
+    let mut painter = painter.clone();
+    if dimmed {
+        painter.multiply_opacity(CONTEXT_OPACITY);
+    }
+    painter
+}
+
 /// Paint an accepted logical connection behind copper without suggesting routed geometry.
 pub fn airwire(p: &Painter, from: Pos2, to: Pos2) {
     p.line_segment([from, to], Stroke::new(1., Tokens::get().board_ink.gamma_multiply(0.55)));
+}
+
+/// Emphasize an existing unrouted connection belonging to the selected reference's component.
+pub fn selected_airwire(p: &Painter, from: Pos2, to: Pos2) {
+    p.line_segment([from, to], Stroke::new(1.5, Tokens::get().accent));
+}
+
+/// Outline visible reference ink for hover or selection without expanding the footprint body bounds.
+pub fn reference_outline(p: &Painter, bounds: Rect, selected: bool, color: Color32) {
+    if bounds.is_finite() && bounds.is_positive() {
+        let color = copper_emphasis(color, Some(true)).gamma_multiply(if selected { 1.0 } else { 0.6 });
+        p.rect_stroke(bounds.expand(2.0), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Outside);
+    }
+}
+
+/// Connect selected or moving reference ink to its physical owner with a view-only dashed leader.
+/// Suppress the leader when ink is hidden or overlaps the owner; canvas clipping remains the painter's responsibility.
+pub fn reference_owner_link(p: &Painter, bounds: Rect, owner: Pos2, color: Color32) {
+    if !bounds.is_finite() || !bounds.is_positive() || bounds.contains(owner) {
+        return;
+    }
+    let stroke = Stroke::new(1., copper_emphasis(color, Some(true)).gamma_multiply(0.65));
+    p.extend(egui::Shape::dashed_line(&[bounds.clamp(owner), owner], stroke, 4., 3.));
+    p.circle_stroke(owner, 3., stroke);
 }
 
 /// The ratsnest is a view overlay, separate from physical drawing layers.
@@ -30,11 +74,11 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, pre
 }
 
 /// Paint one copper track segment at its physical width with round ends, never thinner than a
-/// hairline. Selection draws an accent outline; a preview is translucent accent copper.
+/// hairline. Selection draws an accent outline; a preview lightens the supplied layer color.
 pub fn track(p: &Painter, ends: [Pos2; 2], width: f32, color: Color32, selected: bool, preview: bool) {
     let t = Tokens::get();
     let width = width.max(1.);
-    let fill = if preview { t.accent.gamma_multiply(0.6) } else { color };
+    let fill = copper_emphasis(color, preview.then_some(true));
     if selected {
         let outline = Stroke::new(width + 3., t.accent);
         p.line_segment(ends, outline);
@@ -48,15 +92,38 @@ pub fn track(p: &Painter, ends: [Pos2; 2], width: f32, color: Color32, selected:
     }
 }
 
+/// Shade the clearance around a round-ended segment or via, leaving nearby copper visible.
+/// The caller supplies the drawn copper width and clearance in logical screen points.
+pub fn routing_clearance(p: &Painter, [a, b]: [Pos2; 2], width: f32, clearance: f32) {
+    let color = Tokens::get().board_ink.gamma_multiply(0.19);
+    let radius = width.max(1.0) / 2.0 + clearance;
+    let direction = (b - a).normalized();
+    if direction == egui::Vec2::ZERO {
+        p.circle_filled(a, radius, color);
+        return;
+    }
+    let points = [(a, -direction), (b, direction)]
+        .into_iter()
+        .flat_map(|(center, outward)| {
+            (0..=12).map(move |step| {
+                let angle = outward.angle() + std::f32::consts::PI * (step as f32 / 12.0 - 0.5);
+                center + egui::Vec2::angled(angle) * radius
+            })
+        })
+        .collect();
+    p.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+}
+
 /// Paint a through via: a round pad of `radius` with its drill hole, never smaller than a dot.
-/// Selection draws an accent ring; a preview is translucent accent copper.
-pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool) {
+/// Selection draws an accent ring; an authored via takes the current copper emphasis.
+pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool, emphasized: Option<bool>) {
     let t = Tokens::get();
     let radius = radius.max(2.);
     if selected {
         p.circle_filled(center, radius + 1.5, t.accent);
     }
-    p.circle_filled(center, radius, if preview { t.accent.gamma_multiply(0.6) } else { t.board_through });
+    let fill = if preview { t.accent.gamma_multiply(0.6) } else { copper_emphasis(t.board_through, emphasized) };
+    p.circle_filled(center, radius, fill);
     p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
 }
 
@@ -75,18 +142,6 @@ pub fn measurement(p: &Painter, a: Pos2, b: Pos2, label: &str) {
     let rect = Rect::from_center_size(at, galley.size() + vec2(t.space_8, t.space_4));
     p.rect_filled(rect, t.radius_sm, t.panel);
     p.galley(rect.center() - galley.size() / 2., galley, t.text);
-}
-
-/// Outline highlighted net copper in the cross-probe highlight color, over the normal drawing.
-pub fn net_highlight(p: &Painter, points: &[Pos2], closed: bool, width: f32) {
-    let stroke = Stroke::new(width.max(2.), Tokens::get().board_highlight);
-    if points.len() == 1 {
-        p.circle_stroke(points[0], width.max(2.), stroke);
-    } else if closed {
-        p.add(egui::Shape::closed_line(points.to_vec(), stroke));
-    } else {
-        p.add(egui::Shape::line(points.to_vec(), stroke));
-    }
 }
 
 /// Mark a design rules finding: a small warning triangle in the error color, filled and ringed
@@ -258,9 +313,18 @@ pub struct GraphicDrawing {
     pub color: Option<Color32>,
     pub closed: bool,
     pub stroke_width: Option<f32>,
+    /// Reference paths do not expand the footprint's selection bounds.
+    pub reference: bool,
 }
 
-/// Bounds include real pad extents and visible technical graphics. Legacy markers retain their
+impl GraphicDrawing {
+    /// Screen-space ink bounds including physical stroke width.
+    pub fn bounds(&self) -> Rect {
+        self.points.iter().fold(Rect::NOTHING, |rect, point| rect.union(Rect::from_pos(*point))).expand(self.stroke_width.unwrap_or(0.0) / 2.0)
+    }
+}
+
+/// Bounds include pads and fixed technical graphics. Legacy markers retain their
 /// generous selection affordance; physical dimensions are never inflated to match that affordance.
 pub fn footprint_bounds(pads: &[PadDrawing], graphics: &[GraphicDrawing], center: Pos2) -> Rect {
     if pads.iter().all(|p| p.copper.is_none()) && graphics.is_empty() {
@@ -275,16 +339,28 @@ pub fn footprint_bounds(pads: &[PadDrawing], graphics: &[GraphicDrawing], center
             }
         }
     }
-    for graphic in graphics {
-        let extent = graphic.points.iter().fold(Rect::NOTHING, |rect, point| rect.union(Rect::from_pos(*point)));
-        bounds = bounds.union(extent.expand(graphic.stroke_width.unwrap_or(0.) / 2.));
+    for graphic in graphics.iter().filter(|graphic| !graphic.reference) {
+        bounds = bounds.union(graphic.bounds());
     }
     bounds.expand(4.0)
 }
 
+/// Anchor for the editor-only reference on footprints without generated silkscreen lettering.
+fn reference_anchor(bounds: Rect, shift: egui::Vec2) -> Pos2 {
+    bounds.center_top() - vec2(0., Tokens::get().space_2) + shift
+}
+
+/// Hit bounds for the editor-only reference, using the same font and anchor as its painter.
+pub fn footprint_reference_bounds(p: &Painter, bounds: Rect, text: &str, shift: egui::Vec2) -> Rect {
+    let t = Tokens::get();
+    let size = p.layout_no_wrap(text.to_owned(), FontId::proportional(t.font_body), t.board_ink).size();
+    Align2::CENTER_BOTTOM.anchor_size(reference_anchor(bounds, shift), size)
+}
+
 /// Paint physical land contours and plated drills at their projected dimensions, with separate
-/// technical graphics and selection ink. Only legacy definitions use center markers. Small
+/// technical graphics and lighter layer-colored selection ink. Only legacy definitions use center markers. Small
 /// lands omit labels before they become illegible; physical dimensions never depend on zoom.
+/// With copper emphasis active, use the caller's pad colors and dim technical graphics and text.
 #[allow(clippy::too_many_arguments)]
 pub fn footprint(
     p: &Painter,
@@ -295,62 +371,62 @@ pub fn footprint(
     copper: Color32,
     selected: bool,
     highlighted: bool,
+    copper_focused: bool,
+    reference_shift: egui::Vec2,
 ) {
     let t = Tokens::get();
-    let ink = if selected {
-        t.accent
-    } else if highlighted {
-        t.board_highlight
-    } else {
-        copper
-    };
+    let ink = copper_emphasis(pads.first().and_then(|pad| pad.color).unwrap_or(copper), (selected || highlighted).then_some(true));
     let bounds = footprint_bounds(pads, graphics, center);
+    let context = context_painter(p, copper_focused);
     for graphic in graphics {
         let width = match graphic.style {
             GraphicStyle::Fabrication => 0.8,
             GraphicStyle::Silkscreen => 1.2,
             GraphicStyle::Courtyard => 0.7,
         };
-        let color = graphic.color.unwrap_or_else(|| graphic_color(graphic.style));
+        let base = graphic.color.unwrap_or_else(|| graphic_color(graphic.style));
+        let color = copper_emphasis(base, (selected || highlighted).then_some(true));
         let stroke = Stroke::new(graphic.stroke_width.unwrap_or(width), color);
-        p.add(if graphic.closed {
+        context.add(if graphic.closed {
             egui::Shape::closed_line(graphic.points.clone(), stroke)
         } else {
             egui::Shape::line(graphic.points.clone(), stroke)
         });
         if let Some(width) = graphic.stroke_width {
             for point in &graphic.points {
-                p.circle_filled(*point, width / 2., color);
+                context.circle_filled(*point, width / 2., color);
             }
         }
     }
     if selected || highlighted {
-        p.rect_stroke(bounds, t.radius_sm, Stroke::new(1.5, ink), egui::StrokeKind::Inside);
+        context.rect_stroke(bounds, t.radius_sm, Stroke::new(1.5, ink), egui::StrokeKind::Inside);
     }
     let extent = pads.iter().fold(Rect::from_pos(center), |r, p| r.union(Rect::from_pos(p.center)));
     let (offset, align) = if extent.height() > extent.width() { (vec2(9., 0.), Align2::LEFT_CENTER) } else { (vec2(0., 9.), Align2::CENTER_TOP) };
     for pad in pads {
+        let color = copper_emphasis(pad.color.unwrap_or(copper), (!copper_focused && (selected || highlighted)).then_some(true));
         if let Some(points) = pad.copper {
-            let color = if selected || highlighted { ink } else { pad.color.unwrap_or(copper) };
             p.add(egui::Shape::convex_polygon(pad_contour(pad), color, Stroke::NONE));
             if let Some(radius) = pad.drill_radius {
                 p.circle_filled(pad.center, radius, t.board_canvas);
-                p.circle_stroke(pad.center, radius, Stroke::new(0.7, t.board_ink.gamma_multiply(0.5)));
+                context.circle_stroke(pad.center, radius, Stroke::new(0.7, t.board_ink.gamma_multiply(0.5)));
             }
-            pad_label(p, pad, points, color);
+            let mut label_painter = p.clone();
+            label_painter.multiply_opacity(f32::from(color.a()) / 255.0);
+            pad_label(&label_painter, pad, points, color);
         } else {
-            p.circle_stroke(pad.center, 5., Stroke::new(1.5, ink));
-            p.line_segment([pad.center - vec2(2., 0.), pad.center + vec2(2., 0.)], Stroke::new(1., ink));
-            p.line_segment([pad.center - vec2(0., 2.), pad.center + vec2(0., 2.)], Stroke::new(1., ink));
-            p.text(pad.center + offset, align, &pad.number, FontId::proportional(t.font_small), t.board_ink);
+            p.circle_stroke(pad.center, 5., Stroke::new(1.5, color));
+            p.line_segment([pad.center - vec2(2., 0.), pad.center + vec2(2., 0.)], Stroke::new(1., color));
+            p.line_segment([pad.center - vec2(0., 2.), pad.center + vec2(0., 2.)], Stroke::new(1., color));
+            context.text(pad.center + offset, align, &pad.number, FontId::proportional(t.font_small), t.board_ink);
         }
     }
-    p.text(
-        bounds.center_top() - vec2(0., t.space_2),
+    context.text(
+        reference_anchor(bounds, reference_shift),
         Align2::CENTER_BOTTOM,
         reference,
         FontId::proportional(t.font_body),
-        if selected || highlighted { ink } else { t.board_ink },
+        copper_emphasis(t.board_ink, (selected || highlighted).then_some(true)),
     );
 }
 

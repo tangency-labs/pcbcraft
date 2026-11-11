@@ -5,6 +5,45 @@ use crate::{
 };
 use serde_json::json;
 
+/// Bad reference edits preserve data and history, and repeating an accepted offset is a no-op.
+#[test]
+fn reference_moves_validate_targets_and_preserve_physical_placement() {
+    use crate::board::track::tests::{routed_fixture, view};
+    let mut session = routed_fixture();
+    let footprint = view(&session).footprints().next().unwrap();
+    let board = view(&session).target.board;
+    let id = footprint.id.clone();
+    let pads = footprint.pads;
+    let origin = footprint.position;
+    let revision = session.revision();
+    let original = encode_documents(session.snapshot().unwrap()).unwrap();
+    let params = json!({"board":board,"footprint":id,"offset":{"x_nm":1_000_000,"y_nm":-1_000_000},"expected_revision":revision});
+    for (key, value) in [
+        ("board", json!("00000000-0000-0000-0000-000000000001")),
+        ("footprint", json!("footprint-99999")),
+        ("expected_revision", json!(revision - 1)),
+        ("offset", json!({"x_nm":100_000_001,"y_nm":0})),
+        ("offset", json!({"x_nm":0,"y_nm":-100_000_001})),
+        ("offset", json!({"x_nm":1.5,"y_nm":0})),
+        ("offset", json!({"x_nm":1,"y_nm":0,"pixels":1})),
+    ] {
+        let mut invalid = params.clone();
+        invalid[key] = value;
+        assert!(session.apply(crate::SET_FOOTPRINT_REFERENCE_OFFSET, &invalid).is_err());
+        assert_eq!(session.revision(), revision);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
+    }
+    session.apply(crate::SET_FOOTPRINT_REFERENCE_OFFSET, &params).unwrap();
+    let moved = view(&session).footprints().find(|f| f.id == id).unwrap();
+    assert_eq!(moved.pads, pads);
+    assert_eq!(moved.position, origin);
+    let mut repeated = params;
+    let revision = session.revision();
+    repeated["expected_revision"] = json!(revision);
+    session.apply(crate::SET_FOOTPRINT_REFERENCE_OFFSET, &repeated).unwrap();
+    assert_eq!(session.revision(), revision);
+}
+
 /// Transform preserves mappings and schematic geometry, updates resolved pads, and shares history.
 #[test]
 fn transforms_are_atomic_revision_checked_and_persistent() {

@@ -16,6 +16,7 @@ impl PcbApp {
         let view_id = self.views.active.id();
         let input = self.views.active.input(&self.session);
         let state = &mut self.views.active.board;
+        let browser_selection = state.probe_footprints();
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
             return ([Rect::NOTHING; 3], Rect::NOTHING);
         };
@@ -33,7 +34,7 @@ impl PcbApp {
                     project.clone(),
                     crate::editor_view::DocumentTarget::Board(target.target),
                     &self.views.active.schematic.selection,
-                    &state.selection,
+                    &browser_selection,
                 );
             })
         } else {
@@ -79,6 +80,8 @@ impl PcbApp {
         // The ratsnest for this revision, through the same per-input cache the canvas reads.
         let unrouted = state.ratsnest(target, input).map(|ratsnest| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
+        let mut reference_action = None;
+        let mut reference_pick = None;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
             host.with("properties"),
@@ -88,6 +91,14 @@ impl PcbApp {
             state.properties_collapsed,
             workspace::panels::card_width(area, false),
             |ui| {
+                if let Some(footprint) = state.reference.selected.as_ref().and_then(|id| target.footprints().find(|footprint| &footprint.id == id))
+                    && let Some(input) = input
+                {
+                    let enabled = settings_enabled && !state.editing_footprint();
+                    reference_action =
+                        state.reference.show(ui, &footprint, input, unit, enabled, pcbcraft_chrome::properties::form_body_height(area));
+                    return;
+                }
                 let selected: Vec<_> = target.footprints().filter(|footprint| state.selection.contains(&footprint.id)).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
@@ -95,6 +106,11 @@ impl PcbApp {
                         property(ui, "Value", footprint.value);
                         property(ui, "Board", target.name());
                         property(ui, "Footprint", footprint.definition);
+                        ui.label("Silkscreen");
+                        if ui.button("Edit silkscreen text").clicked() {
+                            reference_pick = Some(footprint.id.clone());
+                        }
+                        ui.end_row();
                         copper_edit = footprint_transform(ui, footprint, unit);
                         property(
                             ui,
@@ -135,6 +151,14 @@ impl PcbApp {
         );
         if collapse {
             state.properties_collapsed = !state.properties_collapsed;
+        }
+        if let Some(action) = reference_action {
+            self.apply_reference_action(action);
+            self.repaint_editors(ui.ctx());
+        }
+        if let Some(footprint) = reference_pick {
+            self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
+            self.repaint_editors(ui.ctx());
         }
         if let Some((command, mut params)) = copper_edit {
             params["board"] = serde_json::json!(target.target.board);

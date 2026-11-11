@@ -172,7 +172,7 @@ impl PcbApp {
     /// units, for this view only. Modify's menu holds Delete, as in Capture; Inspect's holds Reveal.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
-        let editing = self.views.active.board.draft.is_some();
+        let editing = self.views.active.board.editing_footprint();
         let planned =
             |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, menu_check: None };
 
@@ -300,24 +300,25 @@ impl PcbApp {
         workspace::ribbon_separator(ui);
 
         let selected = enabled && self.views.active.board.selection.len() == 1;
+        let reference = enabled && self.views.active.board.reference.selected.is_some();
         // Move also starts a copper move when tracks or vias are selected and no footprint is.
         let copper = enabled && self.views.active.board.selection.is_empty() && !self.views.active.board.tracks.selected.is_empty();
         let modify = [
             RibbonTool {
                 icon: ToolIcon::Move,
                 label: "Move",
-                description: "Move footprint",
+                description: "Move selected footprint, text or copper",
                 shortcut: "M",
-                enabled: (selected || copper) && !editing,
+                enabled: (selected || reference || copper) && !editing,
                 active: editing,
                 menu_check: None,
             },
             RibbonTool {
                 icon: ToolIcon::Rotate,
                 label: "Rotate",
-                description: "Rotate footprint counterclockwise",
+                description: "Rotate selected footprint or text counterclockwise",
                 shortcut: "R",
-                enabled: selected || editing,
+                enabled: selected || reference || editing,
                 active: false,
                 menu_check: None,
             },
@@ -326,7 +327,7 @@ impl PcbApp {
                 label: "Flip",
                 description: "Flip footprint to the other side",
                 shortcut: "F",
-                enabled: selected || editing,
+                enabled: selected || self.views.active.board.draft.is_some(),
                 active: false,
                 menu_check: None,
             },
@@ -336,7 +337,7 @@ impl PcbApp {
             label: "Delete",
             description: "Delete selected PCB items",
             shortcut: "Delete",
-            enabled: idle && selected_items,
+            enabled: idle && (selected_items || reference),
             active: false,
             menu_check: None,
         };
@@ -546,7 +547,7 @@ impl PcbApp {
     /// Arm Place › Via (Ctrl+Shift+X) in the focused board view when the board has two copper
     /// layers and no footprint transform is in progress. Drawing and route tools are dropped first.
     pub(super) fn start_via(&mut self) {
-        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_place_via() {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.editing_footprint() || !self.can_place_via() {
             return;
         }
         self.views.active.board.drawing.cancel();
@@ -557,7 +558,7 @@ impl PcbApp {
     /// Arm Inspect › Measure (Ctrl+Shift+M) in the focused board view, dropping other tools.
     /// Drops clipboard and placement previews without editing the project or selection.
     pub(super) fn start_measure(&mut self) {
-        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.editing_footprint() {
             return;
         }
         self.views.active.cancel_gesture();
@@ -567,7 +568,7 @@ impl PcbApp {
     /// Arm the route tool (KiCad: X) in the focused board view when its active layer is visible
     /// copper and no footprint transform is in progress. Drawing tools are dropped first.
     pub(super) fn start_route(&mut self) {
-        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_route() {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.editing_footprint() || !self.can_route() {
             return;
         }
         self.views.active.board.drawing.cancel();
@@ -627,7 +628,7 @@ impl PcbApp {
                         &highlighted,
                         view.filters,
                         &self.board_appearance,
-                        enabled,
+                        owner_enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity_percent,
                         self.preferences.board_grid_style,
@@ -642,10 +643,12 @@ impl PcbApp {
             || pick.items.is_some()
             || pick.selection.is_some()
             || pick.edit.is_some()
+            || pick.reference_edit.is_some()
+            || pick.reference_pick.is_some()
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && (enabled || pick.clipboard.is_some() && owner_enabled)
+            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some(action) = pick.clipboard {
@@ -656,6 +659,9 @@ impl PcbApp {
             }
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(footprint) = pick.reference_pick {
+                self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
             }
             if let Some(mut edit) = pick.drawing_edit
                 && self.views.active.accepts(edit.source, &self.session)
@@ -696,6 +702,15 @@ impl PcbApp {
                         "rotation": draft.rotation, "side": if draft.bottom { "back" } else { "front" },
                         "expected_revision": draft.source.revision,
                     }),
+                );
+            }
+            if let Some(draft) = pick.reference_edit
+                && self.views.active.accepts(draft.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                self.run(
+                    pcbcraft_engine::SET_FOOTPRINT_REFERENCE_TEXT,
+                    &serde_json::json!({"board":target.board,"footprint":draft.footprint,"appearance":draft.appearance,"offset":draft.offset,"expected_revision":draft.source.revision}),
                 );
             }
             self.repaint_editors(ui.ctx());

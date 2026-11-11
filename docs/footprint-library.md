@@ -137,9 +137,11 @@ neither the project nor its undo history.
 
 Board instances carry the pinned identity, mapping, origin and optional rotation;
 geometry remains in the definition. Rotation transforms pad centers and every
-rectangle corner together. Quarter turns retain exact integer coordinates;
-other whole-degree angles round to the nearest nanometer. Fit and hit bounds
-include the physical graphics. Surface copper renders on the front/component
+rectangle corner together. Coordinates use board axes with positive Y down.
+A 90-degree counterclockwise footprint rotation maps local `(x, y)` to `(y, -x)`
+after side mirroring. Quarter turns retain exact integer coordinates, and other
+whole-degree angles round to the nearest nanometer. Fit and hit bounds include
+the physical graphics. Surface copper renders on the front/component
 side, independently of the active layer; hiding front copper hides these SMD
 pads. The engine projects each physical pad's copper membership as explicit layer
 UUIDs in physical stack order. Plated lands span all copper layers, remain visible
@@ -203,6 +205,31 @@ specifies nominal capital height; curves retain the font's optical overshoot.
 Stroke width and minimum ink spacing remain physical quantities. The earlier
 `pcbcraft-stroke-1` geometry and legacy rectangle graphics remain available for
 older pinned definitions without changing their saved data.
+
+The optional `reference_offset` adds a local X/Y displacement to the automatic
+anchor. In the Footprint Editor, select **Definition**, enable **Generate
+silkscreen reference**, and set the offsets in Properties. The canvas previews
+the template as `REF`. A board placement can add its own offset, and its
+component still supplies the printed reference text.
+
+Selecting reference lettering opens **Silkscreen text** in PCB Properties. The
+component reference remains visible alongside **Printed text**, font, size,
+stroke width, local rotation, alignment, visibility and offsets. Clear **Use
+component reference** to print local words such as `Power input`. These edits
+belong to the placed footprint and its Gerber ink. **Rename… → Rename component**
+explicitly changes the shared component reference through its validated command,
+including the schematic. A local text literal retains its wording across a
+component rename. **Reset silkscreen** restores inherited wording and appearance.
+Body selection offers **Edit silkscreen text** to recover hidden lettering.
+A dashed view-only leader connects selected or moving text to its footprint,
+independently of unrouted electrical airwires. Selection lightens the copper and
+technical-layer colors, including the generated reference and fixed silkscreen.
+The Properties fields use aligned label/value columns; position offsets expand
+under **Position**, and Apply/Reset remain below the scrolling fields in short
+windows. Editing a dimension creates its local size override automatically.
+Fixed footprint silkscreen paths and artwork still belong to the pinned library
+definition; these reference controls do not provide individual board-instance
+editing of those objects.
 
 Passive footprints use two short silk lines outside the pads, LEDs a cathode
 bar, and SOT-23 a clipped body outline and an external triangular pad-1 marker.

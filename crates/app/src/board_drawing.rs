@@ -327,7 +327,7 @@ pub(super) fn interact(
 /// Paint only visible layer graphics and disposable previews; selected vertices are handles,
 /// not copper pads or electrical edit selections. No physical stroke width is implied.
 pub(super) fn paint(
-    ui: &Ui,
+    painter: &egui::Painter,
     rect: Rect,
     camera: &Camera,
     view: BoardView<'_>,
@@ -335,7 +335,6 @@ pub(super) fn paint(
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
 ) {
-    let painter = ui.painter().with_clip_rect(rect);
     for mut drawing in view.drawings().into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
         if let Some(edit) = state.edit.as_ref().filter(|edit| edit.drawing.id == drawing.id) {
             drawing = edit.drawing.clone();
@@ -344,7 +343,7 @@ pub(super) fn paint(
         }
         let selected = state.selected.as_ref() == Some(&drawing.id.to_string()) || state.selected_many.contains(&drawing.id);
         pcbcraft_chrome::board::drawing(
-            &painter,
+            painter,
             drawing.points.iter().map(|point| camera.screen(*point, rect)).collect(),
             drawing.closed,
             selected,
@@ -356,7 +355,7 @@ pub(super) fn paint(
         );
     }
     if let Some(draft) = &state.draft
-        && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
+        && let Some(pointer) = painter.ctx().input(|input| input.pointer.hover_pos())
     {
         let visible: Vec<_> = view.drawings().into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
         let at = snapped(pointer, camera, rect, &visible);
@@ -368,7 +367,7 @@ pub(super) fn paint(
             points
         };
         pcbcraft_chrome::board::drawing(
-            &painter,
+            painter,
             points.iter().map(|point| camera.screen(*point, rect)).collect(),
             state.tool == Some(Tool::Rectangle),
             false,
@@ -378,6 +377,6 @@ pub(super) fn paint(
                 .find(|layer| layer.id.to_string() == draft.layer)
                 .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
         );
-        pcbcraft_chrome::board::drawing_target(&painter, camera.screen(at, rect));
+        pcbcraft_chrome::board::drawing_target(painter, camera.screen(at, rect));
     }
 }

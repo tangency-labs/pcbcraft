@@ -3,10 +3,71 @@ use crate::{PcbApp, ViewId, Workspace, editor_view::ViewInput};
 use pcbcraft_chrome::board;
 use pcbcraft_engine::board::{
     setup::{Layer, LayerPurpose, Side},
+    track::Copper,
     view::{BoardTarget, BoardView, CopperLayers},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use uuid::Uuid;
+
+/// Snapshot-local connectivity shared by manual net emphasis and the route preview.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Connectivity {
+    pub(super) copper: Copper,
+    pub(super) nets: BTreeMap<Uuid, String>,
+}
+
+/// The contact a route started from. A trace or via without a logical net can still have an island.
+#[derive(Clone, Debug)]
+pub(super) enum RouteContact {
+    Pad(Option<String>),
+    Copper(Uuid),
+}
+
+#[derive(Clone, Copy)]
+enum FocusTarget<'a> {
+    Net(&'a str),
+    Island(usize),
+}
+
+/// The copper that should remain prominent in a single board canvas.
+#[derive(Clone, Copy)]
+pub(super) struct CopperFocus<'a> {
+    target: FocusTarget<'a>,
+    connectivity: &'a Connectivity,
+}
+
+impl<'a> CopperFocus<'a> {
+    /// Prefer the current route's net or island, then fall back to the explicit net highlight.
+    pub(super) fn new(connectivity: &'a Connectivity, route: Option<&'a RouteContact>, net: Option<&'a str>) -> Option<Self> {
+        let route = match route {
+            Some(RouteContact::Pad(net)) => net.as_deref().map(FocusTarget::Net),
+            Some(RouteContact::Copper(id)) => connectivity
+                .nets
+                .get(id)
+                .map(|net| FocusTarget::Net(net))
+                .or_else(|| connectivity.copper.tracks.get(id).or_else(|| connectivity.copper.vias.get(id)).copied().map(FocusTarget::Island)),
+            None => None,
+        };
+        Some(Self { target: route.or_else(|| net.map(FocusTarget::Net))?, connectivity })
+    }
+
+    /// Whether this track or via belongs to the emphasized net or island.
+    pub(super) fn contains_copper(self, id: &Uuid) -> bool {
+        match self.target {
+            FocusTarget::Net(net) => self.connectivity.nets.get(id).is_some_and(|name| name == net),
+            FocusTarget::Island(island) => self.connectivity.copper.tracks.get(id).or_else(|| self.connectivity.copper.vias.get(id)) == Some(&island),
+        }
+    }
+
+    /// Whether this pad belongs to the emphasized net or island.
+    pub(super) fn contains_pad(self, footprint: &str, number: &str, net: Option<&str>) -> bool {
+        match self.target {
+            FocusTarget::Net(target) => net == Some(target),
+            FocusTarget::Island(island) => self.connectivity.copper.pads.get(&(footprint.to_owned(), number.to_owned())) == Some(&island),
+        }
+    }
+}
 
 // Preserve the first palette's local-storage key so existing copper overrides survive.
 pub(super) const STORAGE_KEY: &str = "pcbcraft.copper-colors.v1";

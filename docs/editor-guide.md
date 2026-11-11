@@ -53,6 +53,10 @@ between sessions and leaves snapping unchanged. **Grid opacity** fades visible g
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
 same points. The opacity applies across views and windows and is kept with your
 preferences, not in the project.
+
+In PCB layout, wheel and pinch zoom go up to 64× for close inspection of copper
+and clearances. **Fit board** returns to the whole board.
+
 The right end of the bottom status bar shows the grid point under the pointer (**X**, **Y**,
 with Y increasing down), the **Grid** button and the display unit. Click the unit, or press
 **Ctrl+U** (**⌘U** on macOS), to switch between **mil** and **mm**; the Appearance page
@@ -549,6 +553,22 @@ X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs and slots remain planned.
 
+Drag a reference designator or hover over it and press **M**, then click to
+place it. The reference position is stored on that footprint and follows its
+rotation and side. The board view and silkscreen export use the moved position.
+Clicking the lettering selects the text, highlights its owning footprint and
+shows remaining airwires and text Properties. A dashed leader connects selected
+or moving lettering to its footprint even when the board is fully routed. Pad,
+silkscreen and reference highlights lighten their existing layer colors. **R** rotates the selected text;
+**Delete** hides it. Local printed words, font, paired height/stroke, rotation,
+alignment, visibility and offsets are undoable placement edits. Clear **Use
+component reference** to enter literal printed words; **Rename…** explicitly
+renames the shared component in the schematic and outputs. **Reset silkscreen**
+removes local appearance and position overrides. A footprint body's **Edit
+silkscreen text** button opens these controls even when its text is hidden.
+To author the default for future placements, edit the definition's reference
+offset in the Footprint Editor.
+
 **Layout → Design → Setup** and **Layers → Board setup…** share a revision-bound
 Craft settings form, including on a board with no saved stackup. The first opening
 shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.
@@ -605,16 +625,27 @@ reports a missing closed outline and copper outside it or too close to its edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
 **Layout → Route → Track**. Set **Track width** beside it in the display units
-(0.25 mm by default). Click a pad or a grid point to start; each click adds a run with one
-45° bend, and **/** flips whether the diagonal comes first. Clicking a pad or a
-track end on the same layer finishes the route, as do a double-click and Enter.
+(0.25 mm by default). The crosshair follows the pointer, while a dot marks where a
+click will land in free space or a ring marks a nearby copper connection. Free
+points snap when the grid point is close to the cursor. Hold **Ctrl** to bypass
+the grid while pads, track ends and vias still snap to their exact positions.
+Click to start a route or add a run with one 45° bend. Use **/**
+to flip whether the diagonal comes first. Click a copper connection, double-click
+or press **Enter** to finish.
+
+The route preview uses a lighter shade of each segment's copper layer color. A
+halo shows the default copper clearance (0.2 mm) around the draft tracks and vias.
 Press **V** while routing to drop a through via at the pointer and continue on the
 other side: front copper leads to back, any other layer to front, and the view's
-active layer follows. While routing, **PgUp** and **PgDn** do the same but go to front or
-back copper, adding nothing when the route is already there. The **Via pad / drill** field beside the width field sets the
-pad diameter and drill (0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
-previous layer, or else the last vertex. Esc or right-click drops the unfinished
-route, and a second Esc exits the tool. The whole route is one Undo step. When copper
+active layer follows. While routing, **PgUp** and **PgDn** switch to front or back
+copper, adding a via only when the layer changes. Hold **Ctrl** with either page
+key to place the via off-grid in free space. The **Via pad / drill** field beside the
+width field sets the pad diameter and drill (0.6 mm and 0.3 mm by default).
+**Backspace** removes the last via, returning to the previous layer, or else the
+last vertex. Right-click opens the route menu with Finish track, Remove last
+vertex, Place through via, Flip track posture, and Cancel. **Esc** or **Cancel**
+drops the unfinished route, and a second **Esc** exits the tool. The whole route
+is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
 **Layout → Inspect → DRC** checks the board without editing it and opens a DRC card
@@ -646,12 +677,12 @@ afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
 
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
-pads and tracks assigned to that net, along with its vias, are outlined in the
-highlight color, and the status bar names the net. Each copper island takes the
-net of its first netted pad; floating copper has none. If an island already joins
-pads on different nets, its copper highlights only with that first net, while the pads retain their
-own nets. Press Backtick over empty space to clear it. Highlighting is per view
-and edits nothing.
+pads, tracks and vias on that net brighten in their own colors while the rest
+of the board dims. The status bar names the net. Each copper island takes the
+net of its first netted pad, and each pad keeps its own net. Press **Backtick**
+over empty space to clear the highlight. Starting a route on existing copper
+temporarily emphasizes its net or, for an unassigned trace or via, the connected
+copper. The previous view returns when the draft ends.
 
 **Layout → Inspect → Measure** (**Ctrl+Shift+M**) is a ruler that never edits the board.
 Click a start point, then an end point; both snap to a nearby pad center, track end or

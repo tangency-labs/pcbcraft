@@ -22,6 +22,37 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+/// Definition properties author the default reference, and both editable and exported files
+/// retain it without changing the active project or the library primitives.
+#[test]
+fn footprint_definition_properties_save_a_default_reference_offset() {
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Footprint);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let id = h.state().library_editors.active.unwrap();
+    let before = h.state().library_editors.documents[&id].session.snapshot();
+    crate::tests::click(&mut h, "Generate silkscreen reference");
+    let field = "Reference X offset (mm)";
+    h.get_by_label(field).click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label(field).type_text("2.5");
+    h.run();
+    crate::tests::click(&mut h, "Apply");
+    let after = h.state().library_editors.documents[&id].session.snapshot();
+    let offset = pcbcraft_engine::schematic::Point { x_nm: 2_500_000, y_nm: 0 };
+    assert_eq!(after.reference_offset, Some(offset));
+    assert_eq!(after.objects, before.objects);
+    assert!(h.state().session.project().is_none());
+    let definition = after.footprint().unwrap();
+    assert_eq!(definition.reference_offset, Some(offset));
+    assert!(!definition.reference_paths("REF", Default::default(), pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET).is_empty());
+    assert_eq!(Item::decode(&after.encode().unwrap()).unwrap().reference_offset, Some(offset));
+    crate::tests::click(&mut h, "Undo Library Edit");
+    assert_eq!(h.state().library_editors.documents[&id].session.snapshot().reference_offset, None);
+}
+
 /// Project and definition Browsers share row geometry and disclosure controls. Folding a
 /// definition retains its selected primitive and both document histories at normal/compact widths.
 #[test]

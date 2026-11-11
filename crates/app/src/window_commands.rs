@@ -117,6 +117,7 @@ mod live {
     use crate::{
         Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
+        canvas_camera::MAX_BOARD_ZOOM,
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -525,10 +526,15 @@ mod live {
         WindowCommand {
             id: "view.zoom",
             title: "Zoom",
-            summary: "Zoom the view about its center. 100 shows the schematic at its default size.",
+            summary: "Zoom about the view center. The limit is 6400% in PCB layout and 800% in the schematic.",
             params: &[
                 VIEW,
-                Param { name: "zoom_percent", summary: "The zoom in percent", required: true, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param {
+                    name: "zoom_percent",
+                    summary: "The zoom in percent",
+                    required: true,
+                    kind: Kind::Integer { min: 1, max: (MAX_BOARD_ZOOM * 100.0) as i64, step: 1 },
+                },
             ],
         },
         WindowCommand {
@@ -650,7 +656,7 @@ mod live {
         WindowCommand {
             id: "view.select_footprints",
             title: "Select Footprints",
-            summary: "Replace a PCB view's selection with these footprints, as clicking them or their Browser rows does. An empty list clears it. Other views highlight the counterpart symbols under the Follow selection setting.",
+            summary: "Replace a PCB view's selection with these footprints, or select one footprint's reference text using element=reference. An empty footprint list clears selection. Other views highlight the counterpart symbols under the Follow selection setting.",
             params: &[
                 VIEW,
                 Param {
@@ -658,6 +664,12 @@ mod live {
                     summary: "Footprint IDs on the view's board, from inspect_project",
                     required: true,
                     kind: Kind::Footprints,
+                },
+                Param {
+                    name: "element",
+                    summary: "Select footprint bodies (default) or one placement's reference text and Properties",
+                    required: false,
+                    kind: Kind::Choice(&["footprint", "reference"]),
                 },
             ],
         },
@@ -929,6 +941,7 @@ mod live {
                     "tool": view.schematic.tool.as_ref().map(tool_name),
                     "board": (view.workspace == Workspace::Board).then(|| json!({
                         "selection": view.board.selection,
+                        "reference_selection": view.board.reference.selected,
                         "hidden_layers": view.board.hidden_layers,
                         "ratsnest_visible": view.board.target.and_then(|target| app.session.project().and_then(|project| project.board_view(target)))
                             .filter(|board| board.has_accepted_connectivity()).map(|_| !view.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)),
@@ -1172,7 +1185,12 @@ mod live {
                 ("view.zoom", Some((view, _)), _) => {
                     let percent = params["zoom_percent"].as_u64().unwrap_or(100);
                     if let Some(view) = self.views.view_mut(view) {
-                        view.camera.set_zoom(percent as f32 / 100.0);
+                        let max_zoom = view.workspace.max_zoom();
+                        let max_percent = (max_zoom * 100.0) as u64;
+                        if percent > max_percent {
+                            return Err(format!("`zoom_percent` must be at most {max_percent} for this workspace."));
+                        }
+                        view.camera.set_zoom_with_limit(percent as f32 / 100.0, max_zoom);
                     }
                 }
                 ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,
@@ -1251,6 +1269,10 @@ mod live {
                 }
                 ("view.select_footprints", Some((view, _)), _) => {
                     let wanted = footprints(&params["footprints"]).ok_or("`footprints` must be a list of distinct footprint IDs")?;
+                    let reference = params["element"].as_str() == Some("reference");
+                    if reference && wanted.len() != 1 {
+                        return Err("Reference selection requires exactly one footprint ID".into());
+                    }
                     let placed: std::collections::BTreeSet<String> = self
                         .views
                         .view(view)
@@ -1270,7 +1292,13 @@ mod live {
                     let previous = self.views.active.id();
                     self.views.bind(view);
                     self.views.active.cancel_gesture();
-                    self.views.select_board(wanted, &self.session, self.preferences.selection_follow);
+                    if reference {
+                        if let Some(footprint) = wanted.into_iter().next() {
+                            self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
+                        }
+                    } else {
+                        self.views.select_board(wanted, &self.session, self.preferences.selection_follow);
+                    }
                     self.views.bind(previous);
                 }
                 ("view.open_sheet", Some((view, _)), _) => {

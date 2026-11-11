@@ -483,6 +483,7 @@ impl EditorViews {
         if self.active.workspace != Workspace::Board {
             return;
         }
+        self.active.board.reference = Default::default();
         if !selection.is_empty() {
             self.active.board.drawing.cancel();
             self.active.board.drawing.select(None);
@@ -490,6 +491,21 @@ impl EditorViews {
             self.active.board.tracks.selected.clear();
         }
         self.active.board.selection = if self.active.filters.footprints { selection } else { Default::default() };
+        self.selection_changed(session, policy);
+    }
+
+    /// Select text independently of editable footprint geometry and project its owning component to other views.
+    pub(super) fn select_board_reference(&mut self, footprint: String, session: &Session, policy: SelectionFollow) {
+        if self.active.workspace != Workspace::Board || !self.active.filters.footprints {
+            return;
+        }
+        self.active.board.selection.clear();
+        self.active.board.drawing.cancel();
+        self.active.board.drawing.select(None);
+        self.active.board.tracks.cancel();
+        self.active.board.tracks.selected.clear();
+        self.active.board.reference.select(footprint);
+        self.active.board.properties_collapsed = false;
         self.selection_changed(session, policy);
     }
 
@@ -551,7 +567,7 @@ impl EditorViews {
             Workspace::Board => session
                 .project()
                 .and_then(|p| p.board_view(source.board.target?))
-                .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.selection)),
+                .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.probe_footprints())),
         };
         if let Some(project) = self.view(id).and_then(|view| view.snapshot(session)) {
             selection.retain(&project);
@@ -571,7 +587,7 @@ impl EditorViews {
                 .project()
                 .and_then(|p| p.board_view(self.view(id)?.board.target?))
                 .map_or_else(Default::default, |board| board.footprints_for_selection(&source.schematic.selection)),
-            Workspace::Board if self.view(id).is_some_and(|target| target.board.target == source.board.target) => source.board.selection.clone(),
+            Workspace::Board if self.view(id).is_some_and(|target| target.board.target == source.board.target) => source.board.probe_footprints(),
             Workspace::Board => Default::default(),
         }
     }

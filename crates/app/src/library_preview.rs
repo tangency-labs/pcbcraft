@@ -113,6 +113,7 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
             color: None,
             closed: true,
             stroke_width: None,
+            reference: false,
         })
         .collect();
     for artwork in &definition.artwork {
@@ -127,8 +128,9 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
                 },
                 closed: artwork.graphic.closed(),
                 stroke_width: Some(artwork.graphic.stroke_nm as f32 * scale),
+                reference: false,
             });
         }
     }
-    board::footprint(painter, &pads, &graphics, "", rect.center() + pan, board::copper_color(Some(true)), false, false);
+    board::footprint(painter, &pads, &graphics, "", rect.center() + pan, board::copper_color(Some(true)), false, false, false, egui::Vec2::ZERO);
 }

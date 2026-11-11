@@ -117,6 +117,10 @@ artwork carries fabrication, silkscreen or courtyard purpose and physical stroke
 width; footprint fills are not supported. Text retains editable content, size,
 alignment and rotation rather than becoming anonymous line segments.
 
+Footprint **Definition** properties can enable a generated silkscreen reference
+and set its default X/Y offset. The editor shows `REF` at that position, and the
+native definition retains the offset when exported or forked.
+
 Footprints support SMD/plated through-hole rectangular, rounded, circular and oval
 pads. Pad numbers accept the same 1–8 alphanumeric/`+`/`-`/`_` spelling as terminal
 identifiers. Through-hole selection supplies a drill default and validates a

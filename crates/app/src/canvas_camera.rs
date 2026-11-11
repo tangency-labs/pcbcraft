@@ -10,7 +10,9 @@ use crate::preferences::{Navigation, ScrollAction, ZoomAround};
 use crate::schematic_canvas::grid_bounds;
 
 const MIN_ZOOM: f32 = 0.005;
-const MAX_ZOOM: f32 = 8.0;
+pub(super) const MAX_ZOOM: f32 = 8.0;
+/// Board navigation needs to show fine copper and clearance at a useful scale.
+pub(super) const MAX_BOARD_ZOOM: f32 = 64.0;
 
 /// Persistent navigation excludes viewport geometry and pending input.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -22,9 +24,9 @@ pub(super) struct CameraState {
 }
 
 impl CameraState {
-    /// Validate navigation before adopting a saved arrangement.
-    pub(super) fn valid(&self) -> bool {
-        (MIN_ZOOM..=MAX_ZOOM).contains(&self.zoom)
+    /// Validate navigation against the saved workspace's zoom limit before restoring it.
+    pub(super) fn valid(&self, max_zoom: f32) -> bool {
+        (MIN_ZOOM..=max_zoom).contains(&self.zoom)
             && grid::SPACING_RANGE_NM.contains(&self.snap_nm)
             && self.center_nm.iter().all(|n| n.is_finite() && n.abs() <= (MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f64 + 1.0)
     }
@@ -242,12 +244,19 @@ impl Camera {
         Point { x_nm: (self.sign() * center.x).round() as i64, y_nm: center.y.round() as i64 }
     }
 
-    /// Zoom to `zoom` (clamped to the wheel's limits) about the uncovered canvas center, as a
-    /// wheel zoom with Zoom around center does. Cancels a pending fit, like any navigation.
+    /// Zoom about the uncovered canvas center within the definition and schematic limits.
+    /// Cancels a pending fit, like any navigation.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_zoom(&mut self, zoom: f32) {
+        self.set_zoom_with_limit(zoom, MAX_ZOOM);
+    }
+
+    /// Zoom about the uncovered canvas center, clamped to the target workspace's limits.
+    /// Cancels a pending fit, like any navigation.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn set_zoom_with_limit(&mut self, zoom: f32, max_zoom: f32) {
         let center = self.center();
-        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.zoom = zoom.clamp(MIN_ZOOM, max_zoom);
         self.center_on(center);
     }
 
@@ -292,12 +301,12 @@ impl Camera {
         if std::mem::take(&mut self.fit_requested) {
             self.fit(project, rect);
         }
-        self.interact(response, rect, enabled, navigation);
+        self.interact(response, rect, enabled, navigation, MAX_ZOOM);
     }
 
     /// Navigate and fit resolved board copper/graphics, independently of schematic geometry.
-    /// Physical SMD packages may magnify up to the ordinary navigation limit. Fit includes the
-    /// authored board boundary even on an otherwise empty board, independently of layer visibility.
+    /// Wheel and pinch can magnify beyond the whole-board Fit range to inspect fine copper.
+    /// Fit includes the authored board boundary independently of layer visibility.
     pub(crate) fn navigate_board(
         &mut self,
         response: &Response,
@@ -319,7 +328,7 @@ impl Camera {
                 });
             self.fit_bounds(bounds, rect, MAX_ZOOM);
         }
-        self.interact(response, rect, enabled, navigation);
+        self.interact(response, rect, enabled, navigation, MAX_BOARD_ZOOM);
     }
 
     /// Fit native library primitives and navigate without a project, sheet or placed board.
@@ -340,7 +349,7 @@ impl Camera {
             });
             self.fit_bounds(bounds, rect, MAX_ZOOM);
         }
-        self.interact(response, rect, enabled, navigation);
+        self.interact(response, rect, enabled, navigation, MAX_ZOOM);
     }
 
     /// Reveal selected board placements in their own coordinate space without changing zoom.
@@ -352,8 +361,8 @@ impl Camera {
         self.reveal_bounds(bounds);
     }
 
-    /// Apply input navigation independently of the displayed document and its fit geometry.
-    fn interact(&mut self, response: &Response, rect: Rect, enabled: bool, navigation: Navigation) {
+    /// Apply input navigation within the workspace's limit, independently of its Fit geometry.
+    fn interact(&mut self, response: &Response, rect: Rect, enabled: bool, navigation: Navigation, max_zoom: f32) {
         if !enabled {
             return;
         }
@@ -375,7 +384,7 @@ impl Camera {
                     ZoomAround::Center => rect.center(),
                 };
                 let before = (anchor - rect.center() - self.offset) / self.zoom;
-                self.zoom = (self.zoom * zoom.clamp(-2.0, 2.0).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
+                self.zoom = (self.zoom * zoom.clamp(-2.0, 2.0).exp()).clamp(MIN_ZOOM, max_zoom);
                 self.offset = anchor - rect.center() - before * self.zoom;
             }
         }

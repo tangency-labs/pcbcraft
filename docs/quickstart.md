@@ -389,6 +389,19 @@ next reviewed update. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
 
+Click a placed reference designator to select its text and open **Properties**.
+The owning footprint highlights in lighter layer colors, and a dashed leader
+connects the lettering to its footprint. Remaining airwires also appear. Drag the
+lettering, or press **M** and click, to move it; **R** rotates the text and
+**Delete** hides it. Properties offers local printed words, the bundled fonts,
+size/stroke, rotation, alignment, visibility and offsets. Clear **Use component
+reference** to print other words without changing the component's identity.
+**Rename…** explicitly changes the shared component reference, including the
+schematic. **Reset silkscreen** restores inherited text, appearance and position;
+select the footprint body and **Edit silkscreen text** to recover hidden text.
+To set a library default position, open the footprint in **Footprint Editor**,
+select **Definition**, and edit the reference offsets in Properties.
+
 To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
 layout use **Layout → Design → Sync**. **Create board** explicitly adds
 the first PCB when needed. Existing footprints without recorded accepted state
@@ -424,8 +437,16 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
-Arcs, slots, routing, individual pad selection and Flip view still need
-implementation. After reviewed updates are initialized, removing the last
+To route a track, activate a copper layer and press **X**. The crosshair follows
+the pointer, and the target marker shows nearby grid points and copper contacts.
+The preview uses a lighter shade of the layer color and shows the default
+clearance around it. Starting on a trace brightens its copper and dims the rest
+of the board while you route. Hold **Ctrl** to bypass the grid. Click a pad,
+track end or via to finish on copper, or press **Enter** after placing the last
+corner in free space. Right-click opens the route menu, which includes **Cancel**.
+Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
+
+After reviewed updates are initialized, removing the last
 schematic unit retains its footprint until an update accepts the removal. A
 legacy board retains its prior deletion behavior until explicit current-state
 adoption, so establish that starting point before editing its schematic.

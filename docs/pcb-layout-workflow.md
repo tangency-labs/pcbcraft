@@ -225,9 +225,8 @@ ribbon's planned entries and the editor guide have a stated destination.
   must support it in the same slice.
 - **Blind, buried and micro vias** need layer spans checked against the stackup
   and drill pairs in the Excellon output.
-- **Board text and graphics** on copper and silkscreen, and moving a footprint's
-  reference text, need text records with physical font metrics from the
-  silkscreen settings.
+- **Board text and graphics** on copper and silkscreen need independently
+  authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for footprints, tracks and zones is a per-object flag. It refuses
   moves until the object is unlocked, and selection filters can exclude locked
   objects.

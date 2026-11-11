@@ -34,6 +34,8 @@ pub(super) struct Editors {
 #[derive(Debug)]
 struct Document {
     session: Session,
+    /// The library reference preview is derived once per authoring revision.
+    reference_preview: Option<(u64, std::sync::Arc<[Vec<pcbcraft_engine::schematic::Point>]>)>,
     bound_view: Option<crate::ViewId>,
     presentations: BTreeMap<crate::ViewId, views::Presentation>,
     selected: Option<u64>,
@@ -137,6 +139,7 @@ impl Editors {
         self.documents.insert(
             id,
             Document {
+                reference_preview: None,
                 session: Session::new(item, saved)?,
                 bound_view: None,
                 presentations: BTreeMap::new(),
@@ -459,7 +462,8 @@ impl PcbApp {
             Home,
             Open,
             Save(bool),
-            Edit(Action),
+            Undo,
+            Redo,
             Focus(u64),
             Close,
             Quit,
@@ -509,11 +513,11 @@ impl PcbApp {
                 {
                     intents.borrow_mut().push(Intent::Save(false));
                 }
-                for (icon, label, action, available) in
-                    [(MenuIcon::Undo, "Undo Library Edit", Action::Undo, can_undo), (MenuIcon::Redo, "Redo Library Edit", Action::Redo, can_redo)]
+                for (icon, label, intent, available) in
+                    [(MenuIcon::Undo, "Undo Library Edit", Intent::Undo, can_undo), (MenuIcon::Redo, "Redo Library Edit", Intent::Redo, can_redo)]
                 {
                     if menu::quick_action(ui, icon, label, "", available).clicked() {
-                        intents.borrow_mut().push(Intent::Edit(action));
+                        intents.borrow_mut().push(intent);
                     }
                 }
             },
@@ -553,10 +557,10 @@ impl PcbApp {
                 intents.borrow_mut().push(Intent::Save(false));
             }
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Z)) {
-                intents.borrow_mut().push(Intent::Edit(Action::Undo));
+                intents.borrow_mut().push(Intent::Undo);
             }
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y)) {
-                intents.borrow_mut().push(Intent::Edit(Action::Redo));
+                intents.borrow_mut().push(Intent::Redo);
             }
             if !IN_BROWSER && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Q)) {
                 self.begin_project_close(&ctx);
@@ -571,8 +575,9 @@ impl PcbApp {
                 }
                 Intent::Open => self.open_library_picker(&ctx),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
-                Intent::Edit(action) => active.ok_or("No active library item.".into()).and_then(|id| {
+                history @ (Intent::Undo | Intent::Redo) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
+                    let action = if matches!(history, Intent::Undo) { Action::Undo } else { Action::Redo };
                     self.library_editors.edit(id, revision, action)
                 }),
                 Intent::Focus(id) => self.place_library_document(&ctx, id, pcbcraft_chrome::workspace::Placement::Here),

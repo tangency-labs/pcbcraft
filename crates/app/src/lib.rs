@@ -19,6 +19,7 @@ mod board_drc;
 mod board_measure;
 mod board_outputs;
 mod board_panels;
+mod board_reference;
 mod board_setup;
 mod board_tracks;
 mod board_update;
@@ -1684,10 +1685,12 @@ impl PcbApp {
             && !egui::Popup::is_any_open(ctx)
             && !ctx.text_edit_focused()
         {
+            let routing = self.views.active.board.tracks.routing();
+            let page_keys = Modifiers { ctrl: routing && ctx.input(|i| i.modifiers.ctrl), ..Modifiers::NONE };
             let layer_direction = ctx.input_mut(|input| {
-                if input.consume_key(Modifiers::NONE, Key::PageUp) {
+                if input.consume_key(page_keys, Key::PageUp) {
                     Some("front")
-                } else if input.consume_key(Modifiers::NONE, Key::PageDown) {
+                } else if input.consume_key(page_keys, Key::PageDown) {
                     Some("back")
                 } else if input.consume_key(Modifiers::NONE, Key::Plus)
                     || input.consume_key(Modifiers::SHIFT, Key::Plus)
@@ -1702,7 +1705,6 @@ impl PcbApp {
             });
             // Mid-route, PgUp and PgDn drop a via and continue on front or back copper, as in
             // KiCad, instead of changing layer by abandoning the route.
-            let routing = self.views.view(view).is_some_and(|state| state.board.tracks.routing());
             let layer_direction = match layer_direction {
                 Some(side @ ("front" | "back")) if routing => {
                     if let Some(state) = self.views.view_mut(view) {
@@ -1735,12 +1737,15 @@ impl PcbApp {
                 self.home = false;
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+            // Ctrl temporarily bypasses the routing grid while these tool controls stay available.
+            let route_keys = Modifiers { ctrl: self.views.active.board.tracks.tool && ctx.input(|i| i.modifiers.ctrl), ..Modifiers::NONE };
+            if ctx.input_mut(|i| i.consume_key(route_keys, Key::Escape))
                 && (!board_clipboard::busy(&self.views.active.board)
                     || (!self.views.active.board.measure.escape()
                         && !self.views.active.board.tracks.escape()
                         && !self.views.active.board.drawing.escape()
                         && self.views.active.board.draft.take().is_none()
+                        && self.views.active.board.reference_drag.take().is_none()
                         && self.views.active.board.placement.take().is_none()
                         && self.views.active.board.box_drag.take().is_none()))
             {
@@ -1771,9 +1776,9 @@ impl PcbApp {
             self.views.active.board.tracks.drag_segment_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::D));
             if self.views.active.board.tracks.tool {
                 let tracks = &mut self.views.active.board.tracks;
-                tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-                tracks.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
-                tracks.posture_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Slash));
+                tracks.finish_requested = ctx.input_mut(|i| i.consume_key(route_keys, Key::Enter));
+                tracks.backspace_requested = ctx.input_mut(|i| i.consume_key(route_keys, Key::Backspace));
+                tracks.posture_requested = ctx.input_mut(|i| i.consume_key(route_keys, Key::Slash));
                 tracks.via_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::V));
             }
             if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
@@ -2357,11 +2362,13 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
     list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
+    list.push(("PCB layout", "Move reference designator", "M or left drag over the reference".to_owned()));
     list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Flip footprint to the other side", "F".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
+    list.push(("PCB layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
     list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB layout", "Select connected copper", "U".to_owned()));

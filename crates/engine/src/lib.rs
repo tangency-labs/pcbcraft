@@ -73,6 +73,7 @@ enum ParamKind {
     CreateBoard,
     ComponentMetadata,
     FieldLayouts,
+    ReferenceText,
     TextLayout,
     NetLabelStyle,
     NetLabelId,
@@ -159,6 +160,7 @@ impl ParamKind {
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::ComponentMetadata => schematic::fields::metadata_schema(),
+            Self::ReferenceText => board::reference::Text::schema(),
             Self::FieldLayouts => schematic::fields::layouts_schema(),
             Self::TextLayout => schematic::fields::layouts_schema()["additionalProperties"].clone(),
             Self::DefinitionRevision => json!({"type":"integer","minimum":1,"maximum":u32::MAX}),
@@ -299,6 +301,11 @@ impl ParamKind {
                 .filter(|m| m.validate().is_ok())
                 .map(|_| ())
                 .ok_or("must contain valid component fields and attributes"),
+            Self::ReferenceText => serde_json::from_value::<Option<board::reference::Text>>(value.clone())
+                .ok()
+                .filter(|text| text.as_ref().is_none_or(|text| text.validate().is_ok()))
+                .map(|_| ())
+                .ok_or("must be null or a nonempty local silkscreen appearance"),
             Self::FieldLayouts => serde_json::from_value::<schematic::fields::Layouts>(value.clone())
                 .ok()
                 .filter(|m| m.len() <= 66)
@@ -585,6 +592,10 @@ pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
+/// Move a placed footprint's reference without moving its physical package.
+pub const SET_FOOTPRINT_REFERENCE_OFFSET: &str = "pcb.set_footprint_reference_offset";
+/// Edit a placement's printed text and appearance independently of its component reference.
+pub const SET_FOOTPRINT_REFERENCE_TEXT: &str = board::reference::SET_REFERENCE_TEXT;
 /// Remove board placements while retaining components and physical package assignments.
 pub const DELETE_FOOTPRINTS: &str = "pcb.delete_footprints";
 /// Initialize stable layers and a rigid stackup, explicitly opting in to existing pad resolution.
@@ -1298,6 +1309,39 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_FOOTPRINT_REFERENCE_OFFSET,
+        title: "Move Footprint Reference",
+        summary: "Set a placed footprint's additional reference displacement from its library default, in footprint-local nanometers. Zero restores the library default.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "footprint", summary: "Placed footprint ID from board inspection", kind: ParamKind::FootprintId },
+            Param {
+                required: true,
+                name: "offset",
+                summary: "Local reference displacement in nanometers, at most 100 mm per axis",
+                kind: ParamKind::Point,
+            },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: SET_FOOTPRINT_REFERENCE_TEXT,
+        title: "Edit Footprint Silkscreen Reference",
+        summary: "Set local printed words, font, size, rotation, alignment and visibility. The component reference and schematic remain independently identified. Null appearance resets inheritance.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "footprint", summary: "Placed footprint ID from board inspection", kind: ParamKind::FootprintId },
+            Param { required: true, name: "appearance", summary: "Sparse local print overrides, or null to reset", kind: ParamKind::ReferenceText },
+            Param {
+                required: false,
+                name: "offset",
+                summary: "Additional local displacement in nanometers; omission preserves its position",
+                kind: ParamKind::Point,
+            },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
         id: DELETE_FOOTPRINTS,
         title: "Delete Footprints",
         summary: "Remove selected board placements in one undo step. Retain schematic components and pinned physical package assignments.",
@@ -1973,6 +2017,8 @@ impl Session {
             | PLACE_ASSIGNED_FOOTPRINT
             | PLACE_ASSIGNED_FOOTPRINTS
             | SET_FOOTPRINT_TRANSFORM
+            | SET_FOOTPRINT_REFERENCE_OFFSET
+            | SET_FOOTPRINT_REFERENCE_TEXT
             | DELETE_FOOTPRINTS
             | SET_SILKSCREEN
             | ADD_DRAWING
@@ -2147,6 +2193,8 @@ impl Session {
                 | PLACE_ASSIGNED_FOOTPRINTS
                 | PLACE_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
+                | SET_FOOTPRINT_REFERENCE_OFFSET
+                | SET_FOOTPRINT_REFERENCE_TEXT
                 | DELETE_FOOTPRINTS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
@@ -2191,6 +2239,8 @@ impl Session {
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
                 | SET_FOOTPRINT_TRANSFORM
+                | SET_FOOTPRINT_REFERENCE_OFFSET
+                | SET_FOOTPRINT_REFERENCE_TEXT
                 | DELETE_FOOTPRINTS
                 | SET_SILKSCREEN
                 | DRAW_WIRE
@@ -2326,6 +2376,8 @@ impl Session {
             }
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
+            SET_FOOTPRINT_REFERENCE_OFFSET => self.set_footprint_reference_offset(params)?,
+            SET_FOOTPRINT_REFERENCE_TEXT => self.set_footprint_reference_text(params)?,
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,

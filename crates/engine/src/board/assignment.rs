@@ -61,6 +61,8 @@ impl Assignment {
             y_nm: position.y_nm,
             rotation: 0,
             bottom: false,
+            reference_offset: None,
+            reference_text: None,
         }
     }
 
