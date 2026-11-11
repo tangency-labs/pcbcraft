@@ -434,3 +434,13 @@ custom size validation and cancellation, stale view authority, local preset
 restoration and neutral header hover/grip geometry. Isolated X11 and Chrome
 checks covered both ribbon widths; Chrome confirmed that a custom width remained
 available after an immediate reload, with no observed JavaScript or console errors.
+
+The persistent section now uses the toolkit's caption font, row center and pixel
+rounding, matching the Board caption baseline. The final Board command group
+centers its tool pair in the remaining visible strip before the pinned fields;
+compact ribbons retain natural sizing and scrolling. Focused ribbon regressions
+cover the shared baseline and the two-button group with trailing space.
+
+The alignment follow-up passed the focused app/chrome ribbon regressions,
+formatting, Clippy and a packaged WebAssembly build. Native X11 screenshots
+verified the full ribbon at 1920×850 and its compact controls at 760×650.

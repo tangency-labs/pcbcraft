@@ -409,15 +409,26 @@ pub fn ribbon_with_controls(
                             add(&mut controls_ui, RibbonSection::Controls { compact: !side_controls });
                             if !controls_label.is_empty() {
                                 let fields = controls_ui.min_rect();
-                                let top =
-                                    if side_controls { row.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP } else { fields.bottom() + t.space_4 };
-                                ui.painter().text(
-                                    pos2(fields.center().x, top),
-                                    Align2::CENTER_TOP,
-                                    controls_label,
-                                    FontId::proportional(t.font_small),
-                                    t.text_dim,
-                                );
+                                if side_controls {
+                                    use solidcraft_ui_kit::ribbon as shared;
+                                    let center = row.top() + shared::GROUP_HEIGHT - shared::SECTION_HEIGHT / 2.0 - (shared::CARD_INSET - 1.0);
+                                    shared::text(
+                                        ui,
+                                        pos2(fields.center().x, center),
+                                        controls_label,
+                                        solidcraft_theme::Tokens::get().font_caption,
+                                        t.text_dim,
+                                        false,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        pos2(fields.center().x, fields.bottom() + t.space_4),
+                                        Align2::CENTER_TOP,
+                                        controls_label,
+                                        FontId::proportional(t.font_small),
+                                        t.text_dim,
+                                    );
+                                }
                             }
                         }
                     });
@@ -810,6 +821,12 @@ pub fn ribbon_group(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]) -> Optio
     ribbon_group_with_menu(ui, title, tools, &[])
 }
 
+/// Center a final command group in the space left before the persistent editing controls.
+/// Narrow or scrolled ribbons retain the natural group width and their ordinary overflow.
+pub fn ribbon_group_fill(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]) -> Option<usize> {
+    ribbon_group_sized(ui, title, tools, &[], true)
+}
+
 /// Align an inline control and its non-interactive caption with neighboring ribbon groups.
 /// The caller owns control state; chrome owns the group's height and caption metrics.
 pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mut Ui)) {
@@ -832,6 +849,12 @@ pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mu
 /// Buttons share a standard width and wrap labels; a wider caption grows its group evenly.
 /// PCBcraft's surrounding layout supplies the separators between these individual groups.
 pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
+    ribbon_group_sized(ui, title, tools, menu_tools, false)
+}
+
+/// Reserve the natural tool width or the remaining visible command strip before centering
+/// the shared group. The viewport bound prevents a scrolling UI from creating infinite space.
+fn ribbon_group_sized(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>], fill: bool) -> Option<usize> {
     use solidcraft_ui_kit::ribbon as shared;
     let t = Tokens::get();
     let caption_width = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24;
@@ -839,7 +862,9 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
     let button_width = RIBBON_TOOL_WIDTH.max((caption_width - 8.0 - tools.len().saturating_sub(1) as f32 * shared::BUTTON_GAP) / count);
     let widths = vec![button_width; tools.len()];
     let content_width = shared::panel_width(&widths);
-    let width = content_width.max(caption_width) + 5.0;
+    let natural_width = content_width.max(caption_width) + 5.0;
+    let visible_right = ui.available_rect_before_wrap().right().min(ui.clip_rect().right());
+    let width = if fill { natural_width.max(visible_right - ui.next_widget_position().x) } else { natural_width };
     let (_, rect) = ui.allocate_space(vec2(width, shared::GROUP_HEIGHT));
     // The shared row reserves four trailing points plus its separator. Keep that fitting
     // room outside the centered content, and clip its separator in this host composition.
@@ -1571,6 +1596,43 @@ pub fn ribbon_licenses(ui: &mut Ui) {
 #[cfg(test)]
 mod ribbon_tests {
     use super::*;
+
+    /// A final Board group absorbs trailing space before the pinned fields. Its two tools and
+    /// menu caption share the center of that visible section, rather than leaving a trailing gap.
+    #[test]
+    fn final_two_button_group_centers_in_remaining_space() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        let mut output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600., 200.))), ..Default::default() }, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let tools: Vec<_> = ["Update PCB", "Setup"]
+                            .into_iter()
+                            .map(|label| RibbonTool {
+                                icon: ToolIcon::Fit,
+                                label,
+                                description: label,
+                                shortcut: "",
+                                enabled: true,
+                                active: false,
+                                menu_check: None,
+                            })
+                            .collect();
+                        let response = ui.scope(|ui| ribbon_group_fill(ui, "Board", &tools)).response;
+                        let first = solidcraft_ui_registry::rect_of("pcbcraft:ribbon:Board:button_rect:Update PCB").unwrap();
+                        let second = solidcraft_ui_registry::rect_of("pcbcraft:ribbon:Board:button_rect:Setup").unwrap();
+                        let caption = solidcraft_ui_registry::rect_of("pcbcraft:ribbon:Board:section_target:Board").unwrap();
+                        let buttons = first.union(second);
+                        assert!(response.rect.width() > buttons.width() + 100., "fixture must include trailing room");
+                        assert!((buttons.center().x - response.rect.center().x).abs() <= 1.0);
+                        assert!((buttons.center().x - caption.center().x).abs() <= 1.0);
+                        assert_eq!(first.size(), second.size());
+                    });
+                });
+            });
+        output.textures_delta.clear();
+    }
 
     /// The toolkit's fitting reserve belongs outside the visible group. A single button
     /// and its caption must be centered in the host allocation, even for a long caption.

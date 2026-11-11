@@ -302,6 +302,19 @@ fn pcb_editing_fields_are_persistent_outside_the_commands() {
             assert!((section.center().x - fields.center().x).abs() <= 1.0, "{width} {tab}: section caption {section:?}, fields {fields:?}");
             assert!(section.bottom() <= h.get_by_label("PCB canvas").rect().top(), "{width} {tab}: section caption overlaps canvas");
             assert!(h.query_by_role_and_label(egui::Role::Button, "Layer & sizes").is_none());
+            if width == 1400. && tab == "Layout" {
+                let caption_y = |label: &str| {
+                    h.output()
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => Some(text.pos.y),
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                assert_eq!(caption_y("Layer & sizes"), caption_y("Board"), "section labels must share the toolkit's baseline");
+            }
             for (index, name) in labels.iter().enumerate() {
                 let node = h.get_by_label(name);
                 let rect = node.rect();

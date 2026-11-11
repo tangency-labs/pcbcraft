@@ -233,7 +233,7 @@ impl PcbApp {
                 menu_check: None,
             },
         ];
-        match workspace::ribbon_group(ui, "Board", &design) {
+        match workspace::ribbon_group_fill(ui, "Board", &design) {
             Some(0) => self.message = self.begin_board_update(self.views.active.id()).err(),
             Some(1) => self.begin_board_setup(self.views.active.id()),
             _ => {}
