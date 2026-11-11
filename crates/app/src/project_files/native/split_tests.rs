@@ -363,8 +363,11 @@ fn failed_folder_opens_and_stale_saves_preserve_the_session() {
     apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1270000,"y_nm":0}));
     let snapshot = s.snapshot().unwrap();
     let revision = s.revision();
-    fs::write(root.join("board.json"), b"broken").unwrap();
-    assert!(matches!(complete(&mut files, &mut s, load(&root).map(Outcome::Opened)), Some(Update::Error(_))));
+    let board = pcbcraft_engine::persistence::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap();
+    fs::write(root.join(&board), b"broken").unwrap();
+    let result = load(&root).map(Outcome::Opened);
+    assert!(result.as_ref().err().unwrap().contains(&board));
+    assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Error(_))));
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     assert_eq!(s.revision(), revision);
     assert!(files.dirty(&s));
@@ -373,7 +376,7 @@ fn failed_folder_opens_and_stale_saves_preserve_the_session() {
         save_target(snapshot, Some(&saved.snapshot), saved.target.clone(), &mut |_| Ok(())).err().unwrap(),
         "Project folder changed on disk. Use Save As to keep your edits in a separate folder."
     );
-    assert_eq!(fs::read(root.join("board.json")).unwrap(), b"broken");
+    assert_eq!(fs::read(root.join(&board)).unwrap(), b"broken");
 }
 
 /// Overlapping writers use a nonblocking lock and only one publishes from the same baseline.

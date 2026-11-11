@@ -15,7 +15,7 @@ pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, Stri
         if !path.starts_with("sheets/") {
             continue;
         }
-        let mut sheet: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let mut sheet = serde_json::from_slice::<UniqueValue>(bytes).map_err(|e| format!("{path}: {e}"))?.0;
         let mut changed = false;
         if let Some(labels) = sheet["net_labels"].as_array_mut() {
             for label in labels {
@@ -105,9 +105,108 @@ pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, Stri
     Ok(documents)
 }
 
+/// A JSON tree that refuses duplicate object keys at every depth before any sheet rewrite.
+/// Typed document validation still checks the sanitized schema and all cross-document references.
+struct UniqueValue(Value);
+
+impl<'de> Deserialize<'de> for UniqueValue {
+    /// Preserve JSON values while rejecting repeated fields instead of retaining the last one.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct UniqueVisitor;
+        impl<'de> serde::de::Visitor<'de> for UniqueVisitor {
+            type Value = UniqueValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("JSON with unique object fields")
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(UniqueValue(Value::Null))
+            }
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(UniqueValue(value.into()))
+            }
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(UniqueValue(value.into()))
+            }
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(UniqueValue(value.into()))
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(UniqueValue(value.into()))
+            }
+            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(UniqueValue(value.into()))
+            }
+
+            /// JSON numbers must remain finite and representable by the normal JSON value model.
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                serde_json::Number::from_f64(value).map(Value::Number).map(UniqueValue).ok_or_else(|| E::custom("invalid JSON number"))
+            }
+
+            /// Check objects nested anywhere inside an array before retaining the array.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                while let Some(UniqueValue(value)) = sequence.next_element()? {
+                    values.push(value);
+                }
+                Ok(UniqueValue(Value::Array(values)))
+            }
+
+            /// Reject a duplicate before reading or replacing its value, including nested records.
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(serde::de::Error::custom(format!("duplicate field `{key}`")));
+                    }
+                    let UniqueValue(value) = map.next_value()?;
+                    values.insert(key, value);
+                }
+                Ok(UniqueValue(Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_any(UniqueVisitor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repeated fields at the sheet, marker or endpoint level cannot be normalized away.
+    /// Normal package Open must reject them before an active project could be replaced.
+    #[test]
+    fn duplicate_fields_are_rejected_before_marker_rewriting() {
+        let mut session = crate::Session::default();
+        session.open_snapshot(decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap());
+        let at = session.project().unwrap().symbols()[0].pins()[0];
+        session
+            .apply(
+                crate::net_labels::ADD,
+                &json!({"name":"SUPPLY","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let marker = session.project().unwrap().net_labels()[0].id;
+        let mut documents = encode_documents(session.snapshot().unwrap()).unwrap();
+        let path = format!("sheets/{}.json", session.project().unwrap().sheet_target().sheet);
+        let mut sheet: Value = serde_json::from_slice(&documents[&path]).unwrap();
+        sheet["net_labels"][0]["style"] = json!("power");
+        sheet["wires"][0]["from"] = json!({"net_label":marker});
+        let text = serde_json::to_string(&sheet).unwrap();
+        let repeated_wires = format!("{},\"wires\":[]}}", &text[..text.len() - 1]);
+        let repeated_name = text.replacen("\"name\":\"SUPPLY\"", "\"name\":\"SUPPLY\",\"name\":\"OTHER\"", 1);
+        let endpoint = format!("{{\"net_label\":{marker}}}");
+        let repeated_endpoint = text.replacen(&endpoint, &format!("{{\"net_label\":{marker},\"net_label\":{marker}}}"), 1);
+        for (field, malformed) in [("wires", repeated_wires), ("name", repeated_name), ("net_label", repeated_endpoint)] {
+            assert_ne!(malformed, text);
+            documents.insert(path.clone(), malformed.into_bytes());
+            let error = migrate_power_markers(documents.clone()).unwrap_err();
+            assert!(error.contains(&path) && error.contains("duplicate field") && error.contains(field), "{error}");
+            let packed = encode_packed_documents(documents.clone()).unwrap();
+            assert!(decode_packed(&packed).err().unwrap().contains("duplicate field"));
+        }
+    }
 
     /// Every retired drawing becomes a pinned native symbol with the same named contact,
     /// rotation and wire route; unrelated payloads survive and conversion is deterministic.

@@ -655,10 +655,12 @@ folders used a plain JSON `project.pc` entry point, and split archives used
 `.pc.zip` with container version 2. Older single-document projects could also
 use `.pc` for plain JSON or container version 1. Normal desktop, browser and
 headless opens accept the immediately previous split layouts without rewriting
-their source files. Previews are read-only too. First Save upgrades a split folder
-in place: one journaled transaction installs `project.json`, removes `project.pc`
-and migrates any flat board payload. First Save of a previous split archive
-replaces it with a verified container-v3 package at its existing path.
+their source files. Previews are read-only too. On desktop, first Save upgrades
+a split folder in place: one journaled transaction installs `project.json`, removes
+`project.pc` and migrates any flat board payload. Desktop Save of a previous split
+archive replaces it with a verified container-v3 package at its existing path.
+In the browser, Download creates a new upgraded `.pc` file; it leaves the uploaded
+archive unchanged. Reopen the downloaded file to use the saved copy.
 Standalone JSON/container-v1 projects remain unsupported. The optional explicit
 converter below creates a separate copy of the immediately previous split layout.
 
