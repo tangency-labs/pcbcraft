@@ -154,6 +154,14 @@ a file operation or omitted in the browser. Header close, Cancel, Escape and
 backdrop dismissal retain the pending project. The app continues to own save
 completion, failures, edits made during a save and subsequent close/open actions.
 
+## Other dialogs
+
+The common chrome dialog adapter uses the shared modal frame and named title
+close control. Naming, hierarchy, arrangement, file-location, clipboard, layer
+colour, library-editor and Assistant configuration dialogs inherit this host.
+Long bodies scroll within the viewport below the fixed title. Each caller
+retains its validation, focus, actions and document or connection lifecycle.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through

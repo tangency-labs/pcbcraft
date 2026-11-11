@@ -193,38 +193,48 @@ pub fn dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut 
     dialog_width(ctx, id, title, 340.0, add)
 }
 
-/// Keep a variable-length form within the viewport, with a fixed title and scrollable content.
-/// Escape and outside clicks retain the ordinary modal close behavior.
+/// Keep a variable-length form within the shared modal's bounded scrolling body.
+/// Escape, header close and outside clicks retain the ordinary modal close behavior.
 pub fn scrolling_dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
     scrolling_dialog_width(ctx, id, title, 340.0, add)
 }
 
-/// Show a responsive wide form while keeping its variable-length body inside the viewport.
+/// Show a responsive wide form with the shared modal header and bounded body.
 pub fn scrolling_dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
-    let t = Tokens::get();
-    let height = (ctx.content_rect().height() - t.space_16 * 5.0 - t.control_height).max(0.0);
-    dialog_width(ctx, id, title, width, |ui| {
-        ui.scope(|ui| {
-            // Recompute the body's height when a package adds rows, without resetting the title's cursor.
-            ui.set_max_height(height);
-            egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, add);
-        });
-    })
+    dialog_width(ctx, id, title, width, add)
 }
 
-/// Draw a modal with a preferred content width bounded by the viewport.
+/// Draw a shared modal with a preferred content width bounded by the viewport. Callers retain
+/// their field focus, validation and actions; the title stays fixed while long bodies scroll.
 pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
+    use solidcraft_ui_kit::{self as kit, Container, Surface};
     let t = Tokens::get();
-    let frame = Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(t.space_16 as i8));
-    egui::Modal::new(egui::Id::unique(id))
-        .frame(frame)
-        .show(ctx, |ui| {
-            ui.set_width(width.min((ctx.content_rect().width() - t.space_16 * 3.0).max(0.0)));
-            ui.spacing_mut().item_spacing.y = t.space_8;
-            ui.label(RichText::new(title).font(fonts::semibold(t.font_button + 2.0)));
-            add(ui);
-        })
-        .should_close()
+    let mut closed = false;
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let modal = Container::new(ctx, Surface::Window).modal(egui::Id::unique(id)).frame(frame).show(ctx, |ui| {
+        let width = (width + 2.0 * t.space_16).min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        ui.set_width(width);
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (header, close) = crate::catalog::form_header(ui, title);
+            closed = close;
+            Frame::NONE.inner_margin(t.space_16 as i8).show(ui, |ui| {
+                ui.set_style(field_style);
+                ui.set_width((width - 2.0 * t.space_16).max(0.0));
+                ui.spacing_mut().item_spacing.y = t.space_8;
+                let height = (ctx.content_rect().height() - header.height() - 4.0 * t.space_16).max(0.0);
+                egui::ScrollArea::vertical().id_salt("dialog_body").max_height(height).min_scrolled_height(height).auto_shrink([false, true]).show(
+                    ui,
+                    |ui| {
+                        crate::workspace::describe_scroll_viewport(ui);
+                        add(ui);
+                    },
+                );
+            });
+        });
+    });
+    closed || modal.should_close()
 }
 
 /// A save prompt returns a choice without owning the application's save or close lifecycle.
