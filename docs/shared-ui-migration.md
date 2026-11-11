@@ -146,6 +146,14 @@ a mixed state when some categories are hidden, while warning and error totals
 count the complete report. The application controls review validity, update
 approval and placement handoffs.
 
+## Unsaved changes
+
+The project save prompt uses the shared modal frame, title close control and
+confirmation footer. Don't Save remains available when Save is disabled during
+a file operation or omitted in the browser. Header close, Cancel, Escape and
+backdrop dismissal retain the pending project. The app continues to own save
+completion, failures, edits made during a save and subsequent close/open actions.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through

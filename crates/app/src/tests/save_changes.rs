@@ -11,6 +11,54 @@ use pcbcraft_engine::PLACE_SYMBOL;
 use super::*;
 use crate::unsaved::Then;
 
+/// Shared prompt actions stay independent at compact widths: disabled or omitted Save never
+/// disables Don't Save or Cancel, and unowned Enter never approves an unsaved-work decision.
+#[test]
+fn shared_save_prompt_keeps_each_decision_available() {
+    use pcbcraft_chrome::shell::{self, SaveDecision};
+    for width in [1280., 420.] {
+        for (offer_save, save_enabled) in [(true, true), (true, false), (false, false)] {
+            let mut h = Harness::builder().with_size(egui::vec2(width, 650.)).with_context_setup(pcbcraft_chrome::install).build_ui_state(
+                |ui, decision: &mut Option<SaveDecision>| {
+                    if let Some(answer) =
+                        shell::save_changes(ui.ctx(), "Save changes?", "This project has unsaved changes.", offer_save, save_enabled)
+                    {
+                        *decision = Some(answer);
+                    }
+                },
+                None,
+            );
+            h.run();
+            h.key_press(Key::Enter);
+            h.run();
+            assert!(h.state().is_none());
+            if offer_save {
+                h.get_by_label("Save").click();
+                h.run();
+                assert_eq!(*h.state() == Some(SaveDecision::Save), save_enabled);
+            } else {
+                assert!(h.query_by_label("Save").is_none());
+            }
+            *h.state_mut() = None;
+            h.get_by_label("Don't Save").click();
+            h.run();
+            assert!(*h.state() == Some(SaveDecision::Discard));
+            *h.state_mut() = None;
+            h.get_by_label("Cancel").click();
+            h.run();
+            assert!(*h.state() == Some(SaveDecision::Cancel));
+            *h.state_mut() = None;
+            h.get_by_label("Close Save changes?").click();
+            h.run();
+            assert!(*h.state() == Some(SaveDecision::Cancel));
+            *h.state_mut() = None;
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(*h.state() == Some(SaveDecision::Cancel));
+        }
+    }
+}
+
 /// Whether the last frame sent the root viewport a command matching `command`.
 fn sent(h: &Harness<'_, PcbApp>, command: impl Fn(&ViewportCommand) -> bool) -> bool {
     h.output().viewport_output.get(&ViewportId::ROOT).is_some_and(|output| output.commands.iter().any(command))
