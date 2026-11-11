@@ -104,7 +104,7 @@ connections and command examples.
 | [Symbols](docs/symbol-library.md) · [Footprints](docs/footprint-library.md) · [Library sources](docs/library-sources.md) | Definitions, mappings and source policy |
 | [Native storage](docs/native-project-storage.md) | Folder/archive formats and save behavior |
 | [Multiboard and sheet instances](docs/multiboard-and-sheet-instances.md) | Board folders, instances, cross-probing, assembly and output design under #122 |
-| [Net identity](docs/net-identity.md) | Continuation, split/merge, storage and rule-reconciliation design for single-board and multiboard projects |
+| [Net identity](docs/net-identity.md) · [Path to the registry](docs/net-registry-path.md) | Continuation, split/merge, storage and rule-reconciliation design for single-board and multiboard projects, and the proposed storage slices that reach it |
 | [PCB workspace](docs/board-workspace-plan.md) · [Representation](docs/pcb-representation.md) · [Materials](docs/board-materials.md) | Board architecture, implemented slices and planned extensions |
 
 ## Contributing
