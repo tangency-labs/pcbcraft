@@ -514,6 +514,7 @@ impl PcbApp {
     /// Paint any addressed board pane, with input granted only to its focused view. The renderer
     /// returns selection and transform intent; validation and dispatch follow after its borrow ends.
     /// All board panes use the shared grid display preference without changing their cameras.
+    /// Rejected drawing creation restores its captured gesture so the user can correct it.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
         let enabled = ui.is_enabled()
             && (crate::IN_BROWSER || ui.input(|input| input.focused))
@@ -604,6 +605,9 @@ impl PcbApp {
             {
                 edit.params["board"] = serde_json::json!(target.board);
                 self.run(edit.id, &edit.params);
+                if self.message.is_some() {
+                    edit.restore_rejected(&mut self.views.active.board.drawing);
+                }
             }
             if let Some(mut edit) = pick.track_edit
                 && self.views.active.accepts(edit.source, &self.session)

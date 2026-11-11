@@ -482,7 +482,7 @@ fn add(state: &mut State, draft: Draft) -> Option<Command> {
         params["via_diameter_nm"] = json!(state.via_diameter_nm);
         params["via_drill_nm"] = json!(state.via_drill_nm);
     }
-    Some(Command { source: draft.source, id: pcbcraft_engine::ADD_TRACKS, params })
+    Some(Command::new(draft.source, pcbcraft_engine::ADD_TRACKS, params))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -602,7 +602,7 @@ pub(super) fn interact(
         if !gone_vias.is_empty() {
             params["vias"] = json!(gone_vias);
         }
-        out.command = Some(Command { source, id: pcbcraft_engine::DELETE_TRACKS, params });
+        out.command = Some(Command::new(source, pcbcraft_engine::DELETE_TRACKS, params));
         state.selected.clear();
         out.consumed = true;
         return out;
@@ -625,11 +625,11 @@ pub(super) fn interact(
                 segments: Vec::new(),
                 vias: vec![at],
             });
-            out.command = Some(Command {
+            out.command = Some(Command::new(
                 source,
-                id: pcbcraft_engine::ADD_VIA,
-                params: json!({"at":at,"via_diameter_nm":state.via_diameter_nm,"via_drill_nm":state.via_drill_nm,"expected_revision":source.revision}),
-            });
+                pcbcraft_engine::ADD_VIA,
+                json!({"at":at,"via_diameter_nm":state.via_diameter_nm,"via_drill_nm":state.via_drill_nm,"expected_revision":source.revision}),
+            ));
         }
         return out;
     }
@@ -756,11 +756,11 @@ pub(super) fn interact(
             if !ends.is_empty() {
                 state.committed_ends = ends.clone();
                 let tracks: Vec<_> = ends.iter().map(|(id, start, end)| json!({"track":id,"start":start,"end":end})).collect();
-                out.command = Some(Command {
-                    source: segment.source,
-                    id: pcbcraft_engine::RESHAPE_TRACKS,
-                    params: json!({"tracks":tracks,"expected_revision":segment.source.revision}),
-                });
+                out.command = Some(Command::new(
+                    segment.source,
+                    pcbcraft_engine::RESHAPE_TRACKS,
+                    json!({"tracks":tracks,"expected_revision":segment.source.revision}),
+                ));
             }
         }
         return out;
@@ -808,7 +808,7 @@ pub(super) fn interact(
                     params["vias"] = json!(gone_vias);
                 }
                 state.committed_move = Some(moving.offset);
-                out.command = Some(Command { source: moving.source, id: pcbcraft_engine::MOVE_TRACKS, params });
+                out.command = Some(Command::new(moving.source, pcbcraft_engine::MOVE_TRACKS, params));
             }
         }
         return out;

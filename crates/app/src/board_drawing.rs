@@ -54,6 +54,23 @@ pub(super) struct Command {
     pub(super) source: ViewInput,
     pub(super) id: &'static str,
     pub(super) params: Value,
+    /// Keep the original gesture until the engine accepts its creation transaction.
+    retry: Option<Draft>,
+}
+
+impl Command {
+    /// Capture a canvas transaction without attaching a drawing creation gesture.
+    pub(super) fn new(source: ViewInput, id: &'static str, params: Value) -> Self {
+        Self { source, id, params, retry: None }
+    }
+
+    /// Restore a rejected creation gesture after dispatch. Editing/deletion commands have no
+    /// creation draft; callers validate captured view authority before applying the command.
+    pub(super) fn restore_rejected(self, state: &mut State) {
+        if let Some(draft) = self.retry {
+            state.draft = Some(draft);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -148,7 +165,7 @@ fn rectangle(a: Point, b: Point) -> Option<Vec<Point>> {
 /// Emit one create/update transaction; clicking an open path's first vertex makes closure explicit.
 fn command(source: ViewInput, id: &'static str, mut params: Value) -> Command {
     params["expected_revision"] = json!(source.revision);
-    Command { source, id, params }
+    Command::new(source, id, params)
 }
 
 /// Choose the existing typed command for the active material. Copper paths become atomic
@@ -236,8 +253,8 @@ pub(super) fn interact(
         if std::mem::take(&mut state.finish_requested) {
             if let Some(draft) = state.draft.as_ref().filter(|draft| draft.points.len() >= 2) {
                 out.command = create_path(draft.source, view, &draft.layer, &draft.points, false, width_nm);
-                if out.command.is_some() {
-                    state.draft = None;
+                if let Some(command) = &mut out.command {
+                    command.retry = state.draft.take();
                 }
             }
             return out;
@@ -249,8 +266,8 @@ pub(super) fn interact(
                 if tool == Tool::Rectangle {
                     if let Some(points) = rectangle(draft.points[0], at) {
                         out.command = create_path(draft.source, view, &draft.layer, &points, true, width_nm);
-                        if out.command.is_some() {
-                            state.draft = None;
+                        if let Some(command) = &mut out.command {
+                            command.retry = state.draft.take();
                         }
                     }
                 } else {
@@ -260,8 +277,8 @@ pub(super) fn interact(
                     }
                     if (close || response.double_clicked()) && draft.points.len() >= 2 {
                         out.command = create_path(draft.source, view, &draft.layer, &draft.points, close, width_nm);
-                        if out.command.is_some() {
-                            state.draft = None;
+                        if let Some(command) = &mut out.command {
+                            command.retry = state.draft.take();
                         }
                     }
                 }
@@ -410,6 +427,108 @@ mod tests {
     use super::*;
     use crate::tests::{click, click_canvas_at, harness};
     use egui_kittest::kittest::Queryable;
+
+    /// Two accepted nets share separate pads on each resistor, so crossing the first part's
+    /// pads exercises a real engine refusal without a stale revision or invalid layer.
+    fn two_net_board() -> egui_kittest::Harness<'static, crate::PcbApp> {
+        use pcbcraft_engine::{CONNECT_PINS, INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL};
+        let mut h = harness();
+        h.set_size(egui::vec2(1400., 900.));
+        h.state_mut().run("project.new", &json!({"create_board":true}));
+        let mut symbols = Vec::new();
+        for index in 0..2 {
+            let revision = h.state().session().revision();
+            h.state_mut().run(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":index*10_000_000,"y_nm":0,"expected_revision":revision}));
+            let symbol = h.state().session().project().unwrap().symbols().last().unwrap().id();
+            symbols.push(symbol.clone());
+            let revision = h.state().session().revision();
+            h.state_mut().run(PLACE_FOOTPRINT, &json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":index*10_160_000,"y_nm":0,"expected_revision":revision}));
+        }
+        for terminal in ["1", "2"] {
+            let revision = h.state().session().revision();
+            h.state_mut().run(CONNECT_PINS, &json!({"from":{"symbol":symbols[0],"terminal":terminal},"to":{"symbol":symbols[1],"terminal":terminal},"expected_revision":revision}));
+        }
+        let revision = h.state().session().revision();
+        h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":revision}));
+        let revision = h.state().session().revision();
+        h.state_mut().run(pcbcraft_engine::board::update::INITIALIZE_BASELINE, &json!({"expected_revision":revision}));
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        h.run();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        click(&mut h, "Activate layer Top");
+        h
+    }
+
+    /// Enter, path closure and rectangle completion retain their editable gesture when actual
+    /// copper validation refuses a net short; correcting that gesture commits it exactly once.
+    #[test]
+    fn rejected_copper_completion_retains_draft_for_correction() {
+        use pcbcraft_engine::persistence::encode_documents;
+        for completion in ["enter", "close", "rectangle"] {
+            let mut h = two_net_board();
+            assert!(h.state_mut().views.active.camera.set_snap_nm(10_000));
+            let view = h.state().session().project().unwrap().boards().next().unwrap();
+            let part = view.footprints().next().unwrap();
+            assert!(part.pads[0].net.is_some() && part.pads[1].net.is_some() && part.pads[0].net != part.pads[1].net);
+            let mut pads = [part.pads[0].center, part.pads[1].center];
+            pads.sort_by_key(|point| point.x_nm);
+            let [a, b] = pads;
+            let rectangle = completion == "rectangle";
+            click(&mut h, "Draw");
+            click(&mut h, if rectangle { "Draw rectangle on active layer" } else { "Draw lines on active layer" });
+            let source = h.state().views.active.input(h.state().session()).unwrap();
+            let layer = h.state().views.active.board.active_layer.clone().unwrap();
+            let points = if rectangle {
+                vec![a]
+            } else {
+                vec![a, Point { x_nm: a.x_nm, y_nm: a.y_nm + 5_000_000 }, Point { x_nm: b.x_nm, y_nm: b.y_nm + 5_000_000 }, b]
+            };
+            h.state_mut().views.active.board.drawing.draft = Some(Draft { source, layer, points: points.clone() });
+            let original = encode_documents(h.state().session().snapshot().unwrap()).unwrap();
+            let revision = h.state().session().revision();
+            if completion == "enter" {
+                h.key_press(egui::Key::Enter);
+                h.run();
+            } else {
+                let at = if rectangle { Point { x_nm: b.x_nm, y_nm: b.y_nm + 5_000_000 } } else { a };
+                let screen = h.state().views.active.camera.screen(at, h.get_by_label("PCB canvas").rect());
+                click_canvas_at(&mut h, screen);
+            }
+            assert!(
+                h.state().message.as_deref().is_some_and(|message| message.contains("would connect nets")),
+                "{completion}: {:?}, pads={pads:?}, state={:?}, tracks={:?}",
+                h.state().message,
+                h.state().views.active.board.drawing,
+                h.state().session().project().unwrap().boards().next().unwrap().tracks()
+            );
+            assert_eq!(h.state().session().revision(), revision);
+            assert_eq!(encode_documents(h.state().session().snapshot().unwrap()).unwrap(), original);
+            let draft = h.state().views.active.board.drawing.draft.as_ref().expect("rejected geometry remains editable");
+            assert_eq!(draft.points, points);
+            assert_eq!(draft.source, source);
+            h.run_steps(3);
+            assert_eq!(h.state().session().revision(), revision, "no automatic retry");
+            if rectangle {
+                let at = Point { x_nm: a.x_nm - 5_000_000, y_nm: a.y_nm + 5_000_000 };
+                let screen = h.state().views.active.camera.screen(at, h.get_by_label("PCB canvas").rect());
+                click_canvas_at(&mut h, screen);
+            } else {
+                h.key_press(egui::Key::Backspace);
+                h.run();
+                h.key_press(egui::Key::Enter);
+                h.run();
+            }
+            assert!(h.state().message.is_none(), "{completion}: {:?}", h.state().message);
+            assert!(h.state().views.active.board.drawing.draft.is_none());
+            assert_eq!(h.state().views.active.board.drawing.tool, Some(if rectangle { Tool::Rectangle } else { Tool::Lines }));
+            assert_eq!(h.state().session().revision(), revision + 1);
+            assert_eq!(h.state().session().project().unwrap().boards().next().unwrap().tracks().len(), if rectangle { 4 } else { 2 });
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+            h.run();
+            assert_eq!(encode_documents(h.state().session().snapshot().unwrap()).unwrap(), original);
+        }
+    }
 
     /// A full copper draft cannot close past the engine limit, but remains editable and can
     /// still finish as an open 256-point path without losing the user's geometry.
