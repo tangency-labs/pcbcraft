@@ -20,7 +20,7 @@ solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", r
 solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
 solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
 solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
-eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence"] }
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence", "clipboard"] }
 egui = "=0.37.0"
 egui_kittest = "=0.37.0"
 log = "0.4"

@@ -84,3 +84,11 @@ Text widgets and Windows Shift+Delete retain native clipboard handling. Plain V
 while routing is unchanged. The shortcut predicate has Windows/macOS modifier,
 non-Latin fallback and text-focus regression coverage. This original patch adds
 no dependency or external source.
+
+## Browser shutdown event
+
+The save-on-close listener uses the DOM event name `beforeunload`. Upstream's
+`onbeforeunload` spelling registers an event that browsers do not dispatch,
+preventing both persistence and the local `Context::on_exit` lifecycle hook.
+Reassess this correction when updating eframe. Native system clipboard support
+is enabled through eframe's `clipboard` feature in the workspace manifest.
