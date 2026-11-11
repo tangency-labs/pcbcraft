@@ -119,6 +119,13 @@ the footer's left action slot and has its own enabled state. The header close
 control is named Close Assign Footprint so it remains distinguishable from the
 footer's Close button. Each pane controls its scrolling and preview input.
 
+Update PCB from Schematic uses the shared modal frame and action footer, with
+the same title and close adapter as Assign Footprint. Its report uses the
+toolkit's bounded list, checkboxes and action buttons. The All filter displays
+a mixed state when some categories are hidden, while warning and error totals
+count the complete report. The application controls review validity, update
+approval and placement handoffs.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface

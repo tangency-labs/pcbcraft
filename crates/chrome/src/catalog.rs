@@ -76,14 +76,8 @@ pub fn footprint_form(ctx: &egui::Context, enabled: bool, place: Option<bool>, a
         let field_style = ui.style().clone();
         kit::scope(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            let (header, _) = ui.allocate_exact_size(vec2(width, kit::header_height()), Sense::hover());
-            let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.0), vec2(t.control_height, t.control_height));
-            closed = kit::icon_button_at(ui, close, "close", "Close Assign Footprint").clicked();
-            let title = Rect::from_min_max(header.min + vec2(t.space_24, 0.0), pos2(close.left() - t.space_8, header.bottom()));
-            kit::paint_text(ui, title, "Assign Footprint", fonts::interface_heading(ui, t.font_button), t.text, false);
-            ui.interact(title, ui.make_persistent_id("assignment_title"), Sense::hover())
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), "Assign Footprint"));
-            rule(ui, header.bottom(), header.x_range());
+            let (header, close) = form_header(ui, "Assign Footprint");
+            closed = close;
             let footer_height = t.form_footer_height + t.space_4;
             let height = (ctx.content_rect().height() - header.height() - footer_height - t.space_24 * 2.0).clamp(0.0, t.control_height * 24.0);
             let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
@@ -114,6 +108,21 @@ pub fn footprint_form(ctx: &egui::Context, enabled: bool, place: Option<bool>, a
         secondary: modal.inner == kit::Action::Apply,
         ..Default::default()
     }
+}
+
+/// Draw shared title text and a title-specific close control, keeping the header target
+/// distinct from a form's Close footer action. Return the allocated band and dismissal request.
+pub(crate) fn form_header(ui: &mut Ui, title: &str) -> (Rect, bool) {
+    let t = Tokens::get();
+    let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), kit::header_height()), Sense::hover());
+    let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.0), vec2(t.control_height, t.control_height));
+    let closed = kit::icon_button_at(ui, close, "close", &format!("Close {title}")).clicked();
+    let label = Rect::from_min_max(header.min + vec2(t.space_24, 0.0), pos2(close.left() - t.space_8, header.bottom()));
+    kit::paint_text(ui, label, title, fonts::interface_heading(ui, t.font_button), t.text, false);
+    ui.interact(label, ui.make_persistent_id("form_title"), Sense::hover())
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), title));
+    rule(ui, header.bottom(), header.x_range());
+    (header, closed)
 }
 
 /// Keep shared window actions fixed around a bounded page editor. Navigation, validation
@@ -147,7 +156,7 @@ pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: b
 
 /// Render the common shell with a bounded body, preserving modal input and dismissal behavior.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn form_body(
+fn form_body(
     ctx: &egui::Context,
     id: &'static str,
     title: &str,

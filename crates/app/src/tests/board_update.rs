@@ -59,7 +59,8 @@ fn open(h: &mut Harness<'_, PcbApp>) {
     assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)), "dialog {:?}; message {:?}", h.state().dialog, h.state().message);
 }
 
-/// Opening and Close never author data. Explicit board creation is a separate undoable action.
+/// Opening, Enter and dismissal never create a board. Explicit creation uses the primary
+/// action as a separate undoable edit, with title close and Escape discarding the draft.
 #[test]
 fn no_board_review_cancel_and_explicit_creation_have_distinct_history() {
     let mut h = harness();
@@ -68,10 +69,19 @@ fn no_board_review_cancel_and_explicit_creation_have_distinct_history() {
     let before = h.state().session.snapshot().unwrap();
     let revision = h.state().session.revision();
     open(&mut h);
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-    click(&mut h, "Close");
+    click(&mut h, "Close Update PCB from Schematic");
     assert_eq!(h.state().session.revision(), revision);
     assert!(h.state().session.project().unwrap().board_target().is_none());
+
+    open(&mut h);
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 
     open(&mut h);
     click(&mut h, "Create board");

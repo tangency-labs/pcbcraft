@@ -1,6 +1,7 @@
 //! Update options and a filtered change report over the shared Craft dialog shell.
 use crate::{Tokens, catalog};
-use egui::{Frame, RichText, Stroke, Ui, UiBuilder, vec2};
+use egui::{RichText, Sense, Ui, UiBuilder, vec2};
+use solidcraft_ui_kit::{self as kit, Container, Surface};
 
 /// Message classes describe the report rather than granting permission to apply a change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,29 +63,39 @@ pub struct ReportAction {
 /// Keep Close and the primary action fixed while the inner report scrolls. Lifecycle-only
 /// prompts use a shorter body; normal review has room for options, messages and filter controls.
 pub fn form(ctx: &egui::Context, primary: &str, enabled: bool, report: bool, add: impl FnOnce(&mut Ui)) -> catalog::FormAction {
-    catalog::form_body(
-        ctx,
-        "board_update",
-        "Update PCB from Schematic",
-        800.,
-        primary,
-        enabled,
-        false,
-        true,
-        if report { 20. } else { 8. },
-        "Close",
-        |ui| {
-            let t = Tokens::get();
-            let inner = ui.available_rect_before_wrap().shrink2(vec2(t.space_12, t.space_8));
-            ui.scope_builder(UiBuilder::new().max_rect(inner), add);
-        },
-    )
+    let t = Tokens::get();
+    let id = egui::Id::unique("board_update");
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let mut closed = false;
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
+        let width = 800.0_f32.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        ui.set_width(width);
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (header, close) = catalog::form_header(ui, "Update PCB from Schematic");
+            closed = close;
+            let rows = if report { 20.0 } else { 8.0 };
+            let height =
+                (ctx.content_rect().height() - header.height() - t.form_footer_height - t.space_24 * 2.0).clamp(0.0, t.control_height * rows);
+            let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            let inner = body.shrink2(vec2(t.space_12, t.space_8));
+            let mut content = ui.new_child(UiBuilder::new().id_salt("update_body").max_rect(inner));
+            content.set_clip_rect(ui.clip_rect().intersect(inner));
+            content.set_style(field_style);
+            add(&mut content);
+            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            kit::footer(ui, primary, "Close", enabled, kit::Footer::default())
+        })
+    });
+    let cancelled = modal.inner == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    catalog::FormAction { close: closed || cancelled || modal.should_close(), primary: modal.inner == kit::Action::Ok, ..Default::default() }
 }
 
 /// Expose the supported post-update placement choice without changing the reviewed plan.
 pub fn options(ui: &mut Ui, place: &mut bool) {
     ui.strong("Options");
-    ui.checkbox(place, "Place new footprints after updating");
+    kit::checkbox(ui, "Place new footprints after updating", place);
 }
 
 /// Draw one scrollable log, unfiltered warning/error totals and independently selectable message
@@ -96,45 +107,44 @@ pub fn report(ui: &mut Ui, messages: &[&Message], filters: &mut Filters, trailin
     let warnings = messages.iter().filter(|m| m.kind == Kind::Warning).count();
     ui.strong("Changes to Be Applied");
     let height = (ui.available_height() - t.control_height * (if trailing_actions { 6. } else { 3. }) - t.space_8 * 4.).max(t.control_height * 2.);
-    Frame::new().fill(t.field).stroke(Stroke::new(1., t.border)).inner_margin(t.space_8).show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        egui::ScrollArea::vertical().id_salt("pcb_update_report").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
-            let mut visible = false;
-            for (index, message) in messages.iter().enumerate().filter(|(_, m)| filters.includes(m.kind)) {
-                visible = true;
-                ui.push_id(index, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        let color = match message.kind {
-                            Kind::Error => t.error,
-                            Kind::Warning => ui.visuals().warn_fg_color,
-                            _ => t.text,
-                        };
-                        ui.add(egui::Label::new(RichText::new(&message.text).color(color)).wrap());
-                        if let Some(label) = &message.action
-                            && ui.add(catalog::button(label, false)).clicked()
-                        {
-                            action.row = Some(index);
-                        }
-                    });
+    kit::report_list(ui, "pcb_update_report", height, |ui| {
+        ui.set_min_height(height);
+        let mut visible = false;
+        for (index, message) in messages.iter().enumerate().filter(|(_, m)| filters.includes(m.kind)) {
+            visible = true;
+            ui.push_id(index, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let color = match message.kind {
+                        Kind::Error => t.error,
+                        Kind::Warning => ui.visuals().warn_fg_color,
+                        _ => t.text,
+                    };
+                    ui.add(egui::Label::new(RichText::new(&message.text).color(color)).wrap());
+                    if let Some(label) = &message.action
+                        && kit::button(ui, label, kit::Button::Normal).clicked()
+                    {
+                        action.row = Some(index);
+                    }
                 });
-            }
-            if !visible {
-                ui.label("No messages match the selected filters.");
-            }
-        });
+            });
+        }
+        if !visible {
+            ui.label("No messages match the selected filters.");
+        }
     });
     ui.label(format!("Total warnings: {warnings}, errors: {errors}."));
     ui.horizontal_wrapped(|ui| {
         ui.label("Show:");
         let mut all = filters.errors && filters.warnings && filters.actions && filters.infos;
-        if ui.checkbox(&mut all, "All").changed() {
+        let mixed = !all && (filters.errors || filters.warnings || filters.actions || filters.infos);
+        if kit::checkbox_indeterminate(ui, "All", &mut all, mixed).changed() {
             *filters = Filters { errors: all, warnings: all, actions: all, infos: all };
         }
-        ui.checkbox(&mut filters.errors, format!("Errors ({errors})"));
-        ui.checkbox(&mut filters.warnings, format!("Warnings ({warnings})"));
-        ui.checkbox(&mut filters.actions, "Actions");
-        ui.checkbox(&mut filters.infos, "Infos");
-        action.copy = ui.add(catalog::button("Copy report", false)).clicked();
+        kit::checkbox(ui, &format!("Errors ({errors})"), &mut filters.errors);
+        kit::checkbox(ui, &format!("Warnings ({warnings})"), &mut filters.warnings);
+        kit::checkbox(ui, "Actions", &mut filters.actions);
+        kit::checkbox(ui, "Infos", &mut filters.infos);
+        action.copy = kit::button(ui, "Copy report", kit::Button::Normal).clicked();
     });
     action
 }
