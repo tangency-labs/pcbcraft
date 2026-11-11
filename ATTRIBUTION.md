@@ -986,6 +986,7 @@ The PCB width/via dropdowns, custom-size drafts and local reusable numeric prese
 are original PCBcraft code using the already qualified Craft dropdowns and modal
 controls. No dependency, external source, asset or project-format change was added.
 
-The contextual-card header spacing and neutral hover reuse the existing compact
-Parts Catalog composition and shared panel host/grip controls. This adaptation
-adds no external source or dependency.
+The contextual-card header spacing reuses the existing compact Parts Catalog
+composition. Plain titles use original PCBcraft interaction/rendering code with
+the shared grip, fonts and keyboard-focus outline, without hover fills or
+duplicate tooltips. This adaptation adds no external source or dependency.

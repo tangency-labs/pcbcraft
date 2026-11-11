@@ -32,10 +32,10 @@ fn document(h: &Harness<'_, PcbApp>) -> Value {
     json!({"inspection":h.state().session.inspect(),"revision":h.state().session.revision(),"dirty":h.state().files.dirty(&h.state().session),"bytes":encode_documents(h.state().session.snapshot().unwrap()).unwrap()})
 }
 
-/// Movable card headers reuse the compact catalog's leading grip and ordinary hover color;
+/// Movable card headers keep the compact catalog's leading grip without a hover fill;
 /// collapsing or hovering them must not look like selecting project content.
 #[test]
-fn card_headers_keep_grips_near_the_edge_and_use_neutral_hover() {
+fn card_headers_keep_grips_near_the_edge_without_hover_fill() {
     for (board, title) in [(true, "Layers"), (true, "Properties"), (true, "Selection filters"), (false, "Properties")] {
         let mut h = fixture(board);
         let before = document(&h);
@@ -56,10 +56,43 @@ fn card_headers_keep_grips_near_the_edge_and_use_neutral_hover() {
         let leading = dots.iter().map(|dot| dot.x).min_by(f32::total_cmp).unwrap();
         assert!(leading - header.left() <= 8.0, "{title}: duplicated header padding places the grip too far inward");
         assert!(
-            h.output().shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Rect(tile) if header.contains_rect(tile.rect) && tile.rect.contains(header.center()) && tile.fill == Tokens::get().hover)),
-            "{title}: title hover must use the neutral control color"
+            !h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(tile) if header.contains_rect(tile.rect) && tile.rect.contains(header.center()) && tile.fill != egui::Color32::TRANSPARENT)),
+            "{title}: panel titles must not paint a hover fill"
         );
+        assert_eq!(document(&h), before);
+    }
+}
+
+/// Browser headers used to register three tooltips at once. Both workspace hosts must show
+/// just the collapse action and leave the title background unchanged while hovered.
+#[test]
+fn browser_headers_have_one_action_tooltip_and_no_hover_fill() {
+    for board in [false, true] {
+        let mut h = fixture(board);
+        h.ctx.global_style_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.show_tooltips_only_when_still = false;
+        });
+        let before = document(&h);
+        let header = h.get_by_role_and_label(egui::Role::Button, "Collapse Browser").rect();
+        h.hover_at(header.center());
+        h.run_steps(3);
+        let painted = |text: &str| {
+            h.output()
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape,
+            egui::Shape::Text(glyphs) if glyphs.galley.job.text == text)
+                })
+                .count()
+        };
+        assert_eq!(painted("Browser"), 1, "the visible title must not be repeated as a tooltip");
+        assert_eq!(painted("Collapse Browser"), 1, "the header has exactly one action tooltip");
+        assert_eq!(painted("Collapse panel"), 0);
+        assert!(!h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(tile) if header.contains_rect(tile.rect) && tile.fill != egui::Color32::TRANSPARENT)));
         assert_eq!(document(&h), before);
     }
 }

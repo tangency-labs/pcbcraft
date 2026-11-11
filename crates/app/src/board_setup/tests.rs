@@ -16,9 +16,9 @@ fn page(h: &mut Harness<'_, PcbApp>, title: &str) {
 fn count(h: &mut Harness<'_, PcbApp>, count: u64) {
     h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Copper layers").click();
     h.run();
-    h.get_by_label(&format!("{count} copper layers")).scroll_to_me();
+    h.get_by_label(&count.to_string()).scroll_to_me();
     h.run();
-    click(h, &format!("{count} copper layers"));
+    click(h, &count.to_string());
 }
 
 use egui_kittest::{
@@ -49,6 +49,35 @@ fn replace(h: &mut Harness<'_, PcbApp>, label: &str, text: &str) {
     h.key_press(egui::Key::Backspace);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).type_text(text);
     h.run();
+}
+
+/// Setup choices use the available value column; the prompt and standard preset names must
+/// remain readable on both page layouts instead of clipping inside a default-width combo.
+#[test]
+fn stackup_dropdown_keeps_prompt_and_preset_names_readable() {
+    for width in [1200., 700.] {
+        let mut h = harness(width);
+        click(&mut h, "Board setup");
+        page(&mut h, "Physical stackup");
+        let untruncated = |h: &Harness<'_, PcbApp>, label: &str| {
+            let text = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{width}: missing {label}"));
+            assert!(!text.galley.elided, "{width}: {label} must fit the field");
+        };
+        untruncated(&h, "Choose preset…");
+        h.get_by_role_and_label(egui::Role::ComboBox, "Starting stackup").click();
+        h.run();
+        for preset in pcbcraft_engine::board::setup::StackupPreset::ALL {
+            untruncated(&h, preset.name());
+        }
+    }
 }
 
 /// Setup creation is an explicit undoable edit; opening/cancelling does not dirty the project.

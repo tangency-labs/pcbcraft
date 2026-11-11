@@ -198,11 +198,16 @@ pub fn material_choice(ui: &mut Ui, name: &str, assign: bool) -> bool {
     .clicked()
 }
 
-/// Align summary labels with their controls independently of each caption's text width.
+/// Align summary labels independently of their text width. Dropdowns use the available field
+/// column rather than egui's narrow default, so ordinary choices do not truncate prematurely.
 pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         table_label(ui, label, Tokens::get().form_label_width * 2.);
-        ui.with_layout(Layout::left_to_right(Align::Center), add).inner
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            ui.spacing_mut().combo_width = ui.available_width();
+            add(ui)
+        })
+        .inner
     })
     .inner
 }

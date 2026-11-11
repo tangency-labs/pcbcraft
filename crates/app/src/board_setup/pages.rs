@@ -6,10 +6,10 @@ fn copper_count(ui: &mut Ui, count: &mut u64) -> bool {
     let previous = *count;
     form::field(ui, "Copper layers", |ui| {
         pcbcraft_chrome::controls::Choice::from_id_salt("copper_count")
-            .selected_text(format!("{count} copper layers"))
+            .selected_text(count.to_string())
             .show_ui(ui, |ui| {
                 for n in (2..=64).step_by(2) {
-                    ui.selectable_value(count, n, format!("{n} copper layers"));
+                    ui.selectable_value(count, n, n.to_string());
                 }
             })
             .response

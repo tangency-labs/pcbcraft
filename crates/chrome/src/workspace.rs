@@ -1248,37 +1248,42 @@ fn card_header(ui: &mut Ui, title: &str, collapsed: bool) -> Response {
     } else {
         solidcraft_ui_kit::icons::paint_ink_flipped(ui.painter(), icon, "chevron", t.text_dim);
     }
-    response.on_hover_text(if collapsed { "Expand panel" } else { "Collapse panel" })
+    response.on_hover_text(format!("{action} {title}"))
 }
 
-/// Shared header interaction with host-owned identity and drag/collapse policy. Movable cards
-/// use the compact catalog's grip spacing and a neutral hover, without a tab-selection tint.
+/// Plain panel titles have no hover fill or tooltip of their own. The caller supplies one
+/// action tooltip when needed; keyboard focus remains visible without adding a selection fill.
+/// Movable cards reuse the compact catalog's grip spacing and shared focus/grip primitives.
 pub(super) fn panel_header_control(ui: &mut Ui, id: egui::Id, rect: Rect, title: &str, drag: bool) -> Response {
-    let response = solidcraft_ui_kit::panel_host_control(
-        ui,
-        id,
-        rect,
-        solidcraft_ui_kit::HostChrome {
-            label: if drag { "" } else { title },
-            icon: None,
-            icon_only: false,
-            attention: false,
-            selected: false,
-            enabled: ui.is_enabled(),
-            drag,
-            title: false,
-            grip_only: false,
-            rtl: false,
-        },
-    );
+    let sense = if !ui.is_enabled() {
+        Sense::hover()
+    } else if drag {
+        Sense::click_and_drag()
+    } else {
+        Sense::click()
+    };
+    let response = ui.interact(rect, id, sense);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), title));
+    let t = Tokens::get();
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
+    if response.has_focus() {
+        painter.add(solidcraft_ui_kit::native_button_focus(ui, &response, rect.shrink(t.space_2)));
+    }
     if drag {
         drag_grip(ui, rect);
-        let t = Tokens::get();
-        let label = Rect::from_min_max(pos2((rect.left() + 18.0).min(rect.right()), rect.top()), rect.max);
-        let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(label));
-        painter.text(label.left_center(), Align2::LEFT_CENTER, title, fonts::interface_heading(ui, t.font_body), t.text);
     }
-    response.on_hover_text(title)
+    let left = (rect.left() + if drag { 18.0 } else { t.space_4 }).min(rect.right());
+    let right = if drag { rect.right() } else { (rect.right() - t.space_24).max(left) };
+    let label = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
+    let font = if drag { fonts::interface_heading(ui, t.font_body) } else { FontId::proportional(t.font_label) };
+    painter.with_clip_rect(painter.clip_rect().intersect(label)).text(
+        label.left_center(),
+        Align2::LEFT_CENTER,
+        title,
+        font,
+        if ui.is_enabled() { t.text } else { t.text_dim },
+    );
+    response.on_hover_cursor(if drag { egui::CursorIcon::Grab } else { egui::CursorIcon::PointingHand })
 }
 
 /// A card's header, with its title and optional named Close button, over a body that scrolls

@@ -424,8 +424,9 @@ Custom values accept explicit units and can be remembered in local app settings,
 independently of Board Setup profiles. Shareable and project-pinned routing
 profiles remain unimplemented. Captions are centered on the actual dropdown
 bounds with a short gap; the plain Layer & sizes section caption has no menu.
-Movable card headers reuse the compact catalog's grip spacing and neutral
-control hover while retaining shared host input and keyboard-focus behavior.
+Movable card headers reuse the compact catalog's grip spacing without a title
+hover fill. Plain title rendering retains shared grip and keyboard-focus
+primitives; collapsible Browser headers show one action tooltip.
 
 This follow-up passed all 1,332 workspace tests (eight ignored), formatting,
 Clippy with warnings denied and the packaged WebAssembly build. Focused
@@ -444,3 +445,14 @@ cover the shared baseline and the two-button group with trailing space.
 The alignment follow-up passed the focused app/chrome ribbon regressions,
 formatting, Clippy and a packaged WebAssembly build. Native X11 screenshots
 verified the full ribbon at 1920×850 and its compact controls at 760×650.
+
+Board Setup dropdowns use their available field column rather than the default
+narrow combo width. Copper-count rows show only numbers under the Copper layers
+label. The stackup prompt and built-in preset names are checked for truncation
+in both wide and compact forms.
+
+The panel-tooltip and setup-choice follow-up passed all 1,335 workspace tests
+(eight ignored), formatting, Clippy and the packaged WebAssembly build. The
+native desktop check showed a single Collapse Browser tooltip with no title
+hover fill. Rendered-galley regressions verified that the stackup prompt and
+built-in preset names are not elided at 1200- and 700-point viewport widths.
