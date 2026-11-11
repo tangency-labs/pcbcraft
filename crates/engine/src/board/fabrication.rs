@@ -318,11 +318,13 @@ impl BoardView<'_> {
     }
 }
 
-/// Pack outputs into a zip with fixed timestamps, so the same board gives the same bytes.
+/// Pack outputs with fixed timestamps and Unix regular-file metadata on every platform.
+/// The same outputs give the same bytes; ZIP encoding failures are returned as errors.
 pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
     let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
+        .system(zip::System::Unix)
         .compression_method(CompressionMethod::Deflated)
         .last_modified_time(zip::DateTime::default())
         .unix_permissions(0o644);

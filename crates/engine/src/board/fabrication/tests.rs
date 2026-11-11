@@ -3,6 +3,7 @@ use crate::board::{
     drc::tests::outline,
     track::tests::{copper_layers, route, route_with_vias, routed_fixture, view},
 };
+use std::io::Read as _;
 
 fn file<'a>(outputs: &'a [Output], suffix: &str) -> &'a str {
     &outputs
@@ -88,7 +89,8 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     assert!(drill.contains("X7.000Y-20.000\n"), "{drill}");
 }
 
-/// The same board gives byte-identical files and archive, and the archive lists every file.
+/// The same board gives byte-identical files and archive. Every entry retains its contents,
+/// fixed timestamp and Unix regular-file metadata, including on Windows.
 #[test]
 fn outputs_and_their_archive_are_deterministic() {
     let mut s = routed_fixture();
@@ -97,12 +99,21 @@ fn outputs_and_their_archive_are_deterministic() {
     assert_eq!(first, view(&s).fabrication_outputs().unwrap());
     let bytes = zip(&first).unwrap();
     assert_eq!(bytes, zip(&first).unwrap());
-    let archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut names: Vec<String> = archive.file_names().map(|name| name.unwrap().into_owned()).collect();
     names.sort();
     let mut expected: Vec<_> = first.iter().map(|output| output.name.clone()).collect();
     expected.sort();
     assert_eq!(names, expected);
+    for output in &first {
+        let mut entry = archive.by_name(&output.name).unwrap();
+        assert_eq!(entry.system(), zip::System::Unix, "{}", output.name);
+        assert_eq!(entry.unix_mode(), Some(0o100644), "{}", output.name);
+        assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", output.name);
+        let mut contents = String::new();
+        entry.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, output.contents, "{}", output.name);
+    }
 }
 
 /// The command edits nothing and returns every file through execute.
