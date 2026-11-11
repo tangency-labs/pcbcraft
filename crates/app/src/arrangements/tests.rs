@@ -597,8 +597,8 @@ fn arrangement_window_commands_follow_the_tabs() {
 #[test]
 fn saved_ribbon_tabs_keep_the_legacy_view_slot() {
     let mut h = harness();
-    for (name, slot) in [("View", 1), ("Analyze", 2), ("Libraries", 3), ("Manage", 4)] {
-        click(&mut h, name);
+    for (name, slot) in [("View", 1), ("Analyze", 2), ("Libraries", 3), ("Sheets", 4)] {
+        crate::tests::click_tab(&mut h, name);
         let saved = h.state().arrangement_snapshot().unwrap();
         assert_eq!(saved.hosts[0].panels.ribbon, slot);
         let decoded: Snapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
@@ -610,8 +610,37 @@ fn saved_ribbon_tabs_keep_the_legacy_view_slot() {
         assert_eq!(h.state().arrangement_snapshot().unwrap(), saved);
     }
     let mut invalid = h.state().arrangement_snapshot().unwrap();
-    invalid.hosts[0].panels.ribbon = 5;
+    invalid.hosts[0].panels.ribbon = 7;
     assert!(!invalid.valid());
+}
+
+/// The new PCB task slots survive serialization and arrangement restore; switching to
+/// schematic from a PCB-only tab falls back to Capture without changing the project.
+#[test]
+fn pcb_task_tabs_restore_and_fall_back_in_other_workspaces() {
+    let mut h = harness();
+    h.state_mut().start_new_project_in(Workspace::Board);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    for (name, slot) in [("Route", 5), ("Analyze", 2), ("Manufacture", 6), ("Libraries", 3), ("View", 1)] {
+        crate::tests::click_tab(&mut h, name);
+        let saved = h.state().arrangement_snapshot().unwrap();
+        assert_eq!(saved.hosts[0].panels.ribbon, slot);
+        let decoded: Snapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert!(decoded.valid());
+        click(&mut h, "Layout");
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().restore_arrangement(&decoded, &ctx));
+        h.run();
+        assert_eq!(h.state().ribbon_tab, slot);
+        assert_eq!(h.state().arrangement_snapshot().unwrap(), saved);
+    }
+    click(&mut h, "Route");
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Schematic");
+    assert_eq!(h.state().ribbon_tab, 0);
+    h.get_by_label("Clipboard menu");
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
 /// UI/live arrangement changes and already queued actions cannot erase independent definition panes.

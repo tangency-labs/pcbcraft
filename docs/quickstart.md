@@ -221,19 +221,19 @@ switching arrangements or moving views elsewhere. A single view has no lower tab
 strip; split panes each show one document header whose **×** closes the pane.
 The engine supports up to 64 sheets and zero or one physical board. Right-click
 **Sheets** in the Browser and choose **New Sheet…**, or use
-**Manage → Sheets → New sheet**; sheet rows also offer
+**Sheets → New sheet**; sheet rows also offer
 **Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.
 The breadcrumb uses the actual sheet name and its position in the sheet count.
 Deletion asks for confirmation and removes its symbols, wires and associated
 footprints together; Undo restores them. Other views of a deleted sheet become
 unavailable until it is restored or another document is opened.
 
-To add a subsheet, press **S** or choose **Capture → Sheets → Subsheet**, click its parent canvas and give the child a name,
+To add a subsheet, press **S** or choose **Sheets → Subsheet**, click its parent canvas and give the child a name,
 or choose an existing unparented sheet in **Child sheet**. Double-click inside
 the placed rectangle to enter it; **Alt+Backspace** returns to its parent.
 The name appears above the outline. Drag the body/name to move the sheet, or
 select it and drag a corner handle to resize; **Esc** cancels an active gesture.
-Place a hierarchical label with **H** or **Capture → Sheets → Hierarchical label**, enter its name and direction, then
+Place a hierarchical label with **H** or **Sheets → Hierarchical label**, enter its name and direction, then
 connect its pointed anchor with **W**. A matching sheet pin appears automatically
 on the parent symbol. Names and directions stay synchronized when you edit the
 label with **E** or its context menu. The Browser shows the same nesting in
@@ -300,7 +300,7 @@ explicitly opens another workspace. The workspace picker remains available.
 In the board workspace, Properties shows its stored reference, value, definition
 and unit-aware coordinate readouts.
 
-Use **Layout → Design → Setup**, or **Board setup…** in Layers, to edit the board.
+Use **Layout → Board → Board setup**, or **Board setup…** in Layers, to edit the board.
 Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
 **Board editor layers** edits names and unused optional layer membership.
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
@@ -341,7 +341,7 @@ The selected ribbon layer and its menu rows show matching color patches.
 without changing visibility. Plated lands take the active visible copper color, while front-only surface
 pads stay on front copper. Colors are shared local settings for this board,
 separate from its geometry, saved engineering files and document undo.
-**Fit** in the ribbon header fits the placements, and **Layout → Inspect menu → Reveal** brings the current
+**Fit** in the ribbon header fits the placements, and **Analyze → Cross-probe → Reveal schematic** brings the current
 counterpart highlight into view without changing zoom. Switching back restores
 the schematic camera. These actions do not modify project data or undo history.
 
@@ -403,7 +403,7 @@ To set a library default position, open the footprint in **Footprint Editor**,
 select **Definition**, and edit the reference offsets in Properties.
 
 To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
-layout use **Layout → Design → Sync**. **Create board** explicitly adds
+layout use **Layout → Board → Update PCB**. **Create board** explicitly adds
 the first PCB when needed. Existing footprints without recorded accepted state
 first require **Use current state**, which adopts today's schematic, packages and
 connections as the starting point rather than reconstructing earlier history.
@@ -606,7 +606,7 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board and a closed Board Outline, **Layout → Design → Outputs**
+With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
 saves a fabrication ZIP without editing the design. Output names remain unique
 when layer names collide after sanitization; the [editor guide](editor-guide.md)
 describes the generated files and desktop save behavior.

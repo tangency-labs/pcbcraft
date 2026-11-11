@@ -232,6 +232,23 @@ the shared menus and domain-specific preview lists.
 The status bar accommodates the shared controls' minimum height so its grid
 and unit targets stay below the canvas, including at larger interface scales.
 
+## Ribbon tasks
+
+PCB commands are split across Layout, Route, Analyze, Manufacture, Libraries
+and View. Layout retains placement, clipboard, outline and selection edits,
+with a separate Align group and explicit Board setup and Update PCB controls.
+Routing groups tracks, vias and their layer/dimension fields. Analysis groups
+DRC, measurement and cross-probing, fabrication outputs live in Manufacture,
+and Flip view lives beside Fit in View. Schematic Capture has a dedicated
+Clipboard group; Sheets brings independent sheet creation and hierarchy tools
+together. Annotation and reports remain under Analyze.
+
+Saved slots retain View=1, Analyze=2, Libraries=3 and Sheets=4 (formerly Manage).
+Route and Manufacture use new slots 5 and 6. Live commands accept `sheets`,
+`route` and `manufacture`, preserve `manage` as an alias for Sheets, and reject
+tabs unavailable in the target workspace. Compact headers wrap their tabs so
+all tasks remain reachable.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through
@@ -271,6 +288,16 @@ revisions. The retained licence texts are available in About; exact provenance
 and hashes are in [ATTRIBUTION.md](../ATTRIBUTION.md).
 
 ## Validation
+
+The task-oriented ribbon follow-up passed 1,291 workspace tests with eight
+ignored, formatting, Clippy with warnings denied, WebAssembly compilation,
+Trunk packaging and dependency license/source/ban checks. Tests exercise task
+ownership, wide/compact headers, existing editing commands, live tab selection
+and refusals, saved task restoration and workspace fallback. Desktop captures
+cover the PCB task tabs and compact headers; packaged-browser captures cover
+both workspaces in dark mode and compact Sheets in light mode. The browser
+also opened and cancelled the New sheet form, with no captured console errors
+or uncaught exceptions.
 
 The ribbon alignment and disclosure follow-up passed 1,289 workspace tests
 with eight ignored, formatting, Clippy with warnings denied, WebAssembly

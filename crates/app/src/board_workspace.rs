@@ -161,21 +161,21 @@ impl PcbApp {
         }
     }
 
-    /// The PCB Layout tab, grouped as in the layout design: Place, Outline, Route (with the active
-    /// layer and route sizes), Modify, Inspect and Design. Each tool runs the same handler as its
-    /// key or MCP command. Tools that are not built yet appear disabled in their group's menu and
-    /// say "planned", keeping the visible row short enough for ordinary window widths.
-    /// The active-layer field uses the Layers card's view-local handler, without editing the project.
-    /// Place › Footprint opens the package chooser for the selected footprint's component, or with
-    /// no component selected. Route › Track (X) arms copper routing on a visible active copper
-    /// layer; Track width, Via diameter and Via drill set the next route's sizes, in the display
-    /// units, for this view only. Modify's menu holds Delete, as in Capture; Inspect's holds Reveal.
-    pub(super) fn board_tab(&mut self, ui: &mut Ui) {
+    /// Draw PCB commands by task while preserving the focused board's command handlers.
+    /// Layout is the fallback for slots not handled by these PCB task groups.
+    pub(super) fn board_tab(&mut self, ui: &mut Ui, slot: usize) {
+        match slot {
+            crate::ribbon::ROUTE_TAB => self.board_route_tab(ui),
+            2 => self.board_analyze_tab(ui),
+            crate::ribbon::MANUFACTURE_TAB => self.board_manufacture_tab(ui),
+            _ => self.board_layout_tab(ui),
+        }
+    }
+
+    /// Placement, board drawings and selection edits, with board setup and synchronization.
+    fn board_layout_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
-        let planned =
-            |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, menu_check: None };
-
         let place = [RibbonTool {
             icon: ToolIcon::Footprint,
             label: "Footprint",
@@ -185,24 +185,7 @@ impl PcbApp {
             active: false,
             menu_check: None,
         }];
-        let via_shortcut = ui.ctx().format_shortcut(&crate::PLACE_VIA);
-        let place = [
-            place[0],
-            RibbonTool {
-                icon: ToolIcon::Via,
-                label: "Via",
-                description: "Place vias",
-                shortcut: &via_shortcut,
-                enabled: enabled && self.can_place_via() && !editing,
-                active: self.views.active.board.tracks.via_tool,
-                menu_check: None,
-            },
-        ];
-        let place_planned = [planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)")];
-        let picked = workspace::ribbon_group_with_menu(ui, "Place", &place, &place_planned);
-        if picked == Some(1) {
-            self.start_via();
-        }
+        let picked = workspace::ribbon_group(ui, "Place", &place);
         if picked == Some(0) {
             let component = self
                 .session
@@ -277,28 +260,6 @@ impl PcbApp {
         }
         workspace::ribbon_separator(ui);
 
-        let route = [RibbonTool {
-            icon: ToolIcon::Track,
-            label: "Track",
-            description: "Route tracks on the active copper layer",
-            shortcut: "X",
-            enabled: enabled && self.can_route() && !editing,
-            active: self.views.active.board.tracks.tool,
-            menu_check: None,
-        }];
-        let route_planned =
-            [planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"), planned(ToolIcon::Tune, "Tune", "Tune track length (planned)")];
-        if workspace::ribbon_group_with_menu(ui, "Route", &route, &route_planned) == Some(0) {
-            self.start_route();
-        }
-        self.active_layer_field(ui);
-        use pcbcraft_engine::board::track::{MAX_WIDTH_NM, MIN_WIDTH_NM};
-        let unit = self.preferences.units;
-        let tracks = &mut self.views.active.board.tracks;
-        length_field(ui, "Track width", &mut tracks.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, enabled);
-        via_field(ui, &mut tracks.via_diameter_nm, &mut tracks.via_drill_nm, unit, enabled);
-        workspace::ribbon_separator(ui);
-
         let selected = enabled && self.views.active.board.selection.len() == 1;
         let reference = enabled && self.views.active.board.reference.selected.is_some();
         // Move also starts a copper move when tracks or vias are selected and no footprint is.
@@ -341,12 +302,24 @@ impl PcbApp {
             active: false,
             menu_check: None,
         };
+        match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &[delete]) {
+            Some(0) => self.views.active.board.move_requested = true,
+            Some(1) => self.views.active.board.rotate_requested = 90,
+            Some(2) => self.views.active.board.flip_requested = true,
+            Some(3) => self.delete_board_items(),
+            _ => {}
+        }
+        workspace::ribbon_separator(ui);
         let count = self.views.active.board.selection.len();
         let aligns: Vec<RibbonTool> = ALIGNMENTS
             .iter()
             .map(|(label, mode)| RibbonTool {
                 icon: ToolIcon::Align,
-                label,
+                label: match *mode {
+                    AlignMode::Left => "Left",
+                    AlignMode::Right => "Right",
+                    _ => label,
+                },
                 description: label,
                 shortcut: "",
                 enabled: enabled && !editing && count >= mode.minimum(),
@@ -354,65 +327,14 @@ impl PcbApp {
                 menu_check: None,
             })
             .collect();
-        let mut menu = vec![delete];
-        menu.extend(aligns);
-        match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &menu) {
-            Some(0) => self.views.active.board.move_requested = true,
-            Some(1) => self.views.active.board.rotate_requested = 90,
-            Some(2) => self.views.active.board.flip_requested = true,
-            Some(3) => self.delete_board_items(),
-            Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
-            _ => {}
+        if let Some(index) = workspace::ribbon_group_with_menu(ui, "Align", &aligns[..2], &aligns[2..]) {
+            self.align_footprints(ALIGNMENTS[index].1);
         }
         workspace::ribbon_separator(ui);
-
-        let reveal = [RibbonTool {
-            icon: ToolIcon::Symbol,
-            label: "Reveal",
-            description: "Reveal highlighted counterpart",
-            shortcut: "",
-            enabled,
-            active: false,
-            menu_check: None,
-        }];
-        let inspect = [
-            RibbonTool {
-                icon: ToolIcon::Drc,
-                label: "DRC",
-                description: "Run design rules check",
-                shortcut: "",
-                enabled,
-                active: self.views.active.board.drc.open,
-                menu_check: None,
-            },
-            reveal[0],
-        ];
-        let inspect = [
-            inspect[0],
-            RibbonTool {
-                icon: ToolIcon::Measure,
-                label: "Measure",
-                description: "Measure distance",
-                shortcut: "Ctrl+Shift+M",
-                enabled,
-                active: self.views.active.board.measure.tool,
-                menu_check: None,
-            },
-            inspect[1],
-        ];
-        let inspect_planned = [planned(ToolIcon::Rules, "Rules", "Edit design rules (planned)")];
-        match workspace::ribbon_group_with_menu(ui, "Inspect", &inspect, &inspect_planned) {
-            Some(0) => self.run_drc(),
-            Some(1) => self.start_measure(),
-            Some(2) => self.views.reveal_highlight(self.views.active.id(), &self.session),
-            _ => {}
-        }
-        workspace::ribbon_separator(ui);
-
         let design = [
             RibbonTool {
                 icon: ToolIcon::Sync,
-                label: "Sync",
+                label: "Update PCB",
                 description: "Update PCB from schematic",
                 shortcut: "",
                 enabled: self.session.project().is_some() && self.views.active.input(&self.session).is_some(),
@@ -428,44 +350,137 @@ impl PcbApp {
                 active: false,
                 menu_check: None,
             },
-        ];
-        let design = [
-            design[0],
-            design[1],
             RibbonTool {
-                icon: ToolIcon::Outputs,
-                label: "Outputs",
-                description: "Generate fabrication outputs",
+                icon: ToolIcon::Settings,
+                label: "Board setup",
+                description: "Board setup",
                 shortcut: "",
-                enabled: enabled && !self.fabrication_exports.busy(),
-                active: self.fabrication_exports.busy(),
+                enabled,
+                active: false,
                 menu_check: None,
             },
         ];
-        let design = [
-            design[0],
-            design[1],
-            design[2],
-            RibbonTool {
-                icon: ToolIcon::FlipView,
-                label: "Flip view",
-                description: "View the board from below",
-                shortcut: "",
-                enabled,
-                active: self.views.active.camera.mirrored(),
-                menu_check: Some(CheckKind::Toggle),
-            },
-        ];
-        let design_planned = [planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)")];
-        match workspace::ribbon_group_with_menu(ui, "Design", &design, &design_planned) {
+        match workspace::ribbon_group(ui, "Board", &design) {
             Some(0) => self.message = self.begin_board_update(self.views.active.id()).err(),
             Some(1) => self.begin_board_setup(self.views.active.id()),
-            Some(2) => self.export_fabrication(ui.ctx()),
-            Some(3) => {
-                let camera = &mut self.views.active.camera;
-                camera.set_mirrored(!camera.mirrored());
-            }
             _ => {}
+        }
+    }
+
+    /// Tracks and vias share their layer and dimension controls; planned copper tools
+    /// stay in the Route menu and cannot submit commands.
+    fn board_route_tab(&mut self, ui: &mut Ui) {
+        let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
+        let editing = self.views.active.board.editing_footprint();
+        let planned = |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, toggle: false };
+        let route = [RibbonTool {
+            icon: ToolIcon::Track,
+            label: "Track",
+            description: "Route tracks on the active copper layer",
+            shortcut: "X",
+            enabled: enabled && self.can_route() && !editing,
+            active: self.views.active.board.tracks.tool,
+            menu_check: None,
+        }];
+        let via_shortcut = ui.ctx().format_shortcut(&crate::PLACE_VIA);
+        let tools = [
+            route[0],
+            RibbonTool {
+                icon: ToolIcon::Via,
+                label: "Via",
+                description: "Place vias",
+                shortcut: &via_shortcut,
+                enabled: enabled && self.can_place_via() && !editing,
+                active: self.views.active.board.tracks.via_tool,
+                menu_check: None,
+            },
+        ];
+        let planned = [
+            planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)"),
+            planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
+            planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
+            planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
+        ];
+        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
+            Some(0) => self.start_route(),
+            Some(1) => self.start_via(),
+            _ => {}
+        }
+        workspace::ribbon_separator(ui);
+        self.active_layer_field(ui);
+        use pcbcraft_engine::board::track::{MAX_WIDTH_NM, MIN_WIDTH_NM};
+        let unit = self.preferences.units;
+        let tracks = &mut self.views.active.board.tracks;
+        length_field(ui, "Track width", &mut tracks.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, enabled);
+        via_field(ui, &mut tracks.via_diameter_nm, &mut tracks.via_drill_nm, unit, enabled);
+    }
+
+    /// Analysis opens existing DRC, measurement and counterpart tools without editing the board.
+    fn board_analyze_tab(&mut self, ui: &mut Ui) {
+        let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
+        let checks = [RibbonTool {
+            icon: ToolIcon::Drc,
+            label: "DRC",
+            description: "Run design rules check",
+            shortcut: "",
+            enabled,
+            active: self.views.active.board.drc.open,
+            menu_check: None,
+        }];
+        let planned = [RibbonTool {
+            icon: ToolIcon::Rules,
+            label: "Rules",
+            description: "Edit design rules (planned)",
+            shortcut: "",
+            enabled: false,
+            active: false,
+            menu_check: None,
+        }];
+        if workspace::ribbon_group_with_menu(ui, "Checks", &checks, &planned) == Some(0) {
+            self.run_drc();
+        }
+        workspace::ribbon_separator(ui);
+        let measure = [RibbonTool {
+            icon: ToolIcon::Measure,
+            label: "Measure",
+            description: "Measure distance",
+            shortcut: "Ctrl+Shift+M",
+            enabled,
+            active: self.views.active.board.measure.tool,
+            menu_check: None,
+        }];
+        if workspace::ribbon_group(ui, "Measure", &measure).is_some() {
+            self.start_measure();
+        }
+        workspace::ribbon_separator(ui);
+        let reveal = [RibbonTool {
+            icon: ToolIcon::Symbol,
+            label: "Reveal schematic",
+            description: "Reveal highlighted counterpart",
+            shortcut: "",
+            enabled,
+            active: false,
+            menu_check: None,
+        }];
+        if workspace::ribbon_group(ui, "Cross-probe", &reveal).is_some() {
+            self.views.reveal_highlight(self.views.active.id(), &self.session);
+        }
+    }
+
+    /// Generate existing fabrication outputs from the focused physical board.
+    fn board_manufacture_tab(&mut self, ui: &mut Ui) {
+        let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
+        let outputs = [RibbonTool {
+            icon: ToolIcon::Outputs,
+            label: "Outputs",
+            description: "Generate fabrication outputs",
+            shortcut: "",
+            enabled: enabled && !self.fabrication_exports.busy(),
+            active: self.fabrication_exports.busy(),
+            menu_check: None,
+        }];
+        if workspace::ribbon_group(ui, "Fabrication", &outputs).is_some() {
+            self.export_fabrication(ui.ctx());
         }
     }
 

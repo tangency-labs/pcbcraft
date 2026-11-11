@@ -116,6 +116,12 @@ pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
     harness.run();
 }
 
+/// Select an actual ribbon tab when a Browser row has the same visible label.
+pub(super) fn click_tab(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    harness.get_by_role_and_label(egui::Role::Tab, label).click();
+    harness.run();
+}
+
 /// Whether the named control lies wholly inside the window and inside every enclosing container
 /// that clips its children. Scroll areas report their visible viewport through
 /// `pcbcraft_chrome::workspace::describe_scroll_viewport`; one that doesn't is judged by the
@@ -1946,8 +1952,8 @@ mod live_mcp {
         assert_eq!(document(&harness), untouched);
     }
 
-    /// Live clients can select every schematic tab; PCB-only hosts refuse schematic tabs
-    /// before changing any host state, and tab switches never edit project history.
+    /// Live clients address each task tab, retain the Manage alias, and reject tabs from
+    /// the other workspace before changing any host state or authored content.
     #[test]
     fn ported_ribbon_tabs_are_addressable_without_changing_the_project() {
         let mut h = harness();
@@ -1955,18 +1961,26 @@ mod live_mcp {
         let (port, token) = connect(&mut h);
         let connection = (port, token.as_str());
         let original = document(&h);
-        for tab in ["analyze", "libraries", "manage", "view", "capture"] {
+        for tab in ["analyze", "libraries", "sheets", "view", "capture", "manage"] {
+            let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
+            h.run();
+            assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "manage" { "sheets" } else { tab });
+        }
+        for tab in ["route", "manufacture"] {
+            let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+            let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
+            assert_eq!(error["isError"], true);
+            assert_eq!(payload(tool(&mut h, connection, "inspect_editor", json!({}))), before);
+        }
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        for tab in ["layout", "route", "analyze", "manufacture", "libraries", "view"] {
             let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
             h.run();
             assert_eq!(result["windows"][0]["ribbon_tab"], tab);
         }
-        click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
-        let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":"libraries"}));
-        h.run();
-        assert_eq!(result["windows"][0]["ribbon_tab"], "libraries");
-        let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
-        for tab in ["analyze", "manage"] {
+        for tab in ["sheets", "manage"] {
+            let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);
             assert!(error["content"][0]["text"].as_str().unwrap().contains("schematic workspace"));

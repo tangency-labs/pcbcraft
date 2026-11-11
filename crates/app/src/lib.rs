@@ -234,7 +234,7 @@ pub struct PcbApp {
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
     browser: project_browser::ProjectBrowser,
-    /// The ribbon tab shown, an index into [`RIBBON_TABS`].
+    /// The ribbon's stable saved slot, mapped to the active workspace's visual tab order.
     ribbon_tab: usize,
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
@@ -260,7 +260,8 @@ pub struct PcbApp {
 }
 
 /// The Schematic workspace's ribbon tabs, in order.
-const RIBBON_TABS: [&str; 5] = ["Capture", "Analyze", "Libraries", "Manage", "View"];
+const RIBBON_TABS: [&str; 5] = ["Capture", "Sheets", "Analyze", "Libraries", "View"];
+const BOARD_RIBBON_TABS: [&str; 6] = ["Layout", "Route", "Analyze", "Manufacture", "Libraries", "View"];
 const VIEW_TAB: usize = 1;
 
 /// Built-in workspace contributions. The picker handles presentation only; each document
@@ -272,7 +273,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             multiple_views: true,
             title: "Schematic",
             description: "Capture circuits, place symbols and connect pins",
-            tabs: Some("Capture · Analyze · Libraries · Manage · View"),
+            tabs: Some("Capture · Sheets · Analyze · Libraries · View"),
             icon: workspace::WorkspaceIcon::Schematic,
             current: true,
         },
@@ -281,7 +282,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             multiple_views: true,
             title: "PCB layout",
             description: "Inspect footprint placements and linked schematic components",
-            tabs: Some("Layout · Libraries · View"),
+            tabs: Some("Layout · Route · Analyze · Manufacture · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
             current: false,
         },
@@ -834,8 +835,8 @@ impl PcbApp {
         !self.home && self.assistant.shortcuts(ctx)
     }
 
-    /// Render the workspace toolbar using ported schematic groups and upstream PCB/View controls.
-    /// Saved tab slots stay stable while visual ordering follows Next; quick actions use the focused view.
+    /// Render task-oriented tabs for the focused workspace, preserving stable saved slots.
+    /// Unsupported slots fall back to its first tab; quick actions use the focused view.
     fn ribbon(&mut self, ui: &mut Ui) -> Option<workspace::RibbonBackground> {
         use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
@@ -843,7 +844,7 @@ impl PcbApp {
         let order: &[usize] = if board { &ribbon::BOARD_TAB_ORDER } else { &ribbon::TAB_ORDER };
         let mut tab = order.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0);
         let entries = self.workspace_entries();
-        let tabs: &[&str] = if board { &["Layout", "Libraries", "View"] } else { &RIBBON_TABS };
+        let tabs: &[&str] = if board { &BOARD_RIBBON_TABS } else { &RIBBON_TABS };
         let has_project = self.session.project().is_some();
         let mut quick = Vec::new();
         if self.ribbon_tab != VIEW_TAB {
@@ -873,8 +874,8 @@ impl PcbApp {
                 let slot = order[shown];
                 if slot == VIEW_TAB {
                     self.view_tab(ui);
-                } else if board && slot == 0 {
-                    self.board_tab(ui);
+                } else if board && slot != 3 {
+                    self.board_tab(ui, slot);
                 } else {
                     self.ported_ribbon_tab(ui, slot);
                 }
@@ -986,8 +987,25 @@ impl PcbApp {
             active: false,
             menu_check: None,
         }];
-        if workspace::ribbon_group(ui, "Navigate", &navigate).is_some() {
-            self.fit_view(self.views.active.id());
+        let mut navigate = navigate.to_vec();
+        if !schematic {
+            navigate.push(RibbonTool {
+                icon: ToolIcon::FlipView,
+                label: "Flip view",
+                description: "View the board from below",
+                shortcut: "",
+                enabled: self.session.project().and_then(|project| project.board_target()).is_some(),
+                active: self.views.active.camera.mirrored(),
+                toggle: true,
+            });
+        }
+        match workspace::ribbon_group(ui, "Navigate", &navigate) {
+            Some(0) => self.fit_view(self.views.active.id()),
+            Some(1) => {
+                let camera = &mut self.views.active.camera;
+                camera.set_mirrored(!camera.mirrored());
+            }
+            _ => {}
         }
         workspace::ribbon_separator(ui);
         let mut editors = vec![

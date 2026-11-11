@@ -23,7 +23,12 @@ fn view_ribbon_buttons_have_consistent_sizes() {
             h.run();
             let button = h.get_by_label(fit).rect();
             assert_eq!(button.size(), expected);
-            assert!((button.center().x - h.get_by_label("Navigate menu").rect().center().x).abs() <= 1.0);
+            let center = if workspace == Workspace::Board {
+                (button.center().x + h.get_by_label("View the board from below").rect().center().x) / 2.0
+            } else {
+                button.center().x
+            };
+            assert!((center - h.get_by_label("Navigate menu").rect().center().x).abs() <= 1.0);
         }
     }
 }
@@ -83,8 +88,8 @@ fn ribbon_reaches_sheet_and_hierarchical_label_workflows_at_both_widths() {
         new_project(&mut h);
         let original = h.state().session.inspect();
         let revision = h.state().session.revision();
-        for (tab, slot) in [("Analyze", 2), ("Libraries", 3), ("Manage", 4), ("View", 1), ("Capture", 0)] {
-            click(&mut h, tab);
+        for (tab, slot) in [("Analyze", 2), ("Libraries", 3), ("Sheets", 4), ("View", 1), ("Capture", 0)] {
+            click_tab(&mut h, tab);
             assert_eq!(h.state().ribbon_tab, slot);
         }
         if width < 1000. {
@@ -95,6 +100,7 @@ fn ribbon_reaches_sheet_and_hierarchical_label_workflows_at_both_widths() {
         } else {
             assert!(!h.get_by_label("Place ground").accesskit_node().is_disabled());
         }
+        click_tab(&mut h, "Sheets");
         // The scrolled button and its caption-menu entry must target the same view.
         h.get_by_label("Place hierarchical sheet (S)").scroll_to_me();
         h.run();
@@ -114,7 +120,7 @@ fn ribbon_reaches_sheet_and_hierarchical_label_workflows_at_both_widths() {
         assert_eq!(h.state().session.inspect(), original);
         assert_eq!(h.state().session.revision(), revision);
 
-        click(&mut h, "Manage");
+        click_tab(&mut h, "Sheets");
         click(&mut h, "Sheets menu");
         click(&mut h, "New sheet");
         assert!(matches!(h.state().dialog, Dialog::Sheet(_)));
@@ -137,10 +143,10 @@ fn all_five_tabs_fit_the_compact_header() {
     for width in [320., 400., 520., 700.] {
         h.set_size(egui::vec2(width, 800.));
         h.run();
-        for tab in ["Capture", "Analyze", "Libraries", "Manage", "View"] {
-            let rect = h.get_by_label(tab).rect();
+        for tab in ["Capture", "Analyze", "Libraries", "Sheets", "View"] {
+            let rect = h.get_by_role_and_label(egui::Role::Tab, tab).rect();
             assert!(rect.left() >= 0. && rect.right() <= width, "{width}: {tab} {rect:?}");
-            click(&mut h, tab);
+            click_tab(&mut h, tab);
         }
         click(&mut h, "Capture");
     }
@@ -190,33 +196,72 @@ fn clicks_reach_a_tool_scrolled_under_the_ribbon_edge() {
     assert_eq!(h.state().views.active.board.drawing.tool, Some(crate::board_drawing::Tool::Rectangle));
 }
 
-/// The PCB Layout tab follows the layout design's groups. Working tools are enabled buttons;
-/// tools that are not built yet are listed, disabled, in their group's menu. Setup and Sync reach
-/// the same forms as before, and nothing here edits the project.
+/// PCB tasks have distinct tabs; planned tools remain disabled and setup opens the
+/// existing board form. Tab switches and menu inspection never edit project history.
 #[test]
-fn pcb_layout_tab_groups_working_and_planned_tools() {
+fn pcb_tasks_are_grouped_on_separate_tabs() {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
     resistor_with_board_at_origin(&mut h);
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
     let before = h.state().session.inspect();
-    for group in ["Place", "Outline", "Route", "Modify", "Inspect", "Design"] {
-        assert!(h.query_by_label(&format!("{group} menu")).is_some(), "{group} group");
+    for group in ["Place", "Clipboard", "Outline", "Modify", "Align", "Board"] {
+        h.get_by_label(&format!("{group} menu"));
     }
-    for tool in ["Assign and place component footprints", "Update PCB from schematic", "Board setup", "Reveal highlighted counterpart"] {
-        assert!(!h.get_by_label(tool).accesskit_node().is_disabled(), "{tool} is enabled");
+    for tool in ["Assign and place component footprints", "Update PCB from schematic", "Board setup"] {
+        assert!(!h.get_by_label(tool).accesskit_node().is_disabled());
     }
-    for (group, planned) in [("Place", &["Zone"][..]), ("Route", &["Pair", "Tune"]), ("Inspect", &["Rules"]), ("Design", &["Refill zones"])] {
-        click(&mut h, &format!("{group} menu"));
-        for tool in planned {
-            assert!(h.get_by_label(tool).accesskit_node().is_disabled(), "{group} › {tool} is planned");
-        }
-        h.key_press(Key::Escape);
-        h.run();
+    for tool in ["Place vias", "Run design rules check", "Measure distance", "Generate fabrication outputs", "View the board from below"] {
+        assert!(h.query_by_label(tool).is_none(), "{tool} should have its own task tab");
     }
     click(&mut h, "Board setup");
-    assert!(!matches!(h.state().dialog, Dialog::None), "Design › Setup opens the board setup form");
+    assert!(!matches!(h.state().dialog, Dialog::None));
     click(&mut h, "Cancel");
+    click(&mut h, "Route");
+    h.get_by_label("Place vias");
+    h.get_by_label("Route tracks on the active copper layer");
+    h.get_by_label("Active layer");
+    click(&mut h, "Route menu");
+    for tool in ["Zone", "Pair", "Tune", "Refill zones"] {
+        assert!(h.get_by_label(tool).accesskit_node().is_disabled());
+    }
+    h.key_press(Key::Escape);
+    h.run();
+    click(&mut h, "Analyze");
+    h.get_by_label("Run design rules check");
+    h.get_by_label("Measure distance");
+    h.get_by_label("Reveal highlighted counterpart");
+    click(&mut h, "Checks menu");
+    assert!(h.get_by_label("Rules").accesskit_node().is_disabled());
+    h.key_press(Key::Escape);
+    h.run();
+    click(&mut h, "Manufacture");
+    h.get_by_label("Generate fabrication outputs");
+    click(&mut h, "View");
+    h.get_by_label("View the board from below");
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Six PCB tabs remain reachable at compact widths; switching tasks keeps the authored
+/// board untouched and selecting a task restores its actual control surface.
+#[test]
+fn all_pcb_tabs_fit_compact_headers() {
+    let mut app = PcbApp::default();
+    app.start_new_project_in(Workspace::Board);
+    let mut h = Harness::builder().with_size(egui::vec2(1400., 850.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    for width in [320., 400., 520., 700., 1400.] {
+        h.set_size(egui::vec2(width, 850.));
+        h.run();
+        for tab in ["Layout", "Route", "Analyze", "Manufacture", "Libraries", "View"] {
+            let rect = h.get_by_role_and_label(egui::Role::Tab, tab).rect();
+            assert!(rect.left() >= 0. && rect.right() <= width, "{width}: {tab} {rect:?}");
+            click_tab(&mut h, tab);
+        }
+        click(&mut h, "Route");
+        h.get_by_label("Place vias");
+    }
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

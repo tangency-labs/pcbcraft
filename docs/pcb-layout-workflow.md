@@ -17,22 +17,24 @@ implementation source or other GPL EDA source is an input.
 
 ## The workflow today
 
-The Layout ribbon groups the steps in order: **Place**, **Outline**, **Route**,
-**Modify**, **Inspect** and **Design**. Each group puts tools that are not built
-yet in its menu, marked "planned". Every edit below goes through a
+The PCB ribbon separates Layout, Route, Analyze, Manufacture, Libraries and
+View. Layout groups placement, clipboard, outline and selection edits, alignment
+and board setup/synchronization. Route keeps copper tools and their settings
+together; Analyze holds checks and inspection; Manufacture holds outputs.
+Planned tools remain disabled in their task's menu. Every edit below uses a
 revision-checked engine command that the GUI, live MCP and headless MCP share.
 Each edit is one undo step.
 
 | Step | What works | Where |
 | --- | --- | --- |
-| Set up | Copper count, stackup and materials, silkscreen settings | Design › Setup |
-| Place | Assign packages, place, move (M or drag), rotate (R), flip to the bottom side (F), exact X/Y/rotation/side in Properties, align and distribute | Place, Modify, Properties |
-| Outline | Board Outline lines and rectangles; vertex, segment and whole-shape edits | Outline |
-| Route | Tracks with an explicit width and 45° posture. Snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Route, Place › Via |
-| Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, Delete | Modify, Properties |
-| Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Inspect, Properties |
-| Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Design › Outputs |
-| View | Mirrored bottom view, layer visibility and colors | Design › Flip view, Layers |
+| Set up | Copper count, stackup and materials, silkscreen settings | Layout › Board › Board setup |
+| Place | Assign packages, place, move (M or drag), rotate (R), flip to the bottom side (F), exact X/Y/rotation/side in Properties, align and distribute | Layout › Place / Modify / Align, Properties |
+| Outline | Board Outline lines and rectangles; vertex, segment and whole-shape edits | Layout › Outline |
+| Route | Tracks with an explicit width and 45° posture. Snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Route |
+| Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, Delete | Layout › Modify, Properties |
+| Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
+| Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
+| View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
 Copper connectivity is derived from overlap on shared layers. Track edits refuse
 new shorts in the copper they touch. Footprint transforms can still create a
@@ -231,7 +233,7 @@ ribbon's planned entries and the editor guide have a stated destination.
   moves until the object is unlocked, and selection filters can exclude locked
   objects.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
-  added as more files in **Design › Outputs** from the board's footprints and
+  added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
 - **Pad-level selection:** selecting and cross-probing one pad and its net
   between the schematic and the board.

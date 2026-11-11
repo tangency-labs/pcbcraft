@@ -333,7 +333,7 @@ mod live {
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
     const PANELS: &[&str] = &["browser", "parts", "nets", "properties", "selection_filters"];
     const CATALOG_MODES: &[&str] = &["expanded", "compact"];
-    const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
+    const TABS: &[&str] = &["capture", "layout", "sheets", "analyze", "libraries", "manage", "route", "manufacture", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
     const PLACEMENTS: &[&str] = &["here", "beside", "window"];
     const BOARD_GRIDS: &[&str] = &["off", "dots", "lines"];
@@ -706,7 +706,7 @@ mod live {
         WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
-            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, Libraries, View).",
+            summary: "Show a schematic tab (Capture, Sheets, Analyze, Libraries, View) or PCB tab (Layout, Route, Analyze, Manufacture, Libraries, View). Manage remains an alias for Sheets.",
             params: &[WINDOW, Param { name: "tab", summary: "Which tab", required: true, kind: Kind::Choice(TABS) }],
         },
         WindowCommand {
@@ -1387,15 +1387,15 @@ mod live {
                         return Err("Use app.library_view to select the authoring ribbon tab.".into());
                     }
                     let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
-                    if !crate::ribbon::BOARD_TAB_ORDER.contains(&tab)
-                        && self
-                            .views
-                            .hosts
-                            .get(&host)
-                            .and_then(|host| self.views.view(host.focused))
-                            .is_some_and(|view| view.workspace == Workspace::Board)
-                    {
-                        return Err("This ribbon tab is available in the schematic workspace.".into());
+                    let board = self
+                        .views
+                        .hosts
+                        .get(&host)
+                        .and_then(|host| self.views.view(host.focused))
+                        .is_some_and(|view| view.workspace == Workspace::Board);
+                    let allowed: &[usize] = if board { &crate::ribbon::BOARD_TAB_ORDER } else { &crate::ribbon::TAB_ORDER };
+                    if !allowed.contains(&tab) {
+                        return Err(format!("This ribbon tab is available in the {} workspace.", if board { "schematic" } else { "PCB" }));
                     }
                     self.in_window(host, |app| app.ribbon_tab = tab);
                 }

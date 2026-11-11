@@ -78,6 +78,7 @@ fn legacy_outline_names_preserve_saved_geometry_and_custom_names() {
         let before = h.state().session.inspect();
         h.run();
         click(&mut h, &format!("Activate layer {displayed_name}"));
+        click(&mut h, "Layout");
         click(&mut h, "Draw lines on Board Outline");
         h.get_by_label(&format!("Line · {displayed_name}"));
         assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(outline.as_str()));
@@ -111,12 +112,14 @@ fn colliding_outline_defaults_remain_distinct_in_all_layer_controls() {
             h.get_by_label(&format!("Activate layer {name}"));
             click(&mut h, &format!("Activate layer {name}"));
             assert_eq!(h.state().views.active.board.active_layer.as_ref(), Some(id));
+            click(&mut h, "Layout");
             click(&mut h, "Draw lines on Board Outline");
             h.get_by_label(&format!("Line · {name}"));
             h.key_press(Key::Escape);
             h.run();
         }
         for (name, id) in [("Board Edge", &legacy), (other_name, &other)] {
+            click(&mut h, "Route");
             click(&mut h, "Active layer");
             click(&mut h, name);
             assert_eq!(h.state().views.active.board.active_layer.as_ref(), Some(id));
@@ -136,16 +139,20 @@ fn active_layer_picker_and_rows_share_state_without_document_edits() {
     let top = layer(&h, "Top");
     let edge = layer(&h, "Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
+    click(&mut h, "Route");
     click(&mut h, "Active layer");
     click(&mut h, "Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge.clone()));
     assert_eq!(h.get_by_label("Activate layer Board Outline").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    click(&mut h, "Layout");
     click(&mut h, "Draw lines on Board Outline");
     h.get_by_label("Line · Board Outline");
     click(&mut h, "Show layer Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge.clone()));
     assert!(h.state().views.active.board.hidden_layers.contains(&edge));
+    click(&mut h, "Route");
     h.get_by_label("Board Outline (hidden)");
+    click(&mut h, "Layout");
     assert!(h.get_by_label("Draw lines on Board Outline").accesskit_node().is_disabled());
     click(&mut h, "Activate layer Top");
     assert_eq!(h.state().views.active.board.active_layer, Some(top));
@@ -185,6 +192,7 @@ fn isolate_and_show_all_remain_view_local_and_reject_invalid_targets() {
 #[test]
 fn compact_layers_reveal_the_active_row_after_resize() {
     let mut h = board();
+    click(&mut h, "Route");
     click(&mut h, "Active layer");
     click(&mut h, "Board Outline");
     h.set_size(egui::vec2(760., 560.));
@@ -277,12 +285,14 @@ fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     let mut h = board();
     let top = layer(&h, "Top");
     let edge = layer(&h, "Board Outline");
+    click(&mut h, "Route");
     click(&mut h, "Active layer");
     h.key_press(Key::Plus);
     h.run();
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
     h.key_press(Key::Escape);
     h.run();
+    click(&mut h, "Layout");
     super::board_views::open_silkscreen(&mut h);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Text height").click();
     h.run();

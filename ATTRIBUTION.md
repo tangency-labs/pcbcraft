@@ -961,3 +961,8 @@ documents the rendering, surface lifecycle and Wayland gesture changes. The
 shared renderer and SolidCore library dependency closure is recorded in
 [the migration notes](docs/shared-ui-migration.md); PCBcraft does not depend on
 SolidCraft's executable or mechanical application orchestration.
+
+The task-oriented ribbon regrouping, tab compatibility aliases and compact
+header wrapping are original PCBcraft changes using these existing shared
+components and qualified glyphs. No external implementation or artwork was
+introduced.

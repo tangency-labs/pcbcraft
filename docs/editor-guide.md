@@ -80,13 +80,14 @@ project's direction.
 
 ## Tools and parts
 
-The schematic ribbon follows PCBcraft Next: **Capture**, **Analyze**, **Libraries**,
-**Manage** and **View**. Capture holds drawing and editing tools, including subsheets and hierarchical
-labels. Analyze holds checks and reports, Libraries holds source management,
-Manage holds independent sheet creation and project operations, and View holds
-panels and editor layout. Unavailable tools are disabled;
-compact windows keep them in the group caption menus. **Fit** and **Net Inspector**
-are also available beside the tabs; View contains their full controls.
+The schematic ribbon has **Capture**, **Sheets**, **Analyze**, **Libraries** and
+**View** tabs. Capture groups placement, connections, clipboard, selection edits
+and PCB synchronization. Sheets keeps independent sheet creation, subsheet
+placement and hierarchical labels together. Analyze contains checks, annotation
+and reports; Libraries contains editors and source management; View contains
+panels, navigation and editor layout. Unavailable tools are disabled and appear
+in caption menus on compact windows. **Fit** and **Net Inspector** also have
+quick actions beside the tabs.
 
 Choose **Capture → Symbol** or press **A** to open the **Parts Catalog** and
 focus search. The large form has library navigation, searchable results and a
@@ -393,17 +394,17 @@ pins; inspecting them does not change the project. Each ribbon group's caption, 
 **Place ⌄**, opens a menu of the same actions.
 
 A project supports up to 64 sheets, either at the project root or nested under a parent. Right-click **Sheets** or a sheet row
-to create a sheet, or use **Manage → Sheets → New sheet**; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
+to create a sheet, or use **Sheets → New sheet**; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
 Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
 
-Use **S** or **Capture → Sheets → Subsheet** to place a hierarchical sheet symbol,
+Use **S** or **Sheets → Subsheet** to place a hierarchical sheet symbol,
 then choose a new child or an existing unparented sheet. Double-click inside the
 symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
 sits above the outline; drag either to move it, or select it and drag a corner
 handle to resize. Attached wires follow, and each gesture is one undo step. **H** or
-**Capture → Sheets → Hierarchical label** places a hierarchical label inside a child. Its matching pin
+**Sheets → Hierarchical label** places a hierarchical label inside a child. Its matching pin
 appears on the parent symbol automatically, with the same name and direction;
 **W** connects wires to either end. The Browser nests child sheets beneath their
 parent. Each child has one parent, and repeated names on different sheets do not
@@ -485,15 +486,17 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
-The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline**
-(Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
-pad / drill fields), **Modify** (Move, Rotate, Flip; Delete and the align and
-distribute actions in its menu), **Inspect** (DRC, Measure, Reveal) and **Design**
-(Sync updates the PCB from the schematic; Setup opens Board setup; Outputs saves
-fabrication files; Flip view shows the board from below). Tools that are not built
-yet, such as Zone, Pair, Tune, Rules and Refill zones, appear disabled in their
-group's menu and say "planned". The ribbon scrolls sideways when the window is too
-narrow for every group.
+The PCB ribbon separates **Layout**, **Route**, **Analyze**, **Manufacture**,
+**Libraries** and **View**. Layout groups footprint placement, clipboard, outline
+drawing, selection edits and alignment, followed by explicit **Update PCB** and
+**Board setup** actions in **Board**. Route keeps tracks and vias beside their
+active layer, track width and via pad/drill settings. Analyze contains DRC,
+measurement and cross-probing;
+Manufacture contains fabrication outputs. Libraries provides library editing
+and sources, while View contains grid, panels, navigation, **Flip view** and
+window layout. Planned copper tools remain disabled in the Route menu; planned
+rule editing is in Analyze's Checks menu. Tabs wrap on narrow windows, and the
+commands within a tab scroll sideways when needed.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
@@ -503,7 +506,7 @@ placement at a time. With nothing selected, Properties summarizes the board: the
 **Size** in the display units (or **No outline**), copper layers, footprints, tracks, vias
 and, once connections are accepted, the number still **Unrouted**.
 
-With two or more footprints selected, the **Modify** menu aligns them by their physical
+With two or more footprints selected, the **Align** group aligns them by their physical
 bounds (pads, courtyard and fabrication outlines, not silkscreen): **Align to Left**,
 **Right**, **Top** or **Bottom**, or **Align to Vertical Center** and **Horizontal Center**
 (the middle of the selection). With three or more, **Distribute Horizontally** or
@@ -569,7 +572,7 @@ silkscreen text** button opens these controls even when its text is hidden.
 To author the default for future placements, edit the definition's reference
 offset in the Footprint Editor.
 
-**Layout → Design → Setup** and **Layers → Board setup…** share a revision-bound
+**Layout → Board → Board setup** and **Layers → Board setup…** share a revision-bound
 Craft settings form, including on a board with no saved stackup. The first opening
 shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.
 Existing setups retain their own dimensions and materials. Board editor layers provides names and optional membership;
@@ -620,11 +623,11 @@ exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
 or press M to move the drawing, and Delete to remove it. These edits share project
 Undo; Fit and layer visibility include the edge geometry. A Board Outline layer is
 available independently of copper setup, including on older populated boards.
-Open paths remain valid editing state while you draw; **Layout → Inspect → DRC**
+Open paths remain valid editing state while you draw; **Analyze → Checks → DRC**
 reports a missing closed outline and copper outside it or too close to its edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
-**Layout → Route → Track**. Set **Track width** beside it in the display units
+**Route → Track**. Set **Track width** beside it in the display units
 (0.25 mm by default). The crosshair follows the pointer, while a dot marks where a
 click will land in free space or a ring marks a nearby copper connection. Free
 points snap when the grid point is close to the cursor. Hold **Ctrl** to bypass
@@ -648,7 +651,7 @@ drops the unfinished route, and a second **Esc** exits the tool. The whole route
 is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
-**Layout → Inspect → DRC** checks the board without editing it and opens a DRC card
+**Analyze → Checks → DRC** checks the board without editing it and opens a DRC card
 listing each finding. It reports copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
 connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
@@ -659,7 +662,7 @@ These rule values are fixed defaults until net classes and board rules arrive (#
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
 not a manufacturing sign-off.
 
-**Layout → Design → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
+**Manufacture → Fabrication → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
 files for each copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Coordinates are in millimeters with Y up, as seen from the top. Mask
@@ -684,14 +687,14 @@ over empty space to clear the highlight. Starting a route on existing copper
 temporarily emphasizes its net or, for an unassigned trace or via, the connected
 copper. The previous view returns when the draft ends.
 
-**Layout → Inspect → Measure** (**Ctrl+Shift+M**) is a ruler that never edits the board.
+**Analyze → Measure** (**Ctrl+Shift+M**) is a ruler that never edits the board.
 Click a start point, then an end point; both snap to a nearby pad center, track end or
 via, otherwise to the grid. The ruler shows the length and its horizontal and vertical
 parts (Y up) in the display units, follows the pointer until the second click, and a
 third click starts again. Esc clears the ruler, a second Esc or right-click leaves the
 tool. Measurements are not saved.
 
-**Layout → Design → Flip view** shows the board from below in this view: model X runs
+**View → Navigate → Flip view** shows the board from below in this view: model X runs
 right to left around the centered point, at the same zoom, and the status bar says
 **Bottom view**. Selection, routing and moves work as usual, mapped through the mirror;
 the board, its layers and its files are unchanged, and the button toggles back. Fit
@@ -725,7 +728,7 @@ pointer while segments touching it on the same layer stretch to stay attached. A
 that meets the middle of another track holds there, so the segment pivots on that
 junction. A click commits them all as one undo step, and Esc or right-click cancels. Vias
 at its ends stay put. Blind or buried vias are not implemented yet. Routing does not check
-clearance; run **Inspect → DRC** for that.
+clearance; run **Analyze → Checks → DRC** for that.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

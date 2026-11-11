@@ -224,7 +224,8 @@ impl RibbonBackground {
 /// index of the one shown; clicking another tab selects it. `add` draws the actions of the tab
 /// shown, whose index it receives, including a tab clicked this frame. The workspace tile yields
 /// space to longer tab lists at narrow widths; actions scroll with a gutter below the captions.
-/// Narrow headers use tighter tabs; quick controls yield when space runs out and on View, which holds their full controls.
+/// Narrow headers tighten and wrap tabs; quick controls yield when space runs out and on View,
+/// which holds their full controls. Extra header rows reserve space above the action strip.
 ///
 /// The workspace tile returns a workspace/placement request. Picking the current row closes
 /// the picker; the split and window icons within its card create another view.
@@ -239,7 +240,17 @@ pub fn ribbon(
 ) -> RibbonResponse {
     let t = Tokens::get();
     let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
-    let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 };
+    let tab_gap = if wide { t.space_6 } else { t.space_2 };
+    let tab_padding = if wide { t.space_8 } else { t.space_4 };
+    let tab_width = tabs
+        .iter()
+        .map(|title| {
+            ui.painter().layout_no_wrap((*title).to_owned(), FontId::proportional(t.font_body), t.text).size().x + 2.0 * tab_padding + tab_gap
+        })
+        .sum::<f32>();
+    let tab_room = (ui.available_width() - if wide { WORKSPACE_WIDTH + t.space_8 * 5.0 } else { t.space_8 * 4.0 }).max(1.0);
+    let extra_tab_rows = (tab_width / tab_room).ceil().max(1.0) - 1.0;
+    let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 } + extra_tab_rows * t.control_height;
     let painter = ui.painter().clone();
     let background = painter.add(Shape::Noop);
     let panel = Panel::top("workspace_ribbon")
@@ -281,8 +292,8 @@ pub fn ribbon(
                             picked = picker(ui, &tile, workspaces, !was_open);
                         }
                         ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = if wide { t.space_6 } else { t.space_2 };
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = tab_gap;
                             for (index, title) in tabs.iter().enumerate() {
                                 if ribbon_tab(ui, title, index == *tab, wide).clicked() {
                                     *tab = index;
@@ -568,7 +579,7 @@ fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response 
     let galley = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_body), t.text);
     let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.control_height - t.space_6);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, title));
+    response.widget_info(|| WidgetInfo::selected(Role::Tab, true, selected, title));
     if ui.is_rect_visible(rect) {
         let shared = solidcraft_theme::Tokens::get();
         let style = solidcraft_ui_kit::ribbon::tab_style(
