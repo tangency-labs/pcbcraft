@@ -123,6 +123,15 @@ pub fn separator(ui: &mut Ui) {
     ui.painter().hline(r.x_range(), r.center().y, egui::Stroke::new(1.0, t.border));
 }
 
+/// Activation semantics for a menu row with a check mark.
+#[derive(Clone, Copy, Debug)]
+pub enum CheckKind {
+    /// Select a value without clearing it when it is already selected.
+    Choice,
+    /// Flip an independent Boolean value on each activation.
+    Toggle,
+}
+
 /// One row with a label and optional icon and shortcut.
 #[derive(Clone, Copy, Debug)]
 pub struct MenuItem<'a> {
@@ -133,8 +142,7 @@ pub struct MenuItem<'a> {
     /// A ribbon glyph in the leading column, for rows that repeat a ribbon action.
     tool: Option<crate::workspace::ToolIcon>,
     /// `Some` for a row that displays a check mark when checked.
-    checked: Option<bool>,
-    toggle_on_click: bool,
+    checked: Option<(CheckKind, bool)>,
 }
 
 impl<'a> MenuItem<'a> {
@@ -160,7 +168,7 @@ impl<'a> MenuItem<'a> {
 
     /// Start with an enabled text row. Use the builders to add a glyph or shortcut.
     pub fn new(label: &'a str) -> Self {
-        Self { label, shortcut: "", enabled: true, icon: None, tool: None, checked: None, toggle_on_click: false }
+        Self { label, shortcut: "", enabled: true, icon: None, tool: None, checked: None }
     }
 
     /// Add a theme-aware glyph in the row's leading column.
@@ -175,15 +183,21 @@ impl<'a> MenuItem<'a> {
         self
     }
 
-    /// Show a check mark in place of the glyph for a selected choice and expose its state to assistive technology.
-    pub fn checked(self, checked: bool) -> Self {
-        Self { checked: Some(checked), toggle_on_click: false, ..self }
+    /// Expose a mutually exclusive choice as a radio button; activation always selects it.
+    /// The caller must apply that selection when this row is activated.
+    pub fn choice(self, selected: bool) -> Self {
+        self.with_check(CheckKind::Choice, selected)
     }
 
-    /// Show a toggle whose accessibility click event reports the new checked state.
-    /// The caller must flip its value when the row is clicked.
+    /// Expose an independent checkbox toggle and report its new state on activation.
+    /// The caller must flip the value when this row is activated.
     pub fn toggle(self, checked: bool) -> Self {
-        Self { checked: Some(checked), toggle_on_click: true, ..self }
+        self.with_check(CheckKind::Toggle, checked)
+    }
+
+    /// Apply explicit choice or toggle semantics supplied by a ribbon action.
+    pub(crate) fn with_check(self, kind: CheckKind, checked: bool) -> Self {
+        Self { checked: Some((kind, checked)), ..self }
     }
 
     /// Display a shortcut in its own column. The caller handles keyboard input.
@@ -215,7 +229,7 @@ impl<'a> MenuItem<'a> {
 
     /// Measure to content on the popup's sizing pass and fill the row on subsequent passes.
     /// Truncate long labels before the shortcut and expose the full label and any checked state.
-    /// On activation, report the state the caller will apply to a toggle.
+    /// On activation, report the state the caller will apply to a choice or toggle.
     fn row(&self, ui: &mut Ui) -> Response {
         let t = Tokens::get();
         let leading = self.icon.is_some() || self.tool.is_some() || self.checked.is_some();
@@ -234,10 +248,8 @@ impl<'a> MenuItem<'a> {
         let sense = if enabled { Sense::click() } else { Sense::hover() };
         let (r, response) = ui.allocate_exact_size(vec2(width, height), sense);
         response.widget_info(|| match self.checked {
-            Some(checked) => {
-                let checked = if self.toggle_on_click && response.clicked() { !checked } else { checked };
-                WidgetInfo::selected(WidgetType::Checkbox, enabled, checked, self.label)
-            }
+            Some((CheckKind::Choice, selected)) => WidgetInfo::selected(WidgetType::RadioButton, enabled, selected || response.clicked(), self.label),
+            Some((CheckKind::Toggle, checked)) => WidgetInfo::selected(WidgetType::Checkbox, enabled, checked ^ response.clicked(), self.label),
             None => WidgetInfo::labeled(WidgetType::Button, enabled, self.label),
         });
         let hot = enabled && (response.hovered() || response.has_focus());
@@ -250,11 +262,11 @@ impl<'a> MenuItem<'a> {
         }
         let lead = pos2(r.left() + t.space_16, r.center().y);
         match (self.checked, self.tool, self.icon) {
-            (Some(true), ..) => {
+            (Some((_, true)), ..) => {
                 let ink = egui::Stroke::new(1.5, t.accent);
                 painter.add(egui::Shape::line(vec![lead + vec2(-5.0, 0.0), lead + vec2(-1.0, 4.0), lead + vec2(6.0, -4.0)], ink));
             }
-            (Some(false), ..) => {}
+            (Some((_, false)), ..) => {}
             (None, Some(tool), _) => crate::workspace::paint_menu_glyph(&painter, tool, lead, t.space_16),
             (None, None, Some(icon)) => icon.paint(&painter, lead, t, hot),
             (None, None, None) => {}

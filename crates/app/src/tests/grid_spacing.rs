@@ -72,6 +72,30 @@ fn grid_menu_changes_snapping_without_touching_the_project() {
     assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
 }
 
+/// Grid rows are exclusive radio choices; activating an already selected row keeps it selected.
+#[test]
+fn grid_presets_announce_selected_radio_choices_without_document_edits() {
+    use egui::accesskit::Toggled;
+    let mut h = harness();
+    new_project(&mut h);
+    let before = project_state(&h);
+    for already_selected in [false, true] {
+        grid_button(&h).click();
+        h.run();
+        let preset = h.get_by_role_and_label(Role::RadioButton, "25 mil");
+        assert_eq!(preset.accesskit_node().toggled(), Some(if already_selected { Toggled::True } else { Toggled::False }));
+        preset.click();
+        h.run_steps(1);
+        assert!(h.output().platform_output.events.iter().any(|event| {
+            matches!(event, egui::output::OutputEvent::Clicked(info)
+                if info.label.as_deref() == Some("25 mil") && info.typ == egui::WidgetType::RadioButton && info.selected == Some(true))
+        }));
+        assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
+        h.run();
+        assert_eq!(project_state(&h), before);
+    }
+}
+
 /// The Custom field reads mils and millimetres, explains what it refuses and keeps the spacing
 /// until something valid is applied.
 #[test]
@@ -98,7 +122,8 @@ fn custom_spacing_reads_units_and_explains_refusals() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::U);
     h.run();
     click(&mut h, "Grid 0.5 mm · dots 2.5 mm");
-    h.get_by_label("0.5 mm (custom)");
+    let current = h.get_by_role_and_label(Role::RadioButton, "0.5 mm (custom)");
+    assert_eq!(current.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
     h.get_by_label("Pins are on 1.27 mm; wire to them by clicking the pin.");
     assert_eq!(h.state().views.active.camera.snap_nm(), 500_000, "switching units keeps the spacing");
     assert_eq!(project_state(&h), before);

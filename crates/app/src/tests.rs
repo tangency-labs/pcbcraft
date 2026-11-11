@@ -2049,10 +2049,20 @@ fn ribbon_group_menus_run_their_actions() {
     harness.get_by_label("Collapse Browser");
 
     click(&mut harness, "View");
-    choose(&mut harness, "Panels menu", "Browser");
-    assert!(harness.query_by_label("Collapse Browser").is_none());
-    choose(&mut harness, "Panels menu", "Browser");
-    harness.get_by_label("Collapse Browser");
+    let before = harness.state().session.snapshot().unwrap();
+    for open in [false, true] {
+        click(&mut harness, "Panels menu");
+        harness.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Browser").click();
+        harness.run_steps(1);
+        assert_eq!(harness.state().browser.open, open);
+        assert!(harness.output().platform_output.events.iter().any(|event| {
+            matches!(event, egui::output::OutputEvent::Clicked(info)
+                if info.label.as_deref() == Some("Browser") && info.typ == egui::WidgetType::Checkbox && info.selected == Some(open))
+        }));
+        harness.run();
+        assert_eq!(harness.query_by_label("Collapse Browser").is_some(), open);
+        assert!(Arc::ptr_eq(&before, &harness.state().session.snapshot().unwrap()));
+    }
 
     click(&mut harness, "Capture");
     choose(&mut harness, "Connect menu", "Wire");

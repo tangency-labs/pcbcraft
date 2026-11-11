@@ -241,7 +241,7 @@ impl Panel {
                                     for (position, label) in
                                         [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
                                     {
-                                        if MenuItem::new(label).checked(self.position == position).show(ui) {
+                                        if MenuItem::new(label).choice(self.position == position).show(ui) {
                                             self.position = position;
                                             self.at = None;
                                             self.dragging = None;

@@ -1,6 +1,7 @@
 //! Original canvas tools project native primitives through existing Craft painters.
 use super::*;
 use egui::{Rect, vec2};
+use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::{Tokens, board, grid, workspace};
 use pcbcraft_engine::{
     authoring::Primitive,
@@ -218,7 +219,7 @@ impl Document {
                     (Tool::Polyline { .. }, Some(Place::Polyline)) => true,
                     _ => false,
                 },
-                toggle: true,
+                menu_check: Some(CheckKind::Choice),
             })
             .collect::<Vec<_>>();
         if let Some(index) = workspace::ribbon_group(ui, "Draw", &buttons) {
@@ -229,8 +230,15 @@ impl Document {
             }
         }
         workspace::ribbon_separator(ui);
-        let button =
-            |icon, label, available| RibbonTool { icon, label, description: label, shortcut: "", enabled: available, active: false, toggle: false };
+        let button = |icon, label, available| RibbonTool {
+            icon,
+            label,
+            description: label,
+            shortcut: "",
+            enabled: available,
+            active: false,
+            menu_check: None,
+        };
         let tools = [
             button(Icon::Move, "Move", selected),
             button(Icon::Rotate, "Rotate", selected),
@@ -305,7 +313,15 @@ impl Document {
     pub(super) fn view_tools(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon as Icon};
         let tools = [(Icon::Fit, "Fit", false), (Icon::Browser, "Browser", !self.collapsed[0]), (Icon::Settings, "Properties", !self.collapsed[1])]
-            .map(|(icon, label, active)| RibbonTool { icon, label, description: label, shortcut: "", enabled: true, active, toggle: label != "Fit" });
+            .map(|(icon, label, active)| RibbonTool {
+                icon,
+                label,
+                description: label,
+                shortcut: "",
+                enabled: true,
+                active,
+                menu_check: (label != "Fit").then_some(CheckKind::Toggle),
+            });
         if let Some(index) = workspace::ribbon_group(ui, "View", &tools) {
             match index {
                 0 => self.camera.request_fit(),

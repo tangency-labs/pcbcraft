@@ -51,7 +51,7 @@ pub(super) fn idle(ui: &mut Ui, spacing_nm: i64, unit: pcbcraft_chrome::units::U
         .submenu(ui, |ui| {
             canvas_grid::SCHEMATIC_SPACING_PRESETS_NM.into_iter().find_map(|preset| {
                 let label = canvas_grid::spacing_label(preset, unit);
-                MenuItem::new(&label).checked(preset == spacing_nm).show(ui).then_some(Action::Grid(preset))
+                MenuItem::new(&label).choice(preset == spacing_nm).show(ui).then_some(Action::Grid(preset))
             })
         })
         .and_then(|menu| menu.inner)
