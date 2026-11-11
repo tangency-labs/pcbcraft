@@ -27,6 +27,13 @@ The Assistant uses `pcbcraft-cli` beside the desktop app to reach the open
 project. Build both binaries in the same profile; for a release build, add
 `--release` to both Cargo commands.
 
+If your existing project uses the previous `project.pc` folder or `.pc.zip`
+package layout, first create a converted copy with
+`./target/debug/pcbcraft-cli convert /path/to/old-project /path/to/new-project`.
+The destination must not exist; a `.pc` destination creates a portable package.
+The [conversion guide](native-project-storage.md#convert-a-previous-split-project)
+explains supported old inputs and failure behavior.
+
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.

@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod conversion;
 mod folder;
 pub mod library;
 pub use folder::{load, save};

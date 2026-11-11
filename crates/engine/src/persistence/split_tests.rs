@@ -401,3 +401,32 @@ fn rejects_zip64_duplicates_and_crc_corruption() {
     corrupt[position] = b'X';
     assert!(decode_packed(&corrupt).err().unwrap().contains(".DS_Store"));
 }
+
+/// Explicit conversion checks old manifest hashes before renaming paths and preserves every
+/// payload byte; the normal reader continues to reject those old containers.
+#[test]
+fn explicit_conversion_preserves_old_split_packages_and_validates_integrity() {
+    use sha2::{Digest, Sha256};
+    let expected = documents(&session());
+    let mut old = expected.clone();
+    let entry = old.remove(ENTRY_POINT).unwrap();
+    old.insert("project.pc".to_owned(), entry);
+    let parts: Vec<_> =
+        old.iter().map(|(path, bytes)| json!({"path":path,"size_bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(bytes))})).collect();
+    old.insert("manifest.json".to_owned(), serde_json::to_vec(&json!({"format":"pcbcraft-container/2","parts":parts,"assets":[]})).unwrap());
+    for prefix in ["", "wrapped/"] {
+        let archive = zip_files(&old, prefix, false);
+        assert!(decode_packed(&archive).is_err());
+        let converted = decode_legacy_packed(&archive).unwrap();
+        assert_eq!(converted.documents, expected);
+        assert_eq!(decode_packed(&encode_packed_documents(converted.documents).unwrap()).unwrap().documents, expected);
+    }
+    let payload = old.get_mut("project.pc").unwrap();
+    payload.push(b' ');
+    assert!(decode_legacy_packed(&zip_files(&old, "", false)).err().unwrap().contains("digest mismatch"));
+    old.remove("manifest.json");
+    assert!(decode_legacy_packed(&zip_files(&old, "", false)).is_ok());
+    old.insert("project.json".to_owned(), old["project.pc"].clone());
+    assert!(decode_legacy_packed(&zip_files(&old, "", false)).is_err());
+    assert!(decode_legacy_packed(&encode_packed_documents(expected).unwrap()).is_err());
+}

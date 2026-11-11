@@ -990,3 +990,12 @@ The contextual-card header spacing reuses the existing compact Parts Catalog
 composition. Plain titles use original PCBcraft interaction/rendering code with
 the shared grip, fonts and keyboard-focus outline, without hover fills or
 duplicate tooltips. This adaptation adds no external source or dependency.
+
+## Explicit previous-layout conversion
+
+The source-preserving split-layout converter is original PCBcraft work using
+the existing MIT/Apache native document codecs, bounded ZIP reader and recoverable
+folder publication. It introduces no external implementation, dependency, artwork
+or library data. Regression inputs are generated through native commands and
+encoders. User-provided project copies used for local verification remain outside
+the repository and are not distributed with the code.

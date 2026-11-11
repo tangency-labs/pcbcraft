@@ -10,12 +10,26 @@ use pcbcraft_mcp::{
 const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE_OR_FOLDER | --connect PORT [--token-file FILE] [--wait SECONDS]]
                         Serve MCP on stdin and stdout. --connect reads the editor's credential from
                         --token-file, or else from PCBCRAFT_CONTROL_TOKEN.
+       pcbcraft-cli convert SOURCE DESTINATION
+                        Convert a previous split project to a new destination. A .pc destination
+                        creates a ZIP package; other names create a new project folder.
        pcbcraft-cli --version";
 
 /// Dispatch the CLI and report file or server errors on stderr.
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
+        [command, source, destination] if command == "convert" => {
+            let destination = Path::new(destination);
+            let encoding = if destination.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) {
+                pcbcraft_engine::persistence::Encoding::Zip
+            } else {
+                pcbcraft_engine::persistence::Encoding::Json
+            };
+            pcbcraft_storage::conversion::convert(Path::new(source), destination, encoding).map(|()| {
+                println!("Converted project written to {}", destination.display());
+            })
+        }
         [command] if command == "mcp" => serve(Box::new(Headless::default())),
         [command, flag, path] if command == "mcp" && flag == "--project" => {
             load_project(Path::new(path)).and_then(|backend| serve(Box::new(backend)))

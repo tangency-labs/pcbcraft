@@ -4,6 +4,11 @@ PCBCraft offers an in-app Assistant and a live MCP connection on desktop.
 The CLI can also run a separate headless session. Project edits use the
 same engine commands and undo history within each session.
 
+Projects from the previous split layout can be copied into the current format
+with `pcbcraft-cli convert SOURCE DESTINATION` before starting MCP. A `.pc`
+destination creates a ZIP; other destinations create a new working folder. See
+[conversion support and limits](native-project-storage.md#convert-a-previous-split-project).
+
 ## Assistant in the desktop editor
 
 Open **Assistant** from the chat icon next to Preferences or press

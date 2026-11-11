@@ -81,6 +81,36 @@ pub(super) fn preview(root: &Path) -> Result<Documents, String> {
     Ok(documents)
 }
 
+/// Read an old split folder for conversion without creating locks or replaying its journal.
+/// An existing lock stays shared across both reads; an introduced lock, pending recovery, mixed
+/// layout or detected source change refuses conversion without modifying the source.
+pub(super) fn load_legacy(root: &Path) -> Result<Documents, String> {
+    regular_directory(root)?;
+    let lock_path = lock_path(root)?;
+    let file = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) if metadata.is_file() => {
+            let file = File::open(&lock_path).map_err(error)?;
+            file.try_lock_shared().map_err(|e| format!("Could not lock conversion source: {e}"))?;
+            Some(file)
+        }
+        Ok(_) => return Err("Save lock is not a regular file.".to_owned()),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(error(e)),
+    };
+    let lock = FolderLock { file, can_recover: false };
+    require_no_journal(root)?;
+    if root.join(ENTRY_POINT).try_exists().map_err(error)? {
+        return Err("Conversion requires the previous project.pc layout, without project.json.".to_owned());
+    }
+    let documents = read_documents_at(root, false, "project.pc")?;
+    require_no_journal(root)?;
+    if documents != read_documents_at(root, false, "project.pc")? || (lock.file.is_none() && probe_preview_lock(&lock_path)?) {
+        return Err("Project changed while reading conversion source.".to_owned());
+    }
+    require_no_journal(root)?;
+    pcbcraft_engine::persistence::convert_legacy_documents(documents)
+}
+
 /// Check an existing lock nonblockingly and immediately release it, creating no file. Keeping
 /// a shared lock across a slow preview read would make an explicit Open/Save fail behind it.
 fn probe_preview_lock(path: &Path) -> Result<bool, String> {
@@ -284,15 +314,20 @@ fn windows_device_name(relative: &str) -> Option<&str> {
 /// files. Links and special files are refused even when named like OS metadata. A folder
 /// containing only the old `project.pc` entry point is refused before reading managed data.
 fn read_documents(root: &Path, recovering: bool) -> Result<Documents, String> {
+    read_documents_at(root, recovering, ENTRY_POINT)
+}
+
+/// Read the selected split layout using the normal file/size limits and managed-path policy.
+fn read_documents_at(root: &Path, recovering: bool, entry_point: &str) -> Result<Documents, String> {
     // An interrupted save may temporarily contain both removed and added definitions.
     let multiplier = if recovering { 2 } else { 1 };
     let mut entries = 0;
     regular_directory(root)?;
-    if !root.join(ENTRY_POINT).try_exists().map_err(error)? && root.join("project.pc").try_exists().map_err(error)? {
+    if entry_point == ENTRY_POINT && !root.join(ENTRY_POINT).try_exists().map_err(error)? && root.join("project.pc").try_exists().map_err(error)? {
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
     let mut documents = Documents::new();
-    for name in [ENTRY_POINT, "board.json"] {
+    for name in [entry_point, "board.json"] {
         if let Some(bytes) = existing(&root.join(name))? {
             documents.insert(name.to_owned(), bytes);
         }
@@ -470,7 +505,7 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Sync directory entry changes where the platform exposes directory fsync.
-fn sync_dir(path: &Path) -> Result<(), String> {
+pub(super) fn sync_dir(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     File::open(path).and_then(|file| file.sync_all()).map_err(error)?;
     #[cfg(not(unix))]

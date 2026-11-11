@@ -19,16 +19,16 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, decode_documents, encode_documents,
-    is_document_path,
+    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
+    encode_documents, is_document_path,
 };
 mod packed;
-pub use packed::{PackedEncoder, PackedProject, decode_packed, encode_packed, encode_packed_documents};
+pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
 #[cfg(test)]
 mod split_tests;
 
 /// Explain the intentional app 0.1.0 break when a legacy standalone document is opened.
-pub const UNSUPPORTED_PROJECT_LAYOUT: &str = "Unsupported project layout. PCBcraft 0.1.0 opens project folders through project.json and packed .pc ZIP files; legacy standalone JSON projects and project.pc entry points are no longer supported.";
+pub const UNSUPPORTED_PROJECT_LAYOUT: &str = "Unsupported project layout. PCBcraft 0.1.0 opens project folders through project.json and packed .pc ZIP files; legacy standalone JSON projects and project.pc entry points are not accepted by normal Open. Convert previous split projects with pcbcraft-cli convert SOURCE DESTINATION.";
 
 /// Maximum number of bytes in a supported project ZIP.
 pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;

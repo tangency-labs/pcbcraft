@@ -4,6 +4,18 @@ use super::*;
 
 /// The fixed, plain-text entry point inside a project folder.
 pub const ENTRY_POINT: &str = "project.json";
+
+/// Convert only the previous split entry-point name, retaining every document's exact bytes.
+/// Mixed layouts, standalone JSON and unsupported document schemas are refused before adoption.
+pub fn convert_legacy_documents(mut documents: Documents) -> Result<Documents, String> {
+    if documents.contains_key(ENTRY_POINT) {
+        return Err("Conversion requires the previous project.pc layout, without project.json.".to_owned());
+    }
+    let entry = documents.remove("project.pc").ok_or("project.pc: missing previous split entry point")?;
+    documents.insert(ENTRY_POINT.to_owned(), entry);
+    decode_documents(&documents)?;
+    Ok(documents)
+}
 /// Each JSON document is bounded independently; large projects need not fit in one legacy file.
 pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 /// Bound total decoded documents below the packed-file limit, leaving room for ZIP metadata.

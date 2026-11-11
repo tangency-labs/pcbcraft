@@ -75,7 +75,7 @@ these choices, while the diagnostic single-document writer refuses lossy export.
 |---|---|---|
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/15` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides |
+| `board.json` | `pcbcraft-board/1` through `/16` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -602,17 +602,50 @@ folders used a plain JSON `project.pc` entry point, and split archives used
 `.pc.zip` with container version 2. Older single-document projects could also
 use `.pc` for plain JSON or container version 1. Normal desktop, browser and
 headless opens now refuse those earlier layouts without rewriting their source
-files. Renaming an older archive does not convert its contents. There is no
-migration command in this release; retain an earlier build for existing projects.
+files. Renaming an older archive does not convert its contents. The explicit
+converter below supports only the immediately previous split layout.
 
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions
 remain supported under the new entry-point path; sheet, board and library
 schemas are unchanged. A hand-zipped folder without a manifest must likewise use
 `project.json`; its first save adds a version-3 manifest. Container versions 1/2
-are refused even if their payload paths have been renamed. ZIP contents are
+are refused by normal Open even if their payload paths have been renamed. ZIP contents are
 validated independently of the filename, so a current version-3 package can
 still be opened through an explicit path with another extension.
+
+### Convert a previous split project
+
+Build `pcbcraft-cli` and run either form from a terminal:
+
+```sh
+# New working folder (the destination must not exist).
+pcbcraft-cli convert /path/to/old-project /path/to/converted-project
+# New portable ZIP package.
+pcbcraft-cli convert /path/to/old-project.pc.zip /path/to/converted-project.pc
+```
+
+A source folder or its `project.pc` entry point must contain a supported split
+project. Archives must use container version 2, or be manifest-less ZIPs of that
+previous split layout. A destination ending in `.pc` creates a container-v3 ZIP;
+other destinations create a new folder. Both forms validate all managed documents
+and preserve their bytes, stable IDs, pinned libraries and document schema versions.
+Only the entry-point path and packed manifest change. Unrelated root files such
+as notes and `.git` are left in the source rather than copied into the project.
+
+The converter never writes to or recovers the source. Old manifest sizes and
+SHA-256 hashes are checked before renaming its entry-point path. Mixed layouts,
+invalid or unsupported schemas, unsafe paths, symlinks, busy source locks and
+pending save recovery are refused. A pending legacy save must be recovered with
+a previous build before conversion. Existing destinations and paths inside the
+source folder are refused. Folder publication uses the normal recovery journal;
+an interrupted conversion can leave a new destination requiring recovery. It
+never replaces an existing project. Normal Open remains strict after conversion
+is added; open the resulting `project.json` or `.pc`, rather than the old source.
+
+This converter does not translate standalone JSON/container-v1 projects or retired
+annotation types such as `power`, `power_bar` and `ground` into native power
+symbols. Those document-schema changes require a separate migration.
 
 The original `two-resistors-format-1.pc`, `two-resistors-format-2.pc` and
 `two-resistors.pc` fixtures remain historical diagnostic inputs. The low-level

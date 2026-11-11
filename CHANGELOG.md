@@ -9,8 +9,9 @@ The archive retains `manifest.json` with document sizes and SHA-256 hashes, usin
 locations and the first-save location workflow are unchanged.
 
 This breaks compatibility with earlier `project.pc` folders, container-v2
-`.pc.zip` archives and legacy single-document JSON/container-v1 projects. Those
-inputs are refused by desktop, browser and CLI opens without converting or
-overwriting them. Renaming an old archive does not convert it, and this release
-does not include a migration command. Keep an earlier build for existing work.
-Existing sheet, board and library schemas are unchanged.
+`.pc.zip` archives and legacy single-document JSON/container-v1 projects. Normal
+desktop, browser and CLI opens refuse those inputs without overwriting them. The explicit `pcbcraft-cli convert SOURCE DESTINATION` command converts
+previous split folders and container-v2 archives to a new folder or `.pc` package,
+leaving the source unchanged. Renaming an old archive alone does not convert it.
+Standalone projects and retired document features remain unsupported. Existing
+sheet, board and library schemas are unchanged by this layout conversion.
