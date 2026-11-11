@@ -2,6 +2,7 @@
 //! Presentation tables are qualified in ATTRIBUTION.md; no prototype engine is imported.
 
 use crate::{Dialog, PcbApp, Selection, SymbolAction, Tool, Workspace, editor_windows};
+use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::workspace::{self, RibbonTool, ToolIcon as Icon};
 use serde_json::json;
 
@@ -309,7 +310,7 @@ impl PcbApp {
                 shortcut: t.key,
                 enabled: t.action.enabled(self),
                 active: t.action.active(self),
-                toggle: t.action == Action::AutoHeal,
+                menu_check: (t.action == Action::AutoHeal).then_some(CheckKind::Toggle),
             };
             let tools: Vec<_> = promoted.iter().map(render).collect();
             let menu: Vec<_> = extra.iter().map(render).collect();

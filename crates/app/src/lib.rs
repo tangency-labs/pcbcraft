@@ -4,6 +4,7 @@
 //! catalog, the same ones MCP runs. Preferences belong to the person, not the project, so they live
 //! here and stay out of the command set.
 
+use pcbcraft_chrome::menu::CheckKind;
 use std::sync::Arc;
 
 mod app_workspace;
@@ -853,7 +854,7 @@ impl PcbApp {
                     shortcut: "",
                     enabled: has_project,
                     active: has_project && self.net_inspector.open,
-                    toggle: true,
+                    menu_check: Some(CheckKind::Toggle),
                 });
             }
             quick.push(RibbonTool {
@@ -863,7 +864,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project,
                 active: false,
-                toggle: false,
+                menu_check: None,
             });
         }
         let response =
@@ -908,7 +909,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project,
                 active: has_project && self.browser.open,
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
             RibbonTool {
                 icon: ToolIcon::Symbol,
@@ -917,7 +918,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: parts,
                 active: parts && self.parts.open,
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
             RibbonTool {
                 icon: ToolIcon::Nets,
@@ -926,7 +927,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project && schematic,
                 active: has_project && self.net_inspector.open,
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
             RibbonTool {
                 icon: ToolIcon::Settings,
@@ -935,7 +936,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project && schematic,
                 active: self.properties_open,
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
             RibbonTool {
                 icon: ToolIcon::Select,
@@ -944,7 +945,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project,
                 active: self.views.active.filters_open,
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
         ];
         let toggled = match workspace::ribbon_group(ui, "Panels", &panels) {
@@ -968,7 +969,7 @@ impl PcbApp {
             shortcut: "",
             enabled: has_project,
             active: false,
-            toggle: false,
+            menu_check: None,
         }];
         if workspace::ribbon_group(ui, "Navigate", &navigate).is_some() {
             self.fit_view(self.views.active.id());
@@ -982,7 +983,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project,
                 active: self.views.is_split(),
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
             RibbonTool {
                 icon: ToolIcon::Settings,
@@ -991,7 +992,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: true,
                 active: false,
-                toggle: false,
+                menu_check: None,
             },
         ];
         if !IN_BROWSER {
@@ -1002,7 +1003,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project,
                 active: false,
-                toggle: false,
+                menu_check: None,
             });
             editors.push(RibbonTool {
                 icon: ToolIcon::EditorWindow,
@@ -1011,7 +1012,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: has_project,
                 active: false,
-                toggle: false,
+                menu_check: None,
             });
         }
         match workspace::ribbon_group(ui, "Editors", &editors) {

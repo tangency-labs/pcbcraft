@@ -215,12 +215,12 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
             for &preset in presets {
                 let label = spacing_label(preset, unit);
                 let label = if preset == default_nm { format!("{label} (default)") } else { label };
-                if MenuItem::new(&label).checked(*spacing_nm == preset).show(ui) {
+                if MenuItem::new(&label).choice(*spacing_nm == preset).show(ui) {
                     *spacing_nm = preset;
                 }
             }
             if !presets.contains(spacing_nm) {
-                MenuItem::new(&format!("{current} (custom)")).checked(true).show(ui);
+                MenuItem::new(&format!("{current} (custom)")).choice(true).show(ui);
             }
             menu::separator(ui);
             let (mut draft, mut error) = ui.data(|d| d.get_temp::<(String, Option<String>)>(field_id)).unwrap_or_default();

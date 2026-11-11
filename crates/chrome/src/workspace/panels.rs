@@ -245,7 +245,7 @@ impl Panel {
                                 for (position, label) in
                                     [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
                                 {
-                                    if MenuItem::new(label).checked(self.state.position == position).show(ui) {
+                                    if MenuItem::new(label).choice(self.state.position == position).show(ui) {
                                         let offset = at - canvas.min;
                                         self.set_position(position, Some([offset.x, offset.y]));
                                         ui.close();

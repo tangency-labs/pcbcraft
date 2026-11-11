@@ -4,6 +4,7 @@ use crate::{
     editor_view::{DocumentTarget, Workspace},
 };
 use egui::Ui;
+use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::{
     shell,
     workspace::{self, Placement, RibbonTool, ToolIcon},
@@ -172,7 +173,8 @@ impl PcbApp {
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.draft.is_some();
-        let planned = |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, toggle: false };
+        let planned =
+            |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, menu_check: None };
 
         let place = [RibbonTool {
             icon: ToolIcon::Footprint,
@@ -181,7 +183,7 @@ impl PcbApp {
             shortcut: "",
             enabled: enabled && self.session.project().is_some_and(|p| p.components().next().is_some()),
             active: false,
-            toggle: false,
+            menu_check: None,
         }];
         let via_shortcut = ui.ctx().format_shortcut(&crate::PLACE_VIA);
         let place = [
@@ -193,7 +195,7 @@ impl PcbApp {
                 shortcut: &via_shortcut,
                 enabled: enabled && self.can_place_via() && !editing,
                 active: self.views.active.board.tracks.via_tool,
-                toggle: false,
+                menu_check: None,
             },
         ];
         let place_planned = [planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)")];
@@ -227,7 +229,7 @@ impl PcbApp {
             shortcut,
             enabled,
             active: false,
-            toggle: false,
+            menu_check: None,
         })
         .collect();
         match workspace::ribbon_group_with_menu(ui, "Clipboard", &clipboard_tools[..2], &clipboard_tools[2..]) {
@@ -254,7 +256,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: enabled && can_draw && !editing,
                 active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Lines),
-                toggle: false,
+                menu_check: None,
             },
             RibbonTool {
                 icon: ToolIcon::Rectangle,
@@ -263,7 +265,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: enabled && can_draw && !editing,
                 active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Rectangle),
-                toggle: false,
+                menu_check: None,
             },
         ];
         if let Some(index) = workspace::ribbon_group(ui, "Outline", &outline) {
@@ -282,7 +284,7 @@ impl PcbApp {
             shortcut: "X",
             enabled: enabled && self.can_route() && !editing,
             active: self.views.active.board.tracks.tool,
-            toggle: false,
+            menu_check: None,
         }];
         let route_planned =
             [planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"), planned(ToolIcon::Tune, "Tune", "Tune track length (planned)")];
@@ -308,7 +310,7 @@ impl PcbApp {
                 shortcut: "M",
                 enabled: (selected || copper) && !editing,
                 active: editing,
-                toggle: false,
+                menu_check: None,
             },
             RibbonTool {
                 icon: ToolIcon::Rotate,
@@ -317,7 +319,7 @@ impl PcbApp {
                 shortcut: "R",
                 enabled: selected || editing,
                 active: false,
-                toggle: false,
+                menu_check: None,
             },
             RibbonTool {
                 icon: ToolIcon::Mirror,
@@ -326,7 +328,7 @@ impl PcbApp {
                 shortcut: "F",
                 enabled: selected || editing,
                 active: false,
-                toggle: false,
+                menu_check: None,
             },
         ];
         let delete = RibbonTool {
@@ -336,7 +338,7 @@ impl PcbApp {
             shortcut: "Delete",
             enabled: idle && selected_items,
             active: false,
-            toggle: false,
+            menu_check: None,
         };
         let count = self.views.active.board.selection.len();
         let aligns: Vec<RibbonTool> = ALIGNMENTS
@@ -348,7 +350,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: enabled && !editing && count >= mode.minimum(),
                 active: false,
-                toggle: false,
+                menu_check: None,
             })
             .collect();
         let mut menu = vec![delete];
@@ -370,7 +372,7 @@ impl PcbApp {
             shortcut: "",
             enabled,
             active: false,
-            toggle: false,
+            menu_check: None,
         }];
         let inspect = [
             RibbonTool {
@@ -380,7 +382,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled,
                 active: self.views.active.board.drc.open,
-                toggle: false,
+                menu_check: None,
             },
             reveal[0],
         ];
@@ -393,7 +395,7 @@ impl PcbApp {
                 shortcut: "Ctrl+Shift+M",
                 enabled,
                 active: self.views.active.board.measure.tool,
-                toggle: false,
+                menu_check: None,
             },
             inspect[1],
         ];
@@ -414,9 +416,17 @@ impl PcbApp {
                 shortcut: "",
                 enabled: self.session.project().is_some() && self.views.active.input(&self.session).is_some(),
                 active: false,
-                toggle: false,
+                menu_check: None,
             },
-            RibbonTool { icon: ToolIcon::Settings, label: "Setup", description: "Board setup", shortcut: "", enabled, active: false, toggle: false },
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Setup",
+                description: "Board setup",
+                shortcut: "",
+                enabled,
+                active: false,
+                menu_check: None,
+            },
         ];
         let design = [
             design[0],
@@ -428,7 +438,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: enabled && !self.fabrication_exports.busy(),
                 active: self.fabrication_exports.busy(),
-                toggle: false,
+                menu_check: None,
             },
         ];
         let design = [
@@ -442,7 +452,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled,
                 active: self.views.active.camera.mirrored(),
-                toggle: true,
+                menu_check: Some(CheckKind::Toggle),
             },
         ];
         let design_planned = [planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)")];

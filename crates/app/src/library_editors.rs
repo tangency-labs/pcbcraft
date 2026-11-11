@@ -8,6 +8,7 @@ mod tests;
 mod views;
 use crate::{Dialog, IN_BROWSER, Navigation, PcbApp};
 use egui::{Context, Ui};
+use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::{
     authoring,
     menu::{self, MenuIcon},
@@ -653,7 +654,7 @@ impl PcbApp {
             shortcut: "",
             enabled,
             active,
-            toggle: label == "Split",
+            menu_check: (label == "Split").then_some(CheckKind::Toggle),
         });
         let mut layout_action = None;
         let Some(id) = self.library_editors.active else { return };
@@ -685,7 +686,7 @@ impl PcbApp {
                         shortcut: "",
                         enabled,
                         active: false,
-                        toggle: false,
+                        menu_check: None,
                     });
                     file_action = workspace::ribbon_group(ui, "Definition", &tools);
                 }

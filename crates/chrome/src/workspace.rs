@@ -5,7 +5,7 @@ use egui::{
     Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2,
 };
 
-use crate::{Tokens, fonts};
+use crate::{Tokens, fonts, menu::CheckKind};
 
 pub mod catalog;
 pub mod panels;
@@ -697,8 +697,8 @@ pub struct RibbonTool<'a> {
     pub enabled: bool,
     /// Drawn pressed: a tool in use, or a panel that is shown.
     pub active: bool,
-    /// The menu row shows a check mark for `active` instead of the glyph, as for panel toggles.
-    pub toggle: bool,
+    /// A checked menu row declares whether it selects a choice or flips an independent state.
+    pub menu_check: Option<CheckKind>,
 }
 
 /// Lay out a ribbon group as PCBcraft Next does: the tools' buttons side by side, and under them
@@ -727,7 +727,7 @@ pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mu
 }
 
 /// Draw a ribbon group with additional menu-only options after a separator. Returned indices
-/// address the visible tools first, then the extra entries; toggles use the shared checked row.
+/// address the visible tools first, then the extra entries; checked rows use their declared semantics.
 pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
     let t = Tokens::get();
     let font = FontId::proportional(t.font_body);
@@ -773,8 +773,8 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
                 ui.separator();
             }
             let mut item = crate::MenuItem::new(tool.label).tool_icon(tool.icon).shortcut(tool.shortcut).enabled(tool.enabled);
-            if tool.toggle {
-                item = item.checked(tool.active);
+            if let Some(kind) = tool.menu_check {
+                item = item.with_check(kind, tool.active);
             }
             if item.show(ui) {
                 picked = Some(index);

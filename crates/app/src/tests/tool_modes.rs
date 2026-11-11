@@ -95,6 +95,8 @@ fn same_frame_clicks_repeat_without_a_double_click_delay() {
 /// a component behind it. Placement remains armed until its explicit cancellation action.
 #[test]
 fn idle_and_placement_context_menus_keep_input_and_repeat_choices() {
+    use egui::accesskit::{Role, Toggled};
+
     let mut h = editor();
     assert!(h.state().parts.repeats());
     let point = h.get_by_label("Schematic canvas").rect().center();
@@ -116,13 +118,25 @@ fn idle_and_placement_context_menus_keep_input_and_repeat_choices() {
     assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })));
     let before = h.state().session.snapshot().unwrap();
     right_click(&mut h, point + egui::vec2(150., 80.));
-    h.get_by_label("Repeat placement");
+    let repeat = h.get_by_role_and_label(Role::CheckBox, "Repeat placement");
+    assert_eq!(repeat.accesskit_node().toggled(), Some(Toggled::True));
     click(&mut h, "Rotate");
     assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::PlaceSymbol { turns: 1, .. })));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     right_click(&mut h, point + egui::vec2(150., 80.));
-    click(&mut h, "Repeat placement");
+    h.get_by_role_and_label(Role::CheckBox, "Repeat placement").click();
+    h.run_steps(1);
     assert!(!h.state().parts.repeats());
+    assert!(h.output().platform_output.events.iter().any(|event| {
+        matches!(event, egui::output::OutputEvent::Clicked(info)
+            if info.label.as_deref() == Some("Repeat placement") && info.selected == Some(false))
+    }));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    right_click(&mut h, point + egui::vec2(150., 80.));
+    let repeat = h.get_by_role_and_label(Role::CheckBox, "Repeat placement");
+    assert_eq!(repeat.accesskit_node().toggled(), Some(Toggled::False));
+    click_canvas_at(&mut h, point + egui::vec2(-150., 80.));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     click_canvas_at(&mut h, point + egui::vec2(150., 80.));
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
     assert!(h.state().views.active.schematic.tool.is_none());
