@@ -57,7 +57,7 @@ pub fn load(root: &Path) -> Result<Documents, String> {
     } else {
         require_no_journal(root)?;
     }
-    let documents = read_documents(root, false)?;
+    let documents = readable_documents(read_documents(root, false)?)?;
     if !lock.can_recover {
         require_no_journal(root)?;
     }
@@ -73,7 +73,7 @@ pub(super) fn preview(root: &Path) -> Result<Documents, String> {
     let path = lock_path(root)?;
     let had_lock = probe_preview_lock(&path)?;
     require_no_journal(root)?;
-    let documents = read_documents(root, false)?;
+    let documents = readable_documents(read_documents(root, false)?)?;
     require_no_journal(root)?;
     if probe_preview_lock(&path)? && !had_lock {
         return Err("Project changed while reading its preview.".to_owned());
@@ -162,7 +162,7 @@ pub fn save(
     let baseline = read_documents(root, false)?;
     match expected {
         None if !baseline.is_empty() => return Err("That folder already contains a project. Choose a new or empty folder.".to_owned()),
-        Some(expected) if expected != &baseline => {
+        Some(expected) if expected != &readable_documents(baseline.clone())? => {
             return Err("Project folder changed on disk. Use Save As to keep your edits in a separate folder.".to_owned());
         }
         _ => {}
@@ -170,7 +170,7 @@ pub fn save(
     if &baseline == documents {
         return Ok(());
     }
-    crate::layout::preflight_ownership(root, &baseline, documents)?;
+    crate::layout::preflight_ownership(root, &readable_documents(baseline.clone())?, documents)?;
     let stage = tempfile::Builder::new().prefix(".pcbcraft-stage-").tempdir_in(root).map_err(error)?;
     let mut changes = Vec::new();
     let paths: BTreeSet<_> = baseline.keys().chain(documents.keys()).collect();
@@ -202,7 +202,7 @@ pub fn save(
     if read_documents(root, false)? != baseline {
         return Err("Project folder changed while saving.".to_owned());
     }
-    crate::layout::preflight_ownership(root, &baseline, documents)?;
+    crate::layout::preflight_ownership(root, &readable_documents(baseline.clone())?, documents)?;
     fs::rename(stage.path(), root.join(TRANSACTION)).map_err(error)?;
     sync_dir(root)?;
     checkpoint("journal")?;
@@ -230,7 +230,8 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
     let mut replacements = Vec::new();
     let mut total = 0;
     for (index, change) in journal.changes.iter().enumerate() {
-        if !is_document_path(&change.path) || !seen.insert(&change.path) || (change.before.is_none() && change.after.is_none()) {
+        let legacy_removal = change.path == "project.pc" && change.before.is_some() && change.after.is_none();
+        if !(is_document_path(&change.path) || legacy_removal) || !seen.insert(&change.path) || (change.before.is_none() && change.after.is_none()) {
             return Err(format!("Invalid save journal path: {}", change.path));
         }
 
@@ -342,9 +343,39 @@ fn windows_device_name(relative: &str) -> Option<&str> {
 /// Read the managed files only. Root-level README/Git files are left alone; files under
 /// sheets, library and assets must belong to the supported schema, apart from regular OS metadata
 /// files. Links and special files are refused even when named like OS metadata. A folder
-/// containing only the old `project.pc` entry point is refused before reading managed data.
+/// containing an old `project.pc` retains its actual entry name for journaled migration.
 fn read_documents(root: &Path, recovering: bool) -> Result<Documents, String> {
-    read_documents_at(root, recovering, ENTRY_POINT)
+    let current = existing(&root.join(ENTRY_POINT))?;
+    let legacy = existing(&root.join("project.pc"))?;
+    if current.is_some() && legacy.is_some() && !recovering {
+        return Err("Project contains both project.json and project.pc; refusing an ambiguous layout.".into());
+    }
+    let mut documents = read_documents_at(
+        root,
+        recovering,
+        if current.is_some() {
+            ENTRY_POINT
+        } else if legacy.is_some() {
+            "project.pc"
+        } else {
+            ENTRY_POINT
+        },
+    )?;
+    if recovering && let Some(legacy) = legacy {
+        documents.insert("project.pc".into(), legacy);
+    }
+    Ok(documents)
+}
+
+/// Normalize the previous entry name and power markers in memory, retaining unaffected bytes.
+/// Callers validate the resulting split document set before adopting it.
+fn readable_documents(mut documents: Documents) -> Result<Documents, String> {
+    if let Some(entry) = documents.remove("project.pc")
+        && documents.insert(ENTRY_POINT.into(), entry).is_some()
+    {
+        return Err("Project contains both project.json and project.pc.".into());
+    }
+    pcbcraft_engine::persistence::migrate_power_markers(documents)
 }
 
 /// Read the selected split layout using the normal file/size limits and managed-path policy.
@@ -353,9 +384,6 @@ fn read_documents_at(root: &Path, recovering: bool, entry_point: &str) -> Result
     let multiplier = if recovering { 2 } else { 1 };
     let mut entries = 0;
     regular_directory(root)?;
-    if entry_point == ENTRY_POINT && !root.join(ENTRY_POINT).try_exists().map_err(error)? && root.join("project.pc").try_exists().map_err(error)? {
-        return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
-    }
     let mut documents = Documents::new();
     for name in [entry_point, "board.json"] {
         if let Some(bytes) = existing(&root.join(name))? {
@@ -508,7 +536,7 @@ impl BoundDocument {
 /// Traverse one no-follow directory component at a time and retain its verified handle.
 /// Missing parents represent absent documents unless publication explicitly creates them.
 fn bind_document(root: &crate::bound::Directory, relative: &str, create: bool) -> Result<Option<BoundDocument>, String> {
-    if !is_document_path(relative) {
+    if !is_document_path(relative) && relative != "project.pc" {
         return Err("Unsafe project document path.".into());
     }
     let mut pieces = relative.split('/').peekable();

@@ -53,7 +53,7 @@ fn old_split_folder_converts_to_new_folder_and_package_without_source_changes() 
     assert_eq!(decode_packed(&fs::read(&packed).unwrap()).unwrap().documents, expected);
     assert_eq!(files(&root), original);
     assert!(!dir.path().join(".old.pcbcraft-lock").exists());
-    assert!(crate::open(&root).is_err());
+    assert_eq!(crate::open(&root).unwrap().id(), crate::open(&folder).unwrap().id());
 }
 
 /// Refused inputs cannot create a destination or replace a pre-existing file/folder.

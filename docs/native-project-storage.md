@@ -650,20 +650,25 @@ document set. Restoring the original directory permits ordinary recovery.
 
 ## Compatibility and fixtures
 
-App version 0.1.0 introduces this intentionally breaking layout. Earlier working
+App version 0.1.0 introduces this layout. Earlier working
 folders used a plain JSON `project.pc` entry point, and split archives used
 `.pc.zip` with container version 2. Older single-document projects could also
 use `.pc` for plain JSON or container version 1. Normal desktop, browser and
-headless opens now refuse those earlier layouts without rewriting their source
-files. Renaming an older archive does not convert its contents. The explicit
-converter below supports only the immediately previous split layout.
+headless opens accept the immediately previous split layouts without rewriting
+their source files. Previews are read-only too. First Save upgrades a split folder
+in place: one journaled transaction installs `project.json`, removes `project.pc`
+and migrates any flat board payload. First Save of a previous split archive
+replaces it with a verified container-v3 package at its existing path.
+Standalone JSON/container-v1 projects remain unsupported. The optional explicit
+converter below creates a separate copy of the immediately previous split layout.
 
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions
 remain supported under the new entry-point path; sheet, board and library
 schemas are unchanged. A hand-zipped folder without a manifest must likewise use
 `project.json`; its first save adds a version-3 manifest. Container versions 1/2
-are refused by normal Open even if their payload paths have been renamed. ZIP contents are
+are accepted only for version 2 with the previous `project.pc` split paths;
+version 1 remains unsupported. ZIP contents are
 validated independently of the filename, so a current version-3 package can
 still be opened through an explicit path with another extension.
 
@@ -694,12 +699,14 @@ pending save recovery are refused. A pending legacy save must be recovered with
 a previous build before conversion. Existing destinations and paths inside the
 source folder are refused. Folder publication uses the normal recovery journal;
 an interrupted conversion can leave a new destination requiring recovery. It
-never replaces an existing project. Normal Open remains strict after conversion
-is added; open the resulting `project.json` or `.pc`, rather than the old source.
+never replaces an existing project. Open either the converted copy or the old
+split source; saving the latter upgrades it in place.
 
-This converter does not translate standalone JSON/container-v1 projects or retired
-annotation types such as `power`, `power_bar` and `ground` into native power
-symbols. Those document-schema changes require a separate migration.
+Normal Open and explicit conversion also upgrade retired `power`, `power_bar`
+and `ground` annotations to pinned native power symbols. The affected sheet and
+project metadata change; unrelated board, sheet and library bytes are preserved.
+Names, positions, rotations, junctions and authored wire routes survive. This
+converter does not translate standalone JSON/container-v1 projects.
 
 The original `two-resistors-format-1.pc`, `two-resistors-format-2.pc` and
 `two-resistors.pc` fixtures remain historical diagnostic inputs. The low-level

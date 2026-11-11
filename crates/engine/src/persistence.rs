@@ -24,12 +24,14 @@ pub use documents::{
     encode_documents, is_document_path, migrate_board_layout, project_board_path, project_layout_root, project_registered_board_id,
 };
 mod packed;
+mod power_migration;
 pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
+pub use power_migration::migrate_power_markers;
 #[cfg(test)]
 mod split_tests;
 
 /// Explain the intentional app 0.1.0 break when a legacy standalone document is opened.
-pub const UNSUPPORTED_PROJECT_LAYOUT: &str = "Unsupported project layout. PCBcraft 0.1.0 opens project folders through project.json and packed .pc ZIP files; legacy standalone JSON projects and project.pc entry points are not accepted by normal Open. Convert previous split projects with pcbcraft-cli convert SOURCE DESTINATION.";
+pub const UNSUPPORTED_PROJECT_LAYOUT: &str = "Unsupported project layout. Open a split project folder, its project.json or project.pc entry point, or a packed project ZIP. Legacy standalone JSON and container-v1 projects remain unsupported.";
 
 /// Maximum number of bytes in a supported project ZIP.
 pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;

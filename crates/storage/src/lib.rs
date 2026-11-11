@@ -25,6 +25,13 @@ pub use folder::{load, save};
 /// and pass through unchanged.
 pub fn plain_path_if_equivalent(path: PathBuf) -> PathBuf {
     let plain = dunce::simplified(&path);
+    // dunce conservatively retains device-name prefixes even on Windows versions where
+    // the OS treats them as ordinary filenames. Let the OS parser decide for drive paths.
+    let drive_path = path.to_str().and_then(|text| text.strip_prefix(r"\\?\")).filter(|text| {
+        let bytes = text.as_bytes();
+        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+    });
+    let plain = if plain == path { drive_path.map(Path::new).unwrap_or(plain) } else { plain };
     // dunce looks only at the text before a name's last dot when it checks device names, so
     // a multi-dot name such as `CON.board.pc` can pass it. Windows 10's parser (GetFullPathNameW, behind `std::path::absolute`)
     // reads that name as `\\.\CON`; Windows 11's reads it as a file. Asking the parser covers
@@ -75,7 +82,14 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     // same, so errors name the path people chose rather than its `\\?\` form (#154).
     let path = plain_path_if_equivalent(fs::canonicalize(parent).map_err(|e| e.to_string())?.join(name));
     let parent = path.parent().ok_or("Project path has no parent folder")?.to_path_buf();
-    if name == ENTRY_POINT && parent.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())? {
+    // Recent history may still point at the entry removed by a completed migration.
+    if name == "project.pc"
+        && matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+        && parent.join(ENTRY_POINT).try_exists().map_err(|e| e.to_string())?
+    {
+        return decode_documents(&folder(&parent)?);
+    }
+    if (name == ENTRY_POINT || name == "project.pc") && parent.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())? {
         return decode_documents(&folder(&parent)?);
     }
     let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
@@ -87,7 +101,7 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     }
     let bytes = read_bytes(File::open(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     if Encoding::detect(&bytes) == Encoding::Json {
-        if name == ENTRY_POINT {
+        if name == ENTRY_POINT || name == "project.pc" {
             return decode_documents(&folder(&parent)?);
         }
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
@@ -184,6 +198,42 @@ mod tests {
             assert_eq!(preview(path).unwrap().symbols().len(), 1);
         }
         assert_eq!(tree(dir.path()), before);
+    }
+
+    /// Schematic-only previous projects preview without writes, reject mixed entry points,
+    /// and detect external changes before a first-save migration can publish anything.
+    #[test]
+    fn previous_schematic_project_preview_and_migration_refusals() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("old");
+        fs::create_dir(&root).unwrap();
+        let before = encode_documents(project()).unwrap();
+        for (path, bytes) in &before {
+            let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let original = tree(dir.path());
+        assert_eq!(preview(&root).unwrap().symbols().len(), 1);
+        assert_eq!(tree(dir.path()), original);
+        let loaded = open(&root).unwrap();
+        let prepared = layout::prepare(loaded, Some(&root), Some(&before)).unwrap();
+        let after = encode_documents(prepared).unwrap();
+        fs::copy(root.join("project.pc"), root.join(ENTRY_POINT)).unwrap();
+        assert!(preview(&root).is_err());
+        assert!(open(&root).is_err());
+        fs::remove_file(root.join(ENTRY_POINT)).unwrap();
+        let mut changed = before[ENTRY_POINT].clone();
+        changed.push(b' ');
+        fs::write(root.join("project.pc"), changed).unwrap();
+        let external = tree(&root);
+        assert!(save(&root, Some(&before), &after, &mut |_| Ok(())).is_err());
+        assert_eq!(tree(&root), external);
+        fs::write(root.join("project.pc"), &before[ENTRY_POINT]).unwrap();
+        save(&root, Some(&before), &after, &mut |_| Ok(())).unwrap();
+        assert!(!root.join("project.pc").exists());
+        assert_eq!(preview(&root).unwrap().symbols().len(), 1);
+        assert_eq!(load(&root).unwrap(), after);
     }
 
     /// Contended projects return immediately; pending recovery stays untouched until an explicit

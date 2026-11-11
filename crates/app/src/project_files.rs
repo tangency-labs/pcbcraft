@@ -269,7 +269,7 @@ impl ProjectFiles {
         #[cfg(target_arch = "wasm32")]
         {
             match &self.saved {
-                Some(saved) if saved.needs_manifest => "Project opened without a manifest · Download will include one".to_owned(),
+                Some(saved) if saved.needs_manifest => "Project opened · Download will upgrade the project package".to_owned(),
                 _ => "Project opened".to_owned(),
             }
         }

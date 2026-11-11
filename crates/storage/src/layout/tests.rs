@@ -10,6 +10,72 @@ fn legacy() -> Arc<Project> {
     decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap()
 }
 
+/// Previous split folders open/preview without rewrites and migrate atomically on first Save.
+/// Every interrupted checkpoint recovers a complete old or new project; later saves are no-ops.
+#[test]
+fn previous_entry_point_migrates_at_every_checkpoint() {
+    let mut session = Session::default();
+    session.open_snapshot(legacy());
+    session
+        .apply(pcbcraft_engine::net_labels::ADD, &json!({"name":"GND","style":"global","x_nm":0,"y_nm":0,"expected_revision":session.revision()}))
+        .unwrap();
+    let mut before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let sheet_path = format!("sheets/{}.json", session.project().unwrap().sheet_target().id());
+    let mut sheet: serde_json::Value = serde_json::from_slice(&before[&sheet_path]).unwrap();
+    sheet["net_labels"][0]["style"] = json!("ground");
+    before.insert(sheet_path, serde_json::to_vec(&sheet).unwrap());
+    let readable = pcbcraft_engine::persistence::migrate_power_markers(before.clone()).unwrap();
+    let after = pcbcraft_engine::persistence::migrate_board_layout(readable.clone(), ".").unwrap();
+    let install = |root: &Path| {
+        std::fs::create_dir(root).unwrap();
+        for (path, bytes) in &before {
+            let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("probe");
+    install(&root);
+    for path in [&root, &root.join("project.pc")] {
+        assert_eq!(crate::preview(path).unwrap().id(), legacy().id());
+        assert_eq!(crate::open(path).unwrap().id(), legacy().id());
+    }
+    assert_eq!(std::fs::read(root.join("project.pc")).unwrap(), before[ENTRY_POINT]);
+    assert!(!root.join(ENTRY_POINT).exists());
+    let mut steps = Vec::new();
+    crate::save(&root, Some(&readable), &after, &mut |step| {
+        steps.push(step.to_owned());
+        Ok(())
+    })
+    .unwrap();
+    assert!(steps.iter().any(|step| step == "published:project.pc"));
+    assert!(!root.join("project.pc").exists());
+    for (failed_step, step) in steps.iter().enumerate() {
+        let trial = tempfile::tempdir().unwrap();
+        let root = trial.path().join("project");
+        install(&root);
+        let mut index = 0;
+        assert!(
+            crate::save(&root, Some(&readable), &after, &mut |_| {
+                let fail = index == failed_step;
+                index += 1;
+                if fail { Err("interrupted".into()) } else { Ok(()) }
+            })
+            .is_err()
+        );
+        let committed = root.join(".pcbcraft-save").exists() || step == "completed";
+        // Old recent-history entry paths also recover after the entry point has been deleted.
+        assert_eq!(crate::open(&root.join("project.pc")).unwrap().id(), legacy().id());
+        let reopened = crate::load(&root).unwrap();
+        assert_eq!(reopened, if committed { after.clone() } else { readable.clone() }, "{step}");
+        if committed {
+            assert!(!root.join("project.pc").exists());
+            crate::save(&root, Some(&after), &after, &mut |_| Err("no-op save staged".into())).unwrap();
+        }
+    }
+}
+
 /// Every checkpoint of a board move recovers to one complete, validated layout.
 #[test]
 fn migration_recovers_at_every_publication_checkpoint() {

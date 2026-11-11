@@ -28,7 +28,9 @@ project. Build both binaries in the same profile; for a release build, add
 `--release` to both Cargo commands.
 
 If your existing project uses the previous `project.pc` folder or `.pc.zip`
-package layout, first create a converted copy with
+package layout, open it normally. Its first Save upgrades it automatically;
+opening it or showing its recent-project preview leaves its files unchanged.
+To create a separate converted copy instead, use
 `./target/debug/pcbcraft-cli convert /path/to/old-project /path/to/new-project`.
 The destination must not exist; a `.pc` destination creates a portable package.
 The [conversion guide](native-project-storage.md#convert-a-previous-split-project)

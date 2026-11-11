@@ -134,15 +134,17 @@ fn options() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Stored).last_modified_time(zip::DateTime::default()).unix_permissions(0o644)
 }
 
-/// Read container v3 or a hand-zipped folder, refusing earlier containers. Missing manifests
+/// Read current or previous split archives. Previous manifests are verified before migration
+/// in memory, and their replacement is deferred until Save. Missing manifests
 /// are allowed, but malformed or mismatched ones are never ignored. Only manifest-less archives discard ordinary OS
 /// metadata, after validating its ZIP paths, types, CRCs and size limits along with every entry.
 pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
-    decode_layout(bytes, FORMAT, super::ENTRY_POINT)
+    decode_layout(bytes, FORMAT, super::ENTRY_POINT).or_else(|current_error| decode_legacy_packed(bytes).map_err(|_| current_error))
 }
 
-/// Read a previous split container-v2 archive only for explicit conversion. Manifest hashes
-/// are checked against the old paths before renaming the entry point; document bytes survive.
+/// Read a previous split container-v2 archive for automatic migration or explicit conversion. Manifest hashes
+/// are checked against old paths before renaming the entry point and upgrading power markers;
+/// unaffected document bytes survive.
 /// Manifest-less previous split ZIPs are also accepted, but standalone containers remain refused.
 pub fn decode_legacy_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     decode_layout(bytes, "pcbcraft-container/2", "project.pc")
@@ -268,9 +270,11 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
         }
     }
     let legacy = entry_point != super::ENTRY_POINT;
-    let documents = if legacy { super::convert_legacy_documents(documents)? } else { documents };
+    let original_documents = documents.clone();
+    let documents = if legacy { super::convert_legacy_documents(documents)? } else { super::migrate_power_markers(documents)? };
+    let migrated = documents != original_documents;
     let project = decode_documents(&documents)?;
-    Ok(PackedProject { project, documents, needs_manifest: legacy || manifest.is_none() })
+    Ok(PackedProject { project, documents, needs_manifest: migrated || legacy || manifest.is_none() })
 }
 
 /// Recognize Apple's reserved sidecar directory at the archive root or inside its wrapper.

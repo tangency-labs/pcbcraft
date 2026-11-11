@@ -254,7 +254,7 @@ fn container_three_inventory_and_breaking_layout_boundary() {
     let entry = old.remove(ENTRY_POINT).unwrap();
     old.insert("project.pc".to_owned(), entry);
     for prefix in ["", "myproject/"] {
-        assert!(decode_packed(&zip_files(&old, prefix, true)).err().unwrap().contains("project.json"));
+        assert!(decode_packed(&zip_files(&old, prefix, true)).unwrap().needs_manifest);
     }
 }
 
@@ -403,7 +403,7 @@ fn rejects_zip64_duplicates_and_crc_corruption() {
 }
 
 /// Explicit conversion checks old manifest hashes before renaming paths and preserves every
-/// payload byte; the normal reader continues to reject those old containers.
+/// payload byte; normal Open accepts the same validated previous split archives.
 #[test]
 fn explicit_conversion_preserves_old_split_packages_and_validates_integrity() {
     use sha2::{Digest, Sha256};
@@ -417,7 +417,9 @@ fn explicit_conversion_preserves_old_split_packages_and_validates_integrity() {
     old.insert("manifest.json".to_owned(), serde_json::to_vec(&json!({"format":"pcbcraft-container/2","parts":parts,"assets":[]})).unwrap());
     for prefix in ["", "wrapped/"] {
         let archive = zip_files(&old, prefix, false);
-        assert!(decode_packed(&archive).is_err());
+        let opened = decode_packed(&archive).unwrap();
+        assert_eq!(opened.documents, expected);
+        assert!(opened.needs_manifest);
         let converted = decode_legacy_packed(&archive).unwrap();
         assert_eq!(converted.documents, expected);
         assert_eq!(decode_packed(&encode_packed_documents(converted.documents).unwrap()).unwrap().documents, expected);

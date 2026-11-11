@@ -19,6 +19,45 @@ fn session() -> Session {
     s
 }
 
+/// A previous split folder opens through desktop/preview and upgrades on an unchanged Save.
+/// The saved layout is adopted without changing revision or payload bytes.
+#[test]
+fn previous_split_folder_opens_previews_and_saves_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("old");
+    let original = decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap();
+    let documents = encode_documents(original.clone()).unwrap();
+    fs::create_dir(&root).unwrap();
+    for (path, bytes) in &documents {
+        let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    let entry = root.join("project.pc");
+    let opened = load(&entry).unwrap();
+    assert!(crate::schematic_canvas::Thumbnail::new(&pcbcraft_storage::preview(&entry).unwrap()).is_some());
+    assert!(!root.join(ENTRY_POINT).exists());
+    let mut s = Session::default();
+    let mut files = ProjectFiles::default();
+    let previous = (opened.snapshot.clone(), opened.target.clone());
+    complete(&mut files, &mut s, Ok(Outcome::Opened(opened)));
+    let revision = s.revision();
+    assert!(!files.dirty(&s), "opening a legacy project does not invent electrical edits");
+    let result = save(s.snapshot().unwrap(), Some(previous), None);
+    assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Message(_))));
+    assert_eq!(s.revision(), revision);
+    assert!(!files.dirty(&s));
+    assert!(!entry.exists());
+    assert_eq!(load(&entry).unwrap().snapshot.id(), original.id());
+    let board = s.project().unwrap().board_document_path().unwrap();
+    assert_eq!(fs::read(root.join(board)).unwrap(), documents["board.json"]);
+    for (path, bytes) in &documents {
+        if path != ENTRY_POINT && path != "board.json" {
+            assert_eq!(fs::read(root.join(path)).unwrap(), *bytes);
+        }
+    }
+}
+
 /// Apply ordinary engine mutations with the current revision.
 fn apply(s: &mut Session, command: &str, mut params: serde_json::Value) {
     params["expected_revision"] = json!(s.revision());
@@ -436,6 +475,7 @@ fn unknown_owned_files_and_symlinks_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     let d = encode_documents(session().snapshot().unwrap()).unwrap();
+    #[cfg(unix)]
     let board_path = pcbcraft_engine::persistence::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap();
     folder::save(&root, None, &d, &mut |_| Ok(())).unwrap();
     fs::write(root.join("README.md"), b"notes").unwrap();
@@ -633,7 +673,7 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     fs::write(&path, include_bytes!("../../../tests/fixtures/split/two-resistors-no-manifest.pc")).unwrap();
     let loaded = load(&path).unwrap();
     assert!(loaded.target.needs_manifest);
-    assert!(loaded.target.open_notice().contains("without a manifest"));
+    assert!(loaded.target.open_notice().contains("upgrade the project package"));
     let documents = loaded.target.documents.clone().unwrap();
     let outcome = save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
     let Outcome::Saved(saved, _) = outcome else { panic!("expected saved project") };

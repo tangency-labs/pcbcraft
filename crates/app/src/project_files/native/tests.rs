@@ -154,7 +154,7 @@ fn failed_opens_preserve_the_active_project_and_dirty_state() {
     }
 }
 
-/// Old standalone documents, container-v1 packages and folder entry points fail consistently
+/// Old standalone documents, container-v1 packages and incomplete split folders fail consistently
 /// through desktop and headless readers without rewriting their sources or the active session.
 #[test]
 fn legacy_layouts_are_refused_without_adoption_or_source_changes() {
@@ -180,8 +180,8 @@ fn legacy_layouts_are_refused_without_adoption_or_source_changes() {
     let entry = root.join("project.pc");
     fs::write(&entry, &documents[ENTRY_POINT]).unwrap();
     for path in [&root, &entry] {
-        assert!(load(path).unwrap_err().contains("Unsupported project layout"));
-        assert!(pcbcraft_storage::open(path).unwrap_err().contains("Unsupported project layout"));
+        assert!(load(path).is_err());
+        assert!(pcbcraft_storage::open(path).is_err());
     }
     assert_eq!(fs::read(entry).unwrap(), documents[ENTRY_POINT]);
     assert!(!root.join(ENTRY_POINT).exists());

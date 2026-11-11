@@ -6,7 +6,7 @@ use super::*;
 pub const ENTRY_POINT: &str = "project.json";
 
 /// Convert the previous entry-point name and board placement into the current folder layout.
-/// The project registry changes, while physical board, sheet and library payload bytes survive.
+/// Upgrade retired power markers too; unaffected board, sheet and library bytes survive.
 /// Mixed layouts, standalone JSON and unsupported schemas are refused before adoption.
 pub fn convert_legacy_documents(mut documents: Documents) -> Result<Documents, String> {
     if documents.contains_key(ENTRY_POINT) {
@@ -14,7 +14,7 @@ pub fn convert_legacy_documents(mut documents: Documents) -> Result<Documents, S
     }
     let entry = documents.remove("project.pc").ok_or("project.pc: missing previous split entry point")?;
     documents.insert(ENTRY_POINT.to_owned(), entry);
-    migrate_board_layout(documents, ".")
+    migrate_board_layout(super::migrate_power_markers(documents)?, ".")
 }
 
 /// Rewrite only project-level storage metadata and move the board payload without re-encoding it.

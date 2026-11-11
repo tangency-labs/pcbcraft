@@ -36,13 +36,9 @@ impl Target {
         &self.path
     }
 
-    /// Explain the next save when the open archive needs its first manifest.
+    /// Explain the next save when an archive needs migration or a verified manifest.
     pub(super) fn open_notice(&self) -> String {
-        if self.needs_manifest {
-            "Project opened without a manifest · Save will add a verified manifest".to_owned()
-        } else {
-            "Project opened".to_owned()
-        }
+        if self.needs_manifest { "Project opened · Save will upgrade the project package".to_owned() } else { "Project opened".to_owned() }
     }
 
     /// Tell the editor whether this save added the archive's first manifest.
@@ -53,7 +49,7 @@ impl Target {
 
 /// Pick and fully validate a project before making it available to the editor.
 pub(super) fn open(pick_folder: bool) -> Result<Outcome, String> {
-    let dialog = rfd::FileDialog::new().add_filter("PCBCraft project", &["pc", "json"]);
+    let dialog = rfd::FileDialog::new().add_filter("PCBCraft project", &["pc", "json", "zip"]);
     let Some(path) = (if pick_folder { dialog.pick_folder() } else { dialog.pick_file() }) else {
         return Ok(Outcome::Cancelled);
     };
@@ -63,7 +59,15 @@ pub(super) fn open(pick_folder: bool) -> Result<Outcome, String> {
 /// Load a project from a chosen path without changing the active editor.
 pub(super) fn load(path: &Path) -> Result<Saved, String> {
     let path = normalize(path)?;
-    if path.file_name().is_some_and(|name| name == ENTRY_POINT)
+    // Keep old recent-history entry paths usable after successful entry-point migration.
+    if path.file_name().is_some_and(|name| name == "project.pc")
+        && matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == io::ErrorKind::NotFound)
+        && let Some(root) = path.parent()
+        && root.join(ENTRY_POINT).try_exists().map_err(|e| e.to_string())?
+    {
+        return load_folder(root);
+    }
+    if path.file_name().is_some_and(|name| name == ENTRY_POINT || name == "project.pc")
         && let Some(root) = path.parent()
         && root.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())?
     {
@@ -76,7 +80,7 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     let bytes = read(&path).map_err(|error| format!("Could not read project: {error}"))?;
     let encoding = Encoding::detect(&bytes);
     if encoding == Encoding::Json {
-        if path.file_name().is_some_and(|name| name == ENTRY_POINT) {
+        if path.file_name().is_some_and(|name| name == ENTRY_POINT || name == "project.pc") {
             return load_folder(path.parent().ok_or("Project has no parent folder")?);
         }
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
