@@ -5,7 +5,7 @@ use std::sync::{Barrier, mpsc};
 
 use pcbcraft_engine::{
     MOVE_SYMBOL, PLACE_FOOTPRINT, Session,
-    persistence::{MAX_PROJECT_BYTES, decode, encode_packed},
+    persistence::{MAX_DOCUMENT_BYTES, decode, encode_packed},
     schematic::Point,
 };
 use serde_json::{Value, json};
@@ -112,7 +112,8 @@ fn two_resistors_round_trip_and_save_without_a_diff() {
     assert_eq!(read(&fixture.path).unwrap(), noncanonical);
 }
 
-/// Invalid input never replaces the open project or clears its unsaved edits.
+/// Invalid current packages reach their schema validators, while oversized inputs hit the
+/// native read bound. Neither failure replaces the project or clears its unsaved edits.
 #[test]
 fn failed_opens_preserve_the_active_project_and_dirty_state() {
     let mut fixture = Fixture::open();
@@ -120,17 +121,33 @@ fn failed_opens_preserve_the_active_project_and_dirty_state() {
     let before = fixture.session.snapshot().unwrap();
     let revision = fixture.session.revision();
     let invalid = fixture.dir.path().join("invalid.pc");
-    let original = std::str::from_utf8(TWO_RESISTORS).unwrap();
-    for payload in [
-        original.replace("pcbcraft-project/4", "pcbcraft-project/999").into_bytes(),
-        vec![b' '; MAX_PROJECT_BYTES + 1],
-        original.replace("\"component\":2", "\"component\":999").into_bytes(),
-        original.replace("\"unit\":\"main\"", "\"unit\":\"unknown\"").into_bytes(),
-        original.replace("\"pin\":\"2\"", "\"pin\":\"9\"").into_bytes(),
-    ] {
+    let original = encode_documents(decode(TWO_RESISTORS).unwrap()).unwrap();
+    let sheet = original.keys().find(|path| path.starts_with("sheets/")).unwrap().clone();
+    let mut cases = Vec::new();
+    for kind in ["format", "component", "unit", "pin"] {
+        let mut documents = original.clone();
+        let path = if kind == "format" { ENTRY_POINT } else { &sheet };
+        let mut value: Value = serde_json::from_slice(&documents[path]).unwrap();
+        match kind {
+            "format" => value["format"] = json!("pcbcraft-project/999"),
+            "component" => value["symbols"][0]["component"] = json!(999),
+            "unit" => value["symbols"][0]["unit"] = json!("unknown"),
+            "pin" => {
+                assert!(value["wires"][0]["from"].get("pin").is_some());
+                value["wires"][0]["from"]["pin"] = json!("9");
+            }
+            _ => unreachable!(),
+        }
+        documents.insert(path.to_owned(), serde_json::to_vec(&value).unwrap());
+        cases.push((kind, encode_packed_documents(documents).unwrap()));
+    }
+    cases.push(("size limit", vec![b' '; MAX_DOCUMENT_BYTES + 1]));
+    for (kind, payload) in cases {
         fs::write(&invalid, payload).unwrap();
-        let result = load(&invalid).map(Outcome::Opened);
-        assert!(matches!(complete(&mut fixture.files, &mut fixture.session, result), Some(Update::Error(_))));
+        let error = load(&invalid).err().unwrap();
+        assert!(!error.contains("Unsupported project layout"), "{kind}: {error}");
+        assert!(error.to_ascii_lowercase().contains(kind), "{kind}: {error}");
+        assert!(matches!(complete(&mut fixture.files, &mut fixture.session, Err(error)), Some(Update::Error(_))));
         assert!(Arc::ptr_eq(&before, &fixture.session.snapshot().unwrap()));
         assert_eq!(fixture.session.revision(), revision);
         assert!(fixture.files.dirty(&fixture.session));
