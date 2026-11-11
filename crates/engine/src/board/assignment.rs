@@ -62,6 +62,7 @@ impl Assignment {
             rotation: 0,
             bottom: false,
             reference_offset: None,
+            reference_text: None,
         }
     }
 

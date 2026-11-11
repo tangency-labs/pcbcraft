@@ -75,7 +75,7 @@ these choices, while the diagnostic single-document writer refuses lossy export.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/15` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets |
+| `board.json` | `pcbcraft-board/1` through `/15` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -338,10 +338,13 @@ and technical graphics use the back layers. Flipping the last footprint back to 
 returns the board to the format its other data requires, with the same bytes as before.
 Legacy single-file export refuses bottom-side footprints.
 
-Board format 15 adds an optional `reference_offset` point to a footprint
-placement, measured in local nanometers before rotation or side mirroring.
-It requires at least one nonzero offset. Returning the last moved reference to
-its default restores the format required by the other board data.
+Board format 15 adds optional `reference_offset` and `reference_text` fields on a
+footprint placement. The offset is measured in local nanometers before rotation
+or side mirroring. The sparse print object overrides words, font, paired text
+height/stroke, local rotation, alignment and visibility while retaining the
+component's identity and reference. Format 15 requires at least one nonzero
+offset or nonempty print override. Resetting the last of both restores the
+format required by the board's other data.
 The [footprint format specification](footprint-schema.md) defines its placement schema and coordinate contract.
 
 The earlier local format 8 rectangle remains readable and byte-stable on no-op

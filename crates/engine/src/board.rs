@@ -17,6 +17,7 @@ pub mod identity;
 pub mod materials;
 pub mod outline;
 pub mod ratsnest;
+pub mod reference;
 pub mod setup;
 #[cfg(test)]
 mod side_tests;
@@ -85,6 +86,8 @@ pub(crate) struct Footprint {
     /// Additional reference displacement from the library default in footprint-local coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reference_offset: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "reference::present")]
+    pub(crate) reference_text: Option<reference::Text>,
 }
 
 /// Maximum displacement of a footprint reference along either local axis, in nanometers.
@@ -122,6 +125,7 @@ impl Footprint {
             rotation: 0,
             bottom: false,
             reference_offset: None,
+            reference_text: None,
         }
     }
     /// Validate placement vocabulary, bounded origin and whole-degree orientation; the board
@@ -147,6 +151,7 @@ impl Footprint {
             && (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&self.x_nm)
             && (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&self.y_nm)
             && self.reference_offset.is_none_or(|offset| offset != DEFAULT_REFERENCE_OFFSET && valid_reference_offset(offset))
+            && self.reference_text.as_ref().is_none_or(|text| self.library.is_some() && text.validate().is_ok())
     }
     /// Resolve the pinned library identity; legacy marker geometry is explicit compatibility behavior.
     pub(crate) fn key(&self) -> Option<definition::Key> {
@@ -217,6 +222,19 @@ impl Footprint {
         }
         if let Some(offset) = self.reference_offset {
             value["reference_offset"] = json!(offset);
+        }
+        if let Some(text) = &self.reference_text {
+            value["reference_text"] = json!(text);
+        }
+        if let Some(definition) = project.board.definition_for(self) {
+            let name = project
+                .components
+                .get(&self.component)
+                .map(|component| component.reference())
+                .or_else(|| project.board.baseline.as_ref()?.components.get(&self.component).map(|component| component.reference.as_str()))
+                .unwrap_or_default();
+            value["reference_appearance"] =
+                json!(reference::Resolved::new(Some(definition), name, project.board.silkscreen.unwrap_or_default(), self.reference_text.as_ref()));
         }
         if let Some(baseline) = &project.board.baseline {
             let pending_removal = !project.component_is_board_eligible(self.component);

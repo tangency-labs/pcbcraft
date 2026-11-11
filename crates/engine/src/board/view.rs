@@ -119,6 +119,10 @@ pub struct FootprintView<'a> {
     pub physical_reference: bool,
     /// Additional local displacement from the library reference default, before rotation or side mirroring.
     pub reference_offset: Point,
+    /// Sparse local print overrides, retained independently of the component's reference.
+    pub reference_text: Option<super::reference::Text>,
+    /// Effective font, words and print dimensions after resolving defaults and local overrides.
+    pub reference_appearance: super::reference::Resolved,
     /// The accepted source was removed from the schematic; physical removal is pending.
     pub pending_removal: bool,
     /// Placed on the bottom side, mirrored and on the back layers.
@@ -252,8 +256,19 @@ impl<'a> BoardView<'a> {
                     })
                     .collect(),
                 graphics: graphics(self.project, footprint, reference),
-                physical_reference: self.project.board.definition_for(footprint).is_some_and(|d| d.reference.is_some()),
+                physical_reference: self
+                    .project
+                    .board
+                    .definition_for(footprint)
+                    .is_some_and(|d| d.reference.is_some() || footprint.reference_text.is_some()),
                 reference_offset: footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET),
+                reference_text: footprint.reference_text.clone(),
+                reference_appearance: super::reference::Resolved::new(
+                    self.project.board.definition_for(footprint),
+                    reference,
+                    self.silkscreen(),
+                    footprint.reference_text.as_ref(),
+                ),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
                 bottom: footprint.bottom,
             })
@@ -266,7 +281,9 @@ impl<'a> BoardView<'a> {
         let Some(id) = crate::schematic::wiring::parse_id(&view.id, "footprint-").filter(|_| view.board == self.target) else { return Vec::new() };
         let placements = self.project.board.footprints();
         let Ok(index) = placements.binary_search_by_key(&id, |footprint| footprint.id) else { return Vec::new() };
-        reference_graphics(self.project, &placements[index], view.reference, offset)
+        let mut placement = placements[index].clone();
+        placement.reference_text = view.reference_text.clone();
+        reference_graphics(self.project, &placement, view.reference, offset)
     }
 
     /// Project schematic component selection into this board's placement IDs. Wires and missing
@@ -388,15 +405,16 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
 fn reference_graphics(project: &Project, footprint: &super::Footprint, reference: &str, offset: Point) -> Vec<GraphicView> {
     let Some(definition) = project.board.definition_for(footprint) else { return Vec::new() };
     let style = project.board.silkscreen.unwrap_or_default();
+    let stroke_nm = super::reference::Resolved::new(Some(definition), reference, style, footprint.reference_text.as_ref()).size.stroke_width_nm;
     let side = if footprint.bottom { super::setup::Side::Back } else { super::setup::Side::Front };
     definition
-        .reference_paths(reference, style, offset)
+        .reference_paths_with(reference, style, offset, footprint.reference_text.as_ref())
         .into_iter()
         .map(|path| GraphicView {
             purpose: super::definition::GraphicPurpose::Silkscreen,
             side,
             points: path.into_iter().map(|point| footprint.point(point)).collect(),
-            stroke_nm: Some(style.stroke_width_nm),
+            stroke_nm: Some(stroke_nm),
             closed: false,
             reference: true,
         })

@@ -308,7 +308,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
 
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
-    // format 14 adds bottom-side footprints, and format 15 adds reference offsets. Each may carry every
+    // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
     let sided = board.format == SIDE_BOARD_FORMAT;
     let references = board.format == REFERENCE_BOARD_FORMAT;
@@ -327,8 +327,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if !references && sided != board.footprints.iter().any(|footprint| footprint.bottom) {
         return Err("board.json: bottom-side footprints require board format 14 or later, and format 14 requires at least one".into());
     }
-    if references != board.footprints.iter().any(|footprint| footprint.reference_offset.is_some()) {
-        return Err("board.json: footprint reference offsets require board format 15, which requires at least one".into());
+    if references != board.footprints.iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some()) {
+        return Err("board.json: footprint reference offsets and print overrides require board format 15, which requires at least one".into());
     }
     if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
         return Err("board.json: accepted baselines require board format 10, 11 or 12".into());
@@ -964,7 +964,7 @@ impl DocumentsEncoder {
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,
-/// bottom-side footprints version 14, and reference offsets version 15. Versions 12 to 15 are supersets: each may carry any
+/// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
 fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
@@ -975,7 +975,7 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let assignments = !board.assignments.is_empty();
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
-    let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some());
+    let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some());
     if let Some(setup) = setup {
         let format = if references {
             REFERENCE_BOARD_FORMAT

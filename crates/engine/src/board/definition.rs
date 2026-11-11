@@ -1,5 +1,5 @@
 //! Original native footprint definitions, pinned independently from symbol graphics and placements.
-use crate::schematic::Point;
+use crate::schematic::{Point, TextAlign};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -175,7 +175,25 @@ impl FootprintDefinition {
     /// Resolve generated reference strokes in local coordinates for editing and fabrication.
     /// Apply both the library default and the placement displacement before clipping to copper.
     pub fn reference_paths(&self, text: &str, style: super::silkscreen::Settings, offset: Point) -> Vec<Vec<Point>> {
-        let Some(font) = self.reference.as_deref() else { return Vec::new() };
+        self.reference_paths_with(text, style, offset, None)
+    }
+
+    /// Apply local print overrides at the reference anchor before footprint mirroring and rotation.
+    /// Visibility affects only generated ink; component identity and the physical pads remain separate.
+    pub(crate) fn reference_paths_with(
+        &self,
+        text: &str,
+        style: super::silkscreen::Settings,
+        offset: Point,
+        appearance: Option<&super::reference::Text>,
+    ) -> Vec<Vec<Point>> {
+        let appearance = super::reference::Resolved::new(Some(self), text, style, appearance);
+        if !appearance.visible {
+            return Vec::new();
+        }
+        let outline_stroke_nm = style.stroke_width_nm;
+        let style =
+            super::silkscreen::Settings { text_height_nm: appearance.size.height_nm, stroke_width_nm: appearance.size.stroke_width_nm, ..style };
         if !super::valid_reference_offset(offset) {
             return Vec::new();
         }
@@ -184,14 +202,20 @@ impl FootprintDefinition {
             return Vec::new();
         }
         let top_pad = self.pads.iter().map(|p| p.center.y_nm - p.width_nm.max(p.height_nm) / 2).min().unwrap_or(0);
-        let top_line = self.silkscreen.iter().flat_map(|path| &path.points).map(|p| p.y_nm - style.stroke_width_nm / 2).min().unwrap_or(top_pad);
-        let lettering = if font == "pcbcraft-technical-1" { super::silkscreen::lettering } else { super::silkscreen::legacy_lettering };
-        let mut paths = lettering(text, 0, style);
+        let top_line = self.silkscreen.iter().flat_map(|path| &path.points).map(|p| p.y_nm - outline_stroke_nm / 2).min().unwrap_or(top_pad);
+        let lettering = if appearance.font == "pcbcraft-technical-1" { super::silkscreen::lettering } else { super::silkscreen::legacy_lettering };
+        let mut paths = lettering(&appearance.text, 0, style);
         let bottom = paths.iter().flatten().map(|p| p.y_nm).max().unwrap_or(0) + (style.stroke_width_nm + 1) / 2;
-        let y = top_pad.min(top_line) - style.pad_clearance_nm - bottom;
+        let align = match appearance.align {
+            TextAlign::Start => paths.iter().flatten().map(|p| p.x_nm).min().unwrap_or(0) - style.stroke_width_nm / 2,
+            TextAlign::Middle => 0,
+            TextAlign::End => paths.iter().flatten().map(|p| p.x_nm).max().unwrap_or(0) + (style.stroke_width_nm + 1) / 2,
+        };
+        let y = top_pad.min(top_line) - style.pad_clearance_nm;
         for point in paths.iter_mut().flatten() {
-            point.x_nm += default.x_nm + offset.x_nm;
-            point.y_nm += default.y_nm + y + offset.y_nm;
+            let (x, local_y) = super::rotate(point.x_nm - align, point.y_nm - bottom, appearance.rotation);
+            point.x_nm = x + default.x_nm + offset.x_nm;
+            point.y_nm = local_y + default.y_nm + y + offset.y_nm;
         }
         super::silkscreen::clipped(paths, &self.pads, style)
     }

@@ -7,10 +7,9 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-The current main branch implements the footprint format through its font field
-and board documents through format 14. The reference offsets and board format 15
-specified here are the next implementation slice. The schema includes those
-fields so implementers and library authors can target the same contract.
+Board format 15 adds local reference position and print overrides. Earlier board
+formats retain their existing encodings when these fields are absent. Footprint
+library definitions continue to use their independently versioned format 1.
 
 | Document | Format | Machine-readable schema |
 | --- | --- | --- |
@@ -99,8 +98,9 @@ stroke width and `fill` equal to `none`.
 Every persisted length is an integer number of nanometers. Points contain
 exactly `x_nm` and `y_nm`. Unit-aware controls convert millimeters or mils to this
 representation before submitting a command. Geometry uses the footprint's local
-origin and the existing native X/Y axes. Rotation uses whole degrees, with 90
-degrees mapping local `(x, y)` to `(-y, x)`.
+origin and the existing native X/Y axes, with positive Y pointing down. Rotation
+uses whole degrees counterclockwise, with 90 degrees mapping local `(x, y)` to
+`(y, -x)`.
 
 Local coordinates and dimensions are bounded by 100,000,000 nm. Each reference
 offset axis is within ±100,000,000 nm. These are current implementation bounds.
@@ -136,6 +136,37 @@ before rotation. Quarter turns preserve exact integer coordinates. Other
 whole-degree rotations round the transformed local coordinates to nanometers.
 Moving, rotating or flipping a footprint carries its reference with it.
 
+## Local printed text
+
+The optional placement `reference_text` object contains sparse print overrides.
+Its fields are optional and non-null, and at least one field must be present.
+An absent field inherits its default. An explicit value remains an override even
+when it currently matches that default. Reset removes the override.
+
+| Field | Type and constraint | Inherited default |
+| --- | --- | --- |
+| `text` | Nonblank single-line string of at most 128 Unicode characters, without controls | The owning component's current reference |
+| `font` | `pcbcraft-technical-1` or `pcbcraft-stroke-1` | The pinned footprint's reference font, with Technical available for explicitly enabled local ink |
+| `size` | Required integer `height_nm` and `stroke_width_nm` within this optional object. Height is positive and at most 10 mm. Stroke is positive and at most half the height. | The board's silkscreen size and stroke settings |
+| `rotation` | Whole degrees 0…359, counterclockwise around the local text anchor | Zero, before the footprint's own transform |
+| `align` | `start`, `middle` or `end` | `middle` |
+| `visible` | Boolean | Enabled when the pinned definition has a generated reference |
+
+Height and stroke form one size override so an inherited stroke cannot become
+invalid when a local height or global style changes. Pad clearance continues to
+come from the board's silkscreen settings. Alignment and local rotation apply to
+the lettering at its bottom-ink anchor, before the library and placement offsets,
+pad clipping and footprint transform.
+
+A local text literal is used for rendered and exported ink. The schematic,
+component reference, BOM identity and terminal mappings continue to use the
+owning component. For example, printing `Power input` on R2 leaves its component
+reference R2. An explicit **Rename component** action uses the existing shared
+reference edit with uniqueness validation, updating that component across its
+schematic and board views. The component's stable ID and local literal survive
+that rename. A literal `R2` remains literal even when the component becomes R12.
+Removing the `text` override restores the current component reference.
+
 Board canvas rendering and Gerber silkscreen export use the same generated and
 clipped paths. The editor-only fallback label on a retained marker footprint
 continues to use its placement offset through the legacy rendering path.
@@ -145,17 +176,18 @@ continues to use its placement offset through the legacy rendering path.
 The placement schema validates one physical `footprints` array entry inside a
 board document. It includes the exact pinned identity, numeric object and
 component IDs, explicit terminal-to-pad map, board-space origin and optional
-`rotation`, `bottom` and `reference_offset`. A zero rotation and front-side
+`rotation`, `bottom`, `reference_offset` and `reference_text`. A zero rotation and front-side
 placement are omitted on canonical save. Origin coordinates currently range
 from −987,300,000 to 987,300,000 nm on each axis.
 
 The containing board supplies its stable board identity and format. Format 15
-requires at least one footprint with a nonzero `reference_offset`; the other
-placements may omit it. Format 15 extends format 14 and retains every field
+requires at least one nonzero `reference_offset` or nonempty `reference_text`
+override among its footprints. Other placements may omit both. Format 15 extends
+format 14 and retains every field
 permitted by format 14, including optional tracks and vias inherited from
 formats 12–13. Bottom-side placements are accepted in both formats 14 and 15.
-Removing the last override restores the format required by the board's other
-data. Earlier board formats reject this field. The
+Removing the last offset and print override restores the format required by the board's other
+data. Earlier board formats reject both fields. The
 [native storage contract](native-project-storage.md) defines the remaining board
 envelope and its legacy encodings. The physical placement schema covers the
 library-backed representation; retained marker placements have their existing
@@ -165,6 +197,14 @@ legacy identity and `pin_1_pad` rules in the engine codec.
 `expected_revision` and an `offset` point. GUI and MCP use this transaction,
 including reset. Unknown targets, stale revisions and out-of-range values are
 rejected before mutation. Undo restores the previous override and saved format.
+
+`pcb.set_footprint_reference_text` takes the board target, `footprint`,
+`expected_revision`, an `appearance` object and optional `offset`. The appearance
+uses the `reference_text` fields above. A null appearance resets all print
+overrides. Omitting `offset` preserves position, and a zero offset removes its
+override. The whole edit validates and commits as one transaction. Physical print
+appearance requires a native footprint definition. The legacy marker's editor
+annotation retains its earlier offset-only behavior.
 
 ## Semantic validation
 
@@ -203,9 +243,9 @@ version for placed overrides.
 
 The format-1 field set defined here is fixed. Future authored fields or changed
 meanings require a new footprint format and an explicit compatibility design.
-Rotation, visibility, alignment and individual reference size overrides require
-that versioned extension. Reference size and stroke width use board silkscreen
-settings.
+The board-local appearance fields above extend the first format-15 implementation
+before its release. Later changes to the released board contract require their
+own version and compatibility review.
 
 Offsets are additive. Adopting a definition revision with a changed default
 preserves the placement's displacement and recomputes its position. A definition
