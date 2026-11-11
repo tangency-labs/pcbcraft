@@ -5,7 +5,7 @@ use solidcraft_ui_kit::{self as kit, Container, Surface, Window};
 
 /// A shared explicit placement choice keeps compact and expanded catalogs in agreement.
 pub fn repeat_placement(ui: &mut Ui, repeat: &mut bool) -> egui::Response {
-    ui.checkbox(repeat, "Repeat placement")
+    kit::checkbox(ui, "Repeat placement", repeat)
 }
 
 /// Decisions from a form remain presentation events; callers own documents and validation.

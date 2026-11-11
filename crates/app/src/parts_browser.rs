@@ -417,11 +417,7 @@ impl PartsBrowser {
 
     /// Both catalog presentations edit the same query and explicitly own their search focus.
     fn search(&mut self, ui: &mut Ui) {
-        let response = ui.add_sized(
-            [ui.available_width(), pcbcraft_chrome::Tokens::get().control_height],
-            egui::TextEdit::singleline(&mut self.query).hint_text("Search parts"),
-        );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), "Search parts"));
+        let response = catalog::search(ui, &mut self.query);
         self.focus_ids.push(response.id);
         if response.changed() {
             self.selected = None;

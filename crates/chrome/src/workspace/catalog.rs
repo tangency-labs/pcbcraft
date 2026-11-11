@@ -367,41 +367,25 @@ pub fn source(ui: &mut Ui, label: &str, count: usize) {
     });
 }
 
-/// Full-width search with a separate clear control. The caller manages focus and Enter.
+/// Shared full-width parts search. The caller manages query changes, focus and Enter.
 pub fn search(ui: &mut Ui, query: &mut String) -> Response {
-    ui.horizontal(|ui| {
-        let width = ui.available_width() - if query.is_empty() { 0.0 } else { 30.0 };
-        let response = ui.add_sized(
-            [width, 28.0],
-            egui::TextEdit::singleline(query).hint_text("Search parts…").align(egui::Align2::LEFT_CENTER).margin(vec2(9.0, 0.0)),
-        );
-        if !query.is_empty() && icon_button(ui, "Clear parts search", HeaderIcon::Close).clicked() {
-            query.clear();
-            response.request_focus();
-        }
-        response
-    })
-    .inner
+    solidcraft_ui_kit::search_field(ui, ui.make_persistent_id("parts_search"), query, "Search parts")
 }
 
-/// Four equally sized quiet view buttons; the compact layout temporarily forces List.
+/// Shared equal-width density segments. Short panes use List while retaining the saved choice.
 pub fn view_picker(ui: &mut Ui, view: &mut View, compact: bool) -> View {
     if compact {
         return View::List;
     }
-    let width = (ui.available_width() - 6.0) / 4.0;
-    ui.scope(|ui| {
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0, Tokens::get().border);
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.horizontal(|ui| {
-            for (candidate, label) in [(View::Small, "Small"), (View::Medium, "Medium"), (View::Large, "Large"), (View::List, "List")] {
-                if ui.add_sized([width, 24.0], egui::Button::new(egui::RichText::new(label).small()).selected(*view == candidate)).clicked() {
-                    *view = candidate;
-                }
-            }
-        });
-    });
+    let views = [View::Small, View::Medium, View::Large, View::List];
+    let mut selected = views.iter().position(|candidate| candidate == view).unwrap_or_default();
+    solidcraft_ui_kit::segmented(
+        ui,
+        &mut selected,
+        &["Small", "Medium", "Large", "List"],
+        solidcraft_ui_kit::Segments { small: true, compact: true, ..Default::default() },
+    );
+    *view = views[selected];
     *view
 }
 

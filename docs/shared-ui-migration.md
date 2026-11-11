@@ -100,6 +100,15 @@ PCB layer color control. Selection filters use the kit's checkboxes, including
 the mixed state for All items. The filters stay local to each editor view, and
 All items applies only to categories supported by that view.
 
+## Parts Catalog controls
+
+The expanded chooser and compact dock share the toolkit's search field and
+Repeat placement checkbox. Density choices use its segmented control, while
+short result panes use List and retain the selected expanded density. The Library
+selector uses the shared dropdown through PCBcraft's labelled choice adapter,
+which also serves property forms. The app owns query changes, library keys,
+selected definitions, focus and placement authority.
+
 ## Shared property dialogs
 
 Symbol Properties and the net label forms use the kit's modal host, window

@@ -46,15 +46,12 @@ pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, option
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
         let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str()).to_owned();
-        egui::ComboBox::from_id_salt(id)
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                for (key, text) in options {
-                    ui.selectable_value(value, (*key).into(), text);
-                }
-            })
-            .response
-            .labelled_by(label.id)
+        solidcraft_ui_kit::dropdown_menu(ui, id, &selected, |ui| {
+            for (key, text) in options {
+                ui.selectable_value(value, (*key).into(), text);
+            }
+        })
+        .labelled_by(label.id)
     })
     .inner
 }
