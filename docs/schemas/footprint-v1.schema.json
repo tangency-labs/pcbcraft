@@ -1,0 +1,586 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint:1",
+  "title": "PCBcraft canonical published footprint definition, format 1",
+  "description": "Structural validation for native footprint JSON. Geometry relationships, UTF-8 byte limits and project identity checks are defined in ../footprint-schema.md and enforced by the engine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "library",
+    "id",
+    "revision",
+    "name",
+    "license",
+    "source",
+    "pads",
+    "graphics"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-footprint/1"
+    },
+    "library": {
+      "$ref": "#/$defs/library_id"
+    },
+    "id": {
+      "$ref": "#/$defs/library_id"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reference",
+        "locator"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+        }
+      }
+    },
+    "pads": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/pad"
+      }
+    },
+    "graphics": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/graphic_rectangle"
+      }
+    },
+    "artwork": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/artwork"
+      }
+    },
+    "silkscreen": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/silkscreen_path"
+      }
+    },
+    "reference": {
+      "enum": [
+        "pcbcraft-stroke-1",
+        "pcbcraft-technical-1"
+      ]
+    },
+    "reference_offset": {
+      "$ref": "#/$defs/reference_offset"
+    }
+  },
+  "dependentRequired": {
+    "reference_offset": [
+      "reference"
+    ]
+  },
+  "$defs": {
+    "library_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])"
+    },
+    "terminal_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8,
+      "pattern": "^[A-Za-z0-9+_-]+(?![\\s\\S])"
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x_nm",
+        "y_nm"
+      ],
+      "properties": {
+        "x_nm": {
+          "type": "integer",
+          "minimum": -100000000,
+          "maximum": 100000000
+        },
+        "y_nm": {
+          "type": "integer",
+          "minimum": -100000000,
+          "maximum": 100000000
+        }
+      }
+    },
+    "reference_offset": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/point"
+        },
+        {
+          "not": {
+            "properties": {
+              "x_nm": {
+                "const": 0
+              },
+              "y_nm": {
+                "const": 0
+              }
+            },
+            "required": [
+              "x_nm",
+              "y_nm"
+            ]
+          }
+        }
+      ],
+      "description": "Nonzero displacement in footprint-local nanometers. Omit the field to inherit the default."
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000000
+    },
+    "rotation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 359
+    },
+    "purpose": {
+      "enum": [
+        "fabrication",
+        "silkscreen",
+        "courtyard"
+      ]
+    },
+    "pad": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "center",
+        "width_nm",
+        "height_nm",
+        "rotation",
+        "shape",
+        "copper"
+      ],
+      "properties": {
+        "number": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "center": {
+          "$ref": "#/$defs/point"
+        },
+        "width_nm": {
+          "$ref": "#/$defs/size"
+        },
+        "height_nm": {
+          "$ref": "#/$defs/size"
+        },
+        "rotation": {
+          "$ref": "#/$defs/rotation"
+        },
+        "shape": {
+          "enum": [
+            "rectangle",
+            "rounded_rectangle",
+            "circle",
+            "oval"
+          ]
+        },
+        "copper": {
+          "enum": [
+            "component_side",
+            "all_copper"
+          ]
+        },
+        "corner_radius_nm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50000000
+        },
+        "drill_nm": {
+          "$ref": "#/$defs/size"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "shape": {
+                "const": "rounded_rectangle"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "corner_radius_nm"
+            ],
+            "properties": {
+              "corner_radius_nm": {
+                "minimum": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "corner_radius_nm": {
+                "const": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "copper": {
+                "const": "all_copper"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "drill_nm"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "drill_nm"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "graphic_rectangle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "center",
+        "width_nm",
+        "height_nm",
+        "rotation"
+      ],
+      "properties": {
+        "purpose": {
+          "$ref": "#/$defs/purpose"
+        },
+        "center": {
+          "$ref": "#/$defs/point"
+        },
+        "width_nm": {
+          "$ref": "#/$defs/size"
+        },
+        "height_nm": {
+          "$ref": "#/$defs/size"
+        },
+        "rotation": {
+          "$ref": "#/$defs/rotation"
+        }
+      }
+    },
+    "silkscreen_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "points",
+        "closed"
+      ],
+      "properties": {
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "closed": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "points": {
+                "minItems": 3
+              }
+            }
+          }
+        }
+      ]
+    },
+    "artwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "graphic"
+      ],
+      "properties": {
+        "purpose": {
+          "$ref": "#/$defs/purpose"
+        },
+        "graphic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "geometry",
+            "stroke_nm",
+            "fill"
+          ],
+          "properties": {
+            "geometry": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "from",
+                    "to"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "line"
+                    },
+                    "from": {
+                      "$ref": "#/$defs/point"
+                    },
+                    "to": {
+                      "$ref": "#/$defs/point"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "min",
+                    "max"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "rectangle"
+                    },
+                    "min": {
+                      "$ref": "#/$defs/point"
+                    },
+                    "max": {
+                      "$ref": "#/$defs/point"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "center",
+                    "radius_nm"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "circle"
+                    },
+                    "center": {
+                      "$ref": "#/$defs/point"
+                    },
+                    "radius_nm": {
+                      "$ref": "#/$defs/size"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "center",
+                    "radius_nm",
+                    "start_degrees",
+                    "sweep_degrees"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "arc"
+                    },
+                    "center": {
+                      "$ref": "#/$defs/point"
+                    },
+                    "radius_nm": {
+                      "$ref": "#/$defs/size"
+                    },
+                    "start_degrees": {
+                      "type": "integer",
+                      "minimum": -360,
+                      "maximum": 360
+                    },
+                    "sweep_degrees": {
+                      "allOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -360,
+                          "maximum": 360
+                        },
+                        {
+                          "not": {
+                            "const": 0
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "points",
+                    "closed"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "polyline"
+                    },
+                    "points": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 64,
+                      "items": {
+                        "$ref": "#/$defs/point"
+                      }
+                    },
+                    "closed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "closed": {
+                            "const": true
+                          }
+                        }
+                      },
+                      "then": {
+                        "properties": {
+                          "points": {
+                            "minItems": 3
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "at",
+                    "text",
+                    "height_nm",
+                    "rotation",
+                    "align"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "text"
+                    },
+                    "at": {
+                      "$ref": "#/$defs/point"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+                    },
+                    "height_nm": {
+                      "type": "integer",
+                      "minimum": 100000,
+                      "maximum": 10000000
+                    },
+                    "rotation": {
+                      "$ref": "#/$defs/rotation"
+                    },
+                    "align": {
+                      "enum": [
+                        "start",
+                        "middle",
+                        "end"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "stroke_nm": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000000
+            },
+            "fill": {
+              "const": "none"
+            }
+          }
+        }
+      }
+    }
+  }
+}

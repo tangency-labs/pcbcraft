@@ -95,6 +95,10 @@ The starter NPN symbol uses 1 Base, 2 Emitter and 3 Collector, matching
 
 ## Definition and placement contract
 
+The [footprint format specification](footprint-schema.md) defines field ownership,
+reference defaults and overrides, coordinate transforms and compatibility, with
+machine-readable schemas for canonical definitions and physical placements.
+
 A `pcbcraft-footprint/1` document has `library`, `id`, positive `revision`, `name`,
 `license`, `source`, `pads` and `graphics`. `source` records `kind: "original"`,
 `reference` and `locator`; it describes provenance and is never fetched on load.
