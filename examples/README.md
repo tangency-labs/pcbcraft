@@ -30,14 +30,14 @@ The full schematic/board walkthrough and preview release remain part of
 
 Start the desktop app with `cargo run --locked -p pcbcraft` from the repository
 root. On Home, choose **Open Project → Project file or archive…**, then select
-[`dual-led/project.pc`](dual-led/project.pc). Before editing, use
+[`dual-led/project.json`](dual-led/project.json). Before editing, use
 **File → Save As… → Project folder…** to save into a new or empty folder outside
 the checkout. **View → Fit** brings the circuit into view; collapse Parts if you
 want more space. Reopening the distributed example resets the exercise without
 changing your saved copy.
 
 In the [browser build](../README.md#get-started), upload
-[`dual-led.pc.zip`](dual-led.pc.zip) instead. It contains the same project as the
+[`dual-led.pc`](dual-led.pc) instead. It contains the same project as the
 folder, including its symbols. **Download** produces an edited archive; reopen
 that download to check it. Uploading again from the original archive resets the
 exercise. The browser keeps its unsaved marker after requesting a download,
@@ -58,7 +58,7 @@ because it cannot confirm that you kept the file.
    connections; crossing a wire elsewhere does not join it.
 4. Choose **Capture → Nets**. The unchanged example has four connected groups
    and Q1's three unconnected pins, as listed below. Save your copy and reopen it to
-   verify the result. Share the complete folder or archive, not `project.pc`
+   verify the result. Share the complete folder or archive, not `project.json`
    alone.
 
 | Connection | Pins in the unchanged demo |
@@ -92,7 +92,7 @@ updated distributed folder or archive to try these packages.
 
 Build `pcbcraft-cli` with `cargo build --locked -p pcbcraft-cli`. Configure an
 MCP client to launch `target/debug/pcbcraft-cli` with arguments
-`mcp --project examples/dual-led/project.pc` and the repository root as its
+`mcp --project examples/dual-led/project.json` and the repository root as its
 working directory. Add `.exe` on Windows. This opens a separate in-memory
 session; headless edits do not change the GUI or write back to the example.
 
@@ -130,8 +130,8 @@ a destination whose parent exists and which does not already exist:
 cargo run --locked -p pcbcraft-engine --example indicator_demo -- /tmp/pcbcraft-demo
 ```
 
-That creates `/tmp/pcbcraft-demo/dual-led/project.pc` and
-`/tmp/pcbcraft-demo/dual-led.pc.zip`. Choose another path on Windows. Every run
+That creates `/tmp/pcbcraft-demo/dual-led/project.json` and
+`/tmp/pcbcraft-demo/dual-led.pc`. Choose another path on Windows. Every run
 creates a new project and sheet identity; ordinary saves of an existing copy
 preserve its IDs and ordering. Use Save As or copy the entire existing folder
 to retain those identities. The generator refuses an existing destination and

@@ -82,7 +82,7 @@ fn connection_changes_are_proposed_without_replacing_board_geometry() {
     let mut session = fixture();
     let accepted = capture(session.project().unwrap(), 1);
     let symbols: Vec<_> = session.project().unwrap().symbols.iter().map(|symbol| symbol.id()).collect();
-    let before_board = encode_documents(session.snapshot().unwrap()).unwrap()["board.json"].clone();
+    let before_board = encode_documents(session.snapshot().unwrap()).unwrap()[&session.project().unwrap().board_document_path().unwrap()].clone();
     session
         .apply(
             CONNECT_PINS,
@@ -104,7 +104,7 @@ fn connection_changes_are_proposed_without_replacing_board_geometry() {
     assert_eq!(adopted, proposed);
     let documents = encode_documents(Arc::new(next)).unwrap();
     let before: serde_json::Value = serde_json::from_slice(&before_board).unwrap();
-    let after: serde_json::Value = serde_json::from_slice(&documents["board.json"]).unwrap();
+    let after: serde_json::Value = serde_json::from_slice(&documents[&crate::persistence::test_board_path(&documents)]).unwrap();
     for field in ["footprints", "assignments", "setup", "graphics", "outline", "silkscreen"] {
         assert_eq!(after[field], before[field], "physical field {field}");
     }

@@ -27,8 +27,20 @@ The Assistant uses `pcbcraft-cli` beside the desktop app to reach the open
 project. Build both binaries in the same profile; for a release build, add
 `--release` to both Cargo commands.
 
+If your existing project uses the previous `project.pc` folder or `.pc.zip`
+package layout, open it normally. Its first Save upgrades it automatically;
+opening it or showing its recent-project preview leaves its files unchanged.
+To create a separate converted copy instead, use
+`./target/debug/pcbcraft-cli convert /path/to/old-project /path/to/new-project`.
+The destination must not exist; a `.pc` destination creates a portable package.
+The [conversion guide](native-project-storage.md#convert-a-previous-split-project)
+explains supported old inputs and failure behavior. Converted copies and new
+projects store each board under its registered `boards/<folder>/board.json` path.
+Supported flat `project.json` projects open unchanged and migrate on their first
+Save, even without design edits; later unchanged saves produce no diff.
+
 On Home, choose **Open Project**, then **Project file or archive…**, and select
-`crates/app/tests/fixtures/split/two-resistors/project.pc` from your checkout.
+`crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.
 Use **File → Save As… → Project folder…** to save your own copy in a new or empty
 folder outside the checkout before making changes. This keeps the tracked test
@@ -51,8 +63,8 @@ trunk serve --locked
 ```
 
 Open [the local app](http://127.0.0.1:8781) and upload
-`crates/app/tests/fixtures/split/two-resistors.pc.zip`. The browser needs the
-archive, because uploading `project.pc` alone does not include its companion
+`crates/app/tests/fixtures/split/two-resistors.pc`. The browser needs the
+archive, because uploading `project.json` alone does not include its companion
 documents. To begin an empty design on either platform, choose **New Schematic**
 or **New PCB** on Home. Each opens an **Untitled** project in the chosen workspace,
 with an empty sheet. **New Schematic** starts without a physical board; **New PCB**
@@ -107,7 +119,14 @@ the same `VCC` net name, which can be changed before placement.
    library folders on desktop or uploads a portable library bundle on either
    platform. Try the original [Workshop source example](native-library-sources.md),
    then select Workshop in the catalog. Placed symbols keep their pinned
-   definition and license attribution after the source is removed.
+   definition and license attribution after the source is removed. The
+   [native part example](../examples/native-parts/README.md) also offers a generic
+   resistor with a 0603 package and an optional synthetic manufacturer part.
+   Choose **Unassigned** to defer the package, or select the manufacturer record
+   to place the resolved combination. A placed native part's **Footprint** action
+   opens its package, manufacturer and typed requirement form; changes use one
+   undo step and flag a retained MPN when its specifications no longer meet the
+   requirements. These records travel with folder and `.pc` saves.
    **Dock** switches the large form to a compact catalog beneath Browser; its
    header's **Expand** control returns to the large form with the same library,
    search and selection. The compact catalog stays open during placement and can
@@ -158,8 +177,8 @@ the same `VCC` net name, which can be changed before placement.
    **Preferences → Schematic** (also in the Modify menu) defaults on. Retracing a draft shortens the preview as you draw;
    Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
    drawing, then select a wire and use **Heal** for cleanup when desired.
-6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
-   browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that
+6. Save your desktop copy, reopen its `project.json`, and check the edit. In the
+   browser, choose **Download**, keep the resulting `.pc`, then reopen that
    download to check it. A download request does not prove the file was saved,
    so the browser deliberately keeps its unsaved marker.
 7. With unsaved changes, closing the last desktop editor window, **Quit**, **New Project**
@@ -287,8 +306,8 @@ Generate an original example into a directory that does not already exist:
 cargo run --locked -p pcbcraft-engine --example board_workspace -- /tmp/pcbcraft-board-example
 ```
 
-Open `/tmp/pcbcraft-board-example/board-inspection/project.pc` on desktop, or
-upload the generated `board-inspection.pc.zip` in the browser. The example has a
+Open `/tmp/pcbcraft-board-example/board-inspection/project.json` on desktop, or
+upload the generated `board-inspection.pc` in the browser. The example has a
 resistor, a two-pin connector, two connections and two generic footprint
 placements. It is an inspection fixture, not a fabrication-ready board.
 
@@ -463,11 +482,11 @@ schematic unit retains its footprint until an update accepts the removal. A
 legacy board retains its prior deletion behavior until explicit current-state
 adoption, so establish that starting point before editing its schematic.
 
-Share the entire project folder or its `.pc.zip` archive, rather than the entry
+Share the entire project folder or its `.pc` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need
 your source library. The folder is the Git-friendly working form; opening and
 saving a current project without edits preserves its document bytes. The
-[storage guide](native-project-storage.md) explains legacy migration and failed
+[storage guide](native-project-storage.md) explains the compatibility break and failed
 or interrupted saves.
 
 ## Try the same project through MCP
@@ -480,7 +499,7 @@ cargo build --locked -p pcbcraft -p pcbcraft-cli
 
 To inspect a separate, headless copy of the example, configure an MCP client to
 launch `target/debug/pcbcraft-cli` with arguments
-`mcp --project crates/app/tests/fixtures/split/two-resistors/project.pc` and the
+`mcp --project crates/app/tests/fixtures/split/two-resistors/project.json` and the
 repository as its working directory. Use `.exe` on Windows. Running that command
 in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an

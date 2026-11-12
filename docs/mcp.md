@@ -4,6 +4,11 @@ PCBCraft offers an in-app Assistant and a live MCP connection on desktop.
 The CLI can also run a separate headless session. Project edits use the
 same engine commands and undo history within each session.
 
+Projects from the previous split layout can be copied into the current format
+with `pcbcraft-cli convert SOURCE DESTINATION` before starting MCP. A `.pc`
+destination creates a ZIP; other destinations create a new working folder. See
+[conversion support and limits](native-project-storage.md#convert-a-previous-split-project).
+
 ## Assistant in the desktop editor
 
 Open **Assistant** from the chat icon next to Preferences or press
@@ -68,7 +73,7 @@ isn't on your PATH, set its command to the full path of the binary in
 `target/debug`. Close the setup dialog before editing. The copied configuration
 grants access to this window until you disable the connection or close the app.
 
-For a quick check, open `crates/app/tests/fixtures/split/two-resistors/project.pc`. Use
+For a quick check, open `crates/app/tests/fixtures/split/two-resistors/project.json`. Use
 `inspect_project` to get R1's symbol ID and the current revision. Call `execute`
 with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
 `x_nm` and `y_nm`, and the inspected revision as `expected_revision`. Move R1 to
@@ -221,7 +226,7 @@ unavailable copper sides before changing anything.
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it
 at `pcbcraft-cli mcp`. Pass
-`--project path/to/project.pc` (or a folder or `.pc.zip`) after `mcp` to start with a saved snapshot. The
+`--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to return just the resulting revision. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad.

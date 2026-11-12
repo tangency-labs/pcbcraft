@@ -63,11 +63,10 @@ default for a symbol-only workflow, not an override of a selected part definitio
 The native parser, source diagnostics, project pinned-symbol codec and authoring
 copy/export path retain this binding. Source inspection reports a missing or
 conflicting category; it never fetches or substitutes one. Resolving a part
-checks that part's exact category and field binding. Creating project-local
-part definitions during ordinary symbol placement and replacing the existing
-free-text instance Value editor with typed requirements remain separate
-integration work under #92. Preserving this field does not claim that today's
-Value editor already enforces it.
+checks that part's exact category and field binding. Native part placement uses its own explicit part/category binding and typed
+requirements, including canonical primary Value editing. Symbol-only placement
+retains free text; synthesizing a project-local part definition from a bare
+symbol remains separate authoring work. See [part-schema.md](part-schema.md).
 
 ## Validation beyond JSON Schema
 

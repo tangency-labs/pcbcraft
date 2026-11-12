@@ -1785,6 +1785,8 @@ pub struct Project {
     named_graph: Arc<OnceLock<Connectivity>>,
     /// The older format this snapshot was migrated from when it was opened, if any.
     upgraded_from: Option<u32>,
+    /// Versioned project storage metadata; absent for untouched flat-board files.
+    layout: Option<persistence::layout::Layout>,
 }
 
 impl Project {
@@ -2036,34 +2038,63 @@ impl Session {
         self.revision
     }
 
-    /// Give the project the name a completed save chose for it, as part of that save rather than
-    /// as an edit. `original` is the snapshot the save started from and `saved` its renamed copy.
-    /// Every snapshot of that document still bearing `original`'s name, in the open project and in
-    /// undo and redo, takes the new name, so undo doesn't bring the old name back; a name the person
-    /// set meanwhile is kept. `original` itself is replaced by `saved`, so a caller comparing
-    /// snapshots by pointer still sees the saved one. The revision and history depth don't change,
-    /// so edits based on the current revision stay valid. Returns whether anything was renamed.
-    pub fn adopt_saved_name(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
+    /// Adopt the name and storage layout of a completed save without adding an electrical
+    /// edit or changing the revision. New names apply only to snapshots still bearing the
+    /// captured name. Storage adoption remains across Undo, preserves each snapshot's board
+    /// identity/absence and retains a later root/folder choice made since the save began.
+    /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
+    pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
         }
-        let mut renamed = false;
+        let mut changed = false;
         for slot in std::iter::once(&mut self.project).chain(self.undo.iter_mut()).chain(self.redo.iter_mut()) {
             let Some(project) = slot.as_mut() else { continue };
-            if !project.same_document(original) || project.name != original.name {
+            if !project.same_document(original) {
                 continue;
             }
-            *project = if Arc::ptr_eq(project, original) {
-                Arc::clone(saved)
-            } else {
-                Arc::new(Project { name: saved.name.clone(), ..Project::clone(project) })
-            };
-            renamed = true;
+            if Arc::ptr_eq(project, original) {
+                *project = saved.clone();
+                changed = true;
+                continue;
+            }
+            let mut next = Project::clone(project);
+            if project.name == original.name {
+                next.name = saved.name.clone();
+            }
+            if let Some(saved_layout) = &saved.layout {
+                if next.layout.is_none() {
+                    next.layout = Some(persistence::layout::Layout { root: saved_layout.root.clone(), folder: None });
+                    next.refresh_board_folder();
+                    if next.board_target() == saved.board_target()
+                        && let Some(layout) = &mut next.layout
+                    {
+                        layout.folder = saved_layout.folder.clone();
+                    }
+                } else if next.layout_root() == original.layout_root()
+                    && let Some(layout) = &mut next.layout
+                {
+                    layout.root = saved_layout.root.clone();
+                    if project.board_target() == saved.board_target() && original.layout.as_ref().is_some_and(|old| old.folder == layout.folder) {
+                        layout.folder = saved_layout.folder.clone();
+                    }
+                }
+                next.numeric_id_high_water = Some(next.allocation_high_water().max(saved.allocation_high_water()));
+            }
+            if next.name != project.name || next.layout != project.layout || next.numeric_id_high_water != project.numeric_id_high_water {
+                *project = Arc::new(next);
+                changed = true;
+            }
         }
-        if renamed {
+        if changed {
             self.update_plan = None;
         }
-        renamed
+        changed
+    }
+
+    /// Retain the existing save-name API while sharing completed-save metadata adoption.
+    pub fn adopt_saved_name(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
+        self.adopt_saved_metadata(original, saved)
     }
 
     /// Return the runtime revision at which a file replaced the history root, or zero before
@@ -2188,11 +2219,13 @@ impl Session {
     /// `footprint_catalog` lists exact
     /// available revisions with pad identities and provenance, without duplicating drawing data.
     /// A configured board also reports setup and laminate thickness (null when unspecified).
+    /// Each board's `file` is its registered project-relative physical document path, including
+    /// any selected layout-root prefix; flat historical snapshots retain `board.json` until Save.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2397,6 +2430,7 @@ impl Session {
                 board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
                 named_graph: Arc::default(),
                 upgraded_from: None,
+                layout: Some(persistence::layout::Layout::default()),
             }),
             "project.rename" => {
                 let name = name_param(params)?;
@@ -2894,10 +2928,11 @@ impl Session {
         self.update_plan = None;
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
-        if self
+        let physical_changed = self
             .project
             .as_ref()
-            .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board)
+            .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board);
+        if physical_changed
             && matches!(project.board.ownership, board::identity::Ownership::Legacy)
             && let Some(target) = project.board_target()
         {
@@ -2909,6 +2944,7 @@ impl Session {
                 project.numeric_id_high_water = Some(project.allocation_high_water());
             }
         }
+        project.refresh_board_folder();
         // Named anchors can attach to moving geometry and join other sheets.
         if project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();

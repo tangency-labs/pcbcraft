@@ -112,7 +112,7 @@ establishes a common component context across those sheets as described below.
 ### Circuit use scope
 
 A circuit definition groups its component definitions and sheet definitions.
-Its record lives in `project.pc`; a circuit does not require another folder or a
+Its record lives in `project.json`; a circuit does not require another folder or a
 file per component. It may contain one root sheet, several flat roots, or roots
 with subsheets. This component scope need not appear as another parent sheet in
 the editor. A circuit use is one instantiation of that group, with its own stable
@@ -392,7 +392,7 @@ sheet filenames below stand for UUID-based paths):
 
 ```text
 flight-system/
-  project.pc
+  project.json
   sheets/
     <fc-main-id>.json
     <esc-main-id>.json
@@ -433,7 +433,7 @@ its topology must diverge. The equal GND names do not connect the boards by
 themselves; real connector terminals use explicit system mappings.
 
 The same design may begin without either board: both main circuits and Power
-uses live in `project.pc` under `schematic_instances`, and no board folders are
+uses live in `project.json` under `schematic_instances`, and no board folders are
 needed. Later create the boards and assign the closed sheet groups, preserving
 their instance IDs and analysis links while reviewing reference and connectivity
 scope changes. That operation changes physical association and storage home,

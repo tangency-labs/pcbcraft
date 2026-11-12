@@ -2098,7 +2098,7 @@ impl PcbApp {
                         if !IN_BROWSER && pcbcraft_chrome::controls::button(ui, "Project folder…").clicked() {
                             selected = Some(SaveFormat::Folder);
                         }
-                        if pcbcraft_chrome::controls::button(ui, "Packed project (.pc.zip)…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Packed project (.pc)…").clicked() {
                             selected = Some(SaveFormat::Archive);
                         }
                         cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();

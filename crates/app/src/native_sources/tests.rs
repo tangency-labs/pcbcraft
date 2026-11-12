@@ -275,3 +275,112 @@ fn compact_source_manager_tabs_keep_search_and_actions_reachable() {
     click(&mut h, "Close");
     assert!(matches!(h.state().dialog, Dialog::None));
 }
+
+/// Load an actual desktop folder worker and drive the app until its bounded result is adopted.
+fn load_desktop_source(h: &mut Harness<'_, PcbApp>, path: &std::path::Path) {
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.library_sources.load_path("desktop-parts".into(), path.to_str().unwrap().into(), &ctx, app.session.libraries().generation()).unwrap();
+    let start = std::time::Instant::now();
+    loop {
+        h.run();
+        if h.state().library_sources.job.is_none() {
+            break;
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Desktop folder relocation, either package workflow and a source-free handoff use real GUI/worker/storage paths.
+#[test]
+fn desktop_native_part_relocation_and_offline_handoff() {
+    use pcbcraft_engine::persistence::{ENTRY_POINT, encode_packed};
+    for package_before_placement in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("original-library");
+        let files = [
+            ("library.json", include_str!("../../../../examples/native-parts/library.json")),
+            ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
+            ("footprints/resistor-0603.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
+            ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
+            ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
+            ("manufacturer-parts/test.json", include_str!("../../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")),
+        ];
+        for (path, text) in files {
+            let path = original.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let mut app = PcbApp::default();
+        app.parts.set_repeat(false);
+        app.run("project.new", &json!({"create_board":true}));
+        let mut h =
+            Harness::builder().with_size(egui::vec2(1400., 1000.)).with_max_steps(40).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        load_desktop_source(&mut h, &original);
+        h.key_press(egui::Key::A);
+        h.run();
+        click(&mut h, "Native Parts Demo");
+        click(&mut h, "Generic resistor");
+        if package_before_placement {
+            h.get_by_role_and_label(egui::Role::ComboBox, "Manufacturer part").click();
+            h.run();
+            click(&mut h, "Illustrative Manufacturer · TEST-R100M-0603");
+        } else {
+            h.get_by_role_and_label(egui::Role::ComboBox, "Package").click();
+            h.run();
+            click(&mut h, "Unassigned");
+        }
+        click(&mut h, "Place");
+        click(&mut h, "Schematic canvas");
+        let component = h.state().session.project().unwrap().components().next().unwrap().id();
+        if !package_before_placement {
+            assert!(h.state().session.project().unwrap().footprint_assignments().is_empty());
+            h.state_mut().begin_native_part_properties(component.clone());
+            h.run();
+            h.get_by_role_and_label(egui::Role::ComboBox, "Package").click();
+            h.run();
+            click(&mut h, "0603");
+            click(&mut h, "Apply");
+            assert!(matches!(h.state().dialog, Dialog::None));
+        }
+        let snapshot = h.state().session.snapshot().unwrap();
+        let board = snapshot.board_target().unwrap();
+        let docs = encode_documents(snapshot.clone()).unwrap();
+        let folder = root.path().join("handoff");
+        pcbcraft_storage::save(&folder, None, &docs, &mut |_| Ok(())).unwrap();
+        let archive = root.path().join("handoff.pc");
+        std::fs::write(&archive, encode_packed(snapshot.clone()).unwrap()).unwrap();
+        let moved = root.path().join("relocated-library");
+        std::fs::rename(&original, &moved).unwrap();
+        load_desktop_source(&mut h, &original);
+        assert!(h.state().session.libraries().search("", Some(Kind::Part)).is_empty());
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        load_desktop_source(&mut h, &moved);
+        assert_eq!(h.state().session.libraries().search("", Some(Kind::Part)).len(), 1);
+        assert!(h.state().library_sources.storage_text().contains(moved.to_str().unwrap()));
+        let app = h.state_mut();
+        app.library_sources.remove("desktop-parts", &mut app.session);
+        std::fs::remove_dir_all(&moved).unwrap();
+        for path in [&folder, &folder.join(ENTRY_POINT), &archive] {
+            let reopened = pcbcraft_storage::open(path).unwrap();
+            assert_eq!(reopened.board_target(), Some(board));
+            assert_eq!(encode_documents(reopened.clone()).unwrap(), docs);
+            let mut clean = Session::default();
+            assert!(clean.libraries().search("", Some(Kind::Part)).is_empty());
+            clean.open_snapshot(reopened);
+            let selected = clean.project().unwrap().components().next().unwrap().part.as_ref().unwrap();
+            assert_eq!(selected.package.as_deref(), Some("0603"));
+            assert_eq!(selected.manufacturer.is_some(), package_before_placement);
+            clean
+                .apply(
+                    pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT,
+                    &json!({"component":component,"board":board.board,"x_nm":0,"y_nm":0,"expected_revision":clean.revision()}),
+                )
+                .unwrap();
+            let placed = encode_documents(clean.snapshot().unwrap()).unwrap();
+            assert_eq!(encode_documents(decode_documents(&placed).unwrap()).unwrap(), placed);
+        }
+    }
+}

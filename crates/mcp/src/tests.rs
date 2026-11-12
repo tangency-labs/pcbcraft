@@ -1167,3 +1167,52 @@ fn multiunit_placement_uses_shared_commands_and_part_identity() {
     assert_eq!(symbols.len(), 2);
     assert_eq!(symbols[0]["component_id"], symbols[1]["component_id"]);
 }
+
+/// MCP places a central native part/MPN atomically and edits requirements offline through the same engine authority.
+#[test]
+fn native_part_selection_and_compatibility_are_available_through_mcp() {
+    let mut s = server();
+    let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let loaded = call(
+        &mut s,
+        "execute",
+        json!({"command":"library.load_source","params":{"source":"native-parts","documents":{
+            "library.json":include_str!("../../../examples/native-parts/library.json"),
+            "symbols/resistor.json":include_str!("../../../examples/native-parts/symbols/resistor.json"),
+            "footprints/resistor.json":include_str!("../../../examples/native-parts/footprints/resistor-0603.json"),
+            "categories/resistor.json":include_str!("../../../examples/native-parts/categories/resistor.json"),
+            "parts/resistor.json":include_str!("../../../examples/native-parts/parts/resistor.json"),
+            "manufacturer-parts/test.json":include_str!("../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")
+        }}}),
+    );
+    assert_ne!(loaded["isError"], true);
+    let resolved = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":"library.resolve_part","params":{"library":"parts-demo","definition":"resistor","definition_revision":1}}),
+    ));
+    let manufacturers =
+        body(&call(&mut s, "execute", json!({"command":"library.search","params":{"kind":"manufacturer_part","query":"TEST-R100M"}})));
+    let placed = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":"schematic.place_part","params":{
+            "library":"parts-demo","definition":"resistor","definition_revision":1,"definition_digest":resolved["digest"],
+            "manufacturer":{"library":"parts-demo","id":"test-resistor-100m","revision":1},"manufacturer_digest":manufacturers[0]["digest"],
+            "x_nm":0,"y_nm":0,"expected_revision":created["revision"]
+        }}),
+    ));
+    let instance = &placed["project"]["components"][0];
+    assert_eq!(instance["part"]["manufacturer"]["mpn"], "TEST-R100M-0603");
+    assert_eq!(instance["part"]["compatibility"]["status"], "meets_requirements");
+    call(&mut s, "execute", json!({"command":"library.remove_source","params":{"source":"native-parts"}}));
+    let params = json!({"component":instance["id"],"requirements":{
+        "pcbcraft:tolerance":{"operator":"at_most","value":{"type":"quantity","value":"0.005","unit":"1"}}
+    },"expected_revision":placed["revision"]});
+    let edited = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
+    assert_ne!(edited["isError"], true);
+    let edited = body(&edited);
+    assert_eq!(edited["project"]["components"][0]["part"]["compatibility"]["status"], "does_not_meet_requirements");
+    let stale = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
+    assert_eq!(stale["isError"], true);
+}

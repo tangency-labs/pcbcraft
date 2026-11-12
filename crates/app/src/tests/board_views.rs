@@ -858,7 +858,7 @@ fn footprint_moves_cancel_on_escape_panel_release_and_stale_revision() {
         assert!(h.state().views.active.board.draft.is_none(), "{mode:?}");
         let mut after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         if mode == Cancel::Revision {
-            after.insert("project.pc".into(), bytes["project.pc"].clone());
+            after.insert("project.json".into(), bytes["project.json"].clone());
         }
         assert_eq!(after, bytes, "{mode:?}");
     }
@@ -956,7 +956,7 @@ fn opening_another_project_from_pcb_layout_binds_its_board() {
         let before = h.state().views.active.input(&h.state().session).unwrap();
         // The folder case opens a private copy; see `dual_led_copy`.
         let (_copy, path) = if archive {
-            (None, std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led.pc.zip"))
+            (None, std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led.pc"))
         } else {
             let (copy, path) = dual_led_copy();
             (Some(copy), path)

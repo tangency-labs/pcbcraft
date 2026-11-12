@@ -87,7 +87,8 @@ pub(crate) const COMMANDS: [Command; 2] = [
         ],
     },
 ];
-/// Read an optional native manufacturer reference without coercing missing, null and malformed records.
+/// Resolve an optional manufacturer reference and verify that its source dependencies agree with the pinned part.
+/// Missing, null and malformed records retain their distinct edit meanings.
 fn manufacturer(session: &Session, params: &Value, selection: &mut Selection) -> Result<bool, CommandError> {
     let Some(value) = params.get("manufacturer") else {
         return Ok(false);
@@ -103,6 +104,15 @@ fn manufacturer(session: &Session, params: &Value, selection: &mut Selection) ->
     }
     if record.part != selection.resolved.definition.reference() {
         return Err(CommandError::InvalidParams("Manufacturer part belongs to another reusable part.".into()));
+    }
+    let source = session.libraries.resolve_part(&record.part).map_err(CommandError::InvalidParams)?;
+    let pinned = &selection.resolved;
+    if source.definition != pinned.definition
+        || source.category != pinned.category
+        || source.footprints != pinned.footprints
+        || !crate::library::sources::matches_pinned(&pinned.symbol, &source.symbol)
+    {
+        return Err(CommandError::InvalidParams("Manufacturer dependencies conflict with the project's pinned part revision.".into()));
     }
     if params.get("package").is_none() {
         selection.package = Some(record.package.clone());
@@ -176,6 +186,8 @@ impl Session {
         Arc::make_mut(&mut selection.resolved).symbol = symbol;
         Arc::make_mut(&mut candidate.components).get_mut(&id).ok_or_else(|| CommandError::InvalidParams("Unknown new part.".into()))?.part =
             Some(selection);
+        // Native selections require the persisted allocation watermark even when no physical package is chosen.
+        candidate.numeric_id_high_water = Some(candidate.allocation_high_water());
         transaction.project = Some(Arc::new(candidate));
         transaction.assign_selected_package(id)?;
         let candidate = transaction.open_project()?.clone();

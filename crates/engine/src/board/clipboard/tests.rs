@@ -120,7 +120,7 @@ fn bottom_side_survives_copy_rotate_paste_and_undo() {
         assert_eq!(pasted.rotation, (original.rotation + 90) % 360);
     }
     let documents = encode_documents(after).unwrap();
-    assert!(String::from_utf8(documents["board.json"].clone()).unwrap().contains("pcbcraft-board/14"));
+    assert!(String::from_utf8(documents[&crate::persistence::test_board_path(&documents)].clone()).unwrap().contains("pcbcraft-board/14"));
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     s.apply("edit.undo", &Value::Null).unwrap();
     crate::assert_same_content(&before, &s.snapshot().unwrap());
@@ -249,7 +249,7 @@ fn mixed_circuit_copper_vias_and_outline_paste_together() {
     assert_eq!((view(&s).tracks().len(), view(&s).vias().len(), view(&s).drawings().len()), (6, 4, 2));
     assert_eq!(view(&s).ratsnest().unwrap().lines.len(), 0);
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&documents["board.json"]).unwrap().contains("pcbcraft-board/13"));
+    assert!(std::str::from_utf8(&documents[&crate::persistence::test_board_path(&documents)]).unwrap().contains("pcbcraft-board/13"));
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     s.apply("edit.undo", &Value::Null).unwrap();
     crate::assert_same_content(&before, &s.snapshot().unwrap());
@@ -272,7 +272,7 @@ fn geometry_only_copy_cut_and_paste_do_not_create_components() {
     assert_eq!(s.project().unwrap().numeric_id_high_water, before.numeric_id_high_water);
     let source_docs = encode_documents(before).unwrap();
     let after_docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(source_docs["project.pc"], after_docs["project.pc"]);
+    assert_eq!(source_docs["project.json"], after_docs["project.json"]);
 }
 
 /// Foreign layers map by typed role/side, never by display name. Ambiguous internal copper

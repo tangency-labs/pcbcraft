@@ -32,7 +32,7 @@ fn settings_are_atomic_undoable_and_persistent() {
     let style = json!({"text_height_nm":1_200_000,"stroke_width_nm":180_000,"pad_clearance_nm":400_000});
     s.apply(SET_SILKSCREEN, &json!({"settings":style,"expected_revision":revision})).unwrap();
     let after = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&after["board.json"]).unwrap().contains("pcbcraft-board/6"));
+    assert!(std::str::from_utf8(&after[&crate::persistence::test_board_path(&after)]).unwrap().contains("pcbcraft-board/6"));
     assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
     assert_eq!(encode_documents(decode_packed(&encode_packed(s.snapshot().unwrap()).unwrap()).unwrap().project).unwrap(), after);
     assert_eq!(s.inspect()["project"]["board"]["silkscreen"], style);

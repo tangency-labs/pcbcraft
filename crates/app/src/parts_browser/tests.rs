@@ -720,4 +720,24 @@ fn native_part_catalog_and_requirements_use_shared_transactions() {
     let selection = h.state().session.project().unwrap().components().next().unwrap().part.as_ref().unwrap();
     assert_eq!(selection.compatibility()["status"], "does_not_meet_requirements");
     assert!(selection.manufacturer.is_some());
+    let component = h.state().session.project().unwrap().components().next().unwrap().id();
+    h.state_mut().begin_native_part_properties(component);
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Resistance").click();
+    h.run();
+    click(&mut h, "One of");
+    click(&mut h, "Add allowed value");
+    for width in [1400., 700., 420.] {
+        h.set_size(egui::vec2(width, 1000.));
+        h.run();
+        h.get_by_role_and_label(egui::Role::Button, "Remove Resistance value 2").scroll_to_me();
+        h.run();
+        let button = h.get_by_role_and_label(egui::Role::Button, "Remove Resistance value 2").rect();
+        let input = h.get_by_role_and_label(egui::Role::TextInput, "Resistance value 2").rect();
+        assert!(button.right() <= width && input.right() <= button.left(), "one-of row overflows at {width}: {input:?}, {button:?}");
+    }
+    h.get_by_role_and_label(egui::Role::Button, "Remove Resistance value 2").click();
+    h.run();
+    assert!(h.query_by_role_and_label(egui::Role::TextInput, "Resistance value 2").is_none());
+    click(&mut h, "Cancel");
 }

@@ -9,6 +9,7 @@ fn optional_board_is_created_explicitly_and_undo_restores_schematic_only_state()
     let mut h = harness();
     new_project(&mut h);
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    assert!(h.state().session.project().unwrap().board_document_path().is_none());
     assert!(!before.contains_key("board.json"));
     assert!(h.state().session.project().unwrap().board_target().is_none());
     let revision = h.state().session.revision();
@@ -27,7 +28,11 @@ fn optional_board_is_created_explicitly_and_undo_restores_schematic_only_state()
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Board(board)));
     h.get_by_label("PCB canvas");
-    assert!(encode_documents(h.state().session.snapshot().unwrap()).unwrap().contains_key("board.json"));
+    assert!(
+        encode_documents(h.state().session.snapshot().unwrap())
+            .unwrap()
+            .contains_key(&h.state().session.project().unwrap().board_document_path().unwrap())
+    );
 
     h.state_mut().run("edit.undo", &Value::Null);
     h.run();
@@ -91,7 +96,7 @@ fn footprint_chooser_does_not_create_a_board_for_schematic_only_parts() {
     let saved = pcbcraft_engine::persistence::encode_packed(h.state().session.snapshot().unwrap()).unwrap();
     h.state_mut().session.open_snapshot(pcbcraft_engine::persistence::decode_packed(&saved).unwrap().project);
     h.run();
-    assert!(!encode_documents(h.state().session.snapshot().unwrap()).unwrap().contains_key("board.json"));
+    assert!(h.state().session.project().unwrap().board_document_path().is_none());
     h.state_mut().begin_footprint_assignment(Some(component));
     h.run();
     let revision = h.state().session.revision();

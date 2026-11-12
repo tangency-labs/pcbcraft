@@ -241,9 +241,10 @@ compatibility rules to the engine.
 
 Record `revision` identifies a new immutable item revision. A `format` or schema
 version changes when a parser needs a different structural contract. The app
-release version advances independently; this branch retains the 0.1.0 version
-already introduced on main by PR #268. Project format 14 is reserved for that
-merge's storage layout; part selections use format 15. Existing projects
-without the new data retain their existing encoding and no-op save behavior.
+release version advances independently and remains 0.1.0. Project format 15
+adds part selections to the storage vocabulary. It supports format 14's board
+folders and retains a historical flat layout until ordinary first-save migration.
+Projects without the new data retain their low-level encoding and no-op saves;
+the existing first-save storage migration still applies.
 Older apps cannot read project/15, board/17 or baseline/2; saving these features
 therefore requires the newer app. This introduces no board-list migration.

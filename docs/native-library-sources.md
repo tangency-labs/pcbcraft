@@ -35,7 +35,7 @@ symbols already placed in a saved project reopen from their pinned copies.
 
 After loading the example, press **A**, search for **Workshop**, choose
 **Workshop resistor**, and place it. Search results retain library/item IDs,
-revision and license in their tooltips. Library sources can search all four
+revision and license in their tooltips. Library sources can search all five
 native record kinds and filter by kind. Sources and the catalog appear side by side
 on wide windows and as **Sources** / **Catalog** tabs on compact windows, with
 independent scrolling and a fixed Close action. A bad item reports its filename
@@ -96,7 +96,8 @@ reader. Project commands and editing remain independent of the reader.
 Native part/category definitions and exact dependency resolution are described
 in [part-schema.md](part-schema.md). Native part selection pins its complete dependency closure into project
 instances. Project source tables, library authoring tools, Git/providers and
-external-format imports remain separate work. The remaining acceptance in #92 stays open.
+external-format imports remain separate work. The native source, assignment and
+offline handoff behavior is the bounded library MVP in #92.
 
 ## Part definitions and categories
 

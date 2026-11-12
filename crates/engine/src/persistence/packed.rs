@@ -10,7 +10,7 @@ use std::{
 };
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-const FORMAT: &str = "pcbcraft-container/2";
+const FORMAT: &str = "pcbcraft-container/3";
 const MANIFEST: &str = "manifest.json";
 const MANIFEST_LIMIT: usize = 1024 * 1024;
 const CHUNK: usize = 256 * 1024;
@@ -31,16 +31,17 @@ struct Part {
     sha256: String,
 }
 
-/// A fully validated archive. Missing manifests and legacy containers need an upgrade on save.
+/// A fully validated current archive. A missing manifest is added on the next save.
 pub struct PackedProject {
+    /// The project after schema and cross-document validation.
     pub project: Arc<Project>,
-    /// Exact split-document bytes for lossless conversion; absent in legacy containers.
-    pub documents: Option<Documents>,
+    /// Exact split-document bytes for lossless conversion.
+    pub documents: Documents,
+    /// Whether the archive needs a current manifest on export (missing or explicitly converted).
     pub needs_manifest: bool,
-    pub legacy: bool,
 }
 
-/// Encode a portable container v2 using the same bytes as the working folder.
+/// Encode a portable container v3 with a fixed `project.json` entry point.
 pub fn encode_packed(project: Arc<Project>) -> Result<Vec<u8>, String> {
     encode_packed_documents(encode_documents(project)?)
 }
@@ -133,10 +134,24 @@ fn options() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Stored).last_modified_time(zip::DateTime::default()).unix_permissions(0o644)
 }
 
-/// Read containers v1/v2 or a hand-zipped folder. A missing manifest is allowed, but malformed
-/// or mismatched manifests are never ignored. Only manifest-less archives discard ordinary OS
+/// Read current or previous split archives. Previous manifests are verified before migration
+/// in memory, and their replacement is deferred until Save. Missing manifests
+/// are allowed, but malformed or mismatched ones are never ignored. Only manifest-less archives discard ordinary OS
 /// metadata, after validating its ZIP paths, types, CRCs and size limits along with every entry.
 pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
+    decode_layout(bytes, FORMAT, super::ENTRY_POINT).or_else(|current_error| decode_legacy_packed(bytes).map_err(|_| current_error))
+}
+
+/// Read a previous split container-v2 archive for automatic migration or explicit conversion. Manifest hashes
+/// are checked against old paths before renaming the entry point and upgrading power markers;
+/// unaffected document bytes survive.
+/// Manifest-less previous split ZIPs are also accepted, but standalone containers remain refused.
+pub fn decode_legacy_packed(bytes: &[u8]) -> Result<PackedProject, String> {
+    decode_layout(bytes, "pcbcraft-container/2", "project.pc")
+}
+
+/// Share ZIP bounds, safe-path and integrity validation across explicit layout boundaries.
+fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<PackedProject, String> {
     if bytes.len() > MAX_ARCHIVE_BYTES {
         return Err("project ZIP exceeds its size limit".to_owned());
     }
@@ -192,13 +207,12 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
         total += size;
         entries.insert(name, payload);
     }
-    // Legacy containers have a different manifest and one project.json payload. Their existing
-    // strict decoder remains the authority; malformed v1 containers cannot fall back to v2.
+    // Establish the container boundary before root discovery: neither an old entry point nor
+    // a missing new entry point may disguise a present unsupported or malformed manifest.
     if let Some(manifest) = entries.get(MANIFEST) {
         let header: serde_json::Value = serde_json::from_slice(manifest).map_err(error)?;
-        if header["format"] == "pcbcraft-container/1" {
-            let project = super::decode(&super::archive::unpack(bytes)?)?;
-            return Ok(PackedProject { project, documents: None, needs_manifest: false, legacy: true });
+        if header["format"].as_str() != Some(format) {
+            return Err(format!("manifest.json: unsupported container format {}; expected {format}", header["format"]));
         }
     }
     // Any manifest prevents metadata filtering, including malformed or misplaced manifests.
@@ -208,12 +222,13 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
         entries.retain(|name, _| !is_apple_metadata(name) && !matches!(name.rsplit('/').next(), Some(".DS_Store" | "Thumbs.db" | "desktop.ini")));
         directories.retain(|name| !is_apple_metadata(name));
     }
-    let prefix = if entries.contains_key(super::ENTRY_POINT) {
+    let prefix = if entries.contains_key(entry_point) {
         String::new()
     } else {
-        let roots: Vec<_> = entries.keys().filter_map(|name| name.strip_suffix("/project.pc")).filter(|root| !root.contains('/')).collect();
+        let roots: Vec<_> =
+            entries.keys().filter_map(|name| name.strip_suffix(&format!("/{entry_point}"))).filter(|root| !root.contains('/')).collect();
         if roots.len() != 1 {
-            return Err("project.pc: ZIP must contain one project root".to_owned());
+            return Err(format!("{entry_point}: ZIP must contain one project root"));
         }
         format!("{}/", roots[0])
     };
@@ -234,7 +249,7 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     let manifest = documents.remove(MANIFEST);
     if let Some(bytes) = &manifest {
         let manifest: Manifest = serde_json::from_slice(bytes).map_err(|e| format!("manifest.json: {e}"))?;
-        if manifest.format != FORMAT {
+        if manifest.format != format {
             return Err(format!("manifest.json: unsupported container format {}", manifest.format));
         }
         if !manifest.assets.is_empty() {
@@ -254,8 +269,12 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
             return Err(format!("{path}: unlisted manifest part"));
         }
     }
+    let legacy = entry_point != super::ENTRY_POINT;
+    let original_documents = documents.clone();
+    let documents = if legacy { super::convert_legacy_documents(documents)? } else { super::migrate_power_markers(documents)? };
+    let migrated = documents != original_documents;
     let project = decode_documents(&documents)?;
-    Ok(PackedProject { project, documents: Some(documents), needs_manifest: manifest.is_none(), legacy: false })
+    Ok(PackedProject { project, documents, needs_manifest: migrated || legacy || manifest.is_none() })
 }
 
 /// Recognize Apple's reserved sidecar directory at the archive root or inside its wrapper.

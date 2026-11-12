@@ -69,12 +69,15 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         assert_eq!(selected.manufacturer.as_ref().unwrap().mpn, "TEST-R100M-0603");
         assert_eq!(project.footprint_assignments().len(), 1);
         let docs = encode_documents(project.clone()).unwrap();
-        let header: Json = serde_json::from_slice(&docs["project.pc"]).unwrap();
+        let header: Json = serde_json::from_slice(&docs[crate::persistence::ENTRY_POINT]).unwrap();
         assert_eq!(header["format"], "pcbcraft-project/15");
         let mut reserved_format = docs.clone();
         reserved_format.insert(
-            "project.pc".into(),
-            String::from_utf8(docs["project.pc"].clone()).unwrap().replace("pcbcraft-project/15", "pcbcraft-project/14").into_bytes(),
+            crate::persistence::ENTRY_POINT.into(),
+            String::from_utf8(docs[crate::persistence::ENTRY_POINT].clone())
+                .unwrap()
+                .replace("pcbcraft-project/15", "pcbcraft-project/14")
+                .into_bytes(),
         );
         assert!(decode_documents(&reserved_format).is_err(), "part selections must not reuse the storage-layout format");
         assert!(docs.keys().any(|path| path.starts_with("library/parts/")));
@@ -255,4 +258,86 @@ fn native_part_clipboard_is_portable() {
     target.apply("edit.undo", &Json::Null).unwrap();
     assert!(target.project().unwrap().components().next().is_none());
     assert!(before.components().next().is_none());
+}
+
+/// Native selections preserve a legacy flat layout until first-save migration, then retain every pinned record.
+#[test]
+fn native_part_selection_survives_first_save_storage_migration() {
+    for board in [false, true] {
+        let mut session = fixture(board);
+        // Project the original command-created circuit into the supported historical flat encoding.
+        let mut flat = session.project().unwrap().clone();
+        flat.layout = None;
+        let old = encode_documents(Arc::new(flat)).unwrap();
+        session.open_snapshot(decode_documents(&old).unwrap());
+        let params = placement(&session, true);
+        apply(&mut session, PLACE_PART, params);
+        let before = session.snapshot().unwrap();
+        let docs = encode_documents(before.clone()).unwrap();
+        let migrated = crate::persistence::migrate_board_layout(docs.clone(), "electronics").unwrap();
+        let reopened = decode_documents(&migrated).unwrap();
+        assert_eq!(reopened.layout_root(), Some("electronics"));
+        assert_eq!(reopened.id(), before.id());
+        assert_eq!(reopened.board_target(), before.board_target());
+        assert_eq!(reopened.components().next().unwrap().part, before.components().next().unwrap().part);
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), migrated);
+        for (path, bytes) in &docs {
+            if path != crate::persistence::ENTRY_POINT && path != "board.json" {
+                assert_eq!(migrated.get(path), Some(bytes), "migration changed {path}");
+            }
+        }
+        if board {
+            assert_eq!(migrated[&reopened.board_document_path().unwrap()], docs["board.json"]);
+        }
+    }
+}
+
+/// Placing a schematic-only native part also upgrades the allocation contract of a pre-watermark project.
+#[test]
+fn native_part_without_package_adopts_legacy_allocation_watermark() {
+    let mut session = fixture(true);
+    let mut historical = session.project().unwrap().clone();
+    historical.layout = None;
+    historical.numeric_id_high_water = None;
+    Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;
+    let documents = encode_documents(Arc::new(historical)).unwrap();
+    session = Session { libraries: session.libraries.clone(), ..Default::default() };
+    session.open_snapshot(decode_documents(&documents).unwrap());
+    assert!(session.project().unwrap().numeric_id_high_water.is_none());
+    let mut params = placement(&session, false);
+    params["package"] = Json::Null;
+    apply(&mut session, PLACE_PART, params);
+    let project = session.snapshot().unwrap();
+    assert!(project.numeric_id_high_water.is_some());
+    assert!(project.footprint_assignments().is_empty());
+    let documents = encode_documents(project).unwrap();
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+}
+
+/// Re-registering different dependency content under the same revision cannot retarget an existing part through MPN selection.
+#[test]
+fn manufacturer_selection_rejects_conflicting_pinned_dependencies() {
+    let mut session = fixture(true);
+    let params = placement(&session, false);
+    apply(&mut session, PLACE_PART, params);
+    let before = session.snapshot().unwrap();
+    let component = before.components().next().unwrap().id();
+    session.execute(sources::REMOVE, &json!({"source":"native-parts"})).unwrap();
+    let mut documents = documents();
+    let mut part: Json = serde_json::from_str(&documents["parts/resistor.json"]).unwrap();
+    part["fixed_parameters"] = json!({"pcbcraft:resistance":{"type":"quantity","value":"0.1","unit":"Ohm"}});
+    documents.insert("parts/resistor.json".into(), part.to_string());
+    let mut footprint: Json = serde_json::from_str(&documents["footprints/resistor-0603.json"]).unwrap();
+    footprint["pads"][0]["width_nm"] = json!(760_000);
+    documents.insert("footprints/resistor-0603.json".into(), footprint.to_string());
+    session.execute(sources::LOAD, &json!({"source":"native-parts","documents":documents})).unwrap();
+    let manufacturer =
+        session.libraries.manufacturers_for(&Reference { library: "parts-demo".into(), id: "resistor".into(), revision: 1 }).pop().unwrap();
+    let result = session.apply(
+        SET_PART,
+        &json!({"component":component,"manufacturer":manufacturer.reference(),
+        "manufacturer_digest":sources::manufacturer_digest(&manufacturer),"expected_revision":session.revision()}),
+    );
+    assert!(result.unwrap_err().to_string().contains("pinned part revision"));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }

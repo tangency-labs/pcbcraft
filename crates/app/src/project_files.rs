@@ -35,10 +35,10 @@ fn file_name_for(name: &str) -> String {
 }
 
 /// The name a browser download of the project `name` is offered under: the desktop suggestion
-/// from [`file_name_for`] with the archive's `.pc.zip` extension (#164).
+/// from [`file_name_for`] with the archive's `.pc` extension (#164).
 #[cfg(any(target_arch = "wasm32", test))]
 fn download_file_name(name: &str) -> String {
-    format!("{}.pc.zip", file_name_for(name))
+    format!("{}.pc", file_name_for(name))
 }
 
 /// Turn the browser's leave-page warning on or off.
@@ -86,8 +86,6 @@ struct Saved {
     encoding: Encoding,
     #[cfg(target_arch = "wasm32")]
     needs_manifest: bool,
-    #[cfg(target_arch = "wasm32")]
-    legacy: bool,
     #[cfg(target_arch = "wasm32")]
     documents: Option<Arc<pcbcraft_engine::persistence::Documents>>,
 }
@@ -170,13 +168,11 @@ impl ProjectFiles {
     }
 
     /// Whether a plain Save of the open project would write in place, without asking where: the
-    /// project was opened from or saved to a current-format location. Untitled and legacy
-    /// single-file projects need the person to choose one.
+    /// project was opened from or saved to a current-format location. Untitled projects need
+    /// the person to choose one.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn has_location(&self, session: &Session) -> bool {
-        session
-            .snapshot()
-            .is_some_and(|project| self.saved.as_ref().is_some_and(|saved| saved.snapshot.same_document(&project) && !saved.target.legacy()))
+        session.snapshot().is_some_and(|project| self.saved.as_ref().is_some_and(|saved| saved.snapshot.same_document(&project)))
     }
 
     /// Start opening a file. The completed result is ignored if the editor changes in the meantime.
@@ -249,7 +245,7 @@ impl ProjectFiles {
             let unchanged = self
                 .saved
                 .as_ref()
-                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.legacy && !saved.needs_manifest)
+                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest)
                 .map(|saved| Arc::clone(&saved.bytes));
             let documents = self.saved.as_ref().filter(|saved| Arc::ptr_eq(&saved.snapshot, &snapshot)).and_then(|saved| saved.documents.clone());
             web::Download::new(snapshot, unchanged, documents, send)?
@@ -273,8 +269,7 @@ impl ProjectFiles {
         #[cfg(target_arch = "wasm32")]
         {
             match &self.saved {
-                Some(saved) if saved.needs_manifest => "Project opened without a manifest · Download will include one".to_owned(),
-                Some(saved) if saved.legacy => "Project opened · Download will use the split .pc.zip format".to_owned(),
+                Some(saved) if saved.needs_manifest => "Project opened · Download will upgrade the project package".to_owned(),
                 _ => "Project opened".to_owned(),
             }
         }
@@ -315,7 +310,7 @@ impl ProjectFiles {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(Outcome::Saved(saved, renamed)) => {
                 if let Some(original) = renamed {
-                    session.adopt_saved_name(&original, &saved.snapshot);
+                    session.adopt_saved_metadata(&original, &saved.snapshot);
                 }
                 self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
@@ -363,7 +358,7 @@ impl ProjectFiles {
             return;
         };
         let result = match previous {
-            Some(previous) if format.is_none() && !previous.1.legacy() => native::save(snapshot, Some(previous), None),
+            Some(previous) if format.is_none() => native::save(snapshot, Some(previous), None),
             previous => native::save_new(snapshot, previous.as_ref(), format.unwrap_or_default(), path),
         };
         let _ = send.send(result);
@@ -381,11 +376,11 @@ mod name_tests {
     use super::download_file_name;
 
     /// Browser downloads are named after the project, as a desktop first save suggests, instead
-    /// of a fixed `project.pc.zip` (#164).
+    /// of a fixed `project.pc` (#164).
     #[test]
     fn browser_downloads_are_named_after_the_project() {
-        assert_eq!(download_file_name("Dual LED demo"), "Dual LED demo.pc.zip");
-        assert_eq!(download_file_name("Power: 5V/3V3"), "Power- 5V-3V3.pc.zip");
-        assert_eq!(download_file_name(" .. "), "project.pc.zip");
+        assert_eq!(download_file_name("Dual LED demo"), "Dual LED demo.pc");
+        assert_eq!(download_file_name("Power: 5V/3V3"), "Power- 5V-3V3.pc");
+        assert_eq!(download_file_name(" .. "), "project.pc");
     }
 }

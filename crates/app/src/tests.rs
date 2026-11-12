@@ -44,12 +44,12 @@ pub(crate) fn assert_same_content(expected: &Arc<pcbcraft_engine::Project>, actu
     let mut expected = pcbcraft_engine::persistence::encode_documents(expected.clone()).unwrap();
     let mut actual = pcbcraft_engine::persistence::encode_documents(actual.clone()).unwrap();
     let normalize = |documents: &mut pcbcraft_engine::persistence::Documents| {
-        let mut entry: Value = serde_json::from_slice(&documents["project.pc"]).unwrap();
+        let mut entry: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
         let watermark = entry.as_object_mut().unwrap().remove("numeric_id_high_water").and_then(|value| value.as_u64()).unwrap_or(0);
         if entry["format"] == "pcbcraft-project/7" {
             entry["format"] = json!("pcbcraft-project/6");
         }
-        documents.insert("project.pc".into(), serde_json::to_vec(&entry).unwrap());
+        documents.insert("project.json".into(), serde_json::to_vec(&entry).unwrap());
         watermark
     };
     let previous_watermark = normalize(&mut expected);
@@ -80,7 +80,7 @@ pub(super) fn startup_harness<'a>() -> Harness<'a, PcbApp> {
 }
 
 /// Copy the `examples/dual-led` folder project into a new temporary directory and return the
-/// directory, which must be kept alive while the copy is in use, and the copy's `project.pc`.
+/// directory, which must be kept alive while the copy is in use, and the copy's `project.json`.
 /// Opening a folder takes its save lock without waiting, so tests that run in parallel must not
 /// open the shared example folder itself: whichever opens second fails to lock it and keeps its
 /// previous project.
@@ -102,7 +102,7 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
             }
         }
     }
-    (dir, root.join("project.pc"))
+    (dir, root.join("project.json"))
 }
 
 /// Click the named control and run the frame that handles the action. A control that is not
@@ -291,7 +291,7 @@ fn compact_file_menu_keeps_save_as_accessible() {
     new_project(&mut harness);
     choose(&mut harness, "File", "Save As…");
     harness.get_by_label("Project folder…");
-    harness.get_by_label("Packed project (.pc.zip)…");
+    harness.get_by_label("Packed project (.pc)…");
 }
 
 /// The brand and File trigger share the same centerline as the quick actions.
@@ -2258,7 +2258,7 @@ fn project_location_and_save_choices_fit_a_narrow_window() {
     click(&mut harness, "Cancel");
     harness.state_mut().dialog = Dialog::SaveEncoding;
     harness.run();
-    for label in ["Project folder…", "Packed project (.pc.zip)…", "Cancel"] {
+    for label in ["Project folder…", "Packed project (.pc)…", "Cancel"] {
         let rect = harness.get_by_label(label).rect();
         assert!(rect.left() >= 0.0 && rect.right() <= 320.0);
     }

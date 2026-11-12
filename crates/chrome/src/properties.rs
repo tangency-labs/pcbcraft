@@ -39,6 +39,27 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     .inner
 }
 
+/// Keep a labelled value and its trailing action inside the form, reserving the action's measured width.
+/// The returned flag reports only the action; its accessible name includes the field label.
+pub fn text_action(ui: &mut Ui, label: &str, value: &mut String, action: &str) -> bool {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        let label_response = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
+        let action_width =
+            egui::WidgetText::from(action).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x
+                + ui.spacing().button_padding.x * 2.0
+                + ui.spacing().item_spacing.x;
+        let field_width = (ui.available_width() - action_width).max(0.0);
+        ui.allocate_ui_with_layout(vec2(field_width, t.control_height), Layout::left_to_right(Align::Center), |ui| {
+            crate::controls::text(ui, value).labelled_by(label_response.id);
+        });
+        let response = crate::controls::bounded_button(ui, label, action, action_width - ui.spacing().item_spacing.x, true);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{action} {label}")));
+        response.clicked()
+    })
+    .inner
+}
+
 /// A labelled choice field keeps stored enum names separate from readable option labels and
 /// supplies an accessible name even when the selected value contains no field identity.
 pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)]) -> egui::Response {

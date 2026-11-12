@@ -9,7 +9,7 @@ use pcbcraft_engine::{
 };
 use serde_json::json;
 
-const ARCHIVE: &[u8] = include_bytes!("../../../examples/dual-led.pc.zip");
+const ARCHIVE: &[u8] = include_bytes!("../../../examples/dual-led.pc");
 
 /// The distributed version-5 folder and archive migrate to the same canonical documents.
 #[test]
@@ -19,7 +19,7 @@ fn demo_folder_and_archive_migrate_to_the_same_documents() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led");
     let saved = documents.keys().map(|path| (path.clone(), fs::read(root.join(path)).unwrap())).collect();
     assert_eq!(documents, encode_documents(decode_documents(&saved).unwrap()).unwrap());
-    assert_eq!(decode_packed(ARCHIVE).unwrap().documents.unwrap(), saved);
+    assert_eq!(decode_packed(ARCHIVE).unwrap().documents, saved);
     let encoded = encode_packed(project).unwrap();
     assert_eq!(encode_documents(decode_packed(&encoded).unwrap().project).unwrap(), documents);
 }

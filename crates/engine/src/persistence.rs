@@ -18,19 +18,25 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
+pub mod layout;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, decode_documents, encode_documents,
-    is_document_path,
+    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
+    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_layout_root, project_registered_board_id,
 };
 mod packed;
-pub use packed::{PackedEncoder, PackedProject, decode_packed, encode_packed, encode_packed_documents};
+mod power_migration;
+pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
+pub use power_migration::migrate_power_markers;
 #[cfg(test)]
 mod split_tests;
+
+/// Explain the intentional app 0.1.0 break when a legacy standalone document is opened.
+pub const UNSUPPORTED_PROJECT_LAYOUT: &str = "Unsupported project layout. Open a split project folder, its project.json or project.pc entry point, or a packed project ZIP. Legacy standalone JSON and container-v1 projects remain unsupported.";
 
 /// Maximum number of bytes in a supported project ZIP.
 pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 
-/// The encoding of a native .pc file, independent of its filename.
+/// JSON document or ZIP package encoding, detected independently of the filename.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Encoding {
     #[default]
@@ -53,15 +59,23 @@ impl Encoding {
     }
 }
 
-/// Read and validate a native project using the encoding detected from its content.
-pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
+/// Read a diagnostic single-document fixture or current packed project, including legacy
+/// inputs refused by normal app/CLI opens. Use [`decode_packed`] for current archives or
+/// [`decode_documents`] after folder I/O; this compatibility helper is for tests and benchmarks.
+pub fn decode_diagnostic_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
     let encoding = Encoding::detect(bytes);
     if bytes.len() > encoding.input_limit() {
         return Err("project exceeds the native file size limit".to_owned());
     }
     let project = match encoding {
         Encoding::Json => decode(bytes)?,
-        Encoding::Zip => decode_packed(bytes)?.project,
+        Encoding::Zip => {
+            if let Ok(payload) = archive::unpack(bytes) {
+                decode(&payload)?
+            } else {
+                decode_packed(bytes)?.project
+            }
+        }
     };
     Ok((project, encoding))
 }
@@ -954,6 +968,7 @@ fn validate_with_hierarchy(
         board: Arc::new(layout),
         named_graph: Arc::default(),
         upgraded_from,
+        layout: None,
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;
@@ -979,8 +994,23 @@ pub(crate) fn validate_id(ids: &mut BTreeSet<u64>, id: u64) -> Result<(), String
     Ok(())
 }
 
+/// Resolve the physical payload in either supported layout for codec regression tests.
+#[cfg(test)]
+pub(crate) fn test_board_path(documents: &Documents) -> String {
+    project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()
+}
+
 #[cfg(test)]
 mod tests {
+    /// Diagnostic single-document files have no directory layout. Compare electrical inspection
+    /// independently from board `file` paths, which are covered by the split-layout tests.
+    fn without_storage_paths(mut project: serde_json::Value) -> serde_json::Value {
+        for board in project["boards"].as_array_mut().unwrap() {
+            board.as_object_mut().unwrap().remove("file");
+        }
+        project
+    }
+
     use serde_json::json;
 
     use super::*;
@@ -1082,7 +1112,7 @@ mod tests {
         let bytes = encode(session.snapshot().unwrap()).unwrap();
         let mut reopened = Session::default();
         reopened.open_snapshot(decode(&bytes).unwrap());
-        assert_eq!(reopened.inspect()["project"], state["project"]);
+        assert_eq!(without_storage_paths(reopened.inspect()["project"].clone()), without_storage_paths(state["project"].clone()));
 
         let footprint = json!({
             "symbol": "symbol-3", "definition": "generic-through-hole-2",
@@ -1278,7 +1308,7 @@ mod tests {
         assert!(text.contains("\"rotation\":180"));
         let mut reopened = Session::default();
         reopened.open_snapshot(decode(&bytes).unwrap());
-        assert_eq!(reopened.inspect()["project"], session.inspect()["project"]);
+        assert_eq!(without_storage_paths(reopened.inspect()["project"].clone()), without_storage_paths(session.inspect()["project"].clone()));
         let led = &reopened.inspect()["project"]["schematic"]["symbols"][1];
         assert_eq!((led["reference"].clone(), led["value"].clone()), (json!("D7"), json!("Red")));
 
@@ -1299,7 +1329,7 @@ mod tests {
         assert!(before.same_document(&loaded));
         let mut reopened = Session::default();
         reopened.open_snapshot(loaded.clone());
-        assert_eq!(session.inspect()["project"], reopened.inspect()["project"]);
+        assert_eq!(without_storage_paths(session.inspect()["project"].clone()), without_storage_paths(reopened.inspect()["project"].clone()));
         reopened
             .apply(
                 MOVE_SYMBOL,
@@ -1442,7 +1472,7 @@ mod tests {
         assert_eq!(pad.inspect(), json!({"board":migrated.board_target().unwrap().board,"footprint": "footprint-5", "pad": "2"}));
         for encoding in [Encoding::Json, Encoding::Zip] {
             let bytes = encode_file(migrated.clone(), encoding).unwrap();
-            let (project, detected) = decode_file(&bytes).unwrap();
+            let (project, detected) = decode_diagnostic_file(&bytes).unwrap();
             assert_eq!(detected, encoding);
             assert_eq!(project.terminal_for_pad(pad), Some(terminal));
             assert_eq!(project.wires()[0].terminals(), migrated.wires()[0].terminals());

@@ -162,26 +162,26 @@ fn unsupported_or_ambiguous_saved_materials_fail_before_open() {
     let c = candidate(&s);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    let board: Value = serde_json::from_slice(&docs["board.json"]).unwrap();
+    let board: Value = serde_json::from_slice(&docs[&crate::persistence::test_board_path(&docs)]).unwrap();
     for format in ["pcbcraft-board/1", "pcbcraft-board/2", "pcbcraft-board/7"] {
         let mut bad = docs.clone();
         let mut b = board.clone();
         b["format"] = json!(format);
-        bad.insert("board.json".to_owned(), serde_json::to_vec(&b).unwrap());
+        bad.insert(crate::persistence::test_board_path(&bad), serde_json::to_vec(&b).unwrap());
         assert!(persistence::decode_documents(&bad).unwrap_err().contains("board.json"));
     }
-    let mut b: Value = serde_json::from_slice(&legacy["board.json"]).unwrap();
+    let mut b: Value = serde_json::from_slice(&legacy[&crate::persistence::test_board_path(&legacy)]).unwrap();
     b["setup"]["materials"] = json!([]);
     let mut bad = legacy;
-    bad.insert("board.json".to_owned(), serde_json::to_vec(&b).unwrap());
+    bad.insert(crate::persistence::test_board_path(&bad), serde_json::to_vec(&b).unwrap());
     assert!(persistence::decode_documents(&bad).unwrap_err().contains("version 2"));
-    let encoded = std::str::from_utf8(&docs["board.json"]).unwrap();
+    let encoded = std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap();
     for (needle, replacement) in
         [("\"family\":", "\"family\":\"Alias\",\"family\":"), ("\"dk_millionths\":", "\"dk_millionths\":2000000,\"dk_millionths\":")]
     {
         let mut bad = docs.clone();
         assert!(encoded.contains(needle));
-        bad.insert("board.json".to_owned(), encoded.replacen(needle, replacement, 1).into_bytes());
+        bad.insert(crate::persistence::test_board_path(&bad), encoded.replacen(needle, replacement, 1).into_bytes());
         assert!(persistence::decode_documents(&bad).unwrap_err().contains("duplicate field"));
     }
 }

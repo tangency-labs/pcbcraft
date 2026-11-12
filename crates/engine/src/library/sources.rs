@@ -26,7 +26,7 @@ pub const LOAD: &str = "library.load_source";
 pub const REMOVE: &str = "library.remove_source";
 /// Inspect loaded sources, provenance and per-file validation/conflict diagnostics.
 pub const LIST: &str = "library.list_sources";
-/// Search the latest unambiguous revision of symbols and footprints across sources.
+/// Search the latest unambiguous revision of each native record kind across sources.
 pub const SEARCH: &str = "library.search";
 /// Resolve a part's exact dependencies and validate its typed values and complete package maps.
 pub const RESOLVE_PART: &str = "library.resolve_part";
@@ -98,11 +98,16 @@ pub(crate) const COMMANDS: [Command; 6] = [
         params: &[
             Param {
                 name: "query",
-                summary: "Search name, item/library ID or symbol reference prefix",
+                summary: "Search name, item/library ID, symbol prefix or manufacturer/MPN",
                 required: false,
                 kind: ParamKind::LibraryQuery,
             },
-            Param { name: "kind", summary: "symbol, footprint, category or part; omit for all", required: false, kind: ParamKind::LibraryKind },
+            Param {
+                name: "kind",
+                summary: "symbol, footprint, category, part or manufacturer_part; omit for all",
+                required: false,
+                kind: ParamKind::LibraryKind,
+            },
         ],
     },
     Command {

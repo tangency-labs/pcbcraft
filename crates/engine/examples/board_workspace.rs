@@ -39,6 +39,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(path.parent().ok_or("document has no parent")?)?;
         fs::write(path, bytes)?;
     }
-    fs::write(destination.join("board-inspection.pc.zip"), encode_packed(snapshot)?)?;
+    fs::write(destination.join("board-inspection.pc"), encode_packed(snapshot)?)?;
     Ok(())
 }

@@ -328,3 +328,32 @@ fn narrow_footprint_browser_can_show_the_preview_and_mapping() {
     h.get_by_label("Assigned · not placed");
     click(&mut h, "Close");
 }
+
+/// A symbol-only instance can choose an external native footprint through the same explicit mapping form.
+#[test]
+fn external_native_footprint_is_assignable_and_pinned_from_the_chooser() {
+    let mut h = component_harness();
+    let documents = pcbcraft_engine::library::sources::Documents::from([
+        ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
+        ("footprints/resistor.json".into(), include_str!("../../../../examples/native-parts/footprints/resistor-0603.json").into()),
+    ]);
+    h.state_mut().session.execute("library.load_source", &json!({"source":"external-footprint","documents":documents})).unwrap();
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "parts-demo");
+    click(&mut h, "parts-demo / Resistor 0603 (1608 metric) · r1");
+    for (terminal, pad) in [("Terminal 1", "Pad 1"), ("Terminal 2", "Pad 2")] {
+        h.get_by_label(terminal).scroll_to_me();
+        h.run();
+        click(&mut h, terminal);
+        click(&mut h, pad);
+    }
+    click(&mut h, "Assign");
+    assert_eq!(h.state().session.project().unwrap().footprint_assignments()[0]["library"], "parts-demo");
+    click(&mut h, "Close");
+    let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().session.execute("library.remove_source", &json!({"source":"external-footprint"})).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+    assert_eq!(reopened.footprint_assignments()[0]["mapping"], json!({"1":"1","2":"2"}));
+}

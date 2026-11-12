@@ -6,47 +6,85 @@ create separate schematic and board sessions.
 
 The [multiboard and sheet instance design](multiboard-and-sheet-instances.md)
 and its [storage contract](multiboard-storage.md) describe board folders,
-instances and associated-file ownership. The current encodings below do not
-accept that new layout until the codec migration lands. The bounded
-[optional single-board codec](single-board-storage.md) adds explicit zero-or-one
-ownership while retaining the root board path.
+instances and associated-file ownership. The current project/14 codec implements
+board folders for zero or one board; instances, additional boards and associated
+files remain future work. See the [single-board codec](single-board-storage.md)
+for the supported ownership and migration boundary.
 
 ## File encodings and save behavior
 
-The working form is a project folder with a plain UTF-8 JSON `project.pc` entry
+The working form is a project folder with a plain UTF-8 JSON `project.json` entry
 point. Desktop New Project defaults to this form. A project's first Save asks
 for a new folder, suggesting the project's name; one still named Untitled takes
 the chosen folder or archive name as part of that save, with no undo step.
 Cancelling or failing that save leaves it Untitled and unsaved. Open accepts the
-folder, its entry point, a `.pc.zip` archive or a legacy project. Save keeps the opened form;
+folder, its entry point or a `.pc` archive. Save keeps the opened form;
 Save As offers a project folder and a packed project. The folder destination is
 a new or empty project directory, while archive Save As requires an unused file.
 Unrelated root files such as `README.md` and `.git` remain untouched.
 Regular `.DS_Store`, `Thumbs.db` and `desktop.ini` files are also left alone inside
 project subdirectories; they are not project documents and are never published
-or removed by a save. Other unknown files in managed subdirectories are refused.
+or removed by a save. Other unknown files under `sheets/`, `library/` and `assets/` are refused.
+Only the exact registered board file is read under the selected board area;
+unregistered folders and related user files are left alone and are not packaged.
 
 ```text
 my-board/
-  project.pc
+  project.json
   sheets/<sheet-uuid>.json
-  board.json                    # only when a physical board exists
+  boards/<board-slug-and-id>/board.json  # only when a physical board exists
   library/symbols/<library>/<symbol>.r<revision>.json
   library/footprints/<library>/<footprint>.r<revision>.json
   assets/                       # reserved for future asset references
 ```
 
-Opening `project.pc` opens the entire project. Copy the folder or export its
-`.pc.zip` to share it; the entry point alone does not contain the other documents.
-A project rename changes the name in `project.pc`, without renaming its files.
+Opening `project.json` opens the entire project. Copy the folder or export its
+`.pc` to share it; the entry point alone does not contain the other documents.
+A project rename changes the name in `project.json`, without renaming its files.
 
-The browser uploads packed projects and legacy single-file projects and downloads
-`.pc.zip`. It cannot reconstruct a folder from an uploaded entry point alone.
+The browser uploads packed projects and downloads
+`.pc`. It cannot reconstruct a folder from an uploaded entry point alone.
 Download encoding runs in batches of 256 records and archive hashing/copying in
 256 KiB chunks, allowing the editor to yield between batches. The board-header
 phase also writes its bounded setup of at most 64 material revisions, 128 layers,
 127 strata and 256 nested prepreg plies. A requested download
 does not confirm a durable write and does not clear the editor's dirty state.
+
+## Board folders and first-save migration
+
+New projects use `pcbcraft-project/14`, with `layout_root: "."` and a required
+zero-or-one `boards` registry. Each registration contains its stable `id`, `name`
+and portable `folder` segment instead of `file`. Physical data resolves to
+`join(layout_root, "boards", folder, "board.json")`, including single-board
+projects. The folder is a board-name slug plus 12 hexadecimal UUID characters;
+a case-insensitive collision selects the full UUID suffix. Names remain fixed
+through display-name changes. Slugs use lowercase ASCII letters/digits, collapse
+other runs to hyphens, cap at 48 characters and fall back to `board`. Portable
+segments also reject Windows device names and path separators.
+
+Opening a supported flat `project.json` folder or container-v3 package does not
+rewrite it. Its first Save migrates even without design edits: one journaled
+folder transaction updates the entry point, writes the registered nested board
+and removes the root board. The board ID/name and physical payload bytes stay
+the same; sheets and pinned definitions retain their exact bytes. Subsequent
+unchanged saves produce no diff. Project/14 combines the existing allocation
+watermark, component metadata and optional schematic package choices; sheet,
+board and library payload versions do not change merely because a path moves.
+
+If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
+at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,
+starting with 12 hex digits and extending the prefix on case-insensitive
+collisions. It leaves foreign contents untouched and persists the choice.
+Newly occupied namespaces detected while staging fail before journal publication;
+a retry chooses a free namespace. Existing registered roots/folders stay fixed.
+No empty optional areas, `instances.json` or additional boards are introduced.
+
+Layout adoption is save metadata, so a successful native save applies it across
+Undo/Redo without changing electrical revision or discarding intervening edits.
+A failed or cancelled save does not adopt it. Browser Download writes a migrated
+copy in bounded encoding batches, while the active session remains unchanged
+because a download request cannot confirm durable publication. Older readers
+that lack project/14 must refuse it rather than treating it as a flat project.
 
 ## Schematic-only package choices
 
@@ -61,9 +99,10 @@ Choices are ordered by component ID and written incrementally, one per record
 budget. Missing assets, duplicate or unknown components, incompatible maps,
 null/empty lists and simultaneous board ownership are refused before adoption.
 
-Older split formats reject this field. Untouched projects retain their existing
-encoding; deleting the last choice returns to the ordinary schematic-only
-project/9 or /12 vocabulary. Explicit first-board creation transfers choices
+Older split formats reject this field. Project/14 allows the same nonempty
+optional list only with `boards: []`; deleting the last choice omits the field
+while retaining project/14. Historical low-level project/13 encodings return to
+project/9 or /12 when the last choice is removed, until first-save migration. Explicit first-board creation transfers choices
 and pinned definitions to the existing board/7-or-later assignment encoding in
 one undoable transaction. Undo restores project-owned choices. Existing board
 files keep their current encoding and behavior. Folder and packed saves carry
@@ -71,6 +110,11 @@ these choices, while the diagnostic single-document writer refuses lossy export.
 
 Split project format `pcbcraft-project/15` adds an optional `part` selection to
 each native part instance, retaining the existing board registration semantics.
+New projects keep format 14's `layout_root` and board-folder registry. Supported
+historical flat snapshots can acquire native part selections without a physical
+package; ordinary first Save adopts board folders while preserving format 15
+and every pinned dependency. A native selection also adopts the numeric ID
+watermark, including schematic-only placement in pre-watermark projects.
 The small selection references deduplicated `library/parts/`,
 `library/categories/` and `library/manufacturer-parts/` documents using the same
 `<library>/<id>.r<revision>.json` convention as symbols and footprints. Every
@@ -91,9 +135,9 @@ See [part-schema.md](part-schema.md) for record and transaction details.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` or `/15` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14` or `/15` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/17` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/17` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -110,7 +154,7 @@ commands. Deletion removes the sheet’s components and associated board footpri
 atomically, and cannot remove the last sheet. Schematic editing commands and
 footprint placement take an explicit `sheet` UUID when more than one sheet exists;
 unknown or ambiguous targets never fall back to another sheet. A view’s active
-sheet belongs to user-local presentation state and is never saved in `project.pc`.
+sheet belongs to user-local presentation state and is never saved in `project.json`.
 
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
@@ -118,15 +162,15 @@ intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
 Legacy snapshots retain version 6 until numeric allocation or retirement adopts
 the version-7 watermark, an eligible physical edit persists version-9 board
 registration with the same compatibility ID, or component metadata requires
-version 11. New projects start at version 9 with no physical board, unless New PCB
-explicitly requests one. Component metadata with explicit zero-or-one ownership
+version 11. New projects start at version 14 with no physical board, unless New PCB
+explicitly requests one. Supported flat encodings upgrade to project/14 on Save. Component metadata with explicit zero-or-one ownership
 uses version 12, which retains the watermark and registry; version 11 keeps legacy
 implicit ownership and rejects a `boards` record. Version 9 rejects component
 metadata rather than interpreting version-12 fields. Sheet encodings remain
 sheet/1 for ordinary sheets, sheet/2 for
-sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
-editing another document preserves an unaffected entry point. Adding or renaming
-a sheet writes the version-6 entry point. Legacy single-file encoding refuses
+sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. The low-level codec preserves original version-5 document bytes until an
+entry-point change, while ordinary Save adopts project/14 and retains unchanged
+payload bytes. Subsequent sheet changes keep the adopted folder layout. Legacy single-file encoding refuses
 multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
 component metadata and field appearance rather than discarding them.
 
@@ -161,7 +205,7 @@ orientation is independent. Unspecified reference/value layouts retain legacy
 automatic rendering, and optional fields start hidden. Absent metadata/layout
 stays omitted, preserving older canonical document encodings. Older readers
 reject the project/11 or /12 and sheet/4 extensions instead of silently discarding data. Reference/value content
-edits stay in `project.pc`; label placement edits stay in the owning sheet.
+edits stay in `project.json`; label placement edits stay in the owning sheet.
 
 Sheet/5 extends sheet/4 with optional non-null `text` on each named anchor. It uses
 the same field-layout vocabulary and bounds. Offsets are relative to the electrical
@@ -266,7 +310,8 @@ rotated, and legacy single-file export refuses rotated footprints. Moving change
 only the affected footprint record; rotating can additionally change the board
 format header. Every project has its sheet documents. A new schematic-only
 project has no board document; an explicitly created PCB and legacy implicit-board
-projects retain `board.json`, even when no footprints are placed. The board registry
+projects have a physical board document even when no footprints are placed;
+its path follows the registration after folder adoption. The board registry
 supports zero or one board. Newer physical-board versions add data for that board,
 rather than implementing multiple boards.
 
@@ -476,9 +521,9 @@ stroke and pin. Timestamps, generated hashes, caches and thumbnails stay out of
 the working documents.
 
 Moving or rotating a symbol changes only its sheet record. Editing a reference
-or value changes only its component record in `project.pc`. Board geometry stays
+or value changes only its component record in `project.json`. Board geometry stays
 in `board.json`. Placing a new definition changes the project and sheet documents
-and adds its saved symbol file. A no-op save rewrites no project documents.
+and adds its saved symbol file. After the first layout migration, a no-op save rewrites no project documents.
 Even after another document changes, unaffected documents retain their original
 bytes, including valid custom formatting.
 
@@ -491,24 +536,28 @@ both records is insufficient when their IDs collide. An ID-aware merge driver is
 outside this change.
 
 ```gitattributes
-*.pc text eol=lf
 *.json text eol=lf
-*.pc.zip binary
+*.pc binary
 ```
 
 Ignore `.pcbcraft-save/`, `.pcbcraft-stage-*/` and `.*.pcbcraft-lock`. ZIP exports
 are binary; optional text conversion can make local diffs readable but does not
 provide normal text merging. The folder is the collaboration format.
 
+Board inspection reports the resolved project-relative physical path, including
+any custom layout-root prefix, in each board's `file` field. Diagnostic
+single-document files do not carry layout metadata and continue to report the
+flat compatibility path.
+
 ## Packed projects and manifests
 
-A `.pc.zip` contains the same relative document paths and a root `manifest.json`:
+A `.pc` contains the same relative document paths and a root `manifest.json`:
 
 ```json
 {
-  "format": "pcbcraft-container/2",
+  "format": "pcbcraft-container/3",
   "parts": [
-    {"path": "board.json", "size_bytes": 66, "sha256": "<SHA-256 of the exact bytes>"}
+    {"path": "boards/board-a1b2c3d4e5f6/board.json", "size_bytes": 66, "sha256": "<SHA-256 of the exact bytes>"}
   ],
   "assets": []
 }
@@ -526,7 +575,7 @@ the open. A broken manifest never falls back to manifest-less loading.
 
 A hand-zipped project **without a manifest** is accepted when it contains exactly
 a valid project layout. An optional single top-level folder, such as
-`my-board/project.pc`, is stripped; multiple roots and unrelated files are
+`my-board/project.json`, is stripped; multiple roots and unrelated files are
 refused. Ordinary directory entries are accepted. In archives without a manifest,
 `__MACOSX/` sidecar trees and regular `.DS_Store`, `Thumbs.db` and `desktop.ini`
 files are discarded before locating the project root. They still undergo ZIP
@@ -538,7 +587,7 @@ Writers use Store, fixed timestamps, fixed permissions and a deterministic entry
 order (manifest first, then paths in lexical order). Readers accept Store and
 Deflate. Traversal, absolute/drive paths, duplicate or overlapping entries,
 symlinks, special files, encryption, ZIP64 and split archives are refused. Reads
-are bounded by both declared and actual expanded size. A no-op save of a current
+are bounded by both declared and actual expanded size. An unchanged save of an already migrated,
 manifested archive preserves its original bytes, including compression and
 comments. A first save of a manifest-less archive intentionally adds the manifest.
 
@@ -548,7 +597,7 @@ comments. A first save of a manifest-less archive intentionally adds the manifes
 | Each split JSON document | 16 MiB |
 | All split documents combined | 48 MiB |
 | Project documents | 4,096 |
-| Container v2 manifest | 1 MiB |
+| Container v3 manifest | 1 MiB |
 | Packed file | 64 MiB |
 
 These bounds supplement existing symbol, wire, geometry and library-definition
@@ -611,31 +660,97 @@ through canonical `\\?\` paths, where Windows would write such a file, but Git f
 Windows can't add it and programs that open it by its usual path reach the device
 instead. Through a usual path the publish itself fails after the journal commit,
 and every later open would fail in recovery. The message names the
-file; saving as a `.pc.zip` archive works, because the archive stores documents as
+file; saving as a `.pc` archive works, because the archive stores documents as
 ZIP entries. Other platforms save these names as ordinary files.
 
-## Legacy migration and fixtures
+Recovery binds each document parent before checking and publishing its leaf.
+Unix traversal and replacement use no-follow directory-relative operations;
+Windows retains verified non-reparse directory handles without delete sharing
+until publication completes. A parent swapped after resolution cannot redirect
+the replacement to an external symlink target. A final visible-tree check stops
+adoption and retains the journal if registered paths no longer match the completed
+document set. Restoring the original directory permits ordinary recovery.
 
-Plain JSON formats 1–4, split format 5 and container v1 remain readable. Formats 1–3 resolve the
-exact retained starter revisions; format 4 supplies its full symbol copies.
-All migrate in memory to the same split documents without changing IDs, geometry,
-wire connectivity or footprint mappings. Save asks for a new folder destination
-by default; Save As can instead select `.pc.zip`. It never silently replaces a
-legacy text `.pc` with an archive or a folder entry point requiring missing files.
+## Compatibility and fixtures
+
+App version 0.1.0 introduces this layout. Earlier working
+folders used a plain JSON `project.pc` entry point, and split archives used
+`.pc.zip` with container version 2. Older single-document projects could also
+use `.pc` for plain JSON or container version 1. Normal desktop, browser and
+headless opens accept the immediately previous split layouts without rewriting
+their source files. Previews are read-only too. On desktop, first Save upgrades
+a split folder in place: one journaled transaction installs `project.json`, removes
+`project.pc` and migrates any flat board payload. Desktop Save of a previous split
+archive replaces it with a verified container-v3 package at its existing path.
+In the browser, Download creates a new upgraded `.pc` file; it leaves the uploaded
+archive unchanged. Reopen the downloaded file to use the saved copy.
+Standalone JSON/container-v1 projects remain unsupported. The optional explicit
+converter below creates a separate copy of the immediately previous split layout.
+
+The fixed `project.json` filename identifies the new unpacked layout, and packed
+projects use `pcbcraft-container/3`. Existing split document schema versions
+remain supported under the new entry-point path; sheet, board and library
+schemas are unchanged. New hand-zipped folders use `project.json`; previous
+`project.pc` split ZIPs are also accepted for upgrade. Desktop Save or browser
+Download writes a version-3 manifest. Container versions 1/2
+are accepted only for version 2 with the previous `project.pc` split paths;
+version 1 remains unsupported. ZIP contents are
+validated independently of the filename, so a current version-3 package can
+still be opened through an explicit path with another extension.
+
+### Convert a previous split project
+
+Build `pcbcraft-cli` and run either form from a terminal:
+
+```sh
+# New working folder (the destination must not exist).
+pcbcraft-cli convert /path/to/old-project /path/to/converted-project
+# New portable ZIP package.
+pcbcraft-cli convert /path/to/old-project.pc.zip /path/to/converted-project.pc
+```
+
+A source folder or its `project.pc` entry point must contain a supported split
+project. Archives must use container version 2, or be manifest-less ZIPs of that
+previous split layout. A destination ending in `.pc` creates a container-v3 ZIP;
+other destinations create a new folder. Both forms validate all managed documents
+and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
+bytes. The entry point becomes project/14 with a board-folder registration; the
+entry-point path, physical board path and packed manifest change. Unrelated root files such
+as notes and `.git` are left in the source rather than copied into the project.
+
+The converter never writes to or recovers the source. Old manifest sizes and
+SHA-256 hashes are checked before renaming its entry-point path. Mixed layouts,
+invalid or unsupported schemas, unsafe paths, symlinks, busy source locks and
+pending save recovery are refused. A pending legacy save must be recovered with
+a previous build before conversion. Existing destinations and paths inside the
+source folder are refused. Folder publication uses the normal recovery journal;
+an interrupted conversion can leave a new destination requiring recovery. It
+never replaces an existing project. Open either the converted copy or the old
+split source; saving the latter upgrades it in place.
+
+Normal Open and explicit conversion also upgrade retired `power`, `power_bar`
+and `ground` annotations to pinned native power symbols. The affected sheet and
+project metadata change; unrelated board, sheet and library bytes are preserved.
+Names, positions, rotations, junctions and authored wire routes survive. This
+converter does not translate standalone JSON/container-v1 projects.
 
 The original `two-resistors-format-1.pc`, `two-resistors-format-2.pc` and
-`two-resistors.pc` (format 4) fixtures remain legacy inputs. Version-5 split inputs live
-under `crates/app/tests/fixtures/split/`, including the folder, a manifested archive
-and a hand-zipped archive without a manifest. Generate a fresh comparison set with:
+`two-resistors.pc` fixtures remain historical diagnostic inputs. The low-level
+single-document codecs, explicitly named `decode_diagnostic_file` compatibility
+reader and container-v1 fixture writer remain available for codec tests and
+benchmarks; they are not supported app/CLI import paths.
+Split inputs under `crates/app/tests/fixtures/split/` now use `project.json`
+and `.pc` packages, retaining their original document bytes. The checked-in
+version-5 document exercises unchanged Open followed by first-Save migration;
+low-level codec tests separately retain its original encoding. Generate a fresh canonical comparison set with:
 
 ```sh
 cargo run --locked -p pcbcraft-engine --example storage_fixtures -- /tmp/new-fixtures
 ```
 
 The output directory must not already exist. The generator uses the production
-encoder; regression tests compare migrations, document boundaries, library-copy
-lifetimes and archive round trips. Legacy writers remain available to fixture and
-benchmark code, while normal editor saves use the split format.
+encoder; regression tests compare document boundaries, library-copy lifetimes,
+archive round trips and the compatibility boundary. See [release notes](../CHANGELOG.md).
 
 ## Design references
 

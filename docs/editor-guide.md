@@ -767,14 +767,15 @@ arrangement retained while definition panes are open.
 
 ## Opening and saving projects
 
-Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring
+Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring
 its saved views, including split panes and detached windows.
 Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and
-**File → Save As…** offers **Project folder…** and **Packed project (.pc.zip)…**.
+**File → Save As…** offers **Project folder…** and **Packed project (.pc)…**.
 Commit the folder to Git; use the archive to share the complete project.
 Ordinary hand-zipped project folders open too, including those without a manifest.
-The browser uploads archives and legacy files and downloads `.pc.zip` archives.
+The browser uploads and downloads current `.pc` archives. Version 0.1.0 breaks
+older project layouts; see the [release notes](../CHANGELOG.md).
 The [native storage notes](native-project-storage.md) describe the formats,
 file safety and performance checks.
 

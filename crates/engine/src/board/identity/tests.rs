@@ -23,7 +23,7 @@ fn new_schematic_has_no_board_or_physical_file() {
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     let documents = persistence::encode_documents(before.clone()).unwrap();
     assert!(!documents.contains_key("board.json"));
-    assert_eq!(serde_json::from_slice::<Value>(&documents["project.pc"]).unwrap()["boards"], json!([]));
+    assert_eq!(serde_json::from_slice::<Value>(&documents["project.json"]).unwrap()["boards"], json!([]));
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert!(reopened.board_target().is_none());
     assert_eq!(documents, persistence::encode_documents(reopened).unwrap());
@@ -77,7 +77,7 @@ fn invalid_registration_never_adopts_foreign_or_hidden_physical_data() {
     let original = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
     for mutation in 0..8 {
         let mut documents = original.clone();
-        let mut entry: Value = serde_json::from_slice(&documents["project.pc"]).unwrap();
+        let mut entry: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
         match mutation {
             0 => entry["boards"] = json!([]), // a board.json cannot hide in a boardless project
             1 => entry["boards"] = Value::Null,
@@ -88,11 +88,11 @@ fn invalid_registration_never_adopts_foreign_or_hidden_physical_data() {
             6 => entry["boards"][0]["name"] = json!(" Board "),
             _ => entry["boards"][0]["name"] = json!("\nBoard\n"),
         }
-        documents.insert("project.pc".into(), serde_json::to_vec(&entry).unwrap());
+        documents.insert("project.json".into(), serde_json::to_vec(&entry).unwrap());
         assert!(persistence::decode_documents(&documents).is_err(), "mutation {mutation}");
     }
     let mut missing = original;
-    missing.remove("board.json");
+    missing.remove(&crate::persistence::test_board_path(&missing));
     assert!(persistence::decode_documents(&missing).is_err());
 }
 
@@ -126,7 +126,7 @@ fn first_legacy_physical_edit_persists_the_same_board_identity() {
         .unwrap();
     assert_eq!(session.project().unwrap().board_target(), Some(target));
     let after = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
-    let entry: Value = serde_json::from_slice(&after["project.pc"]).unwrap();
+    let entry: Value = serde_json::from_slice(&after["project.json"]).unwrap();
     assert_eq!(entry["boards"][0]["id"], json!(target.board));
     assert_eq!(entry["boards"][0]["name"], "Board");
     assert_eq!(persistence::decode_documents(&after).unwrap().board_target(), Some(target));
@@ -187,10 +187,10 @@ fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema(
             )
             .unwrap();
         let documents = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
-        let header: Value = serde_json::from_slice(&documents["project.pc"]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/12");
+        let header: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
+        assert_eq!(header["format"], "pcbcraft-project/14");
         assert_eq!(header["boards"].as_array().unwrap().len(), usize::from(create_board));
-        assert_eq!(documents.contains_key("board.json"), create_board);
+        assert_eq!(crate::persistence::project_board_path(&documents["project.json"]).unwrap().is_some(), create_board);
         let loaded = persistence::decode_documents(&documents).unwrap();
         assert_eq!(loaded.board_target(), target);
         assert_eq!(persistence::encode_documents(loaded.clone()).unwrap(), documents);
@@ -210,7 +210,7 @@ fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema(
                     entry.as_object_mut().unwrap().remove("numeric_id_high_water");
                 }
             }
-            malformed.insert("project.pc".into(), serde_json::to_vec(&entry).unwrap());
+            malformed.insert("project.json".into(), serde_json::to_vec(&entry).unwrap());
             assert!(persistence::decode_documents(&malformed).is_err(), "mutation {mutation}");
         }
         session.apply("edit.undo", &json!({})).unwrap();
@@ -237,7 +237,7 @@ fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
         )
         .unwrap();
     let before = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
-    let entry: Value = serde_json::from_slice(&before["project.pc"]).unwrap();
+    let entry: Value = serde_json::from_slice(&before["project.json"]).unwrap();
     assert_eq!(entry["format"], "pcbcraft-project/11");
     assert!(entry.get("boards").is_none());
     let reopened = persistence::decode_documents(&before).unwrap();
@@ -246,7 +246,7 @@ fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
     session.open_snapshot(reopened);
     session.apply(crate::PLACE_FOOTPRINT,&json!({"board":target.board,"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let after = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
-    let registered: Value = serde_json::from_slice(&after["project.pc"]).unwrap();
+    let registered: Value = serde_json::from_slice(&after["project.json"]).unwrap();
     assert_eq!(registered["format"], "pcbcraft-project/12");
     assert_eq!(registered["boards"][0]["id"], json!(target.board));
     assert_eq!(registered["components"], entry["components"]);
@@ -255,7 +255,7 @@ fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
     assert_eq!(persistence::encode_documents(reopened).unwrap(), after);
     session.apply("edit.undo", &json!({})).unwrap();
     let undone = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
-    let undone_entry: Value = serde_json::from_slice(&undone["project.pc"]).unwrap();
+    let undone_entry: Value = serde_json::from_slice(&undone["project.json"]).unwrap();
     assert_eq!(undone_entry["format"], "pcbcraft-project/11");
     assert_eq!(undone_entry["components"], entry["components"]);
     assert_eq!(session.project().unwrap().board_target(), Some(target));

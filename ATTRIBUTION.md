@@ -991,6 +991,31 @@ composition. Plain titles use original PCBcraft interaction/rendering code with
 the shared grip, fonts and keyboard-focus outline, without hover fills or
 duplicate tooltips. This adaptation adds no external source or dependency.
 
+## Explicit previous-layout conversion
+
+The source-preserving split-layout converter is original PCBcraft work using
+the existing MIT/Apache native document codecs, bounded ZIP reader and recoverable
+folder publication. It introduces no external implementation, dependency, artwork
+or library data. Regression inputs are generated through native commands and
+encoders. User-provided project copies used for local verification remain outside
+the repository and are not distributed with the code.
+
+The project/14 board-folder codec, namespace selection, first-save migration and
+save-metadata adoption across Undo/Redo are original PCBcraft work over the
+existing native model and journaled publication. Regression circuits use shared
+commands and original repository fixtures. No external implementation, data,
+dependency or asset was added.
+
+Handle-bound recovery publication is original PCBcraft work using `rustix` 1.1.6,
+already present in the qualified dependency graph and now a direct Unix storage
+dependency. The crate remains independently licensed `Apache-2.0 WITH
+LLVM-exception OR Apache-2.0 OR MIT`, with its package notices retained. Its
+[safe descriptor-relative filesystem API](https://docs.rs/rustix/1.1.6/rustix/fs/index.html)
+and Microsoft's [CreateFile sharing/reparse-point contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+were consulted on November 11, 2026. Windows directory handles omit delete sharing
+and reject reparse points; no Windows implementation source was copied. No new
+crate version, external EDA source or asset was added.
+
 ## Native part/category definitions and symbol schemas
 
 The native `pcbcraft-part/1`, `pcbcraft-category/1` and `pcbcraft-symbol/3`

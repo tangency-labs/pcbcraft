@@ -29,11 +29,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             fs::create_dir_all(path.parent().ok_or("document has no parent")?)?;
             fs::write(path, bytes)?;
         }
-        fs::write(destination.join("dual-led.pc.zip"), archive)?;
+        fs::write(destination.join("dual-led.pc"), archive)?;
         Ok(())
     };
     publish().map_err(|error| format!("incomplete output at {}: {error}", destination.display()))?;
-    println!("Open {}", destination.join("dual-led/project.pc").display());
+    println!("Open {}", destination.join("dual-led/project.json").display());
     Ok(())
 }
 

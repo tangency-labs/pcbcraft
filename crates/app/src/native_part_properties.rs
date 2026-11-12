@@ -100,12 +100,14 @@ impl Draft {
                 Operator::OneOf => format!("value {}", index + 1),
                 _ => "value".into(),
             };
-            ui.horizontal(|ui| {
-                properties::text(ui, &format!("{name} {suffix}"), value);
-                if self.operator == Operator::OneOf && count > 1 && pcbcraft_chrome::controls::enabled_button(ui, true, "Remove").clicked() {
+            let label = format!("{name} {suffix}");
+            if self.operator == Operator::OneOf && count > 1 {
+                if properties::text_action(ui, &label, value, "Remove") {
                     remove = Some(index);
                 }
-            });
+            } else {
+                properties::text(ui, &label, value);
+            }
         }
         if let Some(index) = remove {
             self.values.remove(index);
