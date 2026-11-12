@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PCBcraft CPU performance diagnostics</title>
+<pre id="report">Running CPU diagnostics…</pre>
+<script type="module">
+const params = new URLSearchParams(location.search);
+try {
+  const { default: init, run_performance } = await import('./pkg/board_perf_web.js');
+  await init();
+  const read = async name => {
+    const url = params.get(name);
+    if (!url) throw new Error(`Missing ${name} URL parameter`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    return response.text();
+  };
+  const [artifact, environment] = await Promise.all([read('artifact'), read('environment')]);
+  const iterations = Number(params.get('iterations') ?? 100);
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > 10000) throw new Error('Invalid iterations');
+  const report = run_performance(artifact, environment, iterations);
+  globalThis.performanceReport = JSON.parse(report);
+  document.querySelector('#report').textContent = report;
+} catch (error) {
+  globalThis.performanceError = String(error);
+  document.querySelector('#report').textContent = String(error);
+}
+</script>

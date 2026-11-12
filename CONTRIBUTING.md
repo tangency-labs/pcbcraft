@@ -73,6 +73,11 @@ original fixture set, use a destination that does not already exist:
 cargo run --locked -p pcbcraft-engine --example storage_fixtures -- /tmp/pcbcraft-fixtures-new
 ```
 
+For ERC/routing performance work under #237, read the
+[performance-testing guide](docs/performance-testing.md) before implementation.
+It defines saved workload/replay artifacts, matched native/browser CPU comparisons
+and the measurements still needed for actual display-latency claims.
+
 ## Choose a bounded change
 
 Check the issue discussion, [open PRs](https://github.com/tangency-labs/pcbcraft/pulls)

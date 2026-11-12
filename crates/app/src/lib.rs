@@ -48,6 +48,8 @@ mod native_sources;
 mod net_inspector;
 mod net_labels;
 mod parts_browser;
+#[cfg(feature = "performance-harness")]
+pub mod performance;
 mod preferences;
 mod project_browser;
 mod project_files;

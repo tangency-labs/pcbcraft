@@ -1,0 +1,17 @@
+{
+  "base_revision": "627982ca7a186f2b5eeb28db0ba860302c4010ea",
+  "source_sha256": "010e84b2486d53c24cafd1f91a6e3ab98933b009b959eb993ee4abb84246e480",
+  "files": {
+    "Cargo.lock": "fa3bacf039c4c9c2a0d3afb0df24968c6e805d7a687bbe517a94369ef340874d",
+    "Cargo.toml": "b0cefe411c489fad55480f4f06a49a254fff29bf38c9b44d6bf7cf5ea90f9e5a",
+    "crates/app/Cargo.toml": "95592c7f94ea6a8c6edffd6722686313422811737d2e1acad7abc6b13acdebcb",
+    "crates/app/examples/board_perf.rs": "b7d10fb8ae1dc34cddd45644413526a50a9feef9246276ff411ef1387b238c65",
+    "crates/app/examples/board_perf_web.rs": "a2d30a52f0041d9371380885c0a7f00e389275814d496d157c5b88656b0be5e7",
+    "crates/app/src/canvas_camera.rs": "d13414f39be61100d85c668eb02da6e537e26bcb375733ee3d657b87e81d8874",
+    "crates/app/src/lib.rs": "03af99aca4c5ad5fe21e2abb12350a4a82b0c4faa92227ff494cb625b37dd93f",
+    "crates/app/src/performance.rs": "f5c41f138a22a669cfe6f5f5f07bac642a8e0d5cc0b78410f0948e5b2103af9c",
+    "crates/app/src/performance/fixture.rs": "1c56e0d670822c0f48ce68b265dc9deacea5aa966af4545a55819441cf19d31d",
+    "crates/app/src/performance/replay.rs": "9c89d9d3628fe2986f89fb15ebc6e7558879aac39af3b19b71d68f8ab64a9e10",
+    "crates/app/src/performance/report.rs": "2b26da371d9a5ec60776913bdaf2c0fe0fc2799b5b970f2bb0d35e52c661cea2"
+  }
+}

@@ -9,6 +9,18 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+performance-harness = ["dep:sha2"]
+
+[[example]]
+name = "board_perf"
+required-features = ["performance-harness"]
+
+[[example]]
+name = "board_perf_web"
+crate-type = ["cdylib"]
+required-features = ["performance-harness"]
+
 [dependencies]
 pcbcraft-chrome = { workspace = true }
 pcbcraft-engine = { workspace = true }
@@ -18,6 +30,7 @@ log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { version = "=1.29.0", features = ["serde"] }
+sha2 = { version = "=0.10.9", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-agents = { path = "../craft-agents" }

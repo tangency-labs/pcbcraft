@@ -1101,3 +1101,12 @@ MIT OR Apache-2.0 PCBcraft work following #242 and this repository's rule/storag
 contracts. The form reuses the pinned Craft toolkit through the existing chrome
 settings, field and control adapters. No external EDA implementation, library data,
 artwork or new dependency was introduced.
+
+## Performance fixtures and CPU replay
+
+The opt-in #240 harness, fixed-pattern workload recipes, input traces and evidence
+comparison tools are original MIT OR Apache-2.0 PCBcraft work. Fixtures use shared
+commands, the production archive encoder and existing qualified bundled definitions.
+Editor replay uses PCBcraft's production app and pinned Craft chrome. SHA-256
+reuses the already qualified sha2 dependency; no external EDA implementation,
+source-derived fixture, artwork or additional dependency version was introduced.
