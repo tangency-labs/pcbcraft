@@ -46,7 +46,10 @@ impl Cache {
         let entries = project
             .symbols()
             .iter()
-            .filter_map(|symbol| bounds(painter, symbol.unit_definition(), symbol.turns(), symbol.position, step).map(|bounds| (symbol.id(), bounds)))
+            .filter_map(|symbol| {
+                bounds(painter, symbol.unit_definition(), symbol.turns(), symbol.is_mirrored(), symbol.position, step)
+                    .map(|bounds| (symbol.id(), bounds))
+            })
             .collect();
         let index = Arc::new(Index::new(entries));
         self.cached = Some(Cached { project: project.clone(), revision, step, pixels_per_point: painter.pixels_per_point(), index: index.clone() });
@@ -57,20 +60,20 @@ impl Cache {
 /// Convert drawing-only bounds to world grid units. Thin native strokes get a small extent;
 /// an empty drawing has no body to warn about. Native text stays upright after rotation and
 /// uses the rendered galley's full ink extent at this zoom. Fields and pin leads are excluded.
-fn bounds(painter: &Painter, unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, at: Point, step: f32) -> Option<Rect> {
+fn bounds(painter: &Painter, unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored: bool, at: Point, step: f32) -> Option<Rect> {
     let drawing = drawing_bounds(unit);
     if !drawing.is_finite() {
         return None;
     }
     let padding = vec2((0.05 - drawing.width()).max(0.) / 2., (0.05 - drawing.height()).max(0.) / 2.);
-    let mut drawing = turn_rect(drawing.expand2(padding), turns);
+    let mut drawing = turn_rect(drawing.expand2(padding), turns, mirrored);
     if let Some(font) = drawing_text_font(step) {
         for shape in &unit.drawing {
             if let Shape::Text(anchor, text, align) = shape {
                 let (x, y) = grid(*anchor);
-                let (x, y) = turn(x, y, turns);
+                let (x, y) = turn(x, y, turns, mirrored);
                 let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
-                let origin = text_anchor(*align, turns).anchor_size(pos2(x * step, y * step), galley.size()).min;
+                let origin = text_anchor(*align, turns, mirrored).anchor_size(pos2(x * step, y * step), galley.size()).min;
                 let ink = galley.mesh_bounds.translate(origin.to_vec2());
                 drawing = drawing.union(Rect::from_min_max(ink.min / step, ink.max / step));
             }
@@ -184,8 +187,18 @@ impl Index {
     }
 
     /// Warn beside a new placement without preventing its commit or changing connection rules.
-    pub(super) fn preview(&self, ui: &mut Ui, camera: &Camera, canvas: Rect, unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, at: Point) {
-        if bounds(ui.painter(), unit, turns, at, camera.unit_step()).is_some_and(|bounds| self.any(bounds, None)) {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn preview(
+        &self,
+        ui: &mut Ui,
+        camera: &Camera,
+        canvas: Rect,
+        unit: &pcbcraft_engine::schematic::SymbolUnit,
+        turns: u8,
+        mirrored: bool,
+        at: Point,
+    ) {
+        if bounds(ui.painter(), unit, turns, mirrored, at, camera.unit_step()).is_some_and(|bounds| self.any(bounds, None)) {
             pcbcraft_chrome::canvas_warning::badge(
                 ui,
                 ui.scope_id().with("overlap_preview"),

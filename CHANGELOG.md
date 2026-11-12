@@ -10,6 +10,21 @@ Right-click and use Select symbol
 to choose a hidden part; a subsequent drag moves the chosen symbol. Warnings
 follow the current sheet and stay outside project files and undo history.
 
+Schematic symbols can now be mirrored horizontally (**X**) or vertically (**Y**)
+about their center from the canvas, context menu, Capture ribbon, or the shared
+`schematic.mirror_symbol` command. Reflections compose with the stored quarter
+turn, keep terminal, field and pin-to-pad identities, carry attached wires to the
+transformed pins and leave reference/value text upright. Applying the same axis
+twice restores the original pose; undo, clipboard, multi-unit sheets and
+folder/archive reopen preserve the transform. Mirrored sheets use sheet/6 with an
+optional `mirrored` flag and return to the earlier encoding when the last mirror
+is removed; older readers reject sheet/6 rather than dropping the reflection.
+Connecting legs drawn to retain an offset named contact record their wire
+identity, endpoints and bends in sheet/7, so a later mirror removes only that
+generated leg after reopen and never an authored route. Edited legs become
+authored routes again, and removing the last live record returns the sheet to
+the earlier encoding.
+
 Tracks and vias can be locked together in Properties or through
 `pcb.set_copper_locked`. Locked copper stays selectable and refuses geometry,
 size and deletion changes, including indirect changes from footprint transforms

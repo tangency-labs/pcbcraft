@@ -197,7 +197,7 @@ fn grabbed_symbols_rotate_before_placement_with_one_undo_step() {
         assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::Move {symbol,turns,..}) if (symbol.turns() + turns) % 4 == 2), "{mode}");
         assert_eq!(h.state().session.revision(), revision);
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-        let preview = before.transformed_symbol(&before.symbols()[0].id(), target, Some(2), mode == "move", revision, true).unwrap();
+        let preview = before.transformed_symbol(&before.symbols()[0].id(), target, Some(2), None, mode == "move", revision, true).unwrap();
         for wire in preview.wires() {
             let points: Vec<_> = preview.wire_path(wire).into_iter().map(|point| screen(&h, point)).collect();
             assert!(

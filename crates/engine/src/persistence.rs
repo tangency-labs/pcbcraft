@@ -203,6 +203,9 @@ struct Placement<'a> {
     x_nm: i64,
     y_nm: i64,
     rotation: u16,
+    /// Sheet/6 extension: reflect left-to-right before rotation. Canonical records omit false.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    mirrored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     field_layout: Option<crate::schematic::fields::Layouts>,
 }
@@ -290,6 +293,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
             x_nm: record.x_nm,
             y_nm: record.y_nm,
             rotation: 0,
+            mirrored: None,
             field_layout: None,
         });
     }
@@ -397,7 +401,7 @@ struct Connection<'a> {
     bends: Option<Vec<Point>>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged, deny_unknown_fields)]
 enum Endpoint<'a> {
     Pin { symbol: u64, pin: std::borrow::Cow<'a, str> },
@@ -469,10 +473,13 @@ impl Encoder {
         if project.components.values().any(|c| c.part.is_some()) {
             return Err("Native library part selections require split documents or a packed archive.".into());
         }
+        if project.sheets.iter().any(|sheet| sheet.has_live_generated_legs()) {
+            return Err("generated named-contact legs require the split project format".into());
+        }
         if project.components.values().any(|c| !c.metadata.is_empty())
-            || project.sheets.iter().any(|s| s.symbols.iter().any(|s| !s.field_layout.is_empty()))
+            || project.sheets.iter().any(|s| s.symbols.iter().any(|s| !s.field_layout.is_empty() || s.mirrored))
         {
-            return Err("component fields and text appearance require the split project format".into());
+            return Err("component fields, text appearance and mirrored symbols require the split project format".into());
         }
         if project.sheets.len() != 1 || project.sheet_name() != "Main" {
             return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
@@ -590,6 +597,7 @@ impl Encoder {
                     x_nm: symbol.position.x_nm,
                     y_nm: symbol.position.y_nm,
                     rotation: u16::from(symbol.rotation) * 90,
+                    mirrored: None,
                     field_layout: None,
                 };
                 write_record(&mut self.bytes, &record, self.symbols + 1 < self.project.symbols.len())?;
@@ -696,6 +704,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     };
     if document.components.iter().any(|c| c.metadata.is_some()) || document.sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
         return Err("component fields and text appearance require split project/sheet formats 11/4".into());
+    }
+    if document.sheet.symbols.iter().any(|s| s.mirrored.is_some()) {
+        return Err("mirrored symbol placements require split sheet format 6".into());
     }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
@@ -842,6 +853,7 @@ fn validate_with_hierarchy(
             position: Point { x_nm: record.x_nm, y_nm: record.y_nm },
             field_layout,
             rotation,
+            mirrored: record.mirrored.unwrap_or(false),
         });
     }
     let placed_components: BTreeSet<_> = units.keys().map(|(component, _)| component).collect();
@@ -966,6 +978,7 @@ fn validate_with_hierarchy(
             wires: Arc::new(wires),
             junctions: Arc::new(junctions),
             connectivity: Arc::default(),
+            generated_legs: Arc::default(),
         }]),
         sheet_index: 0,
         name,

@@ -259,7 +259,8 @@ pub(super) fn paint(
     highlighted: &std::collections::BTreeSet<String>,
 ) {
     let tokens = Tokens::get();
-    let preview = moved.map(|(symbol, point)| (symbol.terminals(), symbol.unit_definition().pin_positions(point, symbol.turns())));
+    let preview =
+        moved.map(|(symbol, point)| (symbol.terminals(), symbol.unit_definition().pin_positions(point, symbol.turns(), symbol.is_mirrored())));
     let position = |endpoint| {
         if let WireEndpoint::Terminal(pin) = endpoint {
             preview

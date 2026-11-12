@@ -180,7 +180,7 @@ impl Camera {
         let rect = Rect::from_center_size(Pos2::ZERO, Vec2::ZERO);
         for symbol in project.symbols().iter().filter(|symbol| selection.symbols.contains(&symbol.id())) {
             let center = self.screen(symbol.position, rect).to_vec2();
-            let extent = grid_bounds(symbol.unit_definition(), symbol.turns());
+            let extent = grid_bounds(symbol.unit_definition(), symbol.turns(), symbol.is_mirrored());
             let step = self.unit_step();
             bounds = bounds.union(
                 Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step)).translate(center),
@@ -498,7 +498,7 @@ impl Camera {
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
             let center = self.screen(symbol.position, rect) - rect.center();
-            let extent = grid_bounds(symbol.unit_definition(), symbol.turns());
+            let extent = grid_bounds(symbol.unit_definition(), symbol.turns(), symbol.is_mirrored());
             let step = self.unit_step();
             let symbol_bounds = Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step))
                 .translate(center)

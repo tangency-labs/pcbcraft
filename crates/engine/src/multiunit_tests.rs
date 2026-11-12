@@ -84,6 +84,48 @@ fn codec_checks_units_and_logical_terminal_coverage() {
     }
 }
 
+/// Mirroring one drawing keeps the shared component and the other placed unit untouched.
+#[test]
+fn mirrored_units_keep_the_shared_part_and_reopen_with_their_own_pose() {
+    let mut session = session();
+    let initial = session.snapshot().unwrap();
+    let part = initial.symbols()[0].component_id();
+    apply(&mut session, sheets::CREATE_SHEET, json!({"name":"Second"}));
+    let target = session.project().unwrap().sheets().nth(1).unwrap().target;
+    apply(&mut session, PLACE_UNIT, json!({"sheet":target.id(),"component":part,"unit":"b","x_nm":0,"y_nm":0}));
+    let first_pins = initial.symbols()[0].pins();
+    let unit_b = session.project().unwrap().for_sheet(target).unwrap().symbols()[0].id();
+
+    apply(&mut session, MIRROR_SYMBOL, json!({"sheet":target.id(),"symbol":unit_b,"axis":"vertical"}));
+    let mirrored = session.snapshot().unwrap();
+    assert_eq!(mirrored.components().count(), 1);
+    let projected = mirrored.for_sheet(target).unwrap();
+    let placement = &projected.symbols()[0];
+    assert_eq!(placement.id(), unit_b);
+    assert_eq!(placement.component_id(), part);
+    assert_eq!(placement.unit_id(), "b");
+    assert!(placement.is_mirrored());
+    assert_eq!(placement.turns(), 2);
+    assert_eq!(placement.pins(), placement.unit_definition().pin_positions(placement.position, 2, true));
+    assert_eq!(mirrored.symbols()[0].pins(), first_pins, "the other unit keeps its original pose");
+    assert!(!mirrored.symbols()[0].is_mirrored());
+
+    let documents = encode_documents(mirrored.clone()).unwrap();
+    let reopened = decode_documents(&documents).unwrap();
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), documents);
+    let reopened = reopened.for_sheet(target).unwrap();
+    assert!(reopened.symbols()[0].is_mirrored());
+    assert_eq!(reopened.symbols()[0].turns(), 2);
+    assert_eq!(reopened.symbols()[0].pins(), placement.pins());
+
+    session.apply("edit.undo", &Value::Null).unwrap();
+    let restored = session.snapshot().unwrap();
+    let restored_sheet = restored.for_sheet(target).unwrap();
+    let restored_b = &restored_sheet.symbols()[0];
+    assert!(!restored_b.is_mirrored());
+    assert!(!restored.symbols()[0].is_mirrored());
+}
+
 /// Adding a unit consumes one drawing identity, no new part/reference, even without the library.
 #[test]
 fn pinned_units_share_fields_and_round_trip_across_sheets() {

@@ -176,11 +176,11 @@ pub(crate) struct PartDrag {
 /// is drawn unrotated and without labels. A shared minimum preview extent keeps small symbols
 /// from growing disproportionately large across the catalog.
 pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
-    let bounds = grid_bounds(definition.default_unit(), 0);
+    let bounds = grid_bounds(definition.default_unit(), 0, false);
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
     let center = rect.center() - bounds.center().to_vec2() * step;
-    paint_symbol(painter, definition.default_unit(), center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
+    paint_symbol(painter, definition.default_unit(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
 }
 
 /// What a wire's context menu asks for.
@@ -206,6 +206,7 @@ pub(crate) enum SymbolAction {
     Grab,
     DisconnectMove,
     Rotate,
+    Mirror(pcbcraft_engine::schematic::MirrorAxis),
     EditFields,
     AssignFootprint,
     Delete,
@@ -330,7 +331,17 @@ pub(crate) fn show(
     };
     let group_preview = match (&tool, group_delta, reshape_target) {
         (Some(Tool::Move { symbol, turns, disconnect, .. }), _, _) => moved.as_ref().and_then(|(_, point)| {
-            project.transformed_symbol(&symbol.id(), *point, Some((symbol.turns() + turns) % 4), *disconnect, revision, auto_heal).ok()
+            project
+                .transformed_symbol(
+                    &symbol.id(),
+                    *point,
+                    Some((symbol.turns() + turns) % 4),
+                    Some(symbol.is_mirrored()),
+                    *disconnect,
+                    revision,
+                    auto_heal,
+                )
+                .ok()
         }),
         (Some(Tool::MoveItems { items, .. }), Some(delta), _) => {
             items.moved(project, delta).and_then(|next| next.healed(project, revision, auto_heal)).ok()
@@ -429,7 +440,15 @@ pub(crate) fn show(
             } else {
                 tokens.text
             };
-            paint_symbol(&painter, symbol.unit_definition(), center, unit_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+            paint_symbol(
+                &painter,
+                symbol.unit_definition(),
+                center,
+                unit_step,
+                symbol.turns(),
+                symbol.is_mirrored(),
+                Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
+            );
         }
     }
 
@@ -471,7 +490,7 @@ pub(crate) fn show(
                     SymbolPlacement::preview_unit(definition.clone(), unit, *turns, definition.defaults.clone().unwrap_or_default().field_layout)
             {
                 paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent);
-                overlap_index.preview(ui, camera, rect, drawing, *turns, at);
+                overlap_index.preview(ui, camera, rect, drawing, *turns, false, at);
             }
         }
         if let Some(Tool::Wire { start, .. }) = tool {
@@ -496,7 +515,7 @@ pub(crate) fn show(
         let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
             paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
-            overlap_index.preview(ui, camera, rect, drag.placement.definition.default_unit(), 0, point);
+            overlap_index.preview(ui, camera, rect, drag.placement.definition.default_unit(), 0, false, point);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
@@ -739,6 +758,8 @@ pub(crate) fn show(
                 ("Grab (keep connected)", "G", SymbolAction::Grab),
                 ("Disconnect and Move", "M", SymbolAction::DisconnectMove),
                 ("Rotate", "R", SymbolAction::Rotate),
+                ("Mirror Horizontally", "X", SymbolAction::Mirror(pcbcraft_engine::schematic::MirrorAxis::Horizontal)),
+                ("Mirror Vertically", "Y", SymbolAction::Mirror(pcbcraft_engine::schematic::MirrorAxis::Vertical)),
                 ("Edit Fields…", "E", SymbolAction::EditFields),
                 ("Assign Footprint…", "", SymbolAction::AssignFootprint),
                 ("Delete", "Del", SymbolAction::Delete),
@@ -946,7 +967,9 @@ pub(super) fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, p
 
 /// Test the same drawn body area for ordinary picking and selection clarification.
 fn symbol_contains(symbol: &SymbolPlacement, center: Pos2, step: f32, pointer: Pos2) -> bool {
-    body(symbol.unit_definition(), symbol.turns()).translate(center.to_vec2() / step).contains((pointer.to_vec2() / step).to_pos2())
+    body(symbol.unit_definition(), symbol.turns(), symbol.is_mirrored())
+        .translate(center.to_vec2() / step)
+        .contains((pointer.to_vec2() / step).to_pos2())
 }
 
 /// Return all bodies under the pointer in nearest-center order, newest first for ties.
@@ -962,8 +985,10 @@ fn symbols_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, pointer: Po
     hits
 }
 
-/// Turn an offset in grid steps by quarter turns counterclockwise, as the engine turns pins.
-fn turn(x: f32, y: f32, turns: u8) -> (f32, f32) {
+/// Transform an offset in grid steps exactly as the engine does: reflect horizontally first,
+/// then turn counterclockwise.
+fn turn(x: f32, y: f32, turns: u8, mirrored: bool) -> (f32, f32) {
+    let x = if mirrored { -x } else { x };
     match turns % 4 {
         0 => (x, y),
         1 => (y, -x),
@@ -972,10 +997,11 @@ fn turn(x: f32, y: f32, turns: u8) -> (f32, f32) {
     }
 }
 
-/// A rectangle in grid steps after quarter turns: the turned corners' bounds.
-fn turn_rect(rect: Rect, turns: u8) -> Rect {
-    let (ax, ay) = turn(rect.min.x, rect.min.y, turns);
-    let (bx, by) = turn(rect.max.x, rect.max.y, turns);
+/// A rectangle in grid steps after the same mirror and quarter turns as the drawing.
+fn turn_rect(rect: Rect, turns: u8, mirrored: bool) -> Rect {
+    let rect = if mirrored { Rect::from_min_max(pos2(-rect.max.x, rect.min.y), pos2(-rect.min.x, rect.max.y)) } else { rect };
+    let (ax, ay) = turn(rect.min.x, rect.min.y, turns, false);
+    let (bx, by) = turn(rect.max.x, rect.max.y, turns, false);
     Rect::from_two_pos(pos2(ax, ay), pos2(bx, by))
 }
 
@@ -1010,7 +1036,7 @@ fn placement_preview(
     }
     let preview = SymbolPlacement::preview_unit(definition.clone(), unit, turns, definition.defaults.clone().unwrap_or_default().field_layout)?;
     paint_unit_template(&ui.painter_at(rect), &preview, value, screen(point), camera.unit_step(), tokens.accent);
-    overlaps.preview(ui, camera, rect, preview.unit_definition(), turns, point);
+    overlaps.preview(ui, camera, rect, preview.unit_definition(), turns, false, point);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
         response.ctx.data_mut(|data| data.insert_temp(response.id.with("placed_on_press"), true));
@@ -1028,7 +1054,15 @@ fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: 
 
 /// Preview the selected drawing with the same fields and geometry as its committed placement.
 fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str, center: Pos2, step: f32, color: egui::Color32) {
-    paint_symbol(painter, symbol.unit_definition(), center, step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+    paint_symbol(
+        painter,
+        symbol.unit_definition(),
+        center,
+        step,
+        symbol.turns(),
+        symbol.is_mirrored(),
+        Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
+    );
     let defaults = symbol.definition.defaults.clone().unwrap_or_default();
     fields::paint_labels(painter, symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
 }
@@ -1049,8 +1083,8 @@ fn grid_pos(point: Point) -> Pos2 {
 
 /// The area a symbol's drawing covers around its center, in grid steps, after its turns: its
 /// pins and every stroke. Fit uses it so every part stays in view.
-pub(super) fn grid_bounds(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8) -> Rect {
-    turn_rect(unturned_bounds(definition), turns)
+pub(super) fn grid_bounds(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored: bool) -> Rect {
+    turn_rect(unturned_bounds(definition), turns, mirrored)
 }
 
 /// [`grid_bounds`] before rotation.
@@ -1081,7 +1115,16 @@ fn shape_bounds<'a>(shapes: impl Iterator<Item = &'a Shape>) -> Rect {
 
 /// Where an upright label sits on its anchor after the symbol turns. Half a turn swaps start
 /// and end so a label inside a body edge stays inside; a quarter turn centers it.
-fn text_anchor(align: TextAlign, turns: u8) -> Align2 {
+fn text_anchor(align: TextAlign, turns: u8, mirrored: bool) -> Align2 {
+    let align = if mirrored {
+        match align {
+            TextAlign::Start => TextAlign::End,
+            TextAlign::End => TextAlign::Start,
+            TextAlign::Middle => TextAlign::Middle,
+        }
+    } else {
+        align
+    };
     match (align, turns % 4) {
         (TextAlign::Middle, _) | (_, 1 | 3) => Align2::CENTER_CENTER,
         (TextAlign::Start, 0) | (TextAlign::End, 2) => Align2::LEFT_CENTER,
@@ -1098,21 +1141,29 @@ fn drawing_text_font(step: f32) -> Option<FontId> {
 /// The grabbable area of a symbol in grid steps around its center, after its turns: a 5 by 4
 /// step box at the center, grown to the drawing's strokes so a large part can be picked by its
 /// body. Pins stay outside it unless a stroke reaches them.
-fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8) -> Rect {
+fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored: bool) -> Rect {
     let core = Rect::from_center_size(Pos2::ZERO, vec2(5.0, 4.0));
     let drawing = drawing_bounds(definition);
     let unturned = if drawing.is_positive() { core.union(drawing.shrink2(vec2(1.0, 0.0)).intersect(drawing)) } else { core };
-    turn_rect(unturned, turns)
+    turn_rect(unturned, turns, mirrored)
 }
 
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
 /// turned with the symbol.
 /// Part instance fields are drawn separately so their layout never changes the body or pins.
-fn paint_symbol(painter: &Painter, definition: &pcbcraft_engine::schematic::SymbolUnit, center: Pos2, step: f32, turns: u8, stroke: Stroke) {
+fn paint_symbol(
+    painter: &Painter,
+    definition: &pcbcraft_engine::schematic::SymbolUnit,
+    center: Pos2,
+    step: f32,
+    turns: u8,
+    mirrored: bool,
+    stroke: Stroke,
+) {
     let color = stroke.color;
     let xy = |point: &Point| {
         let (x, y) = grid(*point);
-        let (x, y) = turn(x, y, turns);
+        let (x, y) = turn(x, y, turns, mirrored);
         pos2(center.x + x * step, center.y + y * step)
     };
     for shape in &definition.graphics() {
@@ -1122,7 +1173,7 @@ fn paint_symbol(painter: &Painter, definition: &pcbcraft_engine::schematic::Symb
                     if step < theme::SCHEMATIC_MIN_GRID_SPACING {
                         continue;
                     }
-                    let text = crate::definition_graphics::symbol_text(graphic, turns);
+                    let text = crate::definition_graphics::symbol_text(graphic, turns, mirrored);
                     crate::definition_graphics::paint(
                         painter,
                         &text,
@@ -1149,7 +1200,7 @@ fn paint_symbol(painter: &Painter, definition: &pcbcraft_engine::schematic::Symb
             }
             Shape::Text(at, text, align) => {
                 if let Some(font) = drawing_text_font(step) {
-                    painter.text(xy(at), text_anchor(*align, turns), text, font, color);
+                    painter.text(xy(at), text_anchor(*align, turns, mirrored), text, font, color);
                 }
             }
         }

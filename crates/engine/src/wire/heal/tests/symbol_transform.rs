@@ -23,7 +23,8 @@ fn symbol_transform_preview_and_commit_are_one_atomic_edit() {
                 let before = s.snapshot().unwrap();
                 let symbol = before.symbols()[0].clone();
                 let paths: Vec<_> = before.wires().iter().map(|wire| before.wire_path(wire)).collect();
-                let preview = before.transformed_symbol(&symbol.id(), to, Some((degrees / 90) as u8), disconnect, s.revision(), auto_heal).unwrap();
+                let preview =
+                    before.transformed_symbol(&symbol.id(), to, Some((degrees / 90) as u8), None, disconnect, s.revision(), auto_heal).unwrap();
                 assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
                 run(
                     &mut s,
@@ -76,6 +77,6 @@ fn symbol_transform_defaults_noops_and_rejections_preserve_history() {
         assert_eq!(s.revision(), revision);
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
-    assert!(before.transformed_symbol(&symbol, p(0, 0), Some(4), false, revision, true).is_err());
+    assert!(before.transformed_symbol(&symbol, p(0, 0), Some(4), None, false, revision, true).is_err());
     assert_eq!(crate::command(MOVE_SYMBOL).unwrap().to_json()["params"]["properties"]["rotation"]["enum"], json!([0, 90, 180, 270]));
 }

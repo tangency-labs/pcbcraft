@@ -50,7 +50,7 @@ fn dragging_ground_placed_on_a_wire_keeps_the_connection() {
         h.run();
         assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Move { .. })));
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-        let expected = before.transformed_symbol(&label.id(), target, Some(0), false, h.state().session.revision(), auto_heal).unwrap();
+        let expected = before.transformed_symbol(&label.id(), target, Some(0), None, false, h.state().session.revision(), auto_heal).unwrap();
         let points: Vec<_> = expected.wire_path(&expected.wires()[0]).into_iter().map(|point| at(&h, point)).collect();
         assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.points==points)));
         h.drop_at(to);

@@ -4,25 +4,68 @@ use super::*;
 impl Edit {
     /// Apply a validated pose while retaining exact contacts of an offset naming terminal.
     /// Capture against the old geometry, so fixed pins and unsplit interiors remain connected.
-    pub(super) fn pose_symbol(&mut self, index: usize, to: Point, rotation: u8) -> Result<(), CommandError> {
+    pub(super) fn pose_symbol(&mut self, index: usize, to: Point, rotation: u8, mirrored: bool) -> Result<(), CommandError> {
         let symbol = self.project.symbols().get(index).ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
-        let contact = self.project.power_terminals().find(|(end, _, from)| {
-            let WireEndpoint::Terminal(pin) = end else { return false };
-            pin.symbol == symbol.ordinal
-                && symbol.unit_definition().pin_index(pin.number()).is_some_and(|i| symbol.unit_definition().pin_positions(to, rotation)[i] != *from)
+        let contact = self.project.power_terminals().find_map(|(end, _, from)| {
+            let WireEndpoint::Terminal(pin) = end else { return None };
+            if pin.symbol != symbol.ordinal {
+                return None;
+            }
+            let index = symbol.unit_definition().pin_index(pin.number())?;
+            let target = symbol.unit_definition().pin_positions(to, rotation, mirrored)[index];
+            (target != from).then_some((end, from, target))
         });
         let captured = match contact {
-            Some((end, _, from)) => Some((end, from, self.capture_named_contact(end, from)?)),
+            Some((end, from, target)) => {
+                self.remove_returned_legs(end, target)?;
+                Some((end, from, self.capture_named_contact(end, from)?))
+            }
             None => None,
         };
         let symbol = &mut Arc::make_mut(&mut self.project.sheet_mut().symbols)[index];
         symbol.position = to;
         symbol.rotation = rotation;
+        symbol.mirrored = mirrored;
         if let Some((end, from, fixed)) = captured {
             let at = self.project.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("missing named terminal".into()))?;
-            self.retain_fixed_contacts(end, from, at, fixed)?;
+            let generated = self.retain_fixed_contacts(end, from, at, fixed)?;
+            if !generated.is_empty() {
+                Arc::make_mut(&mut self.project.sheet_mut().generated_legs).extend(generated);
+            }
         }
         self.project.named_graph = Arc::default();
+        Ok(())
+    }
+
+    /// Drop exact legs recorded by an earlier retained pose when the named terminal returns to
+    /// a fixed contact's point. Authored routes and legs edited after creation are preserved.
+    fn remove_returned_legs(&mut self, end: WireEndpoint, target: Point) -> Result<(), CommandError> {
+        let legs = self.project.generated_legs.clone();
+        let mut remove = Vec::new();
+        let mut stale = Vec::new();
+        for leg in legs.iter() {
+            if leg.end != end {
+                continue;
+            }
+            let Some(wire) = self.project.wires().iter().find(|wire| wire.ordinal() == leg.wire) else {
+                stale.push(leg.wire);
+                continue;
+            };
+            if !leg.matches(wire) {
+                stale.push(leg.wire);
+                continue;
+            }
+            if self.project.endpoint_position(leg.other) == Some(target) {
+                remove.push(leg.wire);
+            }
+        }
+        if remove.is_empty() && stale.is_empty() {
+            return Ok(());
+        }
+        let sheet = self.project.sheet_mut();
+        Arc::make_mut(&mut sheet.wires).retain(|wire| !remove.contains(&wire.ordinal()));
+        Arc::make_mut(&mut sheet.generated_legs).retain(|leg| !remove.contains(&leg.wire) && !stale.contains(&leg.wire));
+        self.touched.extend(remove);
         Ok(())
     }
 
@@ -57,21 +100,30 @@ impl Edit {
         Ok(fixed)
     }
     /// Connect a moved contact back to fixed terminals without duplicate wire identities.
+    /// Returns the exact legs it created so a later return can remove only those routes.
     pub(super) fn retain_fixed_contacts(
         &mut self,
         end: WireEndpoint,
         from: Point,
         to: Point,
         fixed: BTreeSet<WireEndpoint>,
-    ) -> Result<(), CommandError> {
+    ) -> Result<Vec<crate::wire::GeneratedLeg>, CommandError> {
+        let mut generated = Vec::new();
         for other in fixed {
             if !self.project.wires().iter().any(|wire| wire.endpoints().contains(&other) && wire.endpoints().contains(&end)) {
                 let path = crate::schematic::orthogonal_path([from, to], true);
                 self.draw([other, end], &path)?;
+                let wire = self
+                    .project
+                    .wires()
+                    .iter()
+                    .find(|wire| wire.endpoints() == [other, end])
+                    .ok_or_else(|| CommandError::Unavailable("generated contact leg is missing".into()))?;
+                generated.push(crate::wire::GeneratedLeg { wire: wire.ordinal(), end, other, bends: wire.bends().map(|bends| bends.to_vec()) });
             }
         }
         self.touched.extend(self.project.wires().iter().filter(|w| w.endpoints().contains(&end)).map(|w| w.ordinal()));
-        Ok(())
+        Ok(generated)
     }
 }
 
@@ -79,12 +131,12 @@ impl Project {
     /// Set a current-sheet pose while preserving naming-terminal contacts. Existing explicit
     /// routes keep their endpoints and authored bends; no automatic route cleanup is performed.
     /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically.
-    pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, revision: u64) -> Result<Self, CommandError> {
+    pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, mirrored: bool, revision: u64) -> Result<Self, CommandError> {
         if !valid_point(&to) || rotation > 3 {
             return Err(CommandError::InvalidParams("invalid symbol pose".into()));
         }
         let mut edit = Edit::new(self, revision);
-        edit.pose_symbol(index, to, rotation)?;
+        edit.pose_symbol(index, to, rotation, mirrored)?;
         if edit.touched.is_empty() { Ok(edit.project) } else { edit.finish(false) }
     }
 
@@ -103,7 +155,7 @@ impl Project {
         let mut edit = Edit::new(self, revision);
         let fixed = edit.capture_named_contact(end, from)?;
         edit.project = edit.project.preview_net_label(id, to, rotation)?;
-        edit.retain_fixed_contacts(end, from, to, fixed)?;
+        let _ = edit.retain_fixed_contacts(end, from, to, fixed)?;
         if edit.touched.is_empty() { Ok(edit.project) } else { edit.finish(auto_heal) }
     }
 }

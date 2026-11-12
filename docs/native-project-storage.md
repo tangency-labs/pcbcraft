@@ -188,7 +188,7 @@ See [board-rules.md](board-rules.md) for validation, resolution and reset behavi
 |---|---|---|
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15` or `/16` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, and version 16 adds required single-use occurrence identities |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1`, `/2` with a net registry | Matching board UUID header, one circuit use and one occurrence per sheet, optional sparse net registry; schematic-only projects embed these records in `project.json` instead |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/7` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/19` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
@@ -220,11 +220,16 @@ uses version 12, which retains the watermark and registry; version 11 keeps lega
 implicit ownership and rejects a `boards` record. Version 9 rejects component
 metadata rather than interpreting version-12 fields. Sheet encodings remain
 sheet/1 for ordinary sheets, sheet/2 for
-sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. The low-level codec preserves original version-5 document bytes until an
-entry-point change, while ordinary Save adopts project/16 and retains unchanged
-payload bytes. Subsequent sheet changes keep the adopted folder layout. Legacy single-file encoding refuses
+sheets with hierarchy records, sheet/3 for sheets with named anchors, sheet/4 for
+field appearance, sheet/5 for net-name appearance, sheet/6 for mirrored
+placements and sheet/7 for persisted generated-leg provenance, retaining existing
+board encodings. The low-level codec preserves
+original version-5 document bytes until an entry-point change, while ordinary Save
+adopts project/16 and retains unchanged payload bytes. Subsequent sheet changes keep
+the adopted folder layout. Legacy single-file encoding refuses
 multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
-component metadata, field appearance and adopted occurrence identities rather than discarding them.
+component metadata, field appearance, mirrored placements, live generated
+named-contact legs and adopted occurrence identities rather than discarding them.
 
 ### Component fields and text appearance
 
@@ -265,6 +270,29 @@ anchor in its unrotated space; the text angle is explicit and its height scales
 with zoom. Missing `text` preserves the automatic layout and old sheet encoding.
 Only sheets with authored net-name appearance use version 5; older readers reject
 that version. Appearance edits do not move contacts or alter net names.
+
+Sheet/6 extends sheet/5 with an optional non-null boolean `mirrored` on a unit
+placement. A mirrored unit reflects left-to-right about its center before the
+stored quarter-turn rotation, so pin positions and drawing transform agree.
+`mirrored` is emitted only when true; removing the last mirror returns the sheet
+to the version its remaining content needs. Field layouts keep their authored local
+offsets, which are reflected and turned with the drawing. Explicit text
+orientation stays as authored and is not changed by turns or mirroring.
+Older readers reject sheet/6 rather than silently dropping the reflection. The diagnostic legacy single-file encoding refuses mirrored
+placements because its placement vocabulary has no mirror field.
+
+Sheet/7 extends sheet/6 with a required, non-empty `generated_legs` array on a
+sheet that retains live provenance. Each record stores the generated wire's
+project-unique `wire` ID, its `end` and `other` endpoints in drawing order, and
+its exact `bends` array. The record lets a later mirror remove only the
+connecting leg it created and preserve authored routes after a folder or archive
+reopen. A record is emitted only while its endpoints and bends still exactly
+match that wire; after any route edit the wire becomes authored again and the
+record is dropped. Removing the last live record returns the sheet to the version
+its remaining content needs. Sheets without live records reject the array, and
+older readers reject sheet/7 rather than silently dropping the provenance. The
+diagnostic legacy single-file encoding refuses live generated legs because its
+wire vocabulary has no provenance field.
 
 ### Named net records
 
@@ -344,7 +372,8 @@ bytes; each hierarchy record occupies its own line.
 
 Components own their stable ID, library/definition/revision, reference number,
 displayed reference and value. Unit placements own their ID, component link,
-unit, position in integer nanometers and rotation in degrees (0, 90, 180, 270).
+unit, position in integer nanometers, optional left-to-right mirror before
+rotation and rotation in degrees (0, 90, 180, 270).
 Wires retain terminal or junction endpoints and optional authored bends; legacy
 auto-routed pin links may omit bends. The sheet always has a junction array.
 Footprints retain their component link, definition/revision, pin-to-pad mapping

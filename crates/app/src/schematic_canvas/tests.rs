@@ -32,6 +32,7 @@ fn rotated_led_labels_clear_the_drawing() {
                 pos2(250.0, 250.0),
                 step,
                 turns,
+                false,
                 Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE),
             );
             fields::paint_labels(
@@ -73,9 +74,9 @@ fn integrated_pin_labels_do_not_enlarge_the_symbol_body_hitbox() {
     }
     let after = item.symbol().unwrap();
     for turns in 0..4 {
-        assert_eq!(body(before.default_unit(), turns), body(after.default_unit(), turns));
+        assert_eq!(body(before.default_unit(), turns, false), body(after.default_unit(), turns, false));
     }
-    assert!(grid_bounds(after.default_unit(), 0).width() > grid_bounds(before.default_unit(), 0).width());
+    assert!(grid_bounds(after.default_unit(), 0, false).width() > grid_bounds(before.default_unit(), 0, false).width());
 }
 
 /// Generated stroke lettering follows the same zoom cutoff as ordinary schematic labels;
@@ -103,6 +104,7 @@ fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
             pos2(100., 100.),
             step,
             0,
+            false,
             Stroke::new(1., egui::Color32::WHITE),
         );
         let mut output = ctx.end_pass();
