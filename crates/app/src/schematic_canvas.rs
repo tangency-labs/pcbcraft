@@ -384,7 +384,7 @@ pub(crate) fn show(
         .unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
-    let overlap_index = overlap_cache.get(project, revision);
+    let overlap_index = overlap_cache.get(project, revision, &painter, camera.unit_step());
     let screen = |point| camera.screen(point, rect);
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let unit_step = camera.unit_step();
@@ -1089,6 +1089,12 @@ fn text_anchor(align: TextAlign, turns: u8) -> Align2 {
     }
 }
 
+/// Use the same zoom cutoff and clamped font for native drawing text and its overlap bounds.
+fn drawing_text_font(step: f32) -> Option<FontId> {
+    (step >= theme::SCHEMATIC_MIN_GRID_SPACING)
+        .then(|| FontId::proportional((step * 1.1).clamp(Tokens::get().font_small * 0.8, Tokens::get().font_button)))
+}
+
 /// The grabbable area of a symbol in grid steps around its center, after its turns: a 5 by 4
 /// step box at the center, grown to the drawing's strokes so a large part can be picked by its
 /// body. Pins stay outside it unless a stroke reaches them.
@@ -1142,8 +1148,7 @@ fn paint_symbol(painter: &Painter, definition: &pcbcraft_engine::schematic::Symb
                 painter.circle_stroke(xy(at), *radius as f32 / GRID * step, stroke);
             }
             Shape::Text(at, text, align) => {
-                if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
-                    let font = FontId::proportional((step * 1.1).clamp(Tokens::get().font_small * 0.8, Tokens::get().font_button));
+                if let Some(font) = drawing_text_font(step) {
                     painter.text(xy(at), text_anchor(*align, turns), text, font, color);
                 }
             }

@@ -9,6 +9,8 @@ const MAX_CELLS: i64 = 256;
 struct Cached {
     project: Project,
     revision: u64,
+    step: f32,
+    pixels_per_point: f32,
     index: Arc<Index>,
 }
 
@@ -29,10 +31,13 @@ pub(super) struct Index {
 
 impl Cache {
     /// Reuse immutable sheet geometry between frames, retaining the old snapshot to prevent
-    /// pointer reuse on reopen. Revision and sheet identity guard references and projections.
-    pub(super) fn get(&mut self, project: &Project, revision: u64) -> Arc<Index> {
+    /// pointer reuse on reopen. Revision and sheet identity guard references and projections;
+    /// zoom and display scale invalidate the clamped, pixel-rounded drawing text extents.
+    pub(super) fn get(&mut self, project: &Project, revision: u64, painter: &Painter, step: f32) -> Arc<Index> {
         if let Some(cache) = &self.cached
             && cache.revision == revision
+            && cache.step == step
+            && cache.pixels_per_point == painter.pixels_per_point()
             && cache.project.sheet_target() == project.sheet_target()
             && std::ptr::eq(cache.project.symbols(), project.symbols())
         {
@@ -41,23 +46,37 @@ impl Cache {
         let entries = project
             .symbols()
             .iter()
-            .filter_map(|symbol| bounds(symbol.unit_definition(), symbol.turns(), symbol.position).map(|bounds| (symbol.id(), bounds)))
+            .filter_map(|symbol| bounds(painter, symbol.unit_definition(), symbol.turns(), symbol.position, step).map(|bounds| (symbol.id(), bounds)))
             .collect();
         let index = Arc::new(Index::new(entries));
-        self.cached = Some(Cached { project: project.clone(), revision, index: index.clone() });
+        self.cached = Some(Cached { project: project.clone(), revision, step, pixels_per_point: painter.pixels_per_point(), index: index.clone() });
         index
     }
 }
 
 /// Convert drawing-only bounds to world grid units. Thin native strokes get a small extent;
-/// an empty drawing has no body to warn about. Field text and integrated pin leads are excluded.
-fn bounds(unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, at: Point) -> Option<Rect> {
+/// an empty drawing has no body to warn about. Native text stays upright after rotation and
+/// uses the rendered galley's full ink extent at this zoom. Fields and pin leads are excluded.
+fn bounds(painter: &Painter, unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, at: Point, step: f32) -> Option<Rect> {
     let drawing = drawing_bounds(unit);
     if !drawing.is_finite() {
         return None;
     }
     let padding = vec2((0.05 - drawing.width()).max(0.) / 2., (0.05 - drawing.height()).max(0.) / 2.);
-    Some(turn_rect(drawing.expand2(padding), turns).translate(vec2(at.x_nm as f32 / GRID, at.y_nm as f32 / GRID)))
+    let mut drawing = turn_rect(drawing.expand2(padding), turns);
+    if let Some(font) = drawing_text_font(step) {
+        for shape in &unit.drawing {
+            if let Shape::Text(anchor, text, align) = shape {
+                let (x, y) = grid(*anchor);
+                let (x, y) = turn(x, y, turns);
+                let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
+                let origin = text_anchor(*align, turns).anchor_size(pos2(x * step, y * step), galley.size()).min;
+                let ink = galley.mesh_bounds.translate(origin.to_vec2());
+                drawing = drawing.union(Rect::from_min_max(ink.min / step, ink.max / step));
+            }
+        }
+    }
+    Some(drawing.translate(vec2(at.x_nm as f32 / GRID, at.y_nm as f32 / GRID)))
 }
 
 /// Bound the cell expansion for large custom drawings; oversized bounds use the fallback list.
@@ -166,7 +185,7 @@ impl Index {
 
     /// Warn beside a new placement without preventing its commit or changing connection rules.
     pub(super) fn preview(&self, ui: &mut Ui, camera: &Camera, canvas: Rect, unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, at: Point) {
-        if bounds(unit, turns, at).is_some_and(|bounds| self.any(bounds, None)) {
+        if bounds(ui.painter(), unit, turns, at, camera.unit_step()).is_some_and(|bounds| self.any(bounds, None)) {
             pcbcraft_chrome::canvas_warning::badge(
                 ui,
                 ui.scope_id().with("overlap_preview"),
