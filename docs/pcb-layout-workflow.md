@@ -141,8 +141,12 @@ up only when DRC runs.
   refuses shorts.
 
 **Model and commands.** No format change. The engine exposes one clearance query
-that DRC, the router and later the zone fill all use. It reuses DRC's segment
-distance and adds a spatial index, so the query stays fast on larger boards.
+for DRC, the router and later zone fill. The
+[snapshot query](copper-clearance-query.md) now shares the supported contours,
+separates conservative candidates from final predicates and retains source
+snapshot/revision/rule authority. Its simple sweep/linear scan and exhaustive
+reference precede the separately benchmarked spatial index in #244. Routing
+clearance enforcement and gesture integration remain later work.
 
 **Acceptance.**
 - A route toward another net's pad stops at exactly the clearance.

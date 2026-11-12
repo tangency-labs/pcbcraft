@@ -1,5 +1,6 @@
 //! Original command-built boards exercise the resolved production pad geometry.
 use super::*;
+use crate::board::track::lands;
 use crate::{
     ADD_TRACKS, ADD_VIA, ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, PLACE_ASSIGNED_FOOTPRINT, PLACE_RESISTOR, SET_FOOTPRINT_TRANSFORM,
     board::{
@@ -14,7 +15,7 @@ fn p(x_nm: i64, y_nm: i64) -> Point {
 
 /// Seed a validated original definition, then assign and place it through normal commands.
 /// The first pad is the contour under test; the second is a small circular probe or a remote pad.
-fn fixture(shape: PadShape, width_nm: i64, height_nm: i64, probe: Point, probe_width: i64) -> Session {
+pub(crate) fn fixture(shape: PadShape, width_nm: i64, height_nm: i64, probe: Point, probe_width: i64) -> Session {
     let mut definition = (*super::super::definition::starter("resistor-0402").unwrap()).clone();
     definition.library = "drc-contours".into();
     definition.id = "two-pads".into();
@@ -63,7 +64,7 @@ fn fixture(shape: PadShape, width_nm: i64, height_nm: i64, probe: Point, probe_w
 }
 
 /// Transform the whole footprint so the test traverses the same rotation/side resolution as the editor.
-fn pose(session: &mut Session, rotation: u16, bottom: bool) {
+pub(crate) fn pose(session: &mut Session, rotation: u16, bottom: bool) {
     let footprint = view(session).footprints().next().unwrap().id;
     let board = view(session).target.board;
     session

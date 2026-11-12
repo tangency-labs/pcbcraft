@@ -12,7 +12,10 @@ encodings; undo/redo preserves both geometry and lock intent.
 
 DRC measures copper and board-edge clearance against the same rounded pad
 contours as connectivity, avoiding false findings at empty bounding corners.
-Exact clearance equality still passes, including half-nanometer radii.
+Exact clearance equality still passes, including half-nanometer radii. A reusable
+engine clearance query now captures board/snapshot/revision authority and separates
+conservative obstacle candidates from contour decisions; conflicting intended
+memberships remain visible even at zero clearance.
 
 Projects now use a fixed `project.json` entry point inside their working folder,
 and packed projects use `<project-name>.pc`, a ZIP archive of the same documents.

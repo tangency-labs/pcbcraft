@@ -6,8 +6,11 @@
 //! vias in one undo step. Connectivity is geometric: copper on the same layer connects where it
 //! overlaps, and a via joins whatever copper it overlaps on any layer. This is a bounded connectivity aid for the ratsnest and for
 //! refusing shorts between nets. It is not a clearance check, DRC or manufacturing validation.
+#[cfg(test)]
+use super::geometry::{inside, segment_distance};
 use super::{
     definition::PadShape,
+    geometry::Contour as PadContour,
     setup::LayerPurpose,
     view::{BoardView, CopperLayers},
 };
@@ -199,12 +202,6 @@ pub(super) struct Land {
     corner_radius_nm: i64,
 }
 
-/// The pad's inner rectangle, segment or point, expanded by a round radius.
-pub(super) struct PadContour {
-    pub(super) core: [Point; 4],
-    pub(super) radius: f64,
-}
-
 impl Land {
     /// Derive the copper contour from resolved corners and pad shape in board nanometers.
     pub(super) fn contour(&self) -> PadContour {
@@ -235,78 +232,6 @@ impl Land {
             y_nm: (y + a * uy / w.max(1.) + b * vy / h.max(1.)).round() as i64,
         });
         PadContour { core, radius }
-    }
-}
-
-impl PadContour {
-    /// The four core edges, including degenerate edges for circles and ovals.
-    pub(super) fn edges(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
-        self.core.iter().copied().zip(self.core.iter().copied().cycle().skip(1))
-    }
-
-    /// Check containment in a core with area. Line and point cores are handled by edge distance.
-    pub(super) fn contains_core(&self, p: Point) -> bool {
-        let [a, b, _, d] = self.core;
-        let area = (b.x_nm - a.x_nm) as i128 * (d.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (d.x_nm - a.x_nm) as i128;
-        area != 0 && inside(p, &self.core)
-    }
-
-    /// Test a round-ended segment against the pad, with a zero-length segment for an endpoint or via.
-    fn overlaps_segment(&self, start: Point, end: Point, radius: f64) -> bool {
-        self.contains_core(start) || self.contains_core(end) || self.edges().any(|(a, b)| segment_distance(start, end, a, b) <= self.radius + radius)
-    }
-
-    /// Test whether an unexpanded board edge enters copper's interior. Exact tangency is
-    /// distinct from penetration, including point/line cores and a zero rounding radius.
-    pub(super) fn penetrates_segment(&self, start: Point, end: Point) -> bool {
-        if self.radius > 0. {
-            return self.contains_core(start)
-                || self.contains_core(end)
-                || self.edges().any(|(a, b)| segment_distance(start, end, a, b) < self.radius);
-        }
-        self.segment_enters_core(start, end)
-    }
-
-    /// Clip a segment to the open convex core. Boundary-only contact has no interior interval;
-    /// crossing through vertices still has one. Integer cross products retain the existing
-    /// orientation test, with floating parameters only for the intersection interval.
-    fn segment_enters_core(&self, start: Point, end: Point) -> bool {
-        let cross = |a: Point, b: Point, p: Point| {
-            (b.x_nm - a.x_nm) as i128 * (p.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (p.x_nm - a.x_nm) as i128
-        };
-        let orientation = cross(self.core[0], self.core[1], self.core[3]).signum();
-        if orientation == 0 {
-            return false;
-        }
-        let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
-        for (a, b) in self.edges() {
-            let from = orientation * cross(a, b, start);
-            let to = orientation * cross(a, b, end);
-            if from <= 0 && to <= 0 {
-                return false;
-            }
-            if from <= 0 {
-                enter = enter.max(from as f64 / (from - to) as f64);
-            } else if to <= 0 {
-                leave = leave.min(from as f64 / (from - to) as f64);
-            }
-        }
-        enter < leave
-    }
-
-    /// Test copper contact between two pads, including containment and rounded edges.
-    fn overlaps(&self, other: &Self) -> bool {
-        other.contains_core(self.core[0]) || other.edges().any(|(a, b)| self.overlaps_segment(a, b, other.radius))
-    }
-
-    /// Bounds for pruning pad contact and clearance candidates before testing their contours.
-    pub(super) fn bounds(&self) -> [f64; 4] {
-        let mut bounds = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-        for p in self.core {
-            let (x, y) = (p.x_nm as f64, p.y_nm as f64);
-            bounds = [bounds[0].min(x - self.radius), bounds[1].min(y - self.radius), bounds[2].max(x + self.radius), bounds[3].max(y + self.radius)];
-        }
-        bounds
     }
 }
 
@@ -454,7 +379,11 @@ fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs:
         }
         for (o, other) in tracks.iter().enumerate().take(t) {
             if other.layer == track.layer
-                && segment_distance(track.start, track.end, other.start, other.end) <= (track.width_nm + other.width_nm) as f64 / 2.
+                && PadContour::capsule(track.start, track.end, track.width_nm as f64 / 2.).touches(&PadContour::capsule(
+                    other.start,
+                    other.end,
+                    other.width_nm as f64 / 2.,
+                ))
             {
                 join(&mut parent, node, lands.len() + o);
             }
@@ -469,12 +398,12 @@ fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs:
             }
         }
         for (t, track) in tracks.iter().enumerate() {
-            if point_distance(via.at, track.start, track.end) <= radius + track.width_nm as f64 / 2. {
+            if PadContour::capsule(via.at, via.at, radius).touches(&PadContour::capsule(track.start, track.end, track.width_nm as f64 / 2.)) {
                 join(&mut parent, node, lands.len() + t);
             }
         }
         for (o, other) in vias.iter().enumerate().take(v) {
-            if point_distance(via.at, other.at, other.at) <= radius + other.diameter_nm as f64 / 2. {
+            if PadContour::capsule(via.at, via.at, radius).touches(&PadContour::capsule(other.at, other.at, other.diameter_nm as f64 / 2.)) {
                 join(&mut parent, node, lands.len() + tracks.len() + o);
             }
         }
@@ -521,42 +450,6 @@ fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], bounds: &[[f64;
             }
         }
     }
-}
-
-/// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
-pub(super) fn inside(point: Point, corners: &[Point; 4]) -> bool {
-    let mut sign = 0i8;
-    for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
-        let cross = (b.x_nm - a.x_nm) as i128 * (point.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (point.x_nm - a.x_nm) as i128;
-        let side = cross.signum() as i8;
-        if side != 0 {
-            if sign != 0 && side != sign {
-                return false;
-            }
-            sign = side;
-        }
-    }
-    true
-}
-
-/// Shortest distance between two closed segments in nanometers; zero when they cross.
-pub(super) fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
-    let cross =
-        |o: Point, p: Point, q: Point| (p.x_nm - o.x_nm) as i128 * (q.y_nm - o.y_nm) as i128 - (p.y_nm - o.y_nm) as i128 * (q.x_nm - o.x_nm) as i128;
-    let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
-    if d1.signum() * d2.signum() < 0 && d3.signum() * d4.signum() < 0 {
-        return 0.;
-    }
-    [point_distance(a, c, d), point_distance(b, c, d), point_distance(c, a, b), point_distance(d, a, b)].into_iter().fold(f64::INFINITY, f64::min)
-}
-
-/// Distance from a point to a closed segment; a degenerate segment is a point.
-pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
-    let (px, py, ax, ay, bx, by) = (p.x_nm as f64, p.y_nm as f64, a.x_nm as f64, a.y_nm as f64, b.x_nm as f64, b.y_nm as f64);
-    let (dx, dy) = (bx - ax, by - ay);
-    let length = dx * dx + dy * dy;
-    let t = if length > 0. { (((px - ax) * dx + (py - ay) * dy) / length).clamp(0., 1.) } else { 0. };
-    ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
 }
 
 /// Name the first two distinct nets joined by an island that contains one of the `added`

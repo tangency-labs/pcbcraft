@@ -8,8 +8,9 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+/// Legal copper bridges whose later accepted schematic split creates an existing short.
 #[derive(Clone, Copy)]
-enum Bridge {
+pub(crate) enum Bridge {
     Track,
     Vias,
     Pads,
@@ -25,7 +26,7 @@ fn accept_update(s: &mut Session) {
 
 /// Author a legal bridge, then accept a schematic split while keeping the authored copper.
 /// This reproduces an existing short entirely through shared commands, without file surgery.
-fn bridged_split(bridge: Bridge) -> Session {
+pub(crate) fn bridged_split(bridge: Bridge) -> Session {
     let mut s = routed_fixture();
     let footprint = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
     let component = crate::schematic::wiring::parse_id(&footprint.component, "component-").unwrap();
@@ -208,7 +209,7 @@ fn short_reports_are_deterministic_read_only_and_survive_reopen() {
 
 /// Place overlapping native footprints before naming their isolated logical pins. Identical local
 /// names on different sheets remain distinct nets; identical global names join them deliberately.
-fn coincident_named_pads(count: usize, style: &str, opposite_side: bool) -> Session {
+pub(crate) fn coincident_named_pads(count: usize, style: &str, opposite_side: bool) -> Session {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     let board = s.project().unwrap().board_target().unwrap().board;
