@@ -195,3 +195,59 @@ fn board_edges_use_the_pad_contour_instead_of_empty_bounding_corners() {
         assert_eq!(report.counts.get(&Kind::EdgeClearance), Some(&1), "{shape:?}: {report:?}");
     }
 }
+
+/// A notch tip can enter the copper while leaving every core anchor inside the board.
+/// Zero required clearance must still report penetration; exact tangency remains allowed.
+#[test]
+fn zero_edge_clearance_still_reports_notches_entering_pad_copper() {
+    for shape in [PadShape::Circle, PadShape::Oval, PadShape::RoundedRectangle, PadShape::Rectangle] {
+        let width = if shape == PadShape::Circle { 600_000 } else { 1_000_000 };
+        for tip in [width / 2 + 1, width / 2, width / 2 - 1, 0] {
+            let mut session = fixture(shape, width, 600_000, p(-1_000_000, -1_000_000), 10_000);
+            let points = [
+                p(-2_000_000, -2_000_000),
+                p(2_000_000, -2_000_000),
+                p(2_000_000, 1_140_000),
+                p(tip, 0),
+                p(2_000_000, 1_260_000),
+                p(2_000_000, 2_000_000),
+                p(-2_000_000, 2_000_000),
+            ];
+            if shape == PadShape::RoundedRectangle && tip == 0 {
+                let contour = lands(view(&session))[0].contour();
+                assert!(contour.core.iter().all(|point| in_polygon(*point, &points)), "The reported case bypasses the core-anchor check");
+            }
+            let layer = view(&session).layers().into_iter().find(|l| l.purpose == LayerPurpose::Outline).unwrap().id;
+            session
+                .apply(
+                    crate::ADD_DRAWING,
+                    &json!({"board":view(&session).target.board,"layer":layer,
+                "points":points,"closed":true,"expected_revision":session.revision()}),
+                )
+                .unwrap();
+            let report = view(&session).check_design(Rules { edge_clearance_nm: 0, ..Rules::default() });
+            let boundary: Vec<_> = report.violations.iter().filter(|v| matches!(v.kind, Kind::OutsideBoard | Kind::EdgeClearance)).collect();
+            assert_eq!(boundary.len(), usize::from(tip < width / 2), "{shape:?}, tip {tip}: {report:?}");
+        }
+    }
+}
+
+/// Clipping detects entry through opposite vertices without treating a coincident edge as
+/// penetration. Resolved rotation and bottom-side mirroring may reverse the core winding.
+#[test]
+fn rectangular_core_penetration_distinguishes_interior_from_boundary_contact() {
+    for (rotation, bottom) in [(0, false), (37, false), (90, true)] {
+        let mut session = fixture(PadShape::Rectangle, 1_000_000, 600_000, p(10_000_000, 0), 10_000);
+        pose(&mut session, rotation, bottom);
+        let contour = lands(view(&session))[0].contour();
+        let c = contour.core;
+        let start = p(2 * c[0].x_nm - c[2].x_nm, 2 * c[0].y_nm - c[2].y_nm);
+        let end = p(2 * c[2].x_nm - c[0].x_nm, 2 * c[2].y_nm - c[0].y_nm);
+        assert!(contour.penetrates_segment(start, end));
+        assert!(contour.penetrates_segment(end, start));
+        assert!(contour.penetrates_segment(c[0], c[2]));
+        assert!(contour.penetrates_segment(p(0, 0), p(0, 0)));
+        assert!(!contour.penetrates_segment(c[0], c[1]));
+        assert!(!contour.penetrates_segment(c[0], c[0]));
+    }
+}

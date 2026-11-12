@@ -317,7 +317,8 @@ impl BoardView<'_> {
     }
 
     /// Require a closed Board Outline, every copper item inside it, and copper at least the edge
-    /// clearance from every outline segment. Open outline paths still count as edges.
+    /// clearance from every outline segment. Penetration remains a finding at zero required
+    /// clearance. Open outline paths still count as edges.
     fn check_outline(self, items: &[Item], rules: Rules, found: &mut Vec<Violation>) {
         let layers = self.layers();
         let outline: Vec<_> = self
@@ -360,11 +361,21 @@ impl BoardView<'_> {
                 });
                 continue;
             }
-            let distance = edges.iter().map(|(a, b)| gap(&item.shape, &Shape::Segment { a: *a, b: *b, half: 0. })).fold(f64::INFINITY, f64::min);
-            if distance < rules.edge_clearance_nm as f64 {
+            let (distance, crosses) = edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
+                let distance = gap(&item.shape, &Shape::Segment { a: *a, b: *b, half: 0. });
+                // A contained edge can have gap zero even though it enters a pad's copper.
+                let penetrates =
+                    distance < 0. || (distance == 0. && matches!(&item.shape, Shape::Pad(contour) if contour.penetrates_segment(*a, *b)));
+                (best.min(distance), crosses || penetrates)
+            });
+            if crosses || distance < rules.edge_clearance_nm as f64 {
                 found.push(Violation {
                     kind: Kind::EdgeClearance,
-                    message: format!("Copper is {} from the board edge, below the {} rule", mm(distance.max(0.)), mm(rules.edge_clearance_nm as f64)),
+                    message: if crosses {
+                        "Copper crosses the Board Outline".into()
+                    } else {
+                        format!("Copper is {} from the board edge, below the {} rule", mm(distance.max(0.)), mm(rules.edge_clearance_nm as f64))
+                    },
                     at: item.at,
                     items: vec![item.name.clone()],
                 });
