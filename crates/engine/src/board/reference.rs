@@ -170,7 +170,7 @@ impl Session {
         }
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).footprints[index] = footprint;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

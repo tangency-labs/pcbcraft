@@ -267,7 +267,7 @@ impl Session {
         };
         edit.draw(endpoints, &path)?;
         let candidate = edit.finish(auto_heal(params))?;
-        self.change(candidate);
+        self.change(candidate)?;
         Ok(())
     }
 
@@ -394,7 +394,7 @@ impl Session {
         }
         candidate.prune_junctions();
         candidate.sheet_mut().connectivity = Arc::default();
-        self.change(candidate);
+        self.change(candidate)?;
         Ok(())
     }
 
@@ -433,7 +433,7 @@ impl Session {
         Arc::make_mut(&mut candidate.sheet_mut().wires).remove(index);
         candidate.prune_junctions();
         candidate.sheet_mut().connectivity = Arc::default();
-        self.change(candidate);
+        self.change(candidate)?;
         Ok(())
     }
 }

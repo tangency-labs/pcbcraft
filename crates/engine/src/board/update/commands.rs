@@ -211,7 +211,7 @@ impl Session {
         }
         let (next, _) = apply_candidate(&plan.snapshot, &plan.accepted, &plan.proposed).map_err(CommandError::InvalidParams)?;
         crate::persistence::encode_documents(Arc::new(next.clone())).map_err(CommandError::InvalidParams)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 

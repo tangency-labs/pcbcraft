@@ -94,7 +94,7 @@ impl Session {
         if project.board.silkscreen.unwrap_or_default() != settings {
             let mut project = project.clone();
             std::sync::Arc::make_mut(&mut project.board).silkscreen = Some(settings);
-            self.change(project);
+            self.change(project)?;
         }
         Ok(())
     }

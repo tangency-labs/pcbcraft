@@ -193,7 +193,7 @@ impl Session {
         let candidate = transaction.open_project()?.clone();
         super::storage::validate_project(&candidate).map_err(CommandError::InvalidParams)?;
         crate::persistence::encode_documents(Arc::new(candidate.clone())).map_err(CommandError::InvalidParams)?;
-        self.change(candidate);
+        self.change(candidate)?;
         Ok(())
     }
     /// Pin and assign a selected package through the ordinary assignment validator, without creating geometry.
@@ -269,7 +269,7 @@ impl Session {
         let candidate = transaction.open_project()?.clone();
         super::storage::validate_project(&candidate).map_err(CommandError::InvalidParams)?;
         crate::persistence::encode_documents(Arc::new(candidate.clone())).map_err(CommandError::InvalidParams)?;
-        self.change(candidate);
+        self.change(candidate)?;
         Ok(())
     }
 }

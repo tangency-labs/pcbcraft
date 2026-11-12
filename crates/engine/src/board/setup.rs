@@ -520,7 +520,7 @@ impl Session {
         if let Some(mut data) = project.board.drawings.clone() {
             data.validate(&project).map_err(CommandError::InvalidParams)?;
         }
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 
@@ -571,7 +571,7 @@ impl Session {
             }
             crate::board::track::validate(&project, &mut project.board.tracks.clone(), &mut project.board.vias.clone())
                 .map_err(CommandError::InvalidParams)?;
-            self.change(project);
+            self.change(project)?;
         }
         Ok(())
     }

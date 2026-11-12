@@ -183,6 +183,15 @@ including case-insensitive collisions with fixed-purpose output names. One
 `execute` request generates the file contents once; `apply` still validates
 exportability without changing the project or revision.
 
+`pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
+`locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
+or unlocks the whole selection in one undo step, with no geometry or connectivity
+change. `project.boards[].tracks[]` and `.vias[]` always report `locked`, including
+false; the typed board snapshot exposes the same flag. Geometry, size and deletion
+commands refuse the whole edit when they would modify existing locked copper,
+including indirect footprint/segment transforms. No-op operations remain no-ops.
+Copy/paste preserve locks on new identities; Cut of protected copper is refused.
+
 `pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
 that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and

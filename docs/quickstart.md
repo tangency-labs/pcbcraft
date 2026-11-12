@@ -501,6 +501,12 @@ saving a current project without edits preserves its document bytes. The
 [storage guide](native-project-storage.md) explains the compatibility break and failed
 or interrupted saves.
 
+Selected tracks and vias have a **Lock** choice in Properties. **Locked** keeps
+them selectable while protecting geometry and sizes from edits; unlock them
+before moving, reshaping or deleting them. Copy/duplicate retain locks, and Cut
+refuses protected copper. See the [lock policy](pcb-layout-workflow.md#fixed-tracks-and-vias)
+for mixed selections and indirect footprint/segment changes.
+
 ## Try the same project through MCP
 
 Build the two desktop binaries from the repository root:

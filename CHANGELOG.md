@@ -2,6 +2,14 @@
 
 ## 0.1.0 (unreleased)
 
+Tracks and vias can be locked together in Properties or through
+`pcb.set_copper_locked`. Locked copper stays selectable and refuses geometry,
+size and deletion changes, including indirect changes from footprint transforms
+and segment dragging. Mixed edits fail atomically. Clipboard copies retain locks;
+Cut refuses protected copper. Locks persist with board format 18 and board-kind
+clipboard format 3, which older builds refuse. Unlocked files keep their earlier
+encodings; undo/redo preserves both geometry and lock intent.
+
 DRC measures copper and board-edge clearance against the same rounded pad
 contours as connectivity, avoiding false findings at empty bounding corners.
 Exact clearance equality still passes, including half-nanometer radii.

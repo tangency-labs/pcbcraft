@@ -32,7 +32,7 @@ Each edit is one undo step.
 | Place | Assign packages, place, move (M or drag), rotate (R), flip to the bottom side (F), exact X/Y/rotation/side in Properties, align and distribute | Layout › Place / Modify, Properties |
 | Draw | Active-layer lines and rectangle outlines: conductive copper segments or non-copper graphics with physical strokes; Board Outline vertex, segment and whole-shape edits | Draw |
 | Route | Tracks with an explicit width and 45° posture. Snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
-| Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, Delete | Layout › Modify, Properties |
+| Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
 | Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
@@ -234,9 +234,9 @@ ribbon's planned entries and the editor guide have a stated destination.
   and drill pairs in the Excellon output.
 - **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
-- **Locking** for footprints, tracks and zones is a per-object flag. It refuses
-  moves until the object is unlocked, and selection filters can exclude locked
-  objects.
+- **Locking** for tracks and vias is implemented under #249 through per-object
+  flags and the shared snapshot publication guard. Footprint/zone locks and an
+  optional locked-object selection filter remain broader #81 work.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -244,6 +244,35 @@ ribbon's planned entries and the editor guide have a stated destination.
   between the schematic and the board.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
+
+## Fixed tracks and vias
+
+Select tracks and vias and set **Lock** in Properties to **Locked** or
+**Unlocked**. A mixed selection displays **Mixed**. Locked copper remains
+selectable and inspectable, while its size controls are read-only. The shared
+`pcb.set_copper_locked` command requires an explicit board UUID, expected revision,
+`locked` boolean and at least one track/via UUID. One atomic edit changes only
+lock flags; no-op requests leave revision/history unchanged.
+
+An edit fails as a whole if it would change or delete any existing locked track
+or via. This includes positions, track ends/layers/widths, via diameters/drills,
+segment drags that stretch a locked neighbor, footprint moves/rotations/alignment
+that carry locked track ends, and mixed-selection Delete or Cut. An unchanged
+locked object does not block independent unlocked edits or genuine no-ops.
+Lock flags preserve authored copper records; they do not freeze the board's
+setup, schematic net intent or footprint contacts when no copper record changes.
+In particular, an existing flip that releases a stationary track end keeps that
+track's fixed geometry. Locking/unlocking alone changes no copper connectivity.
+
+Copy, duplicate and paste preserve lock flags while assigning new identities
+and the requested new positions to copies. Existing source objects remain
+protected. Cut refuses a selection containing locked copper. Native folder and
+archive saves preserve locks; board format 18 and board-kind clipboard format 3
+are used only while locks are present. Older readers refuse these extensions.
+Unlocked boards/fragments keep their earlier encodings. Unlocking the last object
+returns to the format needed by the remaining authored data. Inspection exposes
+an explicit `locked` boolean for every track and via, and typed board snapshots
+carry it for later walkaround/shove consumers. No routing solver is added here.
 
 ## Format changes at a glance
 

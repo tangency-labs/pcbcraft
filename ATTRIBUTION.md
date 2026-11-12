@@ -1047,3 +1047,13 @@ PCBcraft work based on this repository's circuit-instance and storage contracts.
 Regression projects use shared commands and original repository fixtures. The
 existing qualified `sha2`, `uuid` and native publication dependencies are reused;
 no external implementation, library data, artwork or dependency was added.
+
+## Fixed track and via locks
+
+The per-object copper lock flags, board/18 and board-kind clipboard/3 extensions,
+shared command, snapshot publication guard and selection property controls are
+original MIT OR Apache-2.0 PCBcraft work following #249 and this repository's
+layout/storage contracts. The choice control reuses the pinned Craft toolkit
+through the existing chrome adapter. Regression boards use shared commands and
+original bundled definitions; no external EDA implementation, source-derived
+fixtures, artwork, library data or new dependency was introduced.

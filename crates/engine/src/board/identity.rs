@@ -108,7 +108,7 @@ impl Session {
         Arc::make_mut(&mut project.board).assignments = packages.assignments;
         Arc::make_mut(&mut project.board).definitions = packages.definitions;
         Arc::make_mut(&mut project.board).ownership = Ownership::Explicit(Some(registration));
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 }

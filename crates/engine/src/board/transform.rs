@@ -164,7 +164,7 @@ impl Session {
         }
         let mut project = project.clone();
         Arc::make_mut(&mut project.board).footprints[index] = footprint;
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 
@@ -199,7 +199,7 @@ impl Session {
         }
         board.footprints.retain(|f| !ids.contains(&f.id));
         board.by_component = board.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -254,7 +254,7 @@ impl Session {
             }
         }
         super::track::carry_copper(project, &mut next, &moved_ids)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -292,7 +292,7 @@ impl Session {
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).footprints[index] = footprint;
         super::track::carry_copper(project, &mut next, &std::collections::BTreeSet::from([format!("footprint-{}", current.id)]))?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

@@ -547,7 +547,7 @@ impl crate::Session {
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).baseline = Some(Arc::new(baseline));
         crate::persistence::encode_documents(Arc::new(next.clone())).map_err(crate::CommandError::InvalidParams)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

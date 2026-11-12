@@ -850,7 +850,7 @@ impl crate::Session {
         let project = self.open_project()?;
         let next = project.healed_wires(&items, self.revision())?;
         if next.wires != project.wires || next.junctions != project.junctions {
-            self.change(next);
+            self.change(next)?;
         }
         Ok(())
     }
