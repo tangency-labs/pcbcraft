@@ -182,7 +182,8 @@ impl PcbApp {
                             let query = edit.component_query.to_lowercase();
                             let components: Vec<_> = project
                                 .components()
-                                .filter(|c| format!("{} {}", c.reference(), c.display_value()).to_lowercase().contains(&query))
+                                // Match the stored text too, so `1000` still finds a value shown as `1 kΩ`.
+                                .filter(|c| format!("{} {} {}", c.reference(), c.value(), c.display_value()).to_lowercase().contains(&query))
                                 .collect();
                             if components.is_empty() {
                                 ui.label("No components match");
