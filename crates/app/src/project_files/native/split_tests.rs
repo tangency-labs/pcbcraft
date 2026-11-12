@@ -1062,3 +1062,35 @@ fn occurrence_adoption_preserves_sheets_created_after_save_capture() {
     assert!(!files.dirty(&s));
     assert_eq!(load(&root).unwrap().snapshot.sheet_instances(), edited);
 }
+
+/// A save of the captured registry-free revision cannot discard or mark saved a later promotion;
+/// Undo/Redo restores its authored identity, and the next save publishes the same UUID.
+#[test]
+fn background_save_keeps_a_later_net_promotion_dirty_and_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let mut s = session();
+    let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    let mut files = ProjectFiles::default();
+    complete(&mut files, &mut s, load(&root).map(Outcome::Opened));
+    let captured = s.snapshot().unwrap();
+    let target = files.saved.as_ref().unwrap().target.clone();
+    let result = save_target(captured.clone(), Some(&captured), target, &mut |_| Ok(()));
+    let anchor = captured.electrical_connectivity().nets[0][0].inspect();
+    apply(&mut s, pcbcraft_engine::nets::PROMOTE, json!({"anchor":anchor}));
+    let registry = s.project().unwrap().inspect_net_registry().unwrap();
+    complete(&mut files, &mut s, result);
+    assert!(files.dirty(&s));
+    assert_eq!(s.project().unwrap().inspect_net_registry().unwrap(), registry);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(!files.dirty(&s));
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert!(files.dirty(&s));
+    assert_eq!(s.project().unwrap().inspect_net_registry().unwrap(), registry);
+    let saved = files.saved.as_ref().unwrap();
+    let result = save_target(s.snapshot().unwrap(), Some(&saved.snapshot), saved.target.clone(), &mut |_| Ok(()));
+    complete(&mut files, &mut s, result);
+    assert!(!files.dirty(&s));
+    assert_eq!(load(&root).unwrap().snapshot.inspect_net_registry().unwrap(), registry);
+}

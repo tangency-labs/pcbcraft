@@ -6,11 +6,13 @@ create separate schematic and board sessions.
 
 The [multiboard and sheet instance design](multiboard-and-sheet-instances.md)
 and its [storage contract](multiboard-storage.md) describe board folders,
-instances and associated-file ownership. The current project/16 codec implements
+instances and associated-file ownership. The project/16 codec implements
 board folders for zero or one board and stable identities for the existing
 single-use sheet hierarchy. Repeated instances, additional boards and associated
 files remain future work. See the [single-board codec](single-board-storage.md)
 and [occurrence codec](sheet-occurrence-storage.md) for the supported boundaries.
+Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
+instance homes, without changing the working-folder or `.pc` container layout.
 
 ## File encodings and save behavior
 
@@ -79,6 +81,14 @@ board folder. Unaffected payload bytes and all component/package identities stay
 unchanged; the [occurrence contract](sheet-occurrence-storage.md) defines the IDs,
 validation and first-board transfer.
 
+The first persistent net record selects `pcbcraft-project/17`. Board projects
+then use `pcbcraft-instances/2` with `net_registry` beside the occurrence records;
+schematic-only projects place it under `schematic_instances.net_registry` in the
+entry point. The header and registry presence must agree, and empty/null
+registries are refused. Existing projects without records retain their low-level
+encoding; Open and inspection never promote nets. Older readers must refuse
+these headers rather than discard identity, lineage or unresolved decisions.
+
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,
 starting with 12 hex digits and extending the prefix on case-insensitive
@@ -146,7 +156,7 @@ See [part-schema.md](part-schema.md) for record and transaction details.
 | File | Format | Contents |
 |---|---|---|
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15` or `/16` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, and version 16 adds required single-use occurrence identities |
-| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` | Matching board UUID header, one circuit use and one occurrence per sheet; schematic-only projects embed these records in `project.json` instead |
+| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1`, `/2` with a net registry | Matching board UUID header, one circuit use and one occurrence per sheet, optional sparse net registry; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/17` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |

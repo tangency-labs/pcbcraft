@@ -18,4 +18,7 @@ pub use server::{PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
 pub use tools::{call_tool, tool_definitions};
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod net_registry_tests;
+#[cfg(test)]
 mod tests;

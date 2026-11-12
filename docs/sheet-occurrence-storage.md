@@ -4,7 +4,8 @@ This implements slice 2 of [the net registry plan](net-registry-path.md), #229,
 on the current `project.json` working-folder and container-v3 `.pc` archive
 layout. Board folders, layout roots and the existing component records remain
 in place. It adds identities for the existing one-use hierarchy; repeated
-instances, component-definition splitting and persistent net IDs remain separate.
+instances and component-definition splitting remain separate. The subsequent
+[net registry slice](net-registry-storage.md) extends these same homes.
 
 ## Records and ownership
 
@@ -14,6 +15,8 @@ absent and the board registration owns an `instances.json` beside `board.json`.
 The instance document's format is `pcbcraft-instances/1`, and its `board` header
 must match the registered board UUID. A second storage home is rejected.
 Container, sheet, board and pinned-definition versions do not change.
+When a sparse net registry is authored, project/17 and instances/2 add it beside
+these records; projects without a registry retain the project/16 encoding.
 
 The instance payload contains `circuit_uses` and `sheet_occurrences`. There is
 exactly one circuit-use record, containing its non-nil UUID `id`. Every sheet

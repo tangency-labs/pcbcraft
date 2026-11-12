@@ -95,6 +95,7 @@ impl super::Board {
 impl Session {
     /// Register the first board and adopt schematic package choices atomically, without
     /// creating placements. Undo restores the choices' project scope; a second creation is refused.
+    /// Current net anchors move to board scope with the same UUIDs; historical captures retain theirs.
     pub(crate) fn create_board(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();

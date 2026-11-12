@@ -132,12 +132,16 @@ browser Download. Standalone JSON and container-v1 projects remain refused; see 
 
 ### Slice 3: the net registry ([#230](https://github.com/tangency-labs/pcbcraft/issues/230))
 
+The [implemented storage and command contract](net-registry-storage.md) covers
+this slice for the existing single-use hierarchy and zero-or-one board. Zone
+authoring and net classes remain later work.
+
 - **IDs.** Net IDs are UUIDs, allocated independently and never reused. They
   are never derived from names or members.
 - **Storage.** Records live in the slice 2 homes.
 - **Which nets are saved.** Only intentionally named nets, nets an authored
-  record targets and explicitly promoted nets get records. The first such record
-  is a zone. An ordinary unnamed net stays derived.
+  record targets and explicitly promoted nets get records. Zones will be the first
+  authored consumer. An ordinary unnamed net stays derived.
 - **Records.** Each has one primary anchor and at most three fallbacks, chosen
   by the [fixed priority](net-identity.md#choosing-and-retaining-the-primary-anchor)
   and stored once. It has no membership list.

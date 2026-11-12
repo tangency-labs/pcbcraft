@@ -41,6 +41,14 @@ pub struct Instances {
     pub circuit_uses: Vec<CircuitUse>,
     /// Exactly one occurrence per sheet, serialized in occurrence UUID order.
     pub sheet_occurrences: Vec<SheetOccurrence>,
+    /// Sparse persistent identities, absent until the first record is authored.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "registry_value")]
+    pub net_registry: Option<crate::nets::Registry>,
+}
+
+/// A present registry must be an object; explicit null is not an older-format omission.
+fn registry_value<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<crate::nets::Registry>, D::Error> {
+    crate::nets::Registry::deserialize(de).map(Some)
 }
 
 /// Require the field while permitting explicit null for a root's absent relationship.
@@ -82,12 +90,21 @@ impl Project {
         if target.project != self.id {
             return None;
         }
-        self.sheet_instances().sheet_occurrences.into_iter().find(|record| record.definition == target.sheet)
+        self.occurrence_instances().sheet_occurrences.into_iter().find(|record| record.definition == target.sheet)
     }
 
     /// Inspect single-use identities without changing revision, dirty state or saved bytes.
     /// Parent/slot relationships come from authored hierarchy and never independently retarget it.
+    /// Include an existing sparse net registry without promoting any derived network.
     pub fn sheet_instances(&self) -> Instances {
+        let mut records = self.occurrence_instances();
+        records.net_registry = (!self.net_registry.records.is_empty()).then(|| (*self.net_registry).clone());
+        records
+    }
+
+    /// Build the occurrence projection without copying the independently inspected net registry.
+    /// Anchor resolution and inspection use this bounded hierarchy-only view.
+    pub(crate) fn occurrence_instances(&self) -> Instances {
         let circuit_use = self.resolved_circuit_use();
         let ids: BTreeMap<_, _> = self.sheets.iter().map(|sheet| (sheet.sheet_id, self.occurrence_id(sheet))).collect();
         let parents: BTreeMap<_, _> =
@@ -107,7 +124,7 @@ impl Project {
             })
             .collect();
         sheet_occurrences.sort_by_key(|record| record.id);
-        Instances { circuit_uses: vec![CircuitUse { id: circuit_use }], sheet_occurrences }
+        Instances { circuit_uses: vec![CircuitUse { id: circuit_use }], sheet_occurrences, net_registry: None }
     }
 
     /// Return a sheet's stored ID or its deterministic compatibility ID before first Save.
@@ -129,6 +146,7 @@ impl Project {
 
     /// Validate the exact single-use hierarchy before installing decoded or migrated identities.
     /// No missing record, duplicate definition or foreign relationship is repaired by inference.
+    /// An optional net registry is validated against the installed occurrences before adoption.
     pub(crate) fn install_sheet_instances(&mut self, records: Instances) -> Result<(), String> {
         if records.circuit_uses.len() != 1 || records.sheet_occurrences.len() != self.sheets.len() {
             return Err("Instance records require one circuit use and one occurrence per sheet.".into());
@@ -167,6 +185,13 @@ impl Project {
         for sheet in Arc::make_mut(&mut self.sheets) {
             sheet.occurrence_id = Some(occurrences[&sheet.sheet_id].id);
         }
+        if let Some(registry) = records.net_registry {
+            if registry.records.is_empty() {
+                return Err("An empty net registry must be omitted.".into());
+            }
+            self.net_registry = Arc::new(registry);
+            self.net_registry.validate(self)?;
+        }
         Ok(())
     }
 
@@ -185,8 +210,9 @@ impl Project {
         if self.circuit_use.is_some() {
             return false;
         }
-        let records = self.sheet_instances();
-        let saved_ids: BTreeMap<_, _> = saved.sheet_instances().sheet_occurrences.into_iter().map(|record| (record.definition, record.id)).collect();
+        let records = self.occurrence_instances();
+        let saved_ids: BTreeMap<_, _> =
+            saved.occurrence_instances().sheet_occurrences.into_iter().map(|record| (record.definition, record.id)).collect();
         let ids: BTreeMap<_, _> = records
             .sheet_occurrences
             .into_iter()

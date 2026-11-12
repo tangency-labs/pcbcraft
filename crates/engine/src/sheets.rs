@@ -164,6 +164,7 @@ impl Project {
             .max()
             .unwrap_or_default()
             .max(self.components.last_key_value().map_or(0, |(&id, _)| id))
+            .max(self.net_registry.highest_object_id())
             .max(self.board.baseline.as_ref().and_then(|baseline| baseline.components.keys().next_back().copied()).unwrap_or(0))
             .max(self.board.footprints().last().map_or(0, |f| f.id))
     }
@@ -189,6 +190,7 @@ impl Session {
             project: Some(Arc::new(projected)),
             revision: self.revision,
             history_root_revision: self.history_root_revision,
+            defer_net_reconciliation: true,
             ..Self::default()
         };
         transaction.apply_inner(id, params)?;

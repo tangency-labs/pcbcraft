@@ -20,6 +20,16 @@ fn previous_entry_point_migrates_at_every_checkpoint() {
         .apply(pcbcraft_engine::net_labels::ADD, &json!({"name":"GND","style":"global","x_nm":0,"y_nm":0,"expected_revision":session.revision()}))
         .unwrap();
     let mut before = encode_documents(session.snapshot().unwrap()).unwrap();
+    // Forge the previous vocabulary together with the retired drawing. A modern registry
+    // cannot legally accompany that annotation, so it must not mask this compatibility test.
+    let mut entry: serde_json::Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+    entry["format"] = json!("pcbcraft-project/16");
+    before.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
+    let instances = session.project().unwrap().instances_document_path().unwrap();
+    let mut records: serde_json::Value = serde_json::from_slice(&before[&instances]).unwrap();
+    records["format"] = json!("pcbcraft-instances/1");
+    records.as_object_mut().unwrap().remove("net_registry");
+    before.insert(instances, serde_json::to_vec(&records).unwrap());
     let sheet_path = format!("sheets/{}.json", session.project().unwrap().sheet_target().id());
     let mut sheet: serde_json::Value = serde_json::from_slice(&before[&sheet_path]).unwrap();
     sheet["net_labels"][0]["style"] = json!("ground");

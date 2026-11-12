@@ -148,6 +148,18 @@ commands with a reason.
 
 ## Headless MCP
 
+`nets.promote` and `nets.resolve_ambiguity` use the shared revision-checked
+transactions in headless and live sessions. Both take `expected_revision` and
+an `anchor`, using an existing terminal/label/port endpoint or a complete typed
+anchor from `project.net_registry.nets`. Address `sheet` when multiple sheets
+exist; an optional `board` must match the current owner. Resolution also takes
+the ambiguous source UUID as `net` and assigns it to the selected current
+candidate branch. Promotion of an already persistent network is a no-op.
+Bare pins and unnamed one-pin stubs cannot be promoted. Inspection reports saved
+IDs, anchors, lineage and decisions only when a registry exists, and never
+creates records. See the [storage and command contract](net-registry-storage.md)
+for scope and version details. There are no new editor controls in this slice.
+
 `pcb.add_drawing`, `pcb.set_drawing` and `pcb.delete_drawing` use the same
 transactions as canvas Board Outline editing. Each takes `board` and
 `expected_revision`; creation also takes a `layer` UUID, ordered `points`

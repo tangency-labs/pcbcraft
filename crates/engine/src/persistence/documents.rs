@@ -44,7 +44,9 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 pub const MAX_DOCUMENTS: usize = 4096;
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
+const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
+const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -115,6 +117,8 @@ struct InstancesDocument {
     board: Uuid,
     circuit_uses: Vec<crate::instances::CircuitUse>,
     sheet_occurrences: Vec<crate::instances::SheetOccurrence>,
+    #[serde(default, deserialize_with = "present")]
+    net_registry: Option<crate::nets::Registry>,
 }
 
 /// Storage-version-specific board registrations never become independent physical identities.
@@ -136,10 +140,10 @@ struct FolderReference {
 impl ProjectDocument {
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
     fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
-        let foldered = matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT)
+        let foldered = matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT)
             || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15 or 16"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16 or 17"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -209,7 +213,7 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
 /// Schematic-only records are embedded in the entry point and have no separate managed path.
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if project.format != OCCURRENCE_PROJECT_FORMAT {
+    if !matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT) {
         return Ok(None);
     }
     Ok(project_board_path(entry)?.and_then(|path| path.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))))
@@ -283,11 +287,14 @@ pub fn is_document_path(path: &str) -> bool {
 /// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
 /// Reject locked tracks or vias under older board headers; board format 18 requires
 /// at least one authored track or via lock.
+/// Project/17 requires a nonempty validated net registry in the sole instance home;
+/// older project/instance headers refuse that vocabulary instead of discarding it.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let occurrences = project.format == OCCURRENCE_PROJECT_FORMAT;
-    let part_format = matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT);
+    let occurrences = matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT);
+    let net_format = project.format == NET_PROJECT_FORMAT;
+    let part_format = matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT);
     let foldered = project.layout_root.is_some();
     if !part_format
         && project
@@ -295,7 +302,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15 or 16.".into());
+        return Err("Extended package mappings require project format 15, 16 or 17.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -322,24 +329,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | FOLDER_PROJECT_FORMAT
             | PART_PROJECT_FORMAT
             | OCCURRENCE_PROJECT_FORMAT
+            | NET_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16".into());
+        return Err("schematic_instances requires project format 16 or 17".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14, 15 or 16, no board and a nonempty bounded list".into());
+        return Err("project footprint choices require format 13, 14, 15, 16 or 17, no board and a nonempty bounded list".into());
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15 or 16.".into());
+        return Err("Pinned part selections require project format 15, 16 or 17.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15 or 16".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16 or 17".into());
     }
     if matches!(
         project.format.as_str(),
@@ -351,9 +359,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | FOLDER_PROJECT_FORMAT
             | PART_PROJECT_FORMAT
             | OCCURRENCE_PROJECT_FORMAT
+            | NET_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15 or 16"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16 or 17"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -369,11 +378,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                if instance.format != INSTANCES_FORMAT || Some(instance.board) != registered {
+                let expected = if net_format { NET_INSTANCES_FORMAT } else { INSTANCES_FORMAT };
+                if instance.format != expected || Some(instance.board) != registered {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
                 }
                 used.insert(path);
-                Some(crate::instances::Instances { circuit_uses: instance.circuit_uses, sheet_occurrences: instance.sheet_occurrences })
+                Some(crate::instances::Instances {
+                    circuit_uses: instance.circuit_uses,
+                    sheet_occurrences: instance.sheet_occurrences,
+                    net_registry: instance.net_registry,
+                })
             }
             (None, Some(records)) => Some(records),
             _ => return Err("Instance records require exactly one schematic or registered-board storage home.".into()),
@@ -381,6 +395,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         None
     };
+    if net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
+        return Err("Net registry records require project format 17 and the corresponding instance vocabulary.".into());
+    }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
     let mut anchors = BTreeSet::new();
@@ -437,6 +454,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         upgraded_from: None,
         layout: None,
         circuit_use: None,
+        net_registry: Arc::default(),
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -1013,7 +1031,9 @@ impl DocumentsEncoder {
                         .assignments
                         .values()
                         .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
-                    let format = if p.has_sheet_occurrences() {
+                    let format = if !p.net_registry.records.is_empty() {
+                        NET_PROJECT_FORMAT
+                    } else if p.has_sheet_occurrences() {
                         OCCURRENCE_PROJECT_FORMAT
                     } else if has_parts || extended_choices {
                         PART_PROJECT_FORMAT
@@ -1111,14 +1131,24 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, occurrence)?;
                         self.cursor += 1;
                     } else {
-                        let board_path = self.project.instances_document_path();
-                        self.bytes.extend_from_slice(if board_path.is_some() { b"  ]\n}\n" } else { b"    ]\n  }\n}\n" });
-                        if self.bytes.len() > MAX_DOCUMENT_BYTES {
-                            return Err("encoded instance document exceeds its size limit".into());
+                        if records.net_registry.is_some() {
+                            self.bytes.extend_from_slice(b"  ],\n  \"net_registry\": {\n    \"records\": [\n");
+                            self.cursor = 0;
+                            self.first = true;
+                            self.phase = 16;
+                        } else {
+                            self.finish_instance_document(false)?;
                         }
-                        self.documents.insert(board_path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
-                        self.next();
-                        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+                    }
+                }
+                16 => {
+                    let registry =
+                        self.instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).ok_or("Missing registry encoding state.")?;
+                    if let Some(net) = registry.records.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, net)?;
+                        self.cursor += 1;
+                    } else {
+                        self.finish_instance_document(true)?;
                     }
                 }
                 12 => {
@@ -1297,7 +1327,8 @@ impl DocumentsEncoder {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                write!(self.bytes, "{{\n  \"format\": \"{INSTANCES_FORMAT}\",\n  \"board\": \"{board}\",\n").map_err(|error| error.to_string())?;
+                let format = if self.project.net_registry.records.is_empty() { INSTANCES_FORMAT } else { NET_INSTANCES_FORMAT };
+                write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"board\": \"{board}\",\n").map_err(|error| error.to_string())?;
             } else {
                 self.bytes.extend_from_slice(b"  ],\n  \"schematic_instances\": {\n");
             }
@@ -1310,6 +1341,25 @@ impl DocumentsEncoder {
             return Ok(());
         }
         self.finish_document(ENTRY_POINT.to_owned())?;
+        self.next();
+        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        Ok(())
+    }
+
+    /// Close the selected instance home, preserving original bytes when the registry is absent.
+    /// Registry records consume individual incremental batches before sheet encoding resumes.
+    fn finish_instance_document(&mut self, registry: bool) -> Result<(), String> {
+        let path = self.project.instances_document_path();
+        self.bytes.extend_from_slice(match (path.is_some(), registry) {
+            (true, false) => b"  ]\n}\n",
+            (false, false) => b"    ]\n  }\n}\n",
+            (true, true) => b"    ]\n  }\n}\n",
+            (false, true) => b"    ]\n  }\n  }\n}\n",
+        });
+        if self.bytes.len() > MAX_DOCUMENT_BYTES {
+            return Err("Encoded instance document exceeds its size limit.".into());
+        }
+        self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
         self.next();
         self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
         Ok(())

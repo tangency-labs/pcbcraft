@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 /// Validate the complete input with equivalent global anchors before running placement;
 /// preserve authored wires and redirect only endpoints attached to a replaced marker.
 /// Repeated reads allocate the same identities and never touch the filesystem.
+/// Compatibility conversion defers net promotion; retired annotations cannot coexist with a
+/// modern persistent registry, and opening an old file never authors new net identities.
 pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, String> {
     documents::check_documents(&documents)?;
     let mut sanitized = documents.clone();
@@ -38,7 +40,10 @@ pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, Stri
         return Ok(documents);
     }
     let original = decode_documents(&sanitized).map_err(|e| format!("Before power-marker migration: {e}"))?;
-    let mut session = crate::Session::default();
+    if !original.net_registry.records.is_empty() {
+        return Err("Retired power annotations cannot coexist with persistent net registry records.".into());
+    }
+    let mut session = crate::Session { defer_net_reconciliation: true, ..Default::default() };
     session.open_snapshot(original);
     let mut replacements = BTreeMap::new();
     for (path, mut marker, definition) in markers {
@@ -188,7 +193,7 @@ mod tests {
             )
             .unwrap();
         let marker = session.project().unwrap().net_labels()[0].id;
-        let mut documents = encode_documents(session.snapshot().unwrap()).unwrap();
+        let mut documents = encode_documents(crate::persistence::diagnostic_snapshot(session.snapshot().unwrap())).unwrap();
         let path = format!("sheets/{}.json", session.project().unwrap().sheet_target().sheet);
         let mut sheet: Value = serde_json::from_slice(&documents[&path]).unwrap();
         sheet["net_labels"][0]["style"] = json!("power");
@@ -224,7 +229,7 @@ mod tests {
                 )
                 .unwrap();
             let marker = session.project().unwrap().net_labels()[0].id;
-            let mut old = encode_documents(session.snapshot().unwrap()).unwrap();
+            let mut old = encode_documents(crate::persistence::diagnostic_snapshot(session.snapshot().unwrap())).unwrap();
             let path = format!("sheets/{}.json", session.project().unwrap().sheet_target().sheet);
             let mut sheet: Value = serde_json::from_slice(&old[&path]).unwrap();
             sheet["net_labels"][0]["style"] = json!(style);
