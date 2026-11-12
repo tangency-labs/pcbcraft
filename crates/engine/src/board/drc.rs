@@ -10,7 +10,7 @@
 use super::{
     definition::GraphicPurpose,
     setup::LayerPurpose,
-    track::{Land, inside, islands, lands, segment_distance},
+    track::{Land, PadContour, islands, lands, segment_distance},
     view::BoardView,
 };
 use crate::{CommandError, Session, schematic::Point};
@@ -98,7 +98,7 @@ struct Item {
 enum Shape {
     Segment { a: Point, b: Point, half: f64 },
     Circle { center: Point, radius: f64 },
-    Quad([Point; 4]),
+    Pad(PadContour),
 }
 
 impl Shape {
@@ -114,41 +114,41 @@ impl Shape {
             Shape::Circle { center, radius } => {
                 [center.x_nm as f64 - radius, center.y_nm as f64 - radius, center.x_nm as f64 + radius, center.y_nm as f64 + radius]
             }
-            Shape::Quad(corners) => corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| {
-                [b[0].min(p.x_nm as f64), b[1].min(p.y_nm as f64), b[2].max(p.x_nm as f64), b[3].max(p.y_nm as f64)]
-            }),
+            Shape::Pad(contour) => contour.bounds(),
         }
     }
 
     /// The shape's outline as segments with the copper extending `half` either side; a circle
-    /// is a zero-length segment with its radius, and a quad's interior is handled separately.
+    /// is a zero-length segment with its radius. Pad core edges carry the existing fractional
+    /// rounding radius; containment in a core with area is handled separately.
     fn segments(&self) -> Vec<(Point, Point, f64)> {
         match self {
             Shape::Segment { a, b, half } => vec![(*a, *b, *half)],
             Shape::Circle { center, radius } => vec![(*center, *center, *radius)],
-            Shape::Quad(c) => (0..4).map(|i| (c[i], c[(i + 1) % 4], 0.)).collect(),
+            Shape::Pad(contour) => contour.edges().map(|(a, b)| (a, b, contour.radius)).collect(),
         }
     }
 
-    /// Whether any point of this shape's skeleton lies inside a quad, which means overlap.
-    fn inside_quad(&self, quad: &[Point; 4]) -> bool {
+    /// Whether a skeleton point is contained in a pad's core with area. Degenerate point/line
+    /// cores have no interior; their contact and clearance come from edge distances and radii.
+    fn inside_pad(&self, pad: &PadContour) -> bool {
         match self {
-            Shape::Segment { a, b, .. } => inside(*a, quad) || inside(*b, quad),
-            Shape::Circle { center, .. } => inside(*center, quad),
-            Shape::Quad(corners) => corners.iter().any(|corner| inside(*corner, quad)),
+            Shape::Segment { a, b, .. } => pad.contains_core(*a) || pad.contains_core(*b),
+            Shape::Circle { center, .. } => pad.contains_core(*center),
+            Shape::Pad(contour) => contour.core.iter().any(|point| pad.contains_core(*point)),
         }
     }
 }
 
 /// Copper-to-copper gap in nanometers; zero or negative means the shapes touch or overlap.
 fn gap(a: &Shape, b: &Shape) -> f64 {
-    if let Shape::Quad(quad) = b
-        && a.inside_quad(quad)
+    if let Shape::Pad(pad) = b
+        && a.inside_pad(pad)
     {
         return 0.;
     }
-    if let Shape::Quad(quad) = a
-        && b.inside_quad(quad)
+    if let Shape::Pad(pad) = a
+        && b.inside_pad(pad)
     {
         return 0.;
     }
@@ -204,7 +204,7 @@ impl BoardView<'_> {
             let island = copper.pads[&land.key];
             items.push(Item {
                 name: format!("{}:{}", land.key.0, land.key.1),
-                shape: Shape::Quad(land.corners),
+                shape: Shape::Pad(land.contour()),
                 layers: land.layers.clone(),
                 island,
                 net: land.net.clone().or_else(|| island_net[island].clone()),
@@ -349,7 +349,7 @@ impl BoardView<'_> {
             let anchors: Vec<Point> = match &item.shape {
                 Shape::Segment { a, b, .. } => vec![*a, *b],
                 Shape::Circle { center, .. } => vec![*center],
-                Shape::Quad(corners) => corners.to_vec(),
+                Shape::Pad(contour) => contour.core.to_vec(),
             };
             if !anchors.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon))) {
                 found.push(Violation {
@@ -456,3 +456,6 @@ impl Session {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod contour_tests;
