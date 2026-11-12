@@ -1996,6 +1996,8 @@ impl Project {
 /// separate session. Window placement and navigation are not part of the project history.
 #[derive(Debug)]
 pub struct Session {
+    /// Runtime authority shared only by clearance captures from this session, never persisted.
+    clearance_identity: Arc<()>,
     libraries: Arc<library::sources::Catalog>,
     project: Option<Arc<Project>>,
     undo: Vec<Option<Arc<Project>>>,
@@ -2013,6 +2015,7 @@ impl Default for Session {
     /// Start with the bundled native sources; no project or authored history exists yet.
     fn default() -> Self {
         Self {
+            clearance_identity: Arc::new(()),
             libraries: Arc::new(library::sources::Catalog::bundled()),
             project: None,
             undo: Vec::new(),

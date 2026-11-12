@@ -22,6 +22,12 @@ still needs to work before the first collaboration-ready preview.
 | Native library sources | Desktop folder registration and session bundle uploads on desktop/browser; symbol/footprint/part/category/manufacturer search with file/conflict diagnostics, exact part resolution and canonical quantity normalization; native part placement and typed requirements; external footprint assignment; complete project pinning and offline reopen after source relocation/removal; [source guide](native-library-sources.md) | Git sources [#93](https://github.com/tangency-labs/pcbcraft/issues/93), provider catalogs [#94](https://github.com/tangency-labs/pcbcraft/issues/94), source publishing and reviewed updates |
 | Later professional work | Planned, not implemented as a complete workflow | Full ERC/DRC [#47](https://github.com/tangency-labs/pcbcraft/issues/47)/#58, copper zones [#57](https://github.com/tangency-labs/pcbcraft/issues/57), fabrication [#59](https://github.com/tangency-labs/pcbcraft/issues/59), advanced routing [#85](https://github.com/tangency-labs/pcbcraft/issues/85) and 3D/STEP [#86](https://github.com/tangency-labs/pcbcraft/issues/86) are outside the first MVP |
 
+DRC and the engine's [snapshot copper query](copper-clearance-query.md) share
+supported pad/track/via contours, contact and clearance predicates. Queries retain
+board, snapshot, revision and effective-clearance authority, with conservative
+candidates and an exhaustive reference. Routing clearance enforcement, spatial
+indexing and native circular arcs remain separate work.
+
 The engine [single-board update workflow](single-board-update.md) previews and
 atomically accepts footprint/package and connectivity changes through shared
 commands and headless/live MCP. Desired assignments and accepted geometry remain

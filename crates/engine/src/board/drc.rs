@@ -9,9 +9,11 @@
 //! This is not a manufacturing sign-off: arcs, zones, hole-to-hole spacing, silkscreen and
 //! solder mask checks are not implemented.
 use super::{
+    clearance::{BoardGeometry, Object as Item},
     definition::GraphicPurpose,
+    geometry::Contour,
     setup::LayerPurpose,
-    track::{Land, PadContour, islands, lands, segment_distance, with_pad_contacts},
+    track::Land,
     update::TerminalKey,
     view::BoardView,
 };
@@ -19,6 +21,7 @@ use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+#[cfg(test)]
 use uuid::Uuid;
 
 /// Check the addressed board against explicit rules; returns a report and edits nothing.
@@ -107,87 +110,6 @@ pub struct Report {
     pub total: usize,
 }
 
-/// Copper reduced to a shape on some layers. `layers` empty means every copper layer (a via).
-struct Item {
-    name: String,
-    shape: Shape,
-    layers: Vec<Uuid>,
-    island: usize,
-    net: Option<String>,
-    at: Point,
-}
-
-enum Shape {
-    Segment { a: Point, b: Point, half: f64 },
-    Circle { center: Point, radius: f64 },
-    Pad(PadContour),
-}
-
-impl Shape {
-    /// Axis-aligned bounds in nanometers.
-    fn bounds(&self) -> [f64; 4] {
-        match self {
-            Shape::Segment { a, b, half } => [
-                a.x_nm.min(b.x_nm) as f64 - half,
-                a.y_nm.min(b.y_nm) as f64 - half,
-                a.x_nm.max(b.x_nm) as f64 + half,
-                a.y_nm.max(b.y_nm) as f64 + half,
-            ],
-            Shape::Circle { center, radius } => {
-                [center.x_nm as f64 - radius, center.y_nm as f64 - radius, center.x_nm as f64 + radius, center.y_nm as f64 + radius]
-            }
-            Shape::Pad(contour) => contour.bounds(),
-        }
-    }
-
-    /// The shape's outline as segments with the copper extending `half` either side; a circle
-    /// is a zero-length segment with its radius. Pad core edges carry the existing fractional
-    /// rounding radius; containment in a core with area is handled separately.
-    fn segments(&self) -> Vec<(Point, Point, f64)> {
-        match self {
-            Shape::Segment { a, b, half } => vec![(*a, *b, *half)],
-            Shape::Circle { center, radius } => vec![(*center, *center, *radius)],
-            Shape::Pad(contour) => contour.edges().map(|(a, b)| (a, b, contour.radius)).collect(),
-        }
-    }
-
-    /// Whether a skeleton point is contained in a pad's core with area. Degenerate point/line
-    /// cores have no interior; their contact and clearance come from edge distances and radii.
-    fn inside_pad(&self, pad: &PadContour) -> bool {
-        match self {
-            Shape::Segment { a, b, .. } => pad.contains_core(*a) || pad.contains_core(*b),
-            Shape::Circle { center, .. } => pad.contains_core(*center),
-            Shape::Pad(contour) => contour.core.iter().any(|point| pad.contains_core(*point)),
-        }
-    }
-}
-
-/// Copper-to-copper gap in nanometers; zero or negative means the shapes touch or overlap.
-fn gap(a: &Shape, b: &Shape) -> f64 {
-    if let Shape::Pad(pad) = b
-        && a.inside_pad(pad)
-    {
-        return 0.;
-    }
-    if let Shape::Pad(pad) = a
-        && b.inside_pad(pad)
-    {
-        return 0.;
-    }
-    let mut best = f64::INFINITY;
-    for (a1, a2, ha) in a.segments() {
-        for (b1, b2, hb) in b.segments() {
-            best = best.min(segment_distance(a1, a2, b1, b2) - ha - hb);
-        }
-    }
-    best
-}
-
-/// Whether two items share a copper layer; a via shares every layer.
-fn share_layer(a: &Item, b: &Item) -> bool {
-    a.layers.is_empty() || b.layers.is_empty() || a.layers.iter().any(|layer| b.layers.contains(layer))
-}
-
 /// Ray-casting point-in-polygon for a closed outline; boundary points count as outside.
 fn in_polygon(point: Point, polygon: &[Point]) -> bool {
     let (x, y) = (point.x_nm as f64, point.y_nm as f64);
@@ -216,33 +138,9 @@ impl BoardView<'_> {
     /// Check this board against `rules` and return every finding, sorted by kind and position.
     pub fn check_design(self, rules: Rules) -> Report {
         let mut found = Vec::new();
-        let lands = lands(self);
-        let (tracks, vias) = (self.tracks(), self.vias());
-        let (copper, members) = islands(&lands, tracks, vias);
-        let island_net: Vec<Option<String>> =
-            members.iter().map(|island| island.iter().find_map(|node| lands.get(*node).and_then(|land| land.net.clone()))).collect();
-        let mut items = Vec::new();
-        for land in &lands {
-            let island = copper.pads[&land.key];
-            items.push(Item {
-                name: format!("{}:{}", land.key.0, land.key.1),
-                shape: Shape::Pad(land.contour()),
-                layers: land.layers.clone(),
-                island,
-                net: land.net.clone().or_else(|| island_net[island].clone()),
-                at: center(land),
-            });
-        }
-        for track in tracks {
-            let island = copper.tracks[&track.id];
-            items.push(Item {
-                name: track.id.to_string(),
-                shape: Shape::Segment { a: track.start, b: track.end, half: track.width_nm as f64 / 2. },
-                layers: vec![track.layer],
-                island,
-                net: island_net[island].clone(),
-                at: midpoint(track.start, track.end),
-            });
+        let geometry = BoardGeometry::new(self);
+        let items = &geometry.items;
+        for track in self.tracks() {
             if track.width_nm < rules.min_track_width_nm {
                 found.push(Violation {
                     kind: Kind::TrackWidth,
@@ -253,16 +151,7 @@ impl BoardView<'_> {
                 });
             }
         }
-        for via in vias {
-            let island = copper.vias[&via.id];
-            items.push(Item {
-                name: via.id.to_string(),
-                shape: Shape::Circle { center: via.at, radius: via.diameter_nm as f64 / 2. },
-                layers: Vec::new(),
-                island,
-                net: island_net[island].clone(),
-                at: via.at,
-            });
+        for via in self.vias() {
             let ring = (via.diameter_nm - via.drill_nm) / 2;
             if ring < rules.min_annular_ring_nm {
                 found.push(Violation {
@@ -275,44 +164,29 @@ impl BoardView<'_> {
             }
         }
 
-        let touching = with_pad_contacts(&lands, &copper, members);
-        self.check_shorts(&lands, &touching, &items, &mut found);
+        self.check_shorts(&geometry.lands, &geometry.members, items, &mut found);
 
-        // Retain the separate clearance check, including direct pad contacts without intended
-        // nets. Shorts are diagnosed independently, including at zero required clearance.
+        // Physical island short diagnostics remain independent of the strict clearance rule.
         let clearance = rules.clearance_nm as f64;
-        let bounds: Vec<_> = items.iter().map(|item| item.shape.bounds()).collect();
-        let mut order: Vec<usize> = (0..items.len()).collect();
-        order.sort_by(|a, b| bounds[*a][0].total_cmp(&bounds[*b][0]));
-        for (position, &i) in order.iter().enumerate() {
-            for &j in &order[position + 1..] {
-                if bounds[j][0] > bounds[i][2] + clearance {
-                    break;
-                }
-                let (a, b) = (&items[i], &items[j]);
-                if a.island == b.island
-                    || (a.net.is_some() && a.net == b.net)
-                    || bounds[j][1] > bounds[i][3] + clearance
-                    || bounds[i][1] > bounds[j][3] + clearance
-                    || !share_layer(a, b)
-                {
-                    continue;
-                }
-                let distance = gap(&a.shape, &b.shape);
-                if distance < clearance {
-                    let nets = match (&a.net, &b.net) {
-                        (Some(x), Some(y)) => format!(" between nets {x} and {y}"),
-                        _ => String::new(),
-                    };
-                    let message = if distance <= 0. {
-                        format!("Copper touches{nets}")
-                    } else {
-                        format!("Clearance {} is below the {} rule{nets}", mm(distance), mm(clearance))
-                    };
-                    let mut names = vec![a.name.clone(), b.name.clone()];
-                    names.sort();
-                    found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
-                }
+        for decision in geometry.clearance_pairs(rules.clearance_nm) {
+            if !decision.clearance_violation {
+                continue;
+            }
+            if let Some(i) = decision.first {
+                let (a, b) = (&items[i], &items[decision.second]);
+                let distance = decision.gap_nm;
+                let nets = match (&a.net, &b.net) {
+                    (Some(x), Some(y)) => format!(" between nets {x} and {y}"),
+                    _ => String::new(),
+                };
+                let message = if distance <= 0. {
+                    format!("Copper touches{nets}")
+                } else {
+                    format!("Clearance {} is below the {} rule{nets}", mm(distance), mm(clearance))
+                };
+                let mut names = vec![a.name.clone(), b.name.clone()];
+                names.sort();
+                found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
             }
         }
 
@@ -331,7 +205,7 @@ impl BoardView<'_> {
             }
         }
 
-        self.check_outline(&items, rules, &mut found);
+        self.check_outline(items, rules, &mut found);
         self.check_courtyards(&mut found);
 
         found.sort_by(|a, b| (a.kind, a.at.x_nm, a.at.y_nm, &a.items).cmp(&(b.kind, b.at.x_nm, b.at.y_nm, &b.items)));
@@ -433,11 +307,7 @@ impl BoardView<'_> {
             })
             .collect();
         for item in items {
-            let anchors: Vec<Point> = match &item.shape {
-                Shape::Segment { a, b, .. } => vec![*a, *b],
-                Shape::Circle { center, .. } => vec![*center],
-                Shape::Pad(contour) => contour.core.to_vec(),
-            };
+            let anchors = &item.contour.core;
             if !anchors.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon))) {
                 found.push(Violation {
                     kind: Kind::OutsideBoard,
@@ -449,10 +319,9 @@ impl BoardView<'_> {
                 continue;
             }
             let (distance, crosses) = edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
-                let distance = gap(&item.shape, &Shape::Segment { a: *a, b: *b, half: 0. });
+                let distance = item.contour.gap(&Contour::capsule(*a, *b, 0.));
                 // A contained edge can have gap zero even though it enters a pad's copper.
-                let penetrates =
-                    distance < 0. || (distance == 0. && matches!(&item.shape, Shape::Pad(contour) if contour.penetrates_segment(*a, *b)));
+                let penetrates = distance < 0. || (distance == 0. && item.contour.penetrates_segment(*a, *b));
                 (best.min(distance), crosses || penetrates)
             });
             if crosses || distance < rules.edge_clearance_nm as f64 {
@@ -507,12 +376,6 @@ impl BoardView<'_> {
     }
 }
 
-/// The center of a land, as its marker position.
-fn center(land: &Land) -> Point {
-    let c = &land.corners;
-    Point { x_nm: c.iter().map(|p| p.x_nm).sum::<i64>() / 4, y_nm: c.iter().map(|p| p.y_nm).sum::<i64>() / 4 }
-}
-
 /// Read optional rule overrides; each must be a positive length within the coordinate range.
 pub(crate) fn rules(params: &Value) -> Result<Rules, CommandError> {
     let mut rules = Rules::default();
@@ -558,7 +421,7 @@ impl Session {
 pub(crate) mod tests;
 
 #[cfg(test)]
-mod contour_tests;
+pub(crate) mod contour_tests;
 
 #[cfg(test)]
-mod short_tests;
+pub(crate) mod short_tests;

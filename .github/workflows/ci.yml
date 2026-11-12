@@ -69,6 +69,23 @@ jobs:
         working-directory: apps/pcbcraft-web
         run: trunk build --release
 
+  geometry-webassembly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: node --version
+      - name: Run board geometry and query tests as WebAssembly
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
+        run: cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1
+
   licenses:
     runs-on: ubuntu-latest
     timeout-minutes: 15

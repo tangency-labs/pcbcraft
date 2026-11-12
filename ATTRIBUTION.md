@@ -1057,3 +1057,12 @@ layout/storage contracts. The choice control reuses the pinned Craft toolkit
 through the existing chrome adapter. Regression boards use shared commands and
 original bundled definitions; no external EDA implementation, source-derived
 fixtures, artwork, library data or new dependency was introduced.
+
+## Shared copper contours and snapshot clearance query
+
+The contour extraction, conservative candidate query, snapshot authority and
+intended-membership evaluation are original PCBcraft work over the existing
+rounded-pad DRC and copper-connectivity implementation. Original regression
+boards use shared commands and existing qualified native definitions. No external
+EDA implementation, fixture, artwork, dependency or native-format change was
+introduced. Circular-arc representation remains separate work under #259.
