@@ -8,6 +8,8 @@ use crate::{
 };
 use serde_json::json;
 
+mod retained;
+
 /// Transport the same original native source data that folder and browser bundle loading use.
 fn documents() -> sources::Documents {
     [
@@ -242,6 +244,16 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     let mut old_baseline = baseline.as_ref().clone();
     old_baseline.format = "pcbcraft-board-baseline/1".into();
     assert!(old_baseline.validate().is_err());
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":project.symbols()[0].id(),"reference":"R1","value":"1k"}));
+    let current = session.project().unwrap();
+    let proposed =
+        crate::board::update::Baseline::proposed(current, &crate::board::update::Baseline::current_choices(current), baseline.source.clone())
+            .unwrap();
+    assert_eq!(proposed.format, "pcbcraft-board-baseline/3");
+    assert!(crate::board::update::preview(baseline, &proposed).unwrap().is_noop());
+    proposed.validate_assets(current).unwrap();
+    session.apply("edit.undo", &Json::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), docs);
     apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":project.symbols()[0].id(),"reference":"R2","value":"R"}));
     session.apply("edit.undo", &Json::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), docs);

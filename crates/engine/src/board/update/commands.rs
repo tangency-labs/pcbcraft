@@ -1,6 +1,6 @@
 //! Session-owned authority for bounded, nonpersistent board-update previews.
 
-use super::{Baseline, ComponentChange, ComponentState, Preview, SourceCapture, apply_candidate, preview};
+use super::{Baseline, ComponentChange, PartInstanceState, Preview, SourceCapture, apply_candidate, preview};
 use crate::{CommandError, Project, Session};
 use serde::{Serialize, Serializer, ser::SerializeMap};
 use serde_json::{Value, json};
@@ -55,31 +55,31 @@ pub struct BoardUpdatePreview<'a> {
 }
 
 impl<'a> BoardUpdatePreview<'a> {
-    /// Resolve stable component metadata from this captured plan, including parts
+    /// Resolve stable part metadata from this captured plan, including parts
     /// removed from the current schematic. It is safe to use for review labels.
-    pub fn component(&self, id: u64) -> Option<&'a ComponentState> {
+    pub fn component(&self, id: u64) -> Option<&'a PartInstanceState> {
         self.details.proposed.get(&id).or_else(|| self.details.accepted.get(&id))
     }
 
     /// Inspect the previous accepted package, mapping and metadata for an old/new
-    /// review row. A newly added component has no accepted predecessor.
-    pub fn accepted_component(&self, id: u64) -> Option<&'a ComponentState> {
+    /// review row. A newly added part has no accepted predecessor.
+    pub fn accepted_component(&self, id: u64) -> Option<&'a PartInstanceState> {
         self.details.accepted.get(&id)
     }
 
     /// Inspect proposed metadata independently of the accepted predecessor. A
-    /// removed component has no proposed record even though `component` labels it.
-    pub fn proposed_component(&self, id: u64) -> Option<&'a ComponentState> {
+    /// removed part has no proposed record even though `component` labels it.
+    pub fn proposed_component(&self, id: u64) -> Option<&'a PartInstanceState> {
         self.details.proposed.get(&id)
     }
 }
 
 /// Serialize old/new metadata only for changed parts, without copying whole maps
-/// into a native view or repeating unchanged components in every MCP response.
+/// into a native view or repeating unchanged parts in every MCP response.
 #[derive(Debug)]
 struct ComponentDetails<'a> {
-    accepted: &'a BTreeMap<u64, ComponentState>,
-    proposed: &'a BTreeMap<u64, ComponentState>,
+    accepted: &'a BTreeMap<u64, PartInstanceState>,
+    proposed: &'a BTreeMap<u64, PartInstanceState>,
     changes: &'a [ComponentChange],
 }
 
@@ -88,8 +88,8 @@ impl Serialize for ComponentDetails<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
         struct Detail<'a> {
-            accepted: Option<&'a ComponentState>,
-            proposed: Option<&'a ComponentState>,
+            accepted: Option<&'a PartInstanceState>,
+            proposed: Option<&'a PartInstanceState>,
         }
         let ids: BTreeSet<_> = self
             .changes

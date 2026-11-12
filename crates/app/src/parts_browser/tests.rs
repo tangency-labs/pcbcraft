@@ -749,6 +749,60 @@ fn native_documents() -> library::sources::Documents {
     .collect()
 }
 
+/// A deleted typed part retains its formatted value in both the real Browser row
+/// and selected-footprint Properties without presentation changing the document.
+#[test]
+fn retained_part_quantity_is_shared_by_board_properties_and_browser() {
+    use pcbcraft_engine::{part_instances::PLACE_PART, persistence::encode_documents};
+    let mut h = editor(1400.);
+    click(&mut h, "Cancel");
+    h.state_mut().run("project.new", &json!({"create_board":true}));
+    let mut documents = native_documents();
+    let mut part: serde_json::Value = serde_json::from_str(&documents["parts/resistor.json"]).unwrap();
+    part["fixed_parameters"] = json!({"pcbcraft:resistance":{"type":"quantity","value":"0.1","unit":"Ohm"}});
+    documents.insert("parts/resistor.json".into(), part.to_string());
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native","documents":documents})).unwrap();
+    let reference = library::parts::Reference { library: "parts-demo".into(), id: "resistor".into(), revision: 1 };
+    let resolved = h.state().session.libraries().resolve_part(&reference).unwrap();
+    let digest = library::sources::part_digest(resolved);
+    let edit = |h: &mut egui_kittest::Harness<'_, PcbApp>, command: &str, mut params: serde_json::Value| {
+        params["expected_revision"] = json!(h.state().session.revision());
+        h.state_mut().run(command, &params);
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        h.run();
+    };
+    edit(
+        &mut h,
+        PLACE_PART,
+        json!({"library":"parts-demo","definition":"resistor","definition_revision":1,
+        "definition_digest":digest,"x_nm":0,"y_nm":0}),
+    );
+    let id = h.state().session.project().unwrap().components().next().unwrap().id();
+    edit(&mut h, pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT, json!({"component":id,"x_nm":0,"y_nm":0}));
+    edit(&mut h, pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, json!({}));
+    let symbol = h.state().session.project().unwrap().symbols()[0].id();
+    edit(&mut h, pcbcraft_engine::DELETE_SYMBOL, json!({"symbol":symbol}));
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    click(&mut h, "Footprint R1  100 mΩ");
+    let snapshot = h.state().session.snapshot().unwrap();
+    let saved = encode_documents(snapshot.clone()).unwrap();
+    let revision = h.state().session.revision();
+    for width in [1400., 900.] {
+        h.set_size(egui::vec2(width, 900.));
+        h.run();
+        h.get_by_label("Footprint R1  100 mΩ");
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text)
+            if text.galley.job.text == "100 mΩ")),
+            "Properties must show the same SI value as the Browser"
+        );
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    }
+}
+
 /// Equally named parts can share a drawing while keeping distinct visible values and identities.
 #[test]
 fn native_catalog_disambiguates_parts_sharing_a_symbol() {

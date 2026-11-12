@@ -175,10 +175,11 @@ also a normal desired-assignment edit.
 
 | Baseline field | Meaning |
 | --- | --- |
-| `format` | `pcbcraft-board-baseline/1` |
+| `format` | `pcbcraft-board-baseline/1`, `/2` for extended mappings, or `/3` for retained typed quantities |
 | `project`, `board` | Explicit owners; both must match the loaded design |
 | `source` | Frozen source `capture_id` UUID and lowercase SHA-256 `content_digest` |
 | `components` | Canonical positive numeric ID keys, with historical symbol identity, reference/value, sorted terminal tokens and accepted package |
+| `components.<id>.primary_quantity` | Optional exact native quantity in baseline/3, used to display a retained part's value after deletion; older/untyped history keeps stored text |
 | `nets` | Canonically ordered accepted component/terminal groups and authored names; these are historical membership, not persistent net IDs |
 
 Each physical package keeps its pinned library/item/revision and exact

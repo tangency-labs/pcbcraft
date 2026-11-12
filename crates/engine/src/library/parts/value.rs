@@ -14,7 +14,7 @@ pub enum Value {
 }
 impl Value {
     /// Bound values before category resolution; quantities use plain canonical decimal notation.
-    pub(super) fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         match self {
             Self::Quantity { value, unit } => {
                 if !decimal(value) || !["Ohm", "F", "H", "V", "A", "W", "Hz", "s", "m", "K", "1"].contains(&unit.as_str()) {

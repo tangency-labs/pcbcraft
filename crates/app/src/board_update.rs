@@ -493,7 +493,7 @@ fn report_entries(preview: &BoardUpdatePreview<'_>) -> Vec<(Option<u64>, form::M
             }
             if matches!(change, ComponentChange::Definition { .. }) {
                 let symbol =
-                    |part: &pcbcraft_engine::board::update::ComponentState| format!("{} / {} · r{}", part.library, part.definition, part.revision);
+                    |part: &pcbcraft_engine::board::update::PartInstanceState| format!("{} / {} · r{}", part.library, part.definition, part.revision);
                 rows.push((
                     None,
                     form::Message {

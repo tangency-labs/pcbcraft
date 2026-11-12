@@ -1938,14 +1938,13 @@ impl Project {
         self.components.get(&symbol.component)
     }
 
-    /// Retire one live component through the board's accepted-state policy. Last
+    /// Retire one live part through the board's accepted-state policy. Last
     /// visible shared fields become retained display metadata; package/terminal
     /// and connection acceptance remain unchanged until a reviewed update.
     pub(crate) fn retire_component(&mut self, id: u64) {
         let component = Arc::make_mut(&mut self.components).remove(&id);
         Arc::make_mut(&mut self.schematic_packages).remove_component(id);
-        let display = component.as_ref().map(|component| (component.reference(), component.value()));
-        Arc::make_mut(&mut self.board).remove_component(id, display);
+        Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
     }
 
     /// Return the owning component's reference, or empty text for a foreign placement.

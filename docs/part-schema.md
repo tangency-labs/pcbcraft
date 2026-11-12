@@ -14,6 +14,8 @@ The implementation uses `PartDefinition` for reusable records and `PartInstance`
 for the engine type previously called `Component`. Existing project JSON
 `components`, component-addressed command parameters and stable `component-…`
 IDs retain their compatibility meaning: they address placed part instances.
+The accepted board snapshot type is `PartInstanceState` (formerly
+`ComponentState`); this Rust rename does not change persisted keys or IDs.
 They never refer to a library part definition. New library APIs use an explicit
 library/item/revision address. **Rename part** changes an instance reference,
 while **Edit copy** authors a separate library definition.
@@ -259,5 +261,12 @@ adds part selections to the storage vocabulary. It supports format 14's board
 folders and retains a historical flat layout until ordinary first-save migration.
 Projects without the new data retain their low-level encoding and no-op saves;
 the existing first-save storage migration still applies.
-Older apps cannot read project/15, board/17 or baseline/2; saving these features
+Accepted board snapshots retain an optional canonical primary quantity under
+baseline/3, so a deleted typed part awaiting reviewed removal keeps its readable
+SI value in PCB Properties and the project browser. Capture uses the resolved
+primary requirement or fixed parameter, with no type inferred from text. Old
+baselines remain text-only until a real update accepts new history; see the
+[storage contract](native-project-storage.md) for compatibility and validation.
+
+Older apps cannot read project/15, board/17 or baseline/2 or /3; saving these features
 therefore requires the newer app. This introduces no board-list migration.

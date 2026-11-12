@@ -1111,6 +1111,16 @@ symbols and powers follow the published NIST SI prefix table
 are original test inputs; no dependency, external implementation, library asset
 or native storage vocabulary was added.
 
+## Retained part quantities
+
+The `PartInstanceState` internal rename, baseline/3 historical primary quantities,
+typed capture/retirement and shared retained-footprint presentation are original
+MIT OR Apache-2.0 PCBcraft work following #292. They reuse the exact formatter
+from #291 and existing native part/category validation. Regression inputs derive
+from original repository library records and shared commands, using production
+folder/archive codecs. No external source, artwork, dependency or library data
+was introduced.
+
 ## Performance fixtures and CPU replay
 
 The opt-in #240 harness, fixed-pattern workload recipes, input traces and evidence
