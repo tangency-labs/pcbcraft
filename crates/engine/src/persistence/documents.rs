@@ -17,11 +17,11 @@ pub fn convert_legacy_documents(mut documents: Documents) -> Result<Documents, S
     migrate_board_layout(super::migrate_power_markers(documents)?, ".")
 }
 
-/// Rewrite only project-level storage metadata and move the board payload without re-encoding it.
-/// Validation covers the entire old and new document sets; no identity is derived from the path.
+/// Adopt board-folder and occurrence metadata, moving physical bytes without re-encoding them.
+/// Validation covers both document sets; compatibility IDs depend on UUIDs, never storage paths.
 pub fn migrate_board_layout(mut documents: Documents, root: &str) -> Result<Documents, String> {
     let original = decode_documents(&documents)?;
-    let migrated = Arc::new(original.with_board_folders(root)?);
+    let migrated = Arc::new(original.with_board_folders(root)?.with_sheet_occurrences()?);
     let mut canonical = encode_documents(migrated.clone())?;
     documents.insert(ENTRY_POINT.to_owned(), canonical.remove(ENTRY_POINT).ok_or("missing encoded entry point")?);
     if let (Some(before), Some(after)) = (original.board_document_path(), migrated.board_document_path())
@@ -29,6 +29,9 @@ pub fn migrate_board_layout(mut documents: Documents, root: &str) -> Result<Docu
     {
         let board = documents.remove(&before).ok_or("missing original board document")?;
         documents.insert(after, board);
+    }
+    if let Some(path) = migrated.instances_document_path() {
+        documents.insert(path.clone(), canonical.remove(&path).ok_or("missing encoded instance document")?);
     }
     decode_documents(&documents)?;
     Ok(documents)
@@ -40,6 +43,8 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
+const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
+const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -87,6 +92,8 @@ struct SheetReference {
 struct ProjectDocument {
     format: String,
     #[serde(default, deserialize_with = "present")]
+    schematic_instances: Option<crate::instances::Instances>,
+    #[serde(default, deserialize_with = "present")]
     footprint_choices: Option<Vec<crate::board::assignment::Assignment>>,
     #[serde(default, deserialize_with = "present")]
     boards: Option<Vec<BoardReference>>,
@@ -98,6 +105,15 @@ struct ProjectDocument {
     numeric_id_high_water: Option<u64>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstancesDocument {
+    format: String,
+    board: Uuid,
+    circuit_uses: Vec<crate::instances::CircuitUse>,
+    sheet_occurrences: Vec<crate::instances::SheetOccurrence>,
 }
 
 /// Storage-version-specific board registrations never become independent physical identities.
@@ -119,9 +135,10 @@ struct FolderReference {
 impl ProjectDocument {
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
     fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
-        let foldered = self.format == FOLDER_PROJECT_FORMAT || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
+        let foldered = matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT)
+            || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14 or 15"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15 or 16"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -187,6 +204,16 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
     Ok(project.registry()?.1.map(|layout| layout.root))
 }
 
+/// Resolve only the registered current-format instance document; older layouts own no such file.
+/// Schematic-only records are embedded in the entry point and have no separate managed path.
+pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
+    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    if project.format != OCCURRENCE_PROJECT_FORMAT {
+        return Ok(None);
+    }
+    Ok(project_board_path(entry)?.and_then(|path| path.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SheetDocument {
@@ -228,7 +255,7 @@ struct BoardDocument {
 
 /// Accept only paths owned by this format. Pinned item identities must match their files on decode.
 pub fn is_document_path(path: &str) -> bool {
-    if path == ENTRY_POINT || path == "board.json" || layout::is_board_path(path) {
+    if path == ENTRY_POINT || path == "board.json" || layout::is_board_path(path) || layout::is_instances_path(path) {
         return true;
     }
     let pieces: Vec<_> = path.split('/').collect();
@@ -256,7 +283,8 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let part_format = project.format == PART_PROJECT_FORMAT;
+    let occurrences = project.format == OCCURRENCE_PROJECT_FORMAT;
+    let part_format = matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT);
     let foldered = project.layout_root.is_some();
     if !part_format
         && project
@@ -264,7 +292,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15.".into());
+        return Err("Extended package mappings require project format 15 or 16.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -290,21 +318,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | SCHEMATIC_PACKAGES_PROJECT_FORMAT
             | FOLDER_PROJECT_FORMAT
             | PART_PROJECT_FORMAT
+            | OCCURRENCE_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
+    }
+    if !occurrences && project.schematic_instances.is_some() {
+        return Err("schematic_instances requires project format 16".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14 or 15, no board and a nonempty bounded list".into());
+        return Err("project footprint choices require format 13, 14, 15 or 16, no board and a nonempty bounded list".into());
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15.".into());
+        return Err("Pinned part selections require project format 15 or 16.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14 or 15".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15 or 16".into());
     }
     if matches!(
         project.format.as_str(),
@@ -315,9 +347,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | SCHEMATIC_PACKAGES_PROJECT_FORMAT
             | FOLDER_PROJECT_FORMAT
             | PART_PROJECT_FORMAT
+            | OCCURRENCE_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14 or 15"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15 or 16"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -328,6 +361,23 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut sheet_ids = BTreeSet::from([project.id]);
     let mut sheet_names = BTreeSet::new();
     let mut used = BTreeSet::from([ENTRY_POINT.to_owned()]);
+    let instance_records = if occurrences {
+        match (project_instances_path(&documents[ENTRY_POINT])?, project.schematic_instances.clone()) {
+            (Some(path), None) => {
+                let instance: InstancesDocument = parse(documents, &path)?;
+                let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
+                if instance.format != INSTANCES_FORMAT || Some(instance.board) != registered {
+                    return Err(format!("{path}: unsupported instances format or foreign board header"));
+                }
+                used.insert(path);
+                Some(crate::instances::Instances { circuit_uses: instance.circuit_uses, sheet_occurrences: instance.sheet_occurrences })
+            }
+            (None, Some(records)) => Some(records),
+            _ => return Err("Instance records require exactly one schematic or registered-board storage home.".into()),
+        }
+    } else {
+        None
+    };
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
     let mut anchors = BTreeSet::new();
@@ -383,6 +433,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         named_graph: Arc::default(),
         upgraded_from: None,
         layout: None,
+        circuit_use: None,
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -739,6 +790,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         .map(|(reference, symbols, junctions, wires)| {
             Ok(crate::sheets::SchematicSheet {
                 sheet_id: reference.id,
+                occurrence_id: None,
                 sheet_name: if previous_format && reference.name == "Schematic" { "Main".into() } else { reference.name.clone() },
                 symbols: Arc::new(project_data.symbols.iter().filter(|s| symbols.contains(&s.ordinal)).cloned().collect()),
                 wires: Arc::new(project_data.wires.iter().filter(|w| wires.contains(&w.ordinal)).cloned().collect()),
@@ -789,6 +841,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         routed.vias = vias;
     }
     crate::part_instances::storage::validate_project(project_data)?;
+    if let Some(records) = instance_records {
+        project_data.install_sheet_instances(records)?;
+    }
     validate_watermark(&project)?;
     Ok(project)
 }
@@ -873,6 +928,7 @@ pub struct DocumentsEncoder {
     first: bool,
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
     footprint_definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
+    instance_records: Option<crate::instances::Instances>,
 }
 
 impl DocumentsEncoder {
@@ -888,6 +944,7 @@ impl DocumentsEncoder {
             first: true,
             definitions: BTreeMap::new(),
             footprint_definitions: BTreeMap::new(),
+            instance_records: None,
         }
     }
 
@@ -901,6 +958,14 @@ impl DocumentsEncoder {
                 0 => {
                     let p = &self.project;
                     crate::part_instances::storage::validate_project(p)?;
+                    if p.has_sheet_occurrences() {
+                        let records = p.sheet_instances();
+                        Project::clone(p).install_sheet_instances(records.clone())?;
+                        self.instance_records = Some(records);
+                        if p.layout.is_none() {
+                            return Err("Occurrence records require the current project folder layout.".into());
+                        }
+                    }
                     let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
                     let sheets = p
                         .sheets
@@ -923,7 +988,9 @@ impl DocumentsEncoder {
                         .assignments
                         .values()
                         .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
-                    let format = if has_parts || extended_choices {
+                    let format = if p.has_sheet_occurrences() {
+                        OCCURRENCE_PROJECT_FORMAT
+                    } else if has_parts || extended_choices {
                         PART_PROJECT_FORMAT
                     } else if p.layout.is_some() {
                         FOLDER_PROJECT_FORMAT
@@ -1011,6 +1078,22 @@ impl DocumentsEncoder {
                         self.cursor = id;
                     } else {
                         self.finish_project_document()?;
+                    }
+                }
+                15 => {
+                    let records = self.instance_records.as_ref().ok_or("missing instance encoding state")?;
+                    if let Some(occurrence) = records.sheet_occurrences.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, occurrence)?;
+                        self.cursor += 1;
+                    } else {
+                        let board_path = self.project.instances_document_path();
+                        self.bytes.extend_from_slice(if board_path.is_some() { b"  ]\n}\n" } else { b"    ]\n  }\n}\n" });
+                        if self.bytes.len() > MAX_DOCUMENT_BYTES {
+                            return Err("encoded instance document exceeds its size limit".into());
+                        }
+                        self.documents.insert(board_path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
+                        self.next();
+                        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
                     }
                 }
                 12 => {
@@ -1182,8 +1265,25 @@ impl DocumentsEncoder {
         Ok(None)
     }
 
-    /// Finish the entry point after components and optional package choices, then start sheets.
+    /// Finish components/package choices, writing adopted instances in their single storage home
+    /// before starting sheets. Instance records consume the ordinary incremental record budget.
     fn finish_project_document(&mut self) -> Result<(), String> {
+        if self.instance_records.is_some() {
+            if self.project.board_target().is_some() {
+                self.finish_document(ENTRY_POINT.to_owned())?;
+                let board = self.project.board_target().ok_or("missing registered board")?.board;
+                write!(self.bytes, "{{\n  \"format\": \"{INSTANCES_FORMAT}\",\n  \"board\": \"{board}\",\n").map_err(|error| error.to_string())?;
+            } else {
+                self.bytes.extend_from_slice(b"  ],\n  \"schematic_instances\": {\n");
+            }
+            let records = self.instance_records.as_ref().ok_or("missing instance encoding state")?;
+            write!(self.bytes, "  \"circuit_uses\": {},\n  \"sheet_occurrences\": [\n", json(&records.circuit_uses)?)
+                .map_err(|error| error.to_string())?;
+            self.cursor = 0;
+            self.first = true;
+            self.phase = 15;
+            return Ok(());
+        }
         self.finish_document(ENTRY_POINT.to_owned())?;
         self.next();
         self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;

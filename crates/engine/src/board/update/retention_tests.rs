@@ -389,10 +389,11 @@ fn accepted_terminals_must_match_a_live_identical_symbol_revision() {
 fn monolithic_encodings_cannot_smuggle_or_discard_accepted_baselines() {
     let mut session = Session::default();
     session.apply("project.new", &json!({"create_board":true})).unwrap();
-    let original = crate::persistence::encode(session.snapshot().unwrap()).unwrap();
+    let original = crate::persistence::encode(crate::persistence::diagnostic_snapshot(session.snapshot().unwrap())).unwrap();
     session.apply(INITIALIZE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
     let baseline = session.project().unwrap().board.baseline.as_ref().unwrap();
-    assert!(crate::persistence::encode(session.snapshot().unwrap()).is_err());
+    let error = crate::persistence::encode(crate::persistence::diagnostic_snapshot(session.snapshot().unwrap())).unwrap_err();
+    assert!(error.contains("accepted board baselines"), "unexpected rejection: {error}");
     for format in ["pcbcraft-project/4", "pcbcraft-project/8", "pcbcraft-project/10"] {
         let mut invalid: serde_json::Value = serde_json::from_slice(&original).unwrap();
         invalid["format"] = json!(format);

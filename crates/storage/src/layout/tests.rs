@@ -192,7 +192,7 @@ fn new_zero_and_one_board_projects_use_folder_format() {
         let snapshot = session.snapshot().unwrap();
         let docs = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/14");
+        assert_eq!(entry["format"], "pcbcraft-project/16");
         assert_eq!(entry["layout_root"], ".");
         assert_eq!(entry["boards"].as_array().unwrap().len(), usize::from(create_board));
         assert!(!docs.contains_key("board.json"));

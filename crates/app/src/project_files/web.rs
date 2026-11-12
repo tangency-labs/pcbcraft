@@ -117,7 +117,8 @@ impl std::fmt::Debug for Download {
 
 impl Download {
     /// Prepare a download from a retained revision without encoding it in the input handler. The
-    /// file is named after the project, as a desktop first save suggests (#164).
+    /// file is named after the project, as a desktop first save suggests (#164). Older snapshots
+    /// acquire folder and occurrence metadata in the downloaded copy without session adoption.
     pub(super) fn new(
         snapshot: Arc<Project>,
         unchanged: Option<Arc<[u8]>>,
@@ -127,9 +128,14 @@ impl Download {
         let name = super::download_file_name(&snapshot.name);
         // A download cannot confirm durable publication or adopt session metadata. Its copy
         // nevertheless uses the current layout, including an unchanged uploaded flat project.
-        let migrating = snapshot.layout_root().is_none();
+        let migrating = snapshot.layout_root().is_none() || !snapshot.has_sheet_occurrences();
         let old_board = snapshot.board_document_path();
-        let snapshot = if migrating { Arc::new(snapshot.with_board_folders(".")?) } else { snapshot };
+        let snapshot = if migrating {
+            let prepared = if snapshot.layout_root().is_none() { snapshot.with_board_folders(".")? } else { Project::clone(&snapshot) };
+            Arc::new(prepared.with_sheet_occurrences()?)
+        } else {
+            snapshot
+        };
         let source = if migrating {
             DownloadSource::Encode(DocumentsEncoder::new(snapshot), documents, old_board)
         } else {
@@ -158,7 +164,8 @@ impl Download {
                 Ok(Some(mut documents)) => {
                     if let Some(original) = original {
                         // The retained documents belong to this unchanged uploaded snapshot.
-                        // Reuse all payload bytes; only the entry point and board path change.
+                        // Reuse existing payload bytes; entry metadata, board paths and a newly
+                        // owned instance document come from the prepared current-format copy.
                         let new_board = pcbcraft_engine::persistence::project_board_path(&documents[pcbcraft_engine::persistence::ENTRY_POINT]);
                         let new_board = match new_board {
                             Ok(path) => path,

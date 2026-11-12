@@ -3,7 +3,7 @@
 use egui::accesskit::Role;
 use pcbcraft_chrome::grid::{self, NM_PER_MIL};
 use pcbcraft_engine::{
-    persistence::encode,
+    persistence::encode_documents,
     schematic::{GRID_NM, Point},
     selection::Selection,
 };
@@ -39,9 +39,9 @@ fn type_custom(h: &mut Harness<'_, PcbApp>, text: &str) {
 }
 
 /// What a grid change must leave alone: revision, unsaved state, undo and the saved bytes.
-fn project_state(h: &Harness<'_, PcbApp>) -> (u64, bool, bool, Vec<u8>) {
+fn project_state(h: &Harness<'_, PcbApp>) -> (u64, bool, bool, pcbcraft_engine::persistence::Documents) {
     let app = h.state();
-    let bytes = encode(app.session.snapshot().unwrap()).unwrap();
+    let bytes = encode_documents(app.session.snapshot().unwrap()).unwrap();
     (app.session.revision(), app.files.dirty(&app.session), app.session.available("edit.undo"), bytes)
 }
 

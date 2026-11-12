@@ -1,4 +1,4 @@
-use pcbcraft_engine::{persistence::encode, schematic::Point};
+use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
 
 use super::*;
 
@@ -60,7 +60,7 @@ fn linked_highlights_are_visible_without_becoming_edit_selections() {
         let mut h = split_harness();
         let target = 1 - source;
         let snapshot = h.state().session.snapshot().unwrap();
-        let bytes = encode(snapshot.clone()).unwrap();
+        let bytes = encode_documents(snapshot.clone()).unwrap();
         let revision = h.state().session.revision();
         let origin = Point { x_nm: 0, y_nm: 0 };
         let centers = [view(&h, 0).camera.screen(origin, canvas(&h, 0)), view(&h, 1).camera.screen(origin, canvas(&h, 1))];
@@ -79,7 +79,7 @@ fn linked_highlights_are_visible_without_becoming_edit_selections() {
         h.run();
         assert_eq!(h.state().session.revision(), revision);
         assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
-        assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
         // Selecting the counterpart deliberately becomes the new source, with no feedback loop.
         click_point(&mut h, target, origin);
         assert!(h.state().views.highlight_for(ViewId(target), &h.state().session).is_empty());
@@ -141,7 +141,7 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
 fn split_views_keep_navigation_and_selection_but_share_undo() {
     let mut h = split_harness();
     let snapshot = h.state().session.snapshot().unwrap();
-    let bytes = encode(snapshot.clone()).unwrap();
+    let bytes = encode_documents(snapshot.clone()).unwrap();
     let before = h.state().session.inspect();
     let dirty = h.state().files.dirty(&h.state().session);
     assert!(canvas(&h, 0).right() < canvas(&h, 1).left());
@@ -167,7 +167,7 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     h.run();
     assert_eq!(h.state().session.inspect(), before);
     assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
-    assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     assert_eq!(h.state().files.dirty(&h.state().session), dirty);
     focus_tab(&mut h, 1);
     h.key_press(Key::Delete);
@@ -871,7 +871,7 @@ fn grid_opacity_reaches_both_views_without_changing_editor_state() {
             let cameras = [0, 1].map(|id| (view(&h, id).camera.zoom(), view(&h, id).camera.screen(origin, canvas(&h, id))));
             assert_ne!(cameras[0].0, cameras[1].0);
             let snapshot = h.state().session.snapshot().unwrap();
-            let bytes = encode(snapshot.clone()).unwrap();
+            let bytes = encode_documents(snapshot.clone()).unwrap();
             let revision = h.state().session.revision();
             let dirty = h.state().files.dirty(&h.state().session);
             for opacity in [100, 35, 0, 100] {
@@ -897,7 +897,7 @@ fn grid_opacity_reaches_both_views_without_changing_editor_state() {
                 assert_eq!(h.state().session.revision(), revision);
                 assert_eq!(h.state().files.dirty(&h.state().session), dirty);
                 assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
-                assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+                assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
             }
         }
     }

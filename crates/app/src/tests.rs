@@ -1093,7 +1093,7 @@ fn hiding_the_grid_keeps_snapping_and_leaves_the_project_untouched() {
         assert_eq!(harness.state().files.dirty(&harness.state().session), dirty);
     }
     let after = harness.state().session().snapshot().unwrap();
-    assert_eq!(pcbcraft_engine::persistence::encode(after).unwrap(), pcbcraft_engine::persistence::encode(before).unwrap());
+    assert_eq!(pcbcraft_engine::persistence::encode_documents(after).unwrap(), pcbcraft_engine::persistence::encode_documents(before).unwrap());
 
     harness.state_mut().preferences.grid_opacity_percent = 0;
     click(&mut harness, "Add symbol (A)");
@@ -2142,8 +2142,8 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     let path = before.wire_path(&before.wires()[0]);
     assert_eq!(path.len(), 3);
     assert_eq!(path[0].x_nm, path[1].x_nm, "Space selects the vertical first elbow");
-    let bytes = pcbcraft_engine::persistence::encode(before.clone()).unwrap();
-    let reopened = pcbcraft_engine::persistence::decode(&bytes).unwrap();
+    let bytes = pcbcraft_engine::persistence::encode_documents(before.clone()).unwrap();
+    let reopened = pcbcraft_engine::persistence::decode_documents(&bytes).unwrap();
     assert_eq!(reopened.inspect_schematic(), before.inspect_schematic());
     click_canvas_offset(&mut harness, egui::vec2(-101.6, 0.0));
     assert!(harness.state().views.active.schematic.selection.single_wire().is_some());
@@ -2222,12 +2222,20 @@ fn ribbon_group_menus_run_their_actions() {
 }
 
 /// Independently created projects have distinct UUIDs; compare the shared command results
-/// while checking sheet/layer records apart from generated identities and derived paths.
+/// while checking sheet/layer/occurrence records apart from generated identities and paths.
 /// These comparisons cover empty boards, so no authored drawing references are normalized.
 fn assert_equivalent_sessions(actual: &Session, expected: &Session) {
     let mut a = actual.inspect();
     let mut b = expected.inspect();
     for state in [&mut a, &mut b] {
+        for circuit_use in state["project"]["sheet_instances"]["circuit_uses"].as_array_mut().unwrap() {
+            circuit_use["id"] = Value::Null;
+        }
+        for occurrence in state["project"]["sheet_instances"]["sheet_occurrences"].as_array_mut().unwrap() {
+            for field in ["id", "definition", "circuit_use"] {
+                occurrence[field] = Value::Null;
+            }
+        }
         for board in state["project"]["boards"].as_array_mut().unwrap() {
             board["id"] = Value::Null;
             assert!(board["drawings"].as_array().unwrap().is_empty());

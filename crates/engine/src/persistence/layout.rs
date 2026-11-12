@@ -97,7 +97,19 @@ pub(crate) fn is_board_path(path: &str) -> bool {
     }
 }
 
+/// Classify portable instance paths without granting ownership to unregistered neighboring files.
+pub(crate) fn is_instances_path(path: &str) -> bool {
+    path.strip_suffix("instances.json").is_some_and(|prefix| is_board_path(&format!("{prefix}board.json")))
+}
+
 impl Project {
+    /// Instance records share the registered board folder; schematic-only records have no file.
+    pub fn instances_document_path(&self) -> Option<String> {
+        if !self.has_sheet_occurrences() {
+            return None;
+        }
+        self.board_document_path()?.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))
+    }
     /// The persisted physical-data namespace, or None for an untouched flat-board project.
     pub fn layout_root(&self) -> Option<&str> {
         self.layout.as_ref().map(|layout| layout.root.as_str())
@@ -251,7 +263,7 @@ mod migration_tests {
 
     /// Each supported explicit flat vocabulary migrates without losing metadata or package intent.
     #[test]
-    fn flat_registry_metadata_and_schematic_packages_migrate_to_fourteen() {
+    fn flat_registry_metadata_and_schematic_packages_migrate_to_current_storage() {
         for version in [9, 12, 13] {
             let mut session = Session::default();
             session.apply("project.new", &json!({"create_board":version != 13})).unwrap();
@@ -273,6 +285,10 @@ mod migration_tests {
             // Recreate a historical storage mode in memory, then use production codecs throughout.
             let mut historical = session.snapshot().unwrap();
             Arc::make_mut(&mut historical).layout = None;
+            Arc::make_mut(&mut historical).circuit_use = None;
+            for sheet in Arc::make_mut(&mut Arc::make_mut(&mut historical).sheets) {
+                sheet.occurrence_id = None;
+            }
             let before = encode_documents(historical.clone()).unwrap();
             let header: serde_json::Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
             assert_eq!(header["format"], format!("pcbcraft-project/{version}"));

@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, fs, io::ErrorKind, path::Path, sync::Arc};
 
 const AREAS: [&str; 4] = ["boards", "builds", "documents", "outputs"];
 
-/// Plan the first-save migration without writing files. Existing registered namespaces stay
+/// Plan first-save folder and occurrence migration without writing files. Registered namespaces stay
 /// fixed; new registrations avoid all unowned reserved areas and occupied board folders.
 /// Archives pass no filesystem root. The returned Arc is unchanged when metadata already agrees.
 pub fn prepare(snapshot: Arc<Project>, root: Option<&Path>, original: Option<&Documents>) -> Result<Arc<Project>, String> {
@@ -30,6 +30,7 @@ pub fn prepare(snapshot: Arc<Project>, root: Option<&Path>, original: Option<&Do
         }
     }
     next = next.with_layout_root(&chosen)?;
+    next = next.with_sheet_occurrences()?;
     let previous_board = original.and_then(|documents| documents.get(ENTRY_POINT)).map(|entry| project_board_path(entry)).transpose()?.flatten();
     // An existing board keeps its stored segment. New board identities get their own segment,
     // even when Undo/Create replaced a previously saved board in the same project history.
@@ -51,11 +52,15 @@ pub fn prepare(snapshot: Arc<Project>, root: Option<&Path>, original: Option<&Do
             next = next.with_board_folder(&folder)?;
         }
     }
-    if next.layout_root() == snapshot.layout_root() && next.board_folder() == snapshot.board_folder() { Ok(snapshot) } else { Ok(Arc::new(next)) }
+    if snapshot.has_sheet_occurrences() && next.layout_root() == snapshot.layout_root() && next.board_folder() == snapshot.board_folder() {
+        Ok(snapshot)
+    } else {
+        Ok(Arc::new(next))
+    }
 }
 
 /// Recheck a new namespace before staging and immediately before journal publication. Existing
-/// registered storage stays authoritative; detected new foreign folders never become project-owned.
+/// registered storage stays authoritative; foreign folders and instance files cannot become owned.
 pub(super) fn preflight_ownership(root: &Path, before: &Documents, after: &Documents) -> Result<(), String> {
     let prior = before.get(ENTRY_POINT).map(|entry| project_layout_root(entry)).transpose()?.flatten();
     let next = after.get(ENTRY_POINT).map(|entry| project_layout_root(entry)).transpose()?.flatten();
@@ -77,6 +82,17 @@ pub(super) fn preflight_ownership(root: &Path, before: &Documents, after: &Docum
         let name = folder.file_name().and_then(|name| name.to_str()).ok_or("invalid board folder")?;
         if contains(&names(&root.join(area))?, name) {
             return Err("The selected board folder is occupied by unregistered data. Save again to choose an unused folder.".into());
+        }
+    }
+    let old_instances = before.get(ENTRY_POINT).map(|entry| pcbcraft_engine::persistence::project_instances_path(entry)).transpose()?.flatten();
+    let new_instances = after.get(ENTRY_POINT).map(|entry| pcbcraft_engine::persistence::project_instances_path(entry)).transpose()?.flatten();
+    if old_instances != new_instances
+        && let Some(path) = new_instances
+    {
+        let path = Path::new(&path);
+        let parent = path.parent().ok_or("missing instance parent")?;
+        if contains(&names(&root.join(parent))?, "instances.json") {
+            return Err("The new instances.json path contains unregistered user data; move that file before saving.".into());
         }
     }
     Ok(())
@@ -107,3 +123,6 @@ fn names(path: &Path) -> Result<BTreeSet<String>, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod occurrence_tests;

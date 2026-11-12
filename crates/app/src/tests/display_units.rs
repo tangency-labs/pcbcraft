@@ -3,14 +3,14 @@
 
 use egui::accesskit::Role;
 use pcbcraft_chrome::units::Unit;
-use pcbcraft_engine::{CONNECT_PINS, PLACE_SYMBOL, persistence::encode};
+use pcbcraft_engine::{CONNECT_PINS, PLACE_SYMBOL, persistence::encode_documents};
 
 use super::*;
 
 /// Revision, unsaved state, undo availability and saved bytes: everything a view setting must leave alone.
-fn project_state(h: &Harness<'_, PcbApp>) -> (u64, bool, bool, Value, Vec<u8>) {
+fn project_state(h: &Harness<'_, PcbApp>) -> (u64, bool, bool, Value, pcbcraft_engine::persistence::Documents) {
     let app = h.state();
-    let bytes = encode(app.session.snapshot().unwrap()).unwrap();
+    let bytes = encode_documents(app.session.snapshot().unwrap()).unwrap();
     (app.session.revision(), app.files.dirty(&app.session), app.session.available("edit.undo"), app.session.inspect(), bytes)
 }
 

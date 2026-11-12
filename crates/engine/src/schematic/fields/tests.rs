@@ -172,7 +172,7 @@ fn metadata_format_requires_valid_watermark_and_refuses_legacy_smuggling() {
     let mut s = fixture();
     let mut metadata = Metadata::default();
     metadata.attributes.exclude_from_bom = true;
-    let original_single = crate::persistence::encode(s.snapshot().unwrap()).unwrap();
+    let original_single = crate::persistence::encode(crate::persistence::diagnostic_snapshot(s.snapshot().unwrap())).unwrap();
     s.apply(SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R1","value":"R","metadata":metadata,"expected_revision":s.revision()}))
         .unwrap();
     let original = encode_documents(s.snapshot().unwrap()).unwrap();

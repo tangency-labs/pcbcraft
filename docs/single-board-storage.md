@@ -37,7 +37,8 @@ board-assignment migrations must preserve this whole-scope association explicitl
 
 Project/14 replaces the transitional `file` field with a portable `folder`
 segment and adds `layout_root`, while retaining zero-or-one ownership. New and
-converted projects use it from their first save. Supported flat layouts open
+converted projects retain this layout in project/16, which adds
+[single-use occurrence records](sheet-occurrence-storage.md). Supported flat layouts open
 without rewriting; their first Save moves the board even without design edits,
 then subsequent unchanged saves have no diff. The native storage contract's
 [board-folder migration](native-project-storage.md#board-folders-and-first-save-migration)
@@ -57,8 +58,9 @@ their old encoding on Open and in the low-level codec until Save migrates it. Th
 persists that same ID as a registration named `Board`, upgrading the entry point
 in the same transaction. Schematic-only edits do not independently register a
 legacy board. Undo restores the earlier ownership representation while allocation
-metadata continues to obey its monotonic contract. Once Save adopts project/14,
-Undo/Redo retain that storage layout and selected root across design history.
+metadata continues to obey its monotonic contract. Once Save adopts the current
+format, Undo/Redo retain the storage layout, selected root and occurrence IDs
+across design history.
 
 An older project may legally have a sheet UUID equal to its deterministic board
 UUID, because those were separate typed addresses. That case keeps its legacy
@@ -78,7 +80,8 @@ validation. The diagnostic single-document encoder uses
 `pcbcraft-project/10` for explicit optional ownership, with the same required
 watermark and registrations. It retains its existing restrictions on multiple
 sheets, hierarchy, component metadata, field appearance and physical board
-features that need split documents.
+features that need split documents. Adopted occurrence identities also require
+split documents or a packed archive; diagnostic export refuses to discard them.
 Older formats reject registration fields rather than silently discarding them.
 
 Schematic-only footprint choices use the bounded

@@ -65,6 +65,7 @@ impl Fragment {
     }
     /// Capture root objects plus complete selected child subtrees, retaining explicit interface
     /// endpoint identities. Unselected root endpoint owners become shared free endpoints.
+    /// Root and descendant occurrence IDs remain attached to the retained source capture.
     pub fn capture_with_hierarchy(project: &Project, items: &Selection, objects: &BTreeSet<String>, cut: bool) -> Result<Self, CommandError> {
         if objects.is_empty() {
             return Self::capture(project, items);
@@ -77,6 +78,7 @@ impl Fragment {
         let (blocks, labels) = selected(project, objects)?;
         let included = descendants(project, &blocks)?;
         let mut root = SchematicSheet::empty(project.sheet_target().id(), project.sheet_name().into());
+        root.occurrence_id = project.sheet_occurrence(project.sheet_target()).map(|record| record.id);
         root.symbols = Arc::new(project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).cloned().collect());
         root.net_labels = Arc::new(project.net_labels().iter().filter(|l| items.net_labels.contains(&l.object_id())).cloned().collect());
         root.subsheets = Arc::new(blocks);
@@ -144,6 +146,7 @@ impl Fragment {
     /// Compose a new independent subtree, or relocate eligible original unparented children after
     /// Cut. Flat contents reuse the established identity/reference/package remapper; hierarchy
     /// endpoints are rebound by wire order before validation, retaining exact shared connectivity.
+    /// Duplicated sheets receive new occurrence IDs in the destination use; Cut reuse keeps IDs.
     pub(super) fn placed_hierarchy(
         &self,
         destination: &Project,
@@ -190,7 +193,8 @@ impl Fragment {
             for source in sources.iter().skip(1) {
                 let id = crate::fresh_id()?;
                 sheet_map.insert(source.sheet_id, id);
-                Arc::make_mut(&mut next.sheets).push(SchematicSheet::empty(id, unique_sheet_name(&source.sheet_name, &mut names)?));
+                let sheet = next.new_sheet_record(id, unique_sheet_name(&source.sheet_name, &mut names)?)?;
+                Arc::make_mut(&mut next.sheets).push(sheet);
             }
         }
         // Allocate interfaces and blocks before importing wires, so every pin address is known.

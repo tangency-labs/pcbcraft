@@ -12,6 +12,7 @@ pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
 pub mod hierarchy;
+pub mod instances;
 pub mod library;
 pub mod library_graphics;
 pub mod net_labels;
@@ -1787,6 +1788,8 @@ pub struct Project {
     upgraded_from: Option<u32>,
     /// Versioned project storage metadata; absent for untouched flat-board files.
     layout: Option<persistence::layout::Layout>,
+    /// Shared single-use identity; absent until legacy storage metadata is adopted.
+    circuit_use: Option<uuid::Uuid>,
 }
 
 impl Project {
@@ -2038,10 +2041,11 @@ impl Session {
         self.revision
     }
 
-    /// Adopt the name and storage layout of a completed save without adding an electrical
+    /// Adopt the name, storage layout and occurrence IDs of a completed save without an electrical
     /// edit or changing the revision. New names apply only to snapshots still bearing the
     /// captured name. Storage adoption remains across Undo, preserves each snapshot's board
     /// identity/absence and retains a later root/folder choice made since the save began.
+    /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
@@ -2059,6 +2063,7 @@ impl Session {
                 continue;
             }
             let mut next = Project::clone(project);
+            let occurrences_adopted = next.adopt_occurrence_metadata(saved);
             if project.name == original.name {
                 next.name = saved.name.clone();
             }
@@ -2081,7 +2086,11 @@ impl Session {
                 }
                 next.numeric_id_high_water = Some(next.allocation_high_water().max(saved.allocation_high_water()));
             }
-            if next.name != project.name || next.layout != project.layout || next.numeric_id_high_water != project.numeric_id_high_water {
+            if occurrences_adopted
+                || next.name != project.name
+                || next.layout != project.layout
+                || next.numeric_id_high_water != project.numeric_id_high_water
+            {
                 *project = Arc::new(next);
                 changed = true;
             }
@@ -2221,6 +2230,8 @@ impl Session {
     /// A configured board also reports setup and laminate thickness (null when unspecified).
     /// Each board's `file` is its registered project-relative physical document path, including
     /// any selected layout-root prefix; flat historical snapshots retain `board.json` until Save.
+    /// `sheet_instances` reports the shared circuit use and every sheet's occurrence/parent slot;
+    /// inspecting a legacy snapshot derives compatibility IDs without adopting save metadata.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
@@ -2229,6 +2240,7 @@ impl Session {
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
+                "sheet_instances": p.sheet_instances(),
                 "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
@@ -2310,6 +2322,8 @@ impl Session {
     /// Preview commands may replace runtime-only cached authority without an authored edit.
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
+    /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
+    /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         if id.starts_with("library.") {
             self.library_command(id, params)?;
@@ -2422,7 +2436,10 @@ impl Session {
                 name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
                 id: fresh_id()?,
                 numeric_id_high_water: Some(0),
-                sheets: Arc::new(vec![sheets::SchematicSheet::empty(fresh_id()?, "Main".into())]),
+                sheets: Arc::new(vec![sheets::SchematicSheet {
+                    occurrence_id: Some(fresh_id()?),
+                    ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
+                }]),
                 sheet_index: 0,
                 components: Arc::default(),
                 units: Arc::default(),
@@ -2431,6 +2448,7 @@ impl Session {
                 named_graph: Arc::default(),
                 upgraded_from: None,
                 layout: Some(persistence::layout::Layout::default()),
+                circuit_use: Some(fresh_id()?),
             }),
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3361,14 +3379,18 @@ mod tests {
     fn placement_preserves_the_library_unit_identity() {
         let mut file: Value = serde_json::from_str(include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
         file["units"][0]["id"] = json!("body");
-        let definition = Arc::new(library::parse_symbol(&file.to_string()).unwrap());
+        let mut definition = library::parse_symbol(&file.to_string()).unwrap();
+        definition.library = "unit-identity-fixture".into();
+        let definition = Arc::new(definition);
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "Unit identity"})).unwrap();
         session.place_symbol(definition, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
         let snapshot = session.snapshot().unwrap();
         assert_eq!(snapshot.symbols()[0].unit, "body");
-        let stored: Value = serde_json::from_slice(&persistence::encode(snapshot).unwrap()).unwrap();
-        assert_eq!(stored["sheet"]["symbols"][0]["unit"], "body");
+        let sheet_path = format!("sheets/{}.json", snapshot.sheet_target().id());
+        let stored = persistence::encode_documents(snapshot).unwrap();
+        let sheet: Value = serde_json::from_slice(&stored[&sheet_path]).unwrap();
+        assert_eq!(sheet["symbols"][0]["unit"], "body");
         assert_eq!(session.inspect()["project"]["schematic"]["symbols"][0]["unit"], "body");
     }
 

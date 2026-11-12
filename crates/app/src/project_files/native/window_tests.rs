@@ -6,7 +6,7 @@ use crate::{
     project_files::Job,
     unsaved::{Then, Waiting},
 };
-use pcbcraft_engine::{PLACE_SYMBOL, persistence::encode_file};
+use pcbcraft_engine::PLACE_SYMBOL;
 use serde_json::json;
 use std::sync::mpsc;
 
@@ -105,7 +105,10 @@ fn close_during_a_file_job_waits_and_reopen_rebinds_both_views() {
     let detached = app.views.hosts[&app.views.detached_hosts()[0]].focused;
     let other_old = app.views.view(detached).unwrap().input(&app.session).unwrap();
     let loaded = load(&root).unwrap();
-    assert_eq!(encode_file(loaded.snapshot.clone(), Encoding::Json).unwrap(), encode_file(app.session.snapshot().unwrap(), Encoding::Json).unwrap());
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(loaded.snapshot.clone()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap()
+    );
     app.session.open_snapshot(loaded.snapshot);
     app.views.sync(&app.session);
     assert!(!app.views.active.accepts(old, &app.session));

@@ -296,7 +296,19 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
 /// Independent project.new commands generate different UUIDs. Check each sheet's path and
 /// retain its other metadata while comparing commands from these separate projects.
 /// Empty boards also expose a compatibility layer derived from their distinct board IDs.
+/// Check each occurrence's sheet/use references before normalizing its independently allocated IDs.
 fn without_sheet_identity(mut state: Value) -> Value {
+    let circuit_use = state["project"]["sheet_instances"]["circuit_uses"][0]["id"].clone();
+    let definitions: Vec<_> = state["project"]["sheets"].as_array().unwrap().iter().map(|sheet| sheet["id"].clone()).collect();
+    for occurrence in state["project"]["sheet_instances"]["sheet_occurrences"].as_array_mut().unwrap() {
+        assert!(definitions.contains(&occurrence["definition"]));
+        assert_eq!(occurrence["circuit_use"], circuit_use);
+        for field in ["id", "definition", "circuit_use"] {
+            assert_eq!(occurrence[field].as_str().unwrap().len(), 36);
+            occurrence[field] = Value::Null;
+        }
+    }
+    state["project"]["sheet_instances"]["circuit_uses"][0]["id"] = Value::Null;
     for board in state["project"]["boards"].as_array_mut().unwrap() {
         assert_eq!(board["id"].as_str().unwrap().len(), 36);
         board["id"] = Value::Null;

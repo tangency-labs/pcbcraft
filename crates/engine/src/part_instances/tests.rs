@@ -70,16 +70,15 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         assert_eq!(project.footprint_assignments().len(), 1);
         let docs = encode_documents(project.clone()).unwrap();
         let header: Json = serde_json::from_slice(&docs[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/15");
-        let mut reserved_format = docs.clone();
-        reserved_format.insert(
-            crate::persistence::ENTRY_POINT.into(),
-            String::from_utf8(docs[crate::persistence::ENTRY_POINT].clone())
-                .unwrap()
-                .replace("pcbcraft-project/15", "pcbcraft-project/14")
-                .into_bytes(),
-        );
-        assert!(decode_documents(&reserved_format).is_err(), "part selections must not reuse the storage-layout format");
+        assert_eq!(header["format"], "pcbcraft-project/16");
+        // Isolate the older vocabulary: remove occurrence records through the historical codec
+        // before forging the format header, so only native part selections cause this rejection.
+        let mut reserved_format = encode_documents(crate::persistence::diagnostic_snapshot(project.clone())).unwrap();
+        let mut reserved: Json = serde_json::from_slice(&reserved_format[crate::persistence::ENTRY_POINT]).unwrap();
+        reserved["format"] = json!("pcbcraft-project/14");
+        reserved_format.insert(crate::persistence::ENTRY_POINT.into(), serde_json::to_vec(&reserved).unwrap());
+        let error = decode_documents(&reserved_format).unwrap_err();
+        assert!(error.contains("Pinned part selections require project format 15 or 16"), "unexpected rejection: {error}");
         assert!(docs.keys().any(|path| path.starts_with("library/parts/")));
         assert!(docs.keys().any(|path| path.starts_with("library/categories/")));
         assert!(docs.keys().any(|path| path.starts_with("library/manufacturer-parts/")));
@@ -268,7 +267,7 @@ fn native_part_selection_survives_first_save_storage_migration() {
     for board in [false, true] {
         let mut session = fixture(board);
         // Project the original command-created circuit into the supported historical flat encoding.
-        let mut flat = session.project().unwrap().clone();
+        let mut flat = crate::Project::clone(&crate::persistence::diagnostic_snapshot(session.snapshot().unwrap()));
         flat.layout = None;
         let old = encode_documents(Arc::new(flat)).unwrap();
         session.open_snapshot(decode_documents(&old).unwrap());
@@ -298,7 +297,7 @@ fn native_part_selection_survives_first_save_storage_migration() {
 #[test]
 fn native_part_without_package_adopts_legacy_allocation_watermark() {
     let mut session = fixture(true);
-    let mut historical = session.project().unwrap().clone();
+    let mut historical = crate::Project::clone(&crate::persistence::diagnostic_snapshot(session.snapshot().unwrap()));
     historical.layout = None;
     historical.numeric_id_high_water = None;
     Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;

@@ -84,6 +84,17 @@ fn complete_subtree_copy_preserves_interfaces_and_excludes_siblings() {
     assert_eq!(p.components.len(), 7);
     assert_eq!(p.subsheets.len(), 2);
     let new_block = &p.subsheets[1];
+    let instances = p.sheet_instances();
+    assert_eq!(instances.sheet_occurrences.len(), p.sheets.len());
+    assert_eq!(instances.sheet_occurrences.iter().map(|occurrence| occurrence.id).collect::<BTreeSet<_>>().len(), p.sheets.len());
+    assert!(instances.sheet_occurrences.iter().all(|occurrence| occurrence.circuit_use == before.sheet_instances().circuit_uses[0].id));
+    assert!(
+        instances
+            .sheet_occurrences
+            .iter()
+            .filter(|occurrence| !before.sheets.iter().any(|sheet| sheet.sheet_id == occurrence.definition))
+            .all(|occurrence| !before.sheet_instances().sheet_occurrences.iter().any(|old| old.id == occurrence.id))
+    );
     assert_ne!(new_block.child, before.subsheets[0].child);
     assert!(new_block.id > high);
     let child = p.for_sheet(SheetTarget { project: p.id(), sheet: new_block.child }).unwrap();
@@ -142,6 +153,8 @@ fn cut_tree_relocation_preserves_original_children_and_dangling_parent_routes() 
     assert_eq!(p.sheets.len(), 4);
     assert_eq!(p.components.len(), 4);
     assert_eq!(p.parent_sheet(child), Some(other));
+    assert_eq!(p.sheet_occurrence(child).unwrap().id, before.sheet_occurrence(child).unwrap().id);
+    assert_eq!(p.sheet_occurrence(child).unwrap().circuit_use, before.sheet_occurrence(child).unwrap().circuit_use);
     assert_eq!(p.for_sheet(child).unwrap().labels[0].name, "EDITED_AFTER_CUT");
     assert_eq!(p.schematic_packages.assignments[&component].definition, "resistor-0603");
     assert_eq!(p.schematic_packages.assignments[&component].mapping["1"], "1");

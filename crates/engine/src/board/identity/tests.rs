@@ -27,8 +27,7 @@ fn new_schematic_has_no_board_or_physical_file() {
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert!(reopened.board_target().is_none());
     assert_eq!(documents, persistence::encode_documents(reopened).unwrap());
-    let single = persistence::encode(before.clone()).unwrap();
-    assert!(persistence::decode(&single).unwrap().board_target().is_none());
+    assert!(persistence::encode(before.clone()).unwrap_err().contains("occurrence"));
     let packed = persistence::encode_packed(before).unwrap();
     assert!(persistence::decode_packed(&packed).unwrap().project.board_target().is_none());
 }
@@ -188,7 +187,7 @@ fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema(
             .unwrap();
         let documents = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
         let header: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/14");
+        assert_eq!(header["format"], "pcbcraft-project/16");
         assert_eq!(header["boards"].as_array().unwrap().len(), usize::from(create_board));
         assert_eq!(crate::persistence::project_board_path(&documents["project.json"]).unwrap().is_some(), create_board);
         let loaded = persistence::decode_documents(&documents).unwrap();
