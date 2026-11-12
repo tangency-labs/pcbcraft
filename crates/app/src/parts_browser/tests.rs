@@ -678,17 +678,7 @@ fn equivalent_source_registrations_do_not_duplicate_catalog_libraries() {
 fn native_part_catalog_and_requirements_use_shared_transactions() {
     let mut h = editor(1400.);
     click(&mut h, "Cancel");
-    let documents: library::sources::Documents = [
-        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
-        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
-        ("footprints/resistor-0603.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
-        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
-        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
-        ("manufacturer-parts/test.json", include_str!("../../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")),
-    ]
-    .into_iter()
-    .map(|(path, text)| (path.into(), text.into()))
-    .collect();
+    let documents = native_documents();
     h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":documents})).unwrap();
     h.key_press(Key::A);
     h.run();
@@ -704,9 +694,9 @@ fn native_part_catalog_and_requirements_use_shared_transactions() {
     let part = project.components().next().unwrap();
     assert!(part.part.as_ref().unwrap().manufacturer.is_some());
     assert_eq!(project.footprint_assignments().len(), 1);
-    let component = part.id();
-    h.state_mut().begin_native_part_properties(component);
+    h.state_mut().begin_footprint_assignment(None);
     h.run();
+    assert!(matches!(h.state().dialog, crate::Dialog::NativePart(_)));
     h.get_by_role_and_label(egui::Role::ComboBox, "Tolerance").click();
     h.run();
     click(&mut h, "At most");
@@ -721,8 +711,9 @@ fn native_part_catalog_and_requirements_use_shared_transactions() {
     assert_eq!(selection.compatibility()["status"], "does_not_meet_requirements");
     assert!(selection.manufacturer.is_some());
     let component = h.state().session.project().unwrap().components().next().unwrap().id();
-    h.state_mut().begin_native_part_properties(component);
+    h.state_mut().begin_footprint_assignment(Some(component));
     h.run();
+    assert!(matches!(h.state().dialog, crate::Dialog::NativePart(_)));
     h.get_by_role_and_label(egui::Role::ComboBox, "Resistance").click();
     h.run();
     click(&mut h, "One of");
@@ -739,5 +730,68 @@ fn native_part_catalog_and_requirements_use_shared_transactions() {
     h.get_by_role_and_label(egui::Role::Button, "Remove Resistance value 2").click();
     h.run();
     assert!(h.query_by_role_and_label(egui::Role::TextInput, "Resistance value 2").is_none());
+    click(&mut h, "Cancel");
+}
+
+/// Original part fixtures are shared across catalog identity and native-selection workflows.
+fn native_documents() -> library::sources::Documents {
+    [
+        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
+        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
+        ("footprints/resistor-0603.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
+        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
+        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
+        ("manufacturer-parts/test.json", include_str!("../../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.into(), text.into()))
+    .collect()
+}
+
+/// Equally named parts can share a drawing while keeping distinct visible values and identities.
+#[test]
+fn native_catalog_disambiguates_parts_sharing_a_symbol() {
+    let mut h = editor(1400.);
+    click(&mut h, "Cancel");
+    let mut documents = native_documents();
+    let mut part: serde_json::Value = serde_json::from_str(&documents["parts/resistor.json"]).unwrap();
+    part["id"] = json!("fixed-resistor");
+    part["fixed_parameters"] = json!({"pcbcraft:resistance":{"type":"quantity","value":"1000","unit":"Ohm"}});
+    documents.insert("parts/fixed.json".into(), part.to_string());
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":documents})).unwrap();
+    h.key_press(Key::A);
+    h.run();
+    click(&mut h, "Native Parts Demo");
+    h.get_by_label("Generic resistor · parts-demo/resistor r1");
+    h.get_by_label("Generic resistor · parts-demo/fixed-resistor r1");
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text == "1000 Ohm")));
+    click(&mut h, "Generic resistor · parts-demo/fixed-resistor r1");
+    assert_eq!(h.state().parts.value, "1000 Ohm");
+    click(&mut h, "Place");
+    click(&mut h, "Schematic canvas");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().value(), "1000 Ohm");
+}
+
+/// Switching from a generic symbol to a native part opens native package selection before assignment.
+#[test]
+fn assignment_component_browser_routes_native_parts() {
+    let mut h = editor(1400.);
+    click(&mut h, "Cancel");
+    h.state_mut().run(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1}));
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":native_documents()})).unwrap();
+    h.key_press(Key::A);
+    h.run();
+    click(&mut h, "Native Parts Demo");
+    click(&mut h, "Generic resistor");
+    click(&mut h, "Place");
+    click(&mut h, "Schematic canvas");
+    let reference = h.state().session.project().unwrap().components().find(|part| part.part.is_some()).unwrap().reference().to_owned();
+    let value = h.state().session.project().unwrap().components().find(|part| part.part.is_some()).unwrap().value().to_owned();
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    assert!(matches!(h.state().dialog, crate::Dialog::Footprint(_)));
+    click(&mut h, &format!("{reference} · {value}"));
+    assert!(matches!(h.state().dialog, crate::Dialog::NativePart(_)));
+    h.get_by_role_and_label(egui::Role::ComboBox, "Package");
     click(&mut h, "Cancel");
 }

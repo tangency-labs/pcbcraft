@@ -278,8 +278,9 @@ returns native dependency documents. It never fetches or substitutes definitions
 example, resistance `100 mΩ` produces
 `{"type":"quantity","value":"0.1","unit":"Ohm"}`. Both operations are read-only
 and work without an open project. [The native contracts](part-schema.md)
-distinguish part definitions from placed part instances and describe remaining
-project-selection/pinning integration.
+distinguish part definitions from placed part instances. `schematic.place_part`
+pins the full native dependency set; `part.set_selection` edits package, MPN and
+typed requirements through the same revision-checked command path as the GUI.
 
 `schematic.place_symbol` accepts an optional `unit` for a new part, while
 `schematic.place_unit` adds an unplaced unit to an existing `component-…` part

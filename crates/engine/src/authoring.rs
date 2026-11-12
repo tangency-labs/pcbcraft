@@ -32,8 +32,14 @@ pub enum Kind {
 pub struct SymbolSettings {
     pub behavior: Option<library::Behavior>,
     pub defaults: Option<library::Defaults>,
-    #[serde(default)]
-    pub category: Option<library::parts::CategoryBinding>,
+    /// Omission preserves the binding; an explicit null clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_category")]
+    pub category: Option<Option<library::parts::CategoryBinding>>,
+}
+
+/// Preserve the distinction between an omitted category update and an explicit null.
+fn present_category<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Option<library::parts::CategoryBinding>>, D::Error> {
+    Option::deserialize(deserializer).map(Some)
 }
 
 /// Generated reference settings owned by the footprint definition, independent of board instances.
@@ -196,6 +202,9 @@ pub struct Item {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<library::parts::CategoryBinding>,
     pub unit: String,
+    /// Native drawing order, whose first entry remains the default independently of the active editor unit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unit_order: Vec<String>,
     /// Inactive symbol units retain their stable primitive IDs and complete editable geometry.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "unique_units")]
     pub other_units: BTreeMap<String, BTreeMap<u64, Primitive>>,
@@ -367,6 +376,7 @@ impl Item {
             defaults: None,
             category: None,
             unit: "main".into(),
+            unit_order: Vec::new(),
             other_units: BTreeMap::new(),
             reference_font: None,
             reference_offset: None,
@@ -454,6 +464,8 @@ impl Item {
         item.reference_prefix = definition.reference_prefix().into();
         item.default_value = definition.default_value().into();
         item.unit = definition.unit_id().into();
+        item.unit_order =
+            if definition.units.len() > 1 { definition.units.iter().map(|unit| unit.unit_id().to_owned()).collect() } else { Vec::new() };
         item.behavior = definition.behavior.clone();
         item.defaults = definition.defaults.clone();
         item.category = definition.category.clone();
@@ -535,8 +547,13 @@ impl Item {
             let mut terminal_map = BTreeMap::new();
             let mut terminal_order = Vec::new();
             let mut units = Vec::new();
-            let drawings: BTreeMap<_, _> = std::iter::once((&self.unit, &self.objects)).chain(self.other_units.iter()).collect();
-            for (id, objects) in drawings {
+            let drawings: BTreeMap<_, _> = std::iter::once((self.unit.as_str(), &self.objects))
+                .chain(self.other_units.iter().map(|(id, objects)| (id.as_str(), objects)))
+                .collect();
+            let order: Vec<_> =
+                if self.unit_order.is_empty() { drawings.keys().copied().collect() } else { self.unit_order.iter().map(String::as_str).collect() };
+            for id in order {
+                let objects = drawings.get(id).ok_or("Missing ordered symbol unit.")?;
                 let mut pins = Vec::new();
                 let mut drawing = Vec::new();
                 for object in objects.values() {
@@ -632,6 +649,10 @@ impl Item {
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
         if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT)
             || (!self.other_units.is_empty() && (self.format != MULTI_UNIT_FORMAT || self.kind != Kind::Symbol))
+            || (!self.unit_order.is_empty()
+                && (self.unit_order.len() != self.other_units.len() + 1
+                    || self.unit_order.iter().collect::<std::collections::BTreeSet<_>>()
+                        != std::iter::once(&self.unit).chain(self.other_units.keys()).collect()))
             || self.other_units.contains_key(&self.unit)
             || self.other_units.len() >= 32
             || unique.len() != all_objects.len()
@@ -662,7 +683,11 @@ impl Item {
         if bytes.len() > MAX_BYTES {
             return Err("Library item exceeds the 1 MiB limit.".into());
         }
-        let item: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let mut item: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if item.unit_order.is_empty() && !item.other_units.is_empty() {
+            item.unit_order = std::iter::once(item.unit.clone()).chain(item.other_units.keys().cloned()).collect();
+            item.unit_order.sort();
+        }
         item.validate()?;
         Ok(item)
     }
@@ -770,6 +795,10 @@ impl Session {
                             return Err("A new symbol unit needs an unused portable identity.".into());
                         }
                         next.format = MULTI_UNIT_FORMAT.into();
+                        if next.unit_order.is_empty() {
+                            next.unit_order.push(next.unit.clone());
+                        }
+                        next.unit_order.push(unit.clone());
                         next.other_units.insert(std::mem::replace(&mut next.unit, unit), std::mem::take(&mut next.objects));
                     }
                     Action::Insert { primitive } => {
@@ -843,7 +872,9 @@ impl Session {
                             }
                             next.behavior = settings.behavior;
                             next.defaults = settings.defaults;
-                            next.category = settings.category;
+                            if let Some(category) = settings.category {
+                                next.category = category;
+                            }
                         }
                         if let Some(settings) = footprint_reference {
                             if next.kind != Kind::Footprint {

@@ -325,8 +325,13 @@ impl PcbApp {
                 self.views.bind(edit.source.view());
                 self.begin_footprint_assignment(Some(format!("component-{component}")));
                 self.views.bind(previous);
-                if let Dialog::Footprint(chooser) = &mut self.dialog {
-                    chooser.update_review = Some(edit);
+                let review_slot = match &mut self.dialog {
+                    Dialog::Footprint(chooser) => Some(&mut chooser.update_review),
+                    Dialog::NativePart(chooser) => Some(&mut chooser.update_review),
+                    _ => None,
+                };
+                if let Some(slot) = review_slot {
+                    *slot = Some(edit);
                     self.repaint_editors(ctx);
                     return;
                 }

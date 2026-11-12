@@ -118,9 +118,10 @@ impl Draft {
     }
 }
 /// A part form owns no source writes, board geometry or project mutation before Apply.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct Edit {
     pub(super) source: ViewInput,
+    pub(super) update_review: Option<Box<crate::board_update::Edit>>,
     component: String,
     selection: Selection,
     original_manufacturer: Option<pcbcraft_engine::library::parts::Reference>,
@@ -166,9 +167,18 @@ impl PcbApp {
             .map(|category| category.fields.keys().map(|id| (id.clone(), Draft::new(effective.get(id)))).collect())
             .unwrap_or_default();
         let original_manufacturer = part.manufacturer.as_ref().map(|record| record.reference());
-        self.dialog = Dialog::NativePart(Box::new(Edit { source, component, selection: part, original_manufacturer, drafts, error: None }));
+        self.dialog = Dialog::NativePart(Box::new(Edit {
+            source,
+            update_review: None,
+            component,
+            selection: part,
+            original_manufacturer,
+            drafts,
+            error: None,
+        }));
     }
     /// Package, MPN and all typed requirement edits commit once; cancellation and errors preserve the snapshot.
+    /// When opened by a board review, Cancel restores it and Apply refreshes its invalidated plan.
     pub(super) fn native_part_properties_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         let reference = self
             .session
@@ -294,6 +304,11 @@ impl PcbApp {
                 Ok(()) => {
                     self.views.sync(&self.session);
                     self.dialog = Dialog::None;
+                    if let Some(mut review) = edit.update_review.take() {
+                        review.invalidate_review();
+                        self.resume_board_update(review);
+                    }
+                    self.repaint_editors(ctx);
                 }
                 Err(error) => {
                     edit.error = Some(error);
@@ -302,6 +317,10 @@ impl PcbApp {
             }
         } else if action.close {
             self.dialog = Dialog::None;
+            if let Some(review) = edit.update_review.take() {
+                self.resume_board_update(review);
+            }
+            self.repaint_editors(ctx);
         } else {
             self.dialog = Dialog::NativePart(Box::new(edit));
         }

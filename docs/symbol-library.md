@@ -122,8 +122,9 @@ The native parser and placement commands support:
 
 - **1 to 128 logical terminals**, each appearing in at least one unit. The
   legacy two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`.
-  [Physical footprints](footprint-library.md) validate an explicit bijection
-  between the symbol terminals and the definition's pad identifiers;
+  [Physical footprints](footprint-library.md) validate complete terminal and pad coverage
+  with exclusive pad ownership. Multiple pads may map to one terminal, and other
+  pads can be explicitly unconnected;
   the starter NPN uses three SOT-23 pads.
 - **1 to 32 units in format 4**, including shared supply-terminal appearances.
   Each unit is placed once per part, and units on different sheets retain one
@@ -165,7 +166,7 @@ identity, instance behavior and removal of the old power-marker representation.
 ## Published schemas and explicit categories (`pcbcraft-symbol/3`)
 
 [The symbol schema contract](symbol-schema.md) publishes machine-readable schemas
-for versions 1–3. Version 3 adds an explicit default category and optional primary
+for versions 1–4. Version 3 adds an explicit default category and optional primary
 quantity-field binding, retained by native loading, authoring export and pinned
 symbol save/reopen. Versions 1–2 reject that field and preserve their existing
 encodings. Category lookup uses exact native identities; names/drawings never

@@ -36,7 +36,7 @@ fn catalog_places_remaining_unit_on_another_sheet_without_duplicate_part() {
         h.key_press(Key::A);
         h.run();
         click(&mut h, "Existing part units");
-        click(&mut h, "U1B · Illustrative dual amplifier");
+        click(&mut h, "U1 B · Illustrative dual amplifier");
         assert!(matches!(&h.state().views.active.schematic.tool,Some(Tool::PlaceSymbol { component:Some(_),unit,.. }) if unit == "b"));
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         let canvas = h.get_by_label("Schematic canvas").rect();
@@ -55,7 +55,7 @@ fn catalog_places_remaining_unit_on_another_sheet_without_duplicate_part() {
         assert_eq!(second.symbols().len(), 1);
         assert_eq!(second.symbols()[0].unit_id(), "b");
         assert!(h.state().views.active.schematic.tool.is_none());
-        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="U1B")));
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="U1 B")));
         h.state_mut().run("edit.undo", &Value::Null);
         h.run();
         let restored = h.state().session.project().unwrap().for_sheet(target).unwrap();

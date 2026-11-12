@@ -409,11 +409,12 @@ impl SymbolPlacement {
     }
 
     /// Keep the part's designator shared while distinguishing its unit on the drawing.
+    /// Whitespace cannot occur in either identity, so the separator prevents collisions with another part's base reference.
     pub fn display_reference(&self, reference: &str) -> String {
         if reference.is_empty() || self.definition.units.len() == 1 {
             reference.to_owned()
         } else {
-            format!("{reference}{}", self.unit.to_uppercase())
+            format!("{reference} {}", self.unit.to_uppercase())
         }
     }
 

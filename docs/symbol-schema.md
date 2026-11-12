@@ -105,8 +105,10 @@ The inspector's **Place unit** actions and the Parts Catalog's **Existing part
 units** menu use that same command; the catalog menu can place units on another
 sheet without requiring a unit to be present there already.
 
-U1A and U1B have independent symbol IDs and positions but share U1's reference,
-Value, metadata, package assignment and physical footprint. Renaming through
+U1 A and U1 B have independent symbol IDs and positions but share U1's reference,
+Value, metadata, package assignment and physical footprint. The space separating
+the base reference and unit cannot occur in either identity, so `U1 A` cannot
+alias another part's base reference `U1A`. Renaming through
 either unit updates that part. Repeated appearances of a terminal join the
 project-wide electrical graph by part/terminal identity, including across sheets;
 board updates collapse those appearances into one physical terminal. Deleting a

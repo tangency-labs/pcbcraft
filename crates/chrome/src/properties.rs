@@ -139,6 +139,33 @@ pub fn mapping_choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String
     .inner
 }
 
+/// Edit a terminal's physical pad set in the same aligned row as a single-pad mapping.
+/// Checkbox choices keep the popup open; callers validate exclusive ownership across rows.
+pub fn mapping_multi_choice(ui: &mut Ui, label: &str, id: egui::Id, values: &mut Vec<String>, options: &[(&str, String)]) -> egui::Response {
+    let t = Tokens::get();
+    let label_width = mapping_label_width(ui.available_width());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_8;
+        ui.spacing_mut().interact_size.y = t.control_height;
+        let label = field_name(ui, label, label_width, false);
+        let selected = if values.is_empty() { "None".into() } else { values.join(", ") };
+        solidcraft_ui_kit::dropdown_menu_with_close_behavior(ui, id, &selected, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            for (key, text) in options {
+                let mut checked = values.iter().any(|value| value == key);
+                if crate::controls::checkbox(ui, &mut checked, text).changed() {
+                    if checked {
+                        values.push((*key).into());
+                    } else {
+                        values.retain(|value| value != key);
+                    }
+                }
+            }
+        })
+        .labelled_by(label.id)
+    })
+    .inner
+}
+
 /// Reserve enough of the preview for named terminals without shrinking pad controls off-screen.
 fn mapping_label_width(width: f32) -> f32 {
     (width * 0.48).min(Tokens::get().form_label_width * 3.)

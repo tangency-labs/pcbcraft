@@ -277,3 +277,21 @@ pub(super) fn duplicate_mapping(bytes: &[u8], mapping: &BTreeMap<String, crate::
     assert_ne!(corrupted, text);
     corrupted.into_bytes()
 }
+
+/// Standalone baseline codecs enforce the aggregate physical pad limit, including NC pads.
+#[test]
+fn baseline_total_pad_limit_includes_mapped_and_unconnected_pads() {
+    let session = fixture();
+    let mut baseline = capture(session.project().unwrap(), 1);
+    baseline.format = "pcbcraft-board-baseline/2".into();
+    let package = baseline.components.values_mut().next().unwrap().package.as_mut().unwrap();
+    package.mapping = BTreeMap::from([("1".into(), (1..=127).map(|n| n.to_string()).collect::<Vec<_>>().into()), ("2".into(), "128".into())]);
+    let encoded = baseline.encode().unwrap();
+    assert_eq!(Baseline::decode(&encoded).unwrap(), baseline);
+    baseline.components.values_mut().next().unwrap().package.as_mut().unwrap().unconnected_pads.push("129".into());
+    assert!(baseline.encode().is_err());
+    let mut invalid: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    let component = invalid["components"].as_object_mut().unwrap().values_mut().next().unwrap();
+    component["package"]["unconnected_pads"] = json!(["129"]);
+    assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+}

@@ -227,7 +227,7 @@ impl Fragment {
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         let mut shared_parts = BTreeMap::new();
         if options.reuse_sheets {
-            for source in sources.iter().skip(1) {
+            for source in &sources {
                 for symbol in source.symbols.iter() {
                     if destination.components.contains_key(&symbol.component) {
                         shared_parts.insert(symbol.component, symbol.component);

@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -67,6 +68,16 @@ class LibrarySchemaTests(unittest.TestCase):
         self.assertFalse(self.checks["urn:pcbcraft:schema:footprint-placement:15"].is_valid(placement))
         placement["mapping"]["1"] = ["1", "1"]
         self.assertFalse(self.checks["urn:pcbcraft:schema:footprint-placement:17"].is_valid(placement))
+
+    def test_discovered_records_must_match_their_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            path = source / "parts" / "wrong-kind.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(self.category))
+            with self.assertRaisesRegex(ValueError, "does not belong in parts/"):
+                checker.validate([], [source])
+            checker.validate([path], [])
 
     def test_symbol_binding_is_explicit_and_versioned(self):
         validator = self.checks[checker.FORMATS["pcbcraft-symbol/3"]]

@@ -100,7 +100,7 @@ fn pinned_units_share_fields_and_round_trip_across_sheets() {
     let second = project.for_sheet(target).unwrap();
     let unit_b = &second.symbols()[0];
     assert_eq!(unit_b.component_id(), part);
-    assert_eq!(unit_b.display_reference("U1"), "U1B");
+    assert_eq!(unit_b.display_reference("U1"), "U1 B");
     assert!(unit_b.terminals().iter().any(|pin| pin.number() == "6"));
     assert!(!unit_b.terminals().iter().any(|pin| pin.number() == "1"));
     assert_eq!(second.terminal_position(unit_b.terminals()[0]), Some(Point { x_nm: 0, y_nm: -5_080_000 }));
@@ -296,4 +296,79 @@ fn authoring_unit_selection_and_rejected_payloads_preserve_data() {
     let before = session.snapshot();
     assert!(session.execute(session.revision(), Action::AddUnit { unit: "a".into() }).is_err());
     assert_eq!(session.snapshot(), before);
+}
+
+/// Source array order determines initial placement even when another unit is selected for editing.
+#[test]
+fn authoring_preserves_non_alphabetic_default_unit_order() {
+    let mut source: Value = serde_json::from_str(SYMBOL).unwrap();
+    source["units"][0]["id"] = json!("z");
+    source["units"][1]["id"] = json!("a");
+    let definition = library::parse_symbol(&source.to_string()).unwrap();
+    let mut item = Item::from_symbol(&definition).unwrap();
+    item.license = "MIT OR Apache-2.0".into();
+    let mut editor = authoring::Session::new(item, false).unwrap();
+    for unit in ["a", "z", "a"] {
+        editor.execute(editor.revision(), Action::SelectUnit { unit: unit.into() }).unwrap();
+        let reopened = Item::decode(&editor.snapshot().encode().unwrap()).unwrap();
+        let native = library::parse_symbol(&reopened.export_native().unwrap().to_string()).unwrap();
+        assert_eq!(native.units[0].unit_id(), "z");
+        assert_eq!(native.units[1].unit_id(), "a");
+    }
+}
+
+/// A unit suffix cannot alias a valid base designator on an independent part.
+#[test]
+fn displayed_unit_reference_cannot_alias_another_base_reference() {
+    let session = session();
+    let symbol = &session.project().unwrap().symbols()[0];
+    assert_eq!(symbol.display_reference("U1"), "U1 A");
+    assert_ne!(symbol.display_reference("U1"), "U1A");
+}
+
+/// Relocating a cut unit with a hierarchy block reuses the part retained by a remote unit.
+#[test]
+fn hierarchy_relocation_keeps_current_package_of_a_retained_root_part() {
+    let mut session = session();
+    let first = session.snapshot().unwrap();
+    let root = first.sheet_target();
+    let part = first.symbols()[0].component_id();
+    apply(&mut session, hierarchy::CREATE_CHILD, json!({"name":"Empty child","x_nm":30_480_000,"y_nm":0}));
+    let block = format!("sheet-symbol-{}", session.project().unwrap().subsheets[0].id);
+    apply(&mut session, sheets::CREATE_SHEET, json!({"name":"Remote"}));
+    let remote = session.project().unwrap().sheets().find(|sheet| sheet.name == "Remote").unwrap().target;
+    apply(&mut session, PLACE_UNIT, json!({"sheet":remote.id(),"component":part,"unit":"b","x_nm":0,"y_nm":0}));
+    let package = session.libraries.footprint("units", "illustrative-six-pad", 1).unwrap();
+    apply(
+        &mut session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":part,"library":package.library,"definition":package.id,
+        "definition_revision":package.revision,"mapping":{"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6"}}),
+    );
+    let text = session
+        .execute(
+            clipboard::CUT,
+            &json!({"sheet":root.id(),"items":selection::Selection::one_symbol(first.symbols()[0].id()),
+        "objects":[block],"expected_revision":session.revision()}),
+        )
+        .unwrap()["clipboard"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    apply(
+        &mut session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":part,"library":package.library,"definition":package.id,
+        "definition_revision":package.revision,"mapping":{"1":"2","2":"1","3":"3","4":"4","5":"5","6":"6"}}),
+    );
+    let changed = session.snapshot().unwrap();
+    apply(&mut session, clipboard::PASTE, json!({"sheet":root.id(),"text":text,"reuse_sheets":true,"x_nm":76_200_000,"y_nm":0}));
+    let project = session.snapshot().unwrap();
+    assert_eq!(project.components().count(), 1);
+    assert_eq!(project.all_symbols().count(), 2);
+    assert_eq!(project.footprint_assignments()[0]["mapping"]["1"], "2");
+    let docs = encode_documents(project).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&changed, &session.snapshot().unwrap());
 }

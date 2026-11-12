@@ -137,13 +137,14 @@ struct MappingItem {
     revision: u32,
 }
 
-/// Accept a proposed default only when it is a complete bijection for the selected definitions.
+/// Accept a proposed default only when every terminal and pad is accounted for exactly once.
 fn mapping_covers(
     mapping: &BTreeMap<String, crate::library::parts::PadIds>,
+    unconnected: &[String],
     symbol: &crate::schematic::SymbolDefinition,
     footprint: &definition::FootprintDefinition,
 ) -> bool {
-    crate::library::parts::mapping::validate(mapping, &[], symbol, footprint).is_ok()
+    crate::library::parts::mapping::validate(mapping, unconnected, symbol, footprint).is_ok()
 }
 
 impl Project {
@@ -187,15 +188,19 @@ impl Project {
         }
         let symbol = &self.components.get(&id)?.definition;
         let key = footprint.key();
-        let saved =
-            self.package_assignments().get(&id).filter(|assignment| assignment.key() == key).map(|assignment| &assignment.mapping).or_else(|| {
+        let saved = self
+            .package_assignments()
+            .get(&id)
+            .filter(|assignment| assignment.key() == key)
+            .map(|assignment| (&assignment.mapping, assignment.unconnected_pads.as_slice()))
+            .or_else(|| {
                 self.board
                     .footprints()
                     .iter()
                     .find(|placement| placement.component == id && placement.key().as_ref() == Some(&key))
-                    .and_then(|placement| placement.mapping.as_ref())
+                    .and_then(|placement| placement.mapping.as_ref().map(|mapping| (mapping, placement.unconnected_pads.as_slice())))
             });
-        if let Some(saved) = saved.filter(|mapping| mapping_covers(mapping, symbol, footprint)) {
+        if let Some((saved, _)) = saved.filter(|(mapping, unconnected)| mapping_covers(mapping, unconnected, symbol, footprint)) {
             return Some(saved.clone());
         }
         let defaults: Vec<MappingDefault> =
@@ -208,10 +213,10 @@ impl Project {
                 && default.footprint.id == footprint.id
                 && default.footprint.revision == footprint.revision
         }) {
-            return mapping_covers(&default.mapping, symbol, footprint).then_some(default.mapping);
+            return mapping_covers(&default.mapping, &[], symbol, footprint).then_some(default.mapping);
         }
         let numbers = symbol.pins().iter().map(|pin| (pin.number.clone(), pin.number.clone().into())).collect();
-        mapping_covers(&numbers, symbol, footprint).then_some(numbers)
+        mapping_covers(&numbers, &[], symbol, footprint).then_some(numbers)
     }
 
     /// Publish source identities, pad numbers and provenance without copying full drawings into

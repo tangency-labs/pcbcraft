@@ -70,16 +70,20 @@ def records(root):
 
 
 def validate(paths, sources):
-    """Validate bundled/example records and additional native items using their explicit formats."""
+    """Check discovered records against their directory kind; explicit files use their own formats."""
     checks = validators()
     bundled = [path for library in sorted((ROOT / "libraries").iterdir()) if library.is_dir() for path in records(library)]
     examples = records(ROOT / "examples/native-library") + records(ROOT / "examples/native-parts")
-    inputs = bundled + examples + paths + [path for source in sources for path in records(source)]
-    for path in inputs:
+    discovered = bundled + examples + [path for source in sources for path in records(source)]
+    inputs = [(path, path.parent.name) for path in discovered] + [(path, None) for path in paths]
+    prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/"}
+    for path, directory in inputs:
         try:
             value = read_json(path)
             if not isinstance(value, dict) or value.get("format") not in FORMATS:
                 raise ValueError("Unsupported native record format")
+            if directory is not None and not value["format"].startswith(prefixes[directory]):
+                raise ValueError(f"Format {value['format']} does not belong in {directory}/")
             checks[FORMATS[value["format"]]].validate(value)
         except (OSError, ValueError, ValidationError) as error:
             raise ValueError(f"{path}: {error}") from error

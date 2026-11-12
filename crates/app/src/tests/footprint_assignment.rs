@@ -357,3 +357,62 @@ fn external_native_footprint_is_assignable_and_pinned_from_the_chooser() {
     assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
     assert_eq!(reopened.footprint_assignments()[0]["mapping"], json!({"1":"1","2":"2"}));
 }
+
+/// The generic chooser edits complete pad sets and NC intent, retaining them on an offline reopen.
+#[test]
+fn generic_chooser_preserves_multi_pad_and_unconnected_assignments() {
+    let mut h = component_harness();
+    let mut footprint: Value = serde_json::from_str(include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")).unwrap();
+    for number in ["3", "4"] {
+        let mut pad = footprint["pads"][0].clone();
+        pad["number"] = json!(number);
+        pad["center"] = json!({"x_nm":if number == "3" {-2_000_000} else {2_000_000},"y_nm":3_000_000});
+        footprint["pads"].as_array_mut().unwrap().push(pad);
+    }
+    h.state_mut()
+        .session
+        .execute(
+            "library.load_source",
+            &json!({"source":"multipad","documents":{
+                "library.json":include_str!("../../../../examples/native-parts/library.json"),
+                "footprints/four.json":footprint.to_string()
+            }}),
+        )
+        .unwrap();
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "Match pin count");
+    click(&mut h, "parts-demo / Resistor 0603 (1608 metric) · r1");
+    for (terminal, pads) in [("Terminal 1", vec!["Pad 1", "Pad 3"]), ("Terminal 2", vec!["Pad 2"]), ("Unconnected pads", vec!["Pad 4"])] {
+        h.get_by_label(terminal).scroll_to_me();
+        h.run();
+        click(&mut h, terminal);
+        for pad in pads {
+            click(&mut h, pad);
+        }
+        h.key_press(Key::Escape);
+        h.run();
+    }
+    click(&mut h, "Assign");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let assignment = h.state().session.project().unwrap().footprint_assignments()[0].clone();
+    assert_eq!(assignment["mapping"], json!({"1":["1","3"],"2":"2"}));
+    assert_eq!(assignment["unconnected_pads"], json!(["4"]));
+    click(&mut h, "Close");
+    let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().session.execute("library.remove_source", &json!({"source":"multipad"})).unwrap();
+    h.state_mut().session.open_snapshot(decode_documents(&saved).unwrap());
+    h.run();
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "Assign");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    click(&mut h, "Close");
+    let app = h.state_mut();
+    let target = app.session.project().unwrap().board_target().unwrap();
+    app.views.active.open_document(crate::editor_view::DocumentTarget::Board(target), &app.session);
+    app.begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "Place on board");
+    assert_eq!(h.state().session.inspect()["project"]["board"]["footprints"][0]["unconnected_pads"], json!(["4"]));
+}

@@ -1153,7 +1153,7 @@ fn multiunit_placement_uses_shared_commands_and_part_identity() {
         }}),
     ));
     let symbol = &first["project"]["schematic"]["symbols"][0];
-    assert_eq!(symbol["display_reference"], "U1B");
+    assert_eq!(symbol["display_reference"], "U1 B");
     assert_eq!(symbol["available_units"], json!(["a"]));
     let second = body(&call(
         &mut s,
@@ -1205,7 +1205,8 @@ fn native_part_selection_and_compatibility_are_available_through_mcp() {
     let instance = &placed["project"]["components"][0];
     assert_eq!(instance["part"]["manufacturer"]["mpn"], "TEST-R100M-0603");
     assert_eq!(instance["part"]["compatibility"]["status"], "meets_requirements");
-    call(&mut s, "execute", json!({"command":"library.remove_source","params":{"source":"native-parts"}}));
+    let removed = call(&mut s, "execute", json!({"command":"library.remove_source","params":{"source":"native-parts"}}));
+    assert_ne!(removed["isError"], true, "{removed}");
     let params = json!({"component":instance["id"],"requirements":{
         "pcbcraft:tolerance":{"operator":"at_most","value":{"type":"quantity","value":"0.005","unit":"1"}}
     },"expected_revision":placed["revision"]});

@@ -97,17 +97,17 @@ on one terminal, or shield and mounting pads. So the mapping is:
 - **Completeness:** every terminal is mapped. A pad that is missing from the
   mapping is an error, never silently left out.
 
-Native part definitions support this terminal-to-multiple-pads contract. The
-existing board assignment codec remains one-to-one; applying the broader mapping
-to project instances requires its own saved-format and command integration.
-Matching names or package size codes never establishes a mapping; choosing a
-package validates the selected variant instead.
+Native part definitions and project assignments support multiple pads per
+terminal, including explicitly unconnected pads. The board assignment codec
+and pinned part-instance storage validate complete coverage and exclusive pad
+ownership; positions and numbering never establish a mapping implicitly.
+Choosing a package validates the selected variant.
 
 ### Values on the instance
 
 In the generic-first workflow you place a resistor and type 10k. That value
-belongs to the instance, not to the library part. Today R1 has a free-text value
-and metadata fields; typed values build on that.
+belongs to the instance. Native part instances store typed requirements, while
+symbol-only instances retain a free-text value and metadata fields.
 
 Instance values and manufacturer values mean different things:
 
@@ -234,8 +234,9 @@ representation that preserves the accepted precision. Formatting may display
 additional typed requirements, such as tolerance or minimum power rating, without
 selecting an MPN or putting the requirement in a comment. The implemented parser syntax, canonical decimal representation and numeric
 bounds are specified in [part-schema.md](part-schema.md#canonical-quantities),
-with shared engine normalization and regression cases. Typed instance editing
-and requirement operators remain a separate consumer integration.
+with shared engine normalization and regression cases. The part properties form
+edits typed instance requirements and their operators through
+`part.set_selection`. Symbol-only Value editing retains its existing free text.
 
 An uncategorized imported symbol may retain its existing free-text value during
 editing. It is explicitly untyped, so automation cannot treat it as a validated

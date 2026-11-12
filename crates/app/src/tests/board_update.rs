@@ -632,3 +632,49 @@ fn placement_option_can_leave_an_updated_report_without_starting_a_cursor_group(
     assert!(matches!(h.state().dialog, Dialog::None));
     assert!(h.state().views.active.board.placement.is_some());
 }
+
+/// Native package selection keeps its parent review on cancellation and refreshes it after Apply.
+#[test]
+fn native_package_blocker_returns_to_board_update_review() {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    h.state_mut().run("project.new", &json!({"create_board":true}));
+    h.run();
+    let documents: pcbcraft_engine::library::sources::Documents = [
+        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
+        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
+        ("footprints/resistor.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
+        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
+        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.into(), text.into()))
+    .collect();
+    h.state_mut().session.execute("library.load_source", &json!({"source":"native","documents":documents})).unwrap();
+    let reference = pcbcraft_engine::library::parts::Reference { library: "parts-demo".into(), id: "resistor".into(), revision: 1 };
+    let resolved = h.state().session.libraries().resolve_part(&reference).unwrap();
+    let digest = pcbcraft_engine::library::sources::part_digest(resolved);
+    edit(
+        &mut h,
+        pcbcraft_engine::part_instances::PLACE_PART,
+        json!({"library":"parts-demo","definition":"resistor","definition_revision":1,
+        "definition_digest":digest,"package":null,"x_nm":0,"y_nm":0}),
+    );
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    open(&mut h);
+    click(&mut h, "Assign footprint to R1");
+    assert!(matches!(h.state().dialog, Dialog::NativePart(_)));
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Assign footprint to R1");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Package").click();
+    h.run();
+    click(&mut h, "0603");
+    click(&mut h, "Apply");
+    assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)));
+    assert!(!h.get_by_label("Update PCB").accesskit_node().is_disabled());
+    click(&mut h, "Update PCB");
+    click(&mut h, "PCB canvas");
+    assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), 1);
+}

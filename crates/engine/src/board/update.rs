@@ -130,7 +130,7 @@ impl Package {
         }
     }
 
-    /// Validate the serialized shape and exact one-to-one terminal correspondence.
+    /// Validate bounded complete pad coverage with exclusive physical-pad ownership.
     fn validate(&self, terminals: &[String]) -> Result<(), String> {
         let keys: BTreeSet<_> = self.mapping.keys().cloned().collect();
         let values: BTreeSet<_> = self.mapping.values().flat_map(|pads| pads.pads()).chain(&self.unconnected_pads).collect();
@@ -138,6 +138,7 @@ impl Package {
             || !super::definition::valid_id(&self.definition)
             || self.library.as_ref().is_some_and(|library| !super::definition::valid_id(library))
             || keys != terminals.iter().cloned().collect()
+            || values.len() > 128
             || self.mapping.values().map(|pads| pads.pads().len()).sum::<usize>() + self.unconnected_pads.len() != values.len()
             || self.mapping.values().any(|value| !value.valid())
             || self.unconnected_pads.iter().any(|pad| PinNumber::new(pad).is_none())

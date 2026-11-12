@@ -138,3 +138,26 @@ fn renumber_batch_and_legacy_fork_preserve_sources() {
         fork.validate().unwrap();
     }
 }
+
+/// Older metadata forms omit category; only an explicit null requests removing the binding.
+#[test]
+fn metadata_omission_preserves_category_while_null_clears_it() {
+    let definition = library::parse_symbol(include_str!("../../../../examples/native-parts/symbols/resistor.json")).unwrap();
+    let mut item = Item::from_symbol(&definition).unwrap();
+    item.license = "MIT OR Apache-2.0".into();
+    let original = item.category.clone();
+    assert!(original.is_some());
+    let mut editor = Session::new(item, false).unwrap();
+    for (settings, expected) in
+        [(json!({"behavior":null,"defaults":null}), original), (json!({"behavior":null,"defaults":null,"category":null}), None)]
+    {
+        let snapshot = editor.snapshot();
+        let action: Action = serde_json::from_value(json!({"operation":"metadata","name":snapshot.name,
+            "license":snapshot.license,"source":snapshot.source,"reference_prefix":snapshot.reference_prefix,
+            "default_value":snapshot.default_value,"symbol_settings":settings}))
+        .unwrap();
+        editor.execute(editor.revision(), action).unwrap();
+        assert_eq!(editor.snapshot().category, expected);
+        assert_eq!(Item::decode(&editor.snapshot().encode().unwrap()).unwrap().category, expected);
+    }
+}

@@ -468,10 +468,9 @@ impl PartsBrowser {
             self.reveal_selection = false;
         }
         catalog::grid(ui, view, entries, reveal, |ui, entry, width| {
-            let symbol = &entry.0;
-            let identity = (entries.iter().filter(|other| other.name() == entry.name()).count() > 1)
-                .then(|| format!("{}/{} r{}", symbol.library, symbol.id, symbol.revision()));
-            let value = symbol.default_value();
+            let (Key::Part(library, id, revision) | Key::Symbol(library, id, revision)) = entry.key();
+            let identity = (entries.iter().filter(|other| other.name() == entry.name()).count() > 1).then(|| format!("{library}/{id} r{revision}"));
+            let value = entry.default_value();
             let response = catalog::tile(
                 ui,
                 view,
@@ -586,7 +585,7 @@ fn existing_units(ui: &mut Ui, project: Option<&pcbcraft_engine::Project>) -> Op
     let mut picked = None;
     ui.menu_button("Existing part units", |ui| {
         for (part, unit) in &available {
-            if ui.button(format!("{}{} · {}", part.reference(), unit.unit_id().to_uppercase(), part.definition.name)).clicked() {
+            if ui.button(format!("{} {} · {}", part.reference(), unit.unit_id().to_uppercase(), part.definition.name)).clicked() {
                 picked = Some(Pick::Unit {
                     definition: part.definition.clone(),
                     component: part.id(),

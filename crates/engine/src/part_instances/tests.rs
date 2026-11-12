@@ -169,6 +169,8 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({}));
     let project = session.snapshot().unwrap();
     let baseline = project.board.baseline.as_ref().unwrap();
+    let definition = project.footprint_catalog().into_iter().find(|d| d.id == "resistor-0603").unwrap();
+    assert_eq!(project.default_footprint_mapping(&component, &definition).unwrap(), project.board.footprints()[0].mapping.clone().unwrap());
     assert_eq!(baseline.format, "pcbcraft-board-baseline/2");
     let ratsnest = project.board_view(project.board_target().unwrap()).unwrap().ratsnest().unwrap();
     assert_eq!(ratsnest.net_count, 1);

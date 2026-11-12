@@ -285,6 +285,7 @@ impl Fragment {
             let d = &component.definition;
             pinned.insert((d.library.clone(), d.id.clone(), d.revision()), d);
         }
+        let retained_parts: BTreeSet<_> = shared_parts.keys().copied().collect();
         for component in self.project.components.values() {
             if let Some(id) = shared_parts.get(&component.ordinal) {
                 if !next.components.contains_key(id) {
@@ -328,6 +329,9 @@ impl Fragment {
             Arc::make_mut(&mut next.components).insert(id, copy);
         }
         for assignment in self.project.schematic_packages.assignments.values() {
+            if retained_parts.contains(&assignment.component) {
+                continue;
+            }
             let mut copy = assignment.clone();
             copy.component = components[&assignment.component];
             let definition = self.project.assignment_definition(&copy.key()).ok_or_else(|| invalid("missing copied package"))?;
