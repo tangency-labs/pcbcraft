@@ -1,6 +1,9 @@
-//! Human-entered lengths and exact editable text, independent of UI or project state.
+//! Physical quantities, units and geometry length input, independent of UI or project state.
 //!
-//! Geometry and command payloads remain whole integer nanometres. A caller supplies the default
+//! [`quantity`] supplies canonical physical values and the standard unit registry. The geometry
+//! length API below retains its existing integer-nanometre conversion and editable text contract.
+//!
+//! Geometry lengths in command payloads remain whole integer nanometres. A caller supplies the default
 //! unit for bare text; a suffix overrides it. Conversion rounds once to the nearest nanometre,
 //! while callers apply their own coordinate, thickness or clearance constraints afterward.
 //!
@@ -12,6 +15,9 @@
 //! let draft = edit_label(-25_401, Unit::Mil);
 //! assert_eq!(parse_length(&draft, Unit::Mm), Ok(-25_401));
 //! ```
+
+/// Canonical physical quantities and standard unit definitions shared by every host.
+pub mod quantity;
 
 use std::fmt;
 

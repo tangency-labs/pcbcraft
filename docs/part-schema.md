@@ -133,6 +133,11 @@ fields and satisfy their types, units, bounds and permitted choices.
 
 ## Canonical quantities
 
+The [shared quantity model](quantity-units.md) in `pcbcraft-units` owns standard
+quantity identities, canonical units, aliases, prefixes and exact normalization.
+Category fields reference those definitions; native part records retain the
+typed value shape below.
+
 Records store base units, independently of display-unit preferences:
 
 | Quantity | Stored unit |
@@ -247,12 +252,17 @@ explicit primary quantity, while symbol-only instances retain free text.
 ## Source organization and versioning
 
 `crates/engine/src/library/parts/` owns reusable definitions, categories, values,
-quantities, package maps, manufacturer metadata and requirement comparisons in
+package maps, manufacturer metadata and requirement comparisons in
 separate modules. `library/sources.rs` owns catalog resolution and dependency
 digests. `part_instances/` owns project selections, shared transactions and pinned
 storage; the app's `parts_browser/native_parts.rs` and
 `native_part_properties.rs` own presentation. UI controls delegate parsing and
 compatibility rules to the engine.
+
+`crates/units/src/quantity/` owns standard quantity/unit metadata and canonical
+quantity values; `crates/units/src/quantity.rs` owns exact parsing and display.
+The engine re-exports shared quantity APIs and adapts parsed results to native
+typed values. Category and manufacturer semantics remain engine-owned.
 
 Record `revision` identifies a new immutable item revision. A `format` or schema
 version changes when a parser needs a different structural contract. The app

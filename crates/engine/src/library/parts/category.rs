@@ -147,7 +147,7 @@ impl Field {
     pub fn parse_input(&self, input: &str) -> Result<super::Value, String> {
         let input = input.trim();
         let value = match &self.value_type {
-            FieldType::Quantity { quantity, .. } => quantity.parse(input)?,
+            FieldType::Quantity { quantity, .. } => quantity.parse(input).map(super::Value::from)?,
             FieldType::Integer { .. } => super::Value::Integer { value: input.parse().map_err(|_| "Expected an integer.")? },
             FieldType::Choice { .. } => super::Value::Choice { value: input.into() },
             FieldType::Text {} => super::Value::Text { value: input.into() },

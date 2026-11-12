@@ -773,7 +773,10 @@ impl Session {
             PARSE_QUANTITY => {
                 let quantity: super::parts::Quantity =
                     serde_json::from_value(params["quantity"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
-                let value = quantity.parse(params["value"].as_str().unwrap_or_default()).map_err(CommandError::InvalidParams)?;
+                let value = quantity
+                    .parse(params["value"].as_str().unwrap_or_default())
+                    .map(super::parts::Value::from)
+                    .map_err(CommandError::InvalidParams)?;
                 serde_json::to_value(value).map_err(|error| CommandError::InvalidParams(error.to_string()))
             }
             RESOLVE_PART => {

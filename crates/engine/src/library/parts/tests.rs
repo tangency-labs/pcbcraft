@@ -3,6 +3,54 @@ use crate::library::sources::{Catalog, Documents, Kind, NativeSource};
 use serde_json::json;
 use std::sync::Arc;
 
+/// Shared definitions must preserve the published category vocabulary and native
+/// command value shape; parsing a standard quantity remains a read-only operation.
+#[test]
+fn shared_registry_matches_native_schema_and_command_values() {
+    use pcbcraft_units::quantity::{CanonicalQuantity, standard_quantities};
+    use std::collections::BTreeSet;
+    let schema: serde_json::Value = serde_json::from_str(include_str!("../../../../../docs/schemas/library-common-v1.schema.json")).unwrap();
+    let published: BTreeSet<_> = schema["$defs"]["field_type"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|field| {
+            Some((field["properties"]["quantity"]["const"].as_str()?.to_owned(), field["properties"]["unit"]["const"].as_str()?.to_owned()))
+        })
+        .collect();
+    let shared: BTreeSet<_> = standard_quantities()
+        .map(|definition| (serde_json::to_value(definition.quantity).unwrap().as_str().unwrap().to_owned(), definition.canonical_unit.to_owned()))
+        .collect();
+    assert_eq!(shared, published);
+    assert_eq!(shared.len(), Quantity::ALL.len());
+    let stored_units: BTreeSet<_> = schema["$defs"]["parameter_value"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "quantity")
+        .unwrap()["properties"]["unit"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|unit| unit.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(stored_units, standard_quantities().map(|definition| definition.canonical_unit.to_owned()).collect());
+    let mut session = crate::Session::default();
+    let revision = session.revision();
+    for definition in standard_quantities() {
+        let canonical = CanonicalQuantity::new("0.1", definition.canonical_unit).unwrap();
+        let native = Value::from(canonical);
+        native.validate().unwrap();
+        let expected = json!({"type":"quantity","value":"0.1","unit":definition.canonical_unit});
+        assert_eq!(serde_json::to_value(native).unwrap(), expected);
+        let result = session
+            .execute("library.parse_quantity", &json!({"quantity":definition.quantity,"value":format!("0.1 {}", definition.canonical_unit)}))
+            .unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(session.revision(), revision);
+    }
+}
+
 /// Original native data, shared with schema and folder/bundle verification.
 fn documents() -> Documents {
     [
@@ -229,12 +277,15 @@ fn quantity_input_normalizes_prefixes_units_and_precision_without_floats() {
         (Quantity::Ratio, "1%", "0.01", "1"),
         (Quantity::Voltage, "-1.2 mV", "-0.0012", "V"),
     ] {
-        assert_eq!(serde_json::to_value(quantity.parse(input).unwrap()).unwrap(), json!({"type":"quantity","value":value,"unit":unit}));
+        assert_eq!(
+            serde_json::to_value(quantity.parse(input).map(Value::from).unwrap()).unwrap(),
+            json!({"type":"quantity","value":value,"unit":unit})
+        );
     }
     for input in ["1 V", "MPN-1", "1e999", "1.2.3", "1e-19", "", "NaN", "100 μV"] {
         assert!(Quantity::Resistance.parse(input).is_err(), "{input}");
     }
-    assert_eq!(Quantity::Resistance.parse("-0.000 Ω").unwrap(), Value::Quantity { value: "0".into(), unit: "Ohm".into() });
+    assert_eq!(Quantity::Resistance.parse("-0.000 Ω").map(Value::from).unwrap(), Value::Quantity { value: "0".into(), unit: "Ohm".into() });
 }
 
 /// A part's single exact symbol reference includes every unit and its complete physical map.
@@ -320,76 +371,8 @@ fn manufacturer_records_validate_metadata_and_category_meaning() {
     );
 }
 
-/// Display text uses engineering SI prefixes, keeps every digit and parses back to the stored value.
+/// Native textual values keep their literal spelling when quantity formatting is shared.
 #[test]
-fn quantities_display_with_si_prefixes_and_round_trip() {
-    use super::display_quantity;
-    for (quantity, value, shown) in [
-        (Quantity::Capacitance, "0.0000001", "100 nF"),
-        (Quantity::Resistance, "4700", "4.7 kΩ"),
-        (Quantity::Frequency, "32768", "32.768 kHz"),
-        (Quantity::Resistance, "0", "0 Ω"),
-        (Quantity::Voltage, "-0.0033", "-3.3 mV"),
-        (Quantity::Voltage, "1", "1 V"),
-        (Quantity::Voltage, "999.999", "999.999 V"),
-        (Quantity::Resistance, "1000", "1 kΩ"),
-        (Quantity::Resistance, "1000000", "1 MΩ"),
-        (Quantity::Current, "0.000001", "1 µA"),
-        (Quantity::Capacitance, "0.000000000001", "1 pF"),
-        (Quantity::Capacitance, "0.000000000000001", "1 fF"),
-        (Quantity::Capacitance, "0.000000000000000001", "1 aF"),
-        (Quantity::Frequency, "1000000000000000", "1 PHz"),
-        (Quantity::Frequency, "1000000000000000000", "1 EHz"),
-        (Quantity::Frequency, "1000000000000000000000", "1000 EHz"),
-        (Quantity::Inductance, "0.0000047123456789", "4.7123456789 µH"),
-        (Quantity::Length, "0.1", "100 mm"),
-        (Quantity::Ratio, "0.05", "0.05"),
-    ] {
-        assert_eq!(display_quantity(value, quantity.unit()), shown);
-        assert_eq!(quantity.parse(shown).unwrap(), Value::Quantity { value: value.into(), unit: quantity.unit().into() }, "{shown}");
-    }
+fn native_text_display_remains_literal() {
     assert_eq!(Value::Text { value: "DNP".into() }.display(), "DNP");
-    assert_eq!(display_quantity("01", "V"), "01 V");
-}
-
-/// New prefix boundaries round-trip exactly, including exa next to scientific notation
-/// and base-unit letters that must not be mistaken for case-sensitive prefix aliases.
-#[test]
-fn atto_through_exa_inputs_preserve_precision_and_scientific_notation() {
-    for (quantity, input, value, shown) in [
-        (Quantity::Capacitance, "1aF", "0.000000000000000001", "1 aF"),
-        (Quantity::Capacitance, "999aF", "0.000000000000000999", "999 aF"),
-        (Quantity::Capacitance, "1000aF", "0.000000000000001", "1 fF"),
-        (Quantity::Capacitance, "1.001fF", "0.000000000000001001", "1.001 fF"),
-        (Quantity::Capacitance, "999.999fF", "0.000000000000999999", "999.999 fF"),
-        (Quantity::Capacitance, "1000fF", "0.000000000001", "1 pF"),
-        (Quantity::Capacitance, "-1f", "-0.000000000000001", "-1 fF"),
-        (Quantity::Capacitance, "1F", "1", "1 F"),
-        (Quantity::Current, "1A", "1", "1 A"),
-        (Quantity::Current, "1aA", "0.000000000000000001", "1 aA"),
-        (Quantity::Frequency, "999.999THz", "999999000000000", "999.999 THz"),
-        (Quantity::Frequency, "1000THz", "1000000000000000", "1 PHz"),
-        (Quantity::Frequency, "999.999PHz", "999999000000000000", "999.999 PHz"),
-        (Quantity::Frequency, "1000PHz", "1000000000000000000", "1 EHz"),
-        (Quantity::Frequency, "1E", "1000000000000000000", "1 EHz"),
-        (Quantity::Frequency, "-1EHz", "-1000000000000000000", "-1 EHz"),
-        (Quantity::Frequency, "1E3 Hz", "1000", "1 kHz"),
-        (Quantity::Frequency, "1E+3Hz", "1000", "1 kHz"),
-        (Quantity::Frequency, "1E-3Hz", "0.001", "1 mHz"),
-        (Quantity::Frequency, "1e18Hz", "1000000000000000000", "1 EHz"),
-        (Quantity::Frequency, "1e-3EHz", "1000000000000000", "1 PHz"),
-        (Quantity::Resistance, "1ER", "1000000000000000000", "1 EΩ"),
-        (Quantity::Capacitance, "0fF", "0", "0 F"),
-    ] {
-        let expected = Value::Quantity { value: value.into(), unit: quantity.unit().into() };
-        assert_eq!(quantity.parse(input).unwrap(), expected, "{input}");
-        assert_eq!(expected.display(), shown, "{input}");
-        assert_eq!(quantity.parse(shown).unwrap(), expected, "{shown}");
-    }
-    for input in ["0.1aF", "1.0001fF", "1e-19F", "1AF", "1FF", "1zF", "1QF", "1EE", "1E+", "1e", "1eHz"] {
-        assert!(Quantity::Capacitance.parse(input).is_err(), "{input}");
-    }
-    let maximum = Value::Quantity { value: "999999999999999999999999999999999999".into(), unit: "Hz".into() };
-    assert_eq!(maximum.display(), "999999999999999999.999999999999999999 EHz");
-    assert_eq!(Quantity::Frequency.parse(&maximum.display()).unwrap(), maximum);
 }
