@@ -671,6 +671,17 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
+## Generate assembly outputs
+
+Open **Analyze → Reports → Variants** to create or rename a board-local assembly
+variant. For each component, choose **Inherit**, **Fitted** or **DNP**; Base uses
+the component's existing DNP setting. **Export BOM and placement** saves both
+files for the selected assembly. **Analyze → Reports → BOM** exports the Base
+assembly directly. The dialog's selection only chooses which snapshot to export;
+it does not change the base design, footprint geometry, routing or connectivity.
+Separate BOM and placement exclusions still apply. See the
+[assembly variant guide](assembly-variants.md) for the CSV and storage contract.
+
 With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
 saves a fabrication ZIP without editing the design. Output names remain unique
 when layer names collide after sanitization; the [editor guide](editor-guide.md)

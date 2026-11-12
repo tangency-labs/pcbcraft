@@ -23,6 +23,7 @@ pub mod schematic;
 pub mod selection;
 pub mod sheets;
 pub mod wire;
+pub use board::assembly::{CREATE_ASSEMBLY_VARIANT, DELETE_ASSEMBLY_VARIANT, EXPORT_ASSEMBLY, SET_ASSEMBLY_VARIANT};
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
@@ -144,6 +145,10 @@ enum ParamKind {
     Closed,
     Locked,
     BoardId,
+    VariantId,
+    ComponentId,
+    Fitted,
+    VariantSelection,
     SheetId,
     CopperLayers,
     HierarchyId,
@@ -225,6 +230,12 @@ impl ParamKind {
                 "pad_clearance_nm":{"type":"integer","minimum":0,"maximum":10_000_000}
             },"required":["text_height_nm","stroke_width_nm","pad_clearance_nm"],"additionalProperties":false}),
             Self::BoardId | Self::SheetId | Self::NetId => json!({"type":"string", "format":"uuid"}),
+            Self::VariantId => json!({"type":"string", "format":"uuid", "description":"Assembly variant UUID from board inspection"}),
+            Self::ComponentId => json!({"type":"string","pattern":"^component-[1-9][0-9]*$"}),
+            Self::Fitted => json!({"oneOf":[{"type":"boolean"},{"type":"null"}]}),
+            Self::VariantSelection => {
+                json!({"oneOf":[{"type":"null","description":"Explicitly select the base assembly"},{"type":"string","format":"uuid","description":"Assembly variant UUID from board inspection"}]})
+            }
             Self::NetTarget => {
                 json!({"oneOf":[Self::Terminal.schema(),hierarchy_endpoint_schema("net_label"),hierarchy_endpoint_schema("label"),hierarchy_endpoint_schema("sheet_pin"),nets::anchor_schema()]})
             }
@@ -465,6 +476,21 @@ impl ParamKind {
             Self::SheetExtent if value.as_i64().is_some_and(|n| (1..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::BoardId | Self::SheetId | Self::NetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
+            Self::VariantId
+                if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok_and(|parsed| !parsed.is_nil() && parsed.to_string() == id)) =>
+            {
+                Ok(())
+            }
+            Self::ComponentId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "component-")).is_some() => Ok(()),
+            Self::Fitted if value.is_null() || value.is_boolean() => Ok(()),
+            Self::VariantSelection
+                if value.is_null()
+                    || value
+                        .as_str()
+                        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok_and(|parsed| !parsed.is_nil() && parsed.to_string() == id)) =>
+            {
+                Ok(())
+            }
             Self::NetTarget
                 if WireEndpoint::parse(value).is_some_and(|end| !matches!(end, WireEndpoint::Junction(_)))
                     || serde_json::from_value::<nets::Anchor>(value.clone()).is_ok_and(|anchor| anchor.validate_form().is_ok()) =>
@@ -525,6 +551,10 @@ impl ParamKind {
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
+            Self::VariantId => Err("must identify an assembly variant by UUID"),
+            Self::ComponentId => Err("must identify a component by stable component-N ID"),
+            Self::Fitted => Err("must be true, false or null to inherit the base setting"),
+            Self::VariantSelection => Err("must be null for Base or an assembly variant UUID"),
             Self::NetId => Err("must identify a persistent net by UUID"),
             Self::NetTarget => Err("must identify a terminal, net label or hierarchical port"),
             Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
@@ -680,6 +710,20 @@ const BOARD: Param = Param {
     name: "board",
     summary: "Board UUID from inspection; omission uses the single-board compatibility default",
     kind: ParamKind::BoardId,
+};
+const REQUIRED_BOARD: Param =
+    Param { required: true, name: "board", summary: "Explicit physical board UUID from project inspection", kind: ParamKind::BoardId };
+const VARIANT_ID: Param =
+    Param { required: true, name: "variant", summary: "Assembly variant UUID from board inspection", kind: ParamKind::VariantId };
+const COMPONENT_ID: Param =
+    Param { required: false, name: "component", summary: "Stable component-N ID from project inspection", kind: ParamKind::ComponentId };
+const FITTED: Param =
+    Param { required: false, name: "fitted", summary: "True fits the part, false marks it DNP, and null inherits base DNP", kind: ParamKind::Fitted };
+const VARIANT_SELECTION: Param = Param {
+    required: true,
+    name: "variant",
+    summary: "Explicitly null for Base or an assembly variant UUID from board inspection",
+    kind: ParamKind::VariantSelection,
 };
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
@@ -1771,6 +1815,30 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: CREATE_ASSEMBLY_VARIANT,
+        title: "Create Assembly Variant",
+        summary: "Create a named board-local population alternative. Unset choices inherit each component's base DNP attribute.",
+        params: &[REQUIRED_BOARD, EXPECTED_REVISION, NAME],
+    },
+    Command {
+        id: SET_ASSEMBLY_VARIANT,
+        title: "Set Assembly Variant",
+        summary: "Rename a board-local variant or set/clear one component's fitted override. Null fitted inherits base DNP.",
+        params: &[REQUIRED_BOARD, EXPECTED_REVISION, VARIANT_ID, Param { required: false, ..NAME }, COMPONENT_ID, FITTED],
+    },
+    Command {
+        id: DELETE_ASSEMBLY_VARIANT,
+        title: "Delete Assembly Variant",
+        summary: "Delete one named board-local population alternative in one undoable edit.",
+        params: &[REQUIRED_BOARD, EXPECTED_REVISION, VARIANT_ID],
+    },
+    Command {
+        id: EXPORT_ASSEMBLY,
+        title: "Generate Assembly Outputs",
+        summary: "Generate BOM and pick-and-place CSV files from one captured board snapshot. The variant is required; null explicitly selects Base. DNP and output-specific exclusions do not alter board geometry.",
+        params: &[REQUIRED_BOARD, VARIANT_SELECTION],
+    },
+    Command {
         id: EXPORT_FABRICATION,
         title: "Generate Fabrication Outputs",
         summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
@@ -1924,6 +1992,11 @@ impl Project {
     /// Return the logical components in stable component ID order.
     pub fn components(&self) -> impl Iterator<Item = &PartInstance> {
         self.components.values()
+    }
+
+    /// Return the physical board's named population alternatives in stable UUID order.
+    pub fn assembly_variants(&self) -> impl Iterator<Item = &board::assembly::AssemblyVariant> {
+        self.board.assembly_variants.values()
     }
 
     /// Whether a live component belongs in this project's current physical board
@@ -2300,6 +2373,10 @@ impl Session {
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
             | EXPORT_FABRICATION
+            | CREATE_ASSEMBLY_VARIANT
+            | SET_ASSEMBLY_VARIANT
+            | DELETE_ASSEMBLY_VARIANT
+            | EXPORT_ASSEMBLY
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
@@ -2375,8 +2452,21 @@ impl Session {
                     Err(error)=>json!({"error":error}),
                 };
             }
-            if p.board.baseline.is_some() || !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
+            if p.board.baseline.is_some()
+                || !p.board.assignments.is_empty()
+                || p.board.setup.is_some()
+                || p.board.silkscreen.is_some()
+                || p.board.outline.is_some()
+                || p.board.drawings.is_some()
+                || !p.board.footprints().is_empty()
+                || !p.board.assembly_variants.is_empty()
+            {
                 inspected["board"] = json!({"id":p.board_target().map(|target|target.board), "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
+                inspected["board"]["assembly_variants"] = json!(p.board.assembly_variants.values().map(|variant| {
+                    json!({"id":variant.id,"board":variant.board,"name":variant.name,
+                        "file":p.assembly_variant_document_path(variant.id),
+                        "population":variant.population.iter().map(|(component,fitted)| (format!("component-{component}"),*fitted)).collect::<BTreeMap<_,_>>()})
+                }).collect::<Vec<_>>());
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
                 inspected["board"]["outline"] = json!(p.board.outline);
@@ -2438,6 +2528,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
+        if id == EXPORT_ASSEMBLY {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"assembly":self.assembly_report(params)?}));
+        }
         self.apply(id, params)?;
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
@@ -2496,6 +2590,10 @@ impl Session {
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
                 | EXPORT_FABRICATION
+                | CREATE_ASSEMBLY_VARIANT
+                | SET_ASSEMBLY_VARIANT
+                | DELETE_ASSEMBLY_VARIANT
+                | EXPORT_ASSEMBLY
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
@@ -2706,6 +2804,10 @@ impl Session {
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }
+            CREATE_ASSEMBLY_VARIANT => self.create_assembly_variant(params)?,
+            SET_ASSEMBLY_VARIANT => self.set_assembly_variant(params)?,
+            DELETE_ASSEMBLY_VARIANT => self.delete_assembly_variant(params)?,
+            EXPORT_ASSEMBLY => return Err(CommandError::Unavailable("assembly export is a read-only execute query".into())),
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),

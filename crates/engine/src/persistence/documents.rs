@@ -20,6 +20,8 @@ pub fn convert_legacy_documents(mut documents: Documents) -> Result<Documents, S
 /// Adopt board-folder and occurrence metadata, moving physical bytes without re-encoding them.
 /// Validation covers both document sets; compatibility IDs depend on UUIDs, never storage paths.
 pub fn migrate_board_layout(mut documents: Documents, root: &str) -> Result<Documents, String> {
+    let entry = documents.get(ENTRY_POINT).ok_or("project.json: missing project document")?;
+    let variant_paths = project_assembly_variant_paths(entry)?;
     let original = decode_documents(&documents)?;
     let migrated = Arc::new(original.with_board_folders(root)?.with_sheet_occurrences()?);
     let mut canonical = encode_documents(migrated.clone())?;
@@ -33,6 +35,13 @@ pub fn migrate_board_layout(mut documents: Documents, root: &str) -> Result<Docu
     if let Some(path) = migrated.instances_document_path() {
         documents.insert(path.clone(), canonical.remove(&path).ok_or("missing encoded instance document")?);
     }
+    for (id, before) in variant_paths {
+        let after = migrated.assembly_variant_document_path(id).ok_or("missing migrated assembly variant path")?;
+        if before != after {
+            let document = documents.remove(&before).ok_or_else(|| format!("{before}: missing assembly variant document"))?;
+            documents.insert(after, document);
+        }
+    }
     decode_documents(&documents)?;
     Ok(documents)
 }
@@ -45,6 +54,7 @@ pub const MAX_DOCUMENTS: usize = 4096;
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
+const VARIANT_PROJECT_FORMAT: &str = "pcbcraft-project/18";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
@@ -102,6 +112,8 @@ struct ProjectDocument {
     #[serde(default, deserialize_with = "present")]
     boards: Option<Vec<BoardReference>>,
     #[serde(default, deserialize_with = "present")]
+    assembly_variants: Option<Vec<AssemblyVariantReference>>,
+    #[serde(default, deserialize_with = "present")]
     layout_root: Option<String>,
     id: Uuid,
     name: String,
@@ -109,6 +121,14 @@ struct ProjectDocument {
     numeric_id_high_water: Option<u64>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
+}
+
+/// Project registry entry binds a stable variant ID to its physical board, never to a name or path.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AssemblyVariantReference {
+    id: Uuid,
+    board: Uuid,
 }
 
 #[derive(Deserialize)]
@@ -142,9 +162,9 @@ impl ProjectDocument {
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
     fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
         let foldered = matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT)
-            || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
+            || (matches!(self.format.as_str(), PART_PROJECT_FORMAT | VARIANT_PROJECT_FORMAT) && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16 or 17"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires a foldered project format"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -214,10 +234,50 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
 /// Schematic-only records are embedded in the entry point and have no separate managed path.
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if !matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT) {
+    if !matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | VARIANT_PROJECT_FORMAT) {
         return Ok(None);
     }
     Ok(project_board_path(entry)?.and_then(|path| path.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))))
+}
+
+/// Resolve only the registry-owned, board-local population documents in the selected project layout.
+fn project_assembly_variant_paths(entry: &[u8]) -> Result<Vec<(Uuid, String)>, String> {
+    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    let records = project.assembly_variants.as_deref().unwrap_or_default();
+    if (project.format == VARIANT_PROJECT_FORMAT) != !records.is_empty()
+        || (project.format != VARIANT_PROJECT_FORMAT && project.assembly_variants.is_some())
+    {
+        return Err(format!("{ENTRY_POINT}: assembly variant registry requires project format 18 and a nonempty registry"));
+    }
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+    if records.len() > crate::board::assembly::MAX_ASSEMBLY_VARIANTS {
+        return Err(format!("{ENTRY_POINT}: too many assembly variants"));
+    }
+    let board_path = project_board_path(entry)?.ok_or_else(|| format!("{ENTRY_POINT}: assembly variants require a physical board"))?;
+    let prefix = board_path.strip_suffix("board.json").ok_or("invalid board document path")?;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut paths = Vec::with_capacity(records.len());
+    for record in records {
+        if record.id.is_nil() || !ids.insert(record.id) {
+            return Err(format!("{ENTRY_POINT}: duplicate or nil assembly variant identity"));
+        }
+        if project.boards.as_ref().is_some_and(|boards| {
+            !boards.iter().any(|board| match board {
+                BoardReference::Flat(board) => board.id == record.board,
+                BoardReference::Folder(board) => board.id == record.board,
+            })
+        }) {
+            return Err(format!("{ENTRY_POINT}: assembly variant {} has a foreign board owner", record.id));
+        }
+        let path = format!("{prefix}variants/{}.json", record.id);
+        if !layout::is_assembly_variant_path(&path) {
+            return Err(format!("{ENTRY_POINT}: invalid assembly variant path for {}", record.id));
+        }
+        paths.push((record.id, path));
+    }
+    Ok(paths)
 }
 
 #[derive(Deserialize)]
@@ -261,9 +321,37 @@ struct BoardDocument {
     footprints: Vec<Footprint>,
 }
 
+/// Strict independently saved population data, with both stable IDs repeated inside the document.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssemblyVariantDocument {
+    format: String,
+    id: Uuid,
+    board: Uuid,
+    name: String,
+    #[serde(default)]
+    population: BTreeMap<u64, bool>,
+}
+
+/// Stable versioned variant envelope written beside its owning board document.
+#[derive(Serialize)]
+struct EncodedAssemblyVariantDocument<'a> {
+    format: &'static str,
+    id: Uuid,
+    board: Uuid,
+    name: &'a str,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    population: &'a BTreeMap<u64, bool>,
+}
+
 /// Accept only paths owned by this format. Pinned item identities must match their files on decode.
 pub fn is_document_path(path: &str) -> bool {
-    if path == ENTRY_POINT || path == "board.json" || layout::is_board_path(path) || layout::is_instances_path(path) {
+    if path == ENTRY_POINT
+        || path == "board.json"
+        || layout::is_board_path(path)
+        || layout::is_instances_path(path)
+        || layout::is_assembly_variant_path(path)
+    {
         return true;
     }
     let pieces: Vec<_> = path.split('/').collect();
@@ -296,9 +384,11 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let occurrences = matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT);
+    let variant_paths = project_assembly_variant_paths(&documents[ENTRY_POINT])?;
+    let occurrences = matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | VARIANT_PROJECT_FORMAT);
     let net_format = project.format == NET_PROJECT_FORMAT;
-    let part_format = matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT);
+    let part_format =
+        matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | VARIANT_PROJECT_FORMAT);
     let foldered = project.layout_root.is_some();
     if !part_format
         && project
@@ -306,7 +396,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16 or 17.".into());
+        return Err("Extended package mappings require project format 15, 16, 17 or 18.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -334,24 +424,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PART_PROJECT_FORMAT
             | OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
+            | VARIANT_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16 or 17".into());
+        return Err("schematic_instances requires project format 16, 17 or 18".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14, 15, 16 or 17, no board and a nonempty bounded list".into());
+        return Err("project footprint choices require format 13 through 18, no board and a nonempty bounded list".into());
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16 or 17.".into());
+        return Err("Pinned part selections require project format 15, 16, 17 or 18.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16 or 17".into());
+        return Err("component metadata requires project format 11 through 18".into());
     }
     if matches!(
         project.format.as_str(),
@@ -364,9 +455,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PART_PROJECT_FORMAT
             | OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
+            | VARIANT_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16 or 17"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7 or 9 through 18"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -382,8 +474,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let expected = if net_format { NET_INSTANCES_FORMAT } else { INSTANCES_FORMAT };
-                if instance.format != expected || Some(instance.board) != registered {
+                let supported_instance = if net_format {
+                    instance.format == NET_INSTANCES_FORMAT
+                } else if project.format == VARIANT_PROJECT_FORMAT {
+                    matches!(instance.format.as_str(), INSTANCES_FORMAT | NET_INSTANCES_FORMAT)
+                } else {
+                    instance.format == INSTANCES_FORMAT
+                };
+                if !supported_instance || Some(instance.board) != registered {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
                 }
                 used.insert(path);
@@ -399,8 +497,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         None
     };
-    if net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err("Net registry records require project format 17 and the corresponding instance vocabulary.".into());
+    let has_net_registry = instance_records.as_ref().is_some_and(|records| records.net_registry.is_some());
+    if (net_format && !has_net_registry) || (!net_format && project.format != VARIANT_PROJECT_FORMAT && has_net_registry) {
+        return Err("Net registry records require project format 17 or 18 and the corresponding instance vocabulary.".into());
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -545,6 +644,22 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             footprints: vec![],
         }
     };
+    let mut assembly_variants = BTreeMap::new();
+    for (reference, (id, path)) in project.assembly_variants.as_ref().into_iter().flatten().zip(variant_paths) {
+        if reference.id != id {
+            return Err(format!("{ENTRY_POINT}: assembly variant registry order changed unexpectedly"));
+        }
+        let document: AssemblyVariantDocument = parse(documents, &path)?;
+        if document.format != "pcbcraft-assembly-variant/1" || document.id != id || document.board != reference.board {
+            return Err(format!("{path}: assembly variant format or registered identity does not match {ENTRY_POINT}"));
+        }
+        let variant =
+            crate::board::assembly::AssemblyVariant { id: document.id, board: document.board, name: document.name, population: document.population };
+        if assembly_variants.insert(id, variant).is_some() {
+            return Err(format!("{path}: duplicate assembly variant identity"));
+        }
+        used.insert(path);
+    }
 
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
@@ -895,6 +1010,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         graphics.validate(project_data).map_err(|error| format!("board.json: {error}"))?;
         Arc::make_mut(&mut project_data.board).drawings = Some(graphics);
     }
+    if !assembly_variants.is_empty() {
+        let target = project_data.board_target().ok_or("assembly variants require a physical board")?;
+        if assembly_variants.values().any(|variant| variant.board != target.board) {
+            return Err("project.json: an assembly variant has a foreign board owner".into());
+        }
+        Arc::make_mut(&mut project_data.board).assembly_variants = assembly_variants;
+        crate::board::assembly::validate(project_data).map_err(|error| format!("project.json: {error}"))?;
+    }
     if tracked {
         let mut tracks = board.tracks.unwrap_or_default();
         let mut vias = board.vias.unwrap_or_default();
@@ -1021,6 +1144,7 @@ impl DocumentsEncoder {
                 0 => {
                     let p = &self.project;
                     crate::part_instances::storage::validate_project(p)?;
+                    crate::board::assembly::validate(p)?;
                     if p.has_sheet_occurrences() {
                         let records = p.sheet_instances();
                         Project::clone(p).install_sheet_instances(records.clone())?;
@@ -1051,7 +1175,15 @@ impl DocumentsEncoder {
                         .assignments
                         .values()
                         .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
-                    let format = if !p.net_registry.records.is_empty() {
+                    let format = if !p.board.assembly_variants.is_empty() {
+                        if p.numeric_id_high_water.is_none() {
+                            return Err("assembly variants require an adopted numeric ID watermark".into());
+                        }
+                        if !p.has_sheet_occurrences() {
+                            return Err("assembly variants require adopted sheet occurrences".into());
+                        }
+                        VARIANT_PROJECT_FORMAT
+                    } else if !p.net_registry.records.is_empty() {
                         NET_PROJECT_FORMAT
                     } else if p.has_sheet_occurrences() {
                         OCCURRENCE_PROJECT_FORMAT
@@ -1092,6 +1224,19 @@ impl DocumentsEncoder {
                         writeln!(self.bytes, "  \"boards\": {},", json(&records)?).map_err(|e| e.to_string())?;
                     } else if let Some(registrations) = registrations {
                         writeln!(self.bytes, "  \"boards\": {},", json(&registrations)?).map_err(|e| e.to_string())?;
+                    }
+                    if !p.board.assembly_variants.is_empty() {
+                        let target = p.board_target().ok_or("assembly variants require a physical board")?;
+                        let records = p
+                            .board
+                            .assembly_variants
+                            .values()
+                            .map(|variant| AssemblyVariantReference { id: variant.id, board: variant.board })
+                            .collect::<Vec<_>>();
+                        if records.iter().any(|record| record.board != target.board) {
+                            return Err("assembly variant has a foreign board owner".into());
+                        }
+                        writeln!(self.bytes, "  \"assembly_variants\": {},", json(&records)?).map_err(|e| e.to_string())?;
                     }
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
                     self.next();
@@ -1304,7 +1449,32 @@ impl DocumentsEncoder {
                         }
                         self.cursor = id;
                     } else {
-                        self.next();
+                        if self.project.board.assembly_variants.is_empty() {
+                            self.next();
+                        } else {
+                            self.phase = 17;
+                            self.cursor = 0;
+                        }
+                    }
+                }
+                17 => {
+                    if let Some(variant) = self.project.board.assembly_variants.values().nth(self.cursor as usize) {
+                        let document = EncodedAssemblyVariantDocument {
+                            format: "pcbcraft-assembly-variant/1",
+                            id: variant.id,
+                            board: variant.board,
+                            name: &variant.name,
+                            population: &variant.population,
+                        };
+                        let mut bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
+                        bytes.push(b'\n');
+                        let path = self.project.assembly_variant_document_path(variant.id).ok_or("missing assembly variant document path")?;
+                        self.documents.insert(path, bytes);
+                        self.cursor += 1;
+                    } else {
+                        self.phase = 10;
+                        self.cursor = 0;
+                        self.first = true;
                     }
                 }
                 10 => {

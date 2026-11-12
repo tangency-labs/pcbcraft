@@ -15,7 +15,7 @@ use super::{
     view::{BoardView, CopperLayers, PadView},
 };
 use crate::{CommandError, Session, schematic::Point};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -33,7 +33,7 @@ const OUTLINE_NM: i64 = 100_000;
 const CORNER_SEGMENTS: usize = 6;
 
 /// One generated file: a portable name and its text.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Output {
     pub name: String,
     pub contents: String,

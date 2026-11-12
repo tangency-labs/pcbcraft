@@ -328,7 +328,7 @@ impl PcbApp {
         self.board_size_controls(ui, enabled, compact);
     }
 
-    /// Analysis opens DRC, measurement and counterpart tools, plus Rules for editing saved board defaults.
+    /// Analysis opens board checks, reports, measurement and counterpart tools, plus board Rules.
     fn board_analyze_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let checks = [
@@ -381,6 +381,31 @@ impl PcbApp {
         }];
         if workspace::ribbon_group(ui, "Cross-probe", &reveal).is_some() {
             self.views.reveal_highlight(self.views.active.id(), &self.session);
+        }
+        workspace::ribbon_separator(ui);
+        let reports_enabled = self.assembly_reports_enabled();
+        let bom = [RibbonTool {
+            icon: ToolIcon::Bom,
+            label: "BOM",
+            description: "Generate Base BOM and pick-and-place files.",
+            shortcut: "",
+            enabled: reports_enabled,
+            active: self.fabrication_exports.busy(),
+            menu_check: None,
+        }];
+        let variants = [RibbonTool {
+            icon: ToolIcon::Bom,
+            label: "Variants",
+            description: "Manage board-local population variants.",
+            shortcut: "",
+            enabled: reports_enabled,
+            active: false,
+            menu_check: None,
+        }];
+        match workspace::ribbon_group_with_menu(ui, "Reports", &bom, &variants) {
+            Some(0) => self.export_base_assembly(ui.ctx()),
+            Some(1) => self.begin_assembly_variants(),
+            _ => {}
         }
     }
 
@@ -459,7 +484,7 @@ impl PcbApp {
             .and_then(|outputs| pcbcraft_engine::board::fabrication::zip(&outputs))
             .and_then(|bytes| {
                 let name = crate::board_outputs::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
-                self.fabrication_exports.start(ctx, name, bytes)
+                self.fabrication_exports.start_for(ctx, crate::board_outputs::Purpose::Fabrication, name, bytes)
             });
         self.message = result.err();
     }

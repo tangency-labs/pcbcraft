@@ -2,6 +2,17 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Assembly variants and outputs
+
+The assembly-variant workflow was adapted from ProtoCraft's
+`crates/eda-pcb/src/assembly_variants.rs` at revision
+`9aa1b8d0152d6ef3a5061aa1be5d07107d53f42d` (MIT OR Apache-2.0). PCBCraft
+replaces external reference-based configuration with board-owned UUIDs,
+stable component-ID overrides, revision-checked undoable commands and native
+format-18 storage. BOM and placement outputs resolve from one project snapshot
+while keeping their independent exclusion rules. No ProtoCraft dependency or
+asset is bundled.
+
 ## Component fields and text placement
 
 Component metadata, population/exclusion intent, per-unit field appearance and

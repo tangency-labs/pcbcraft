@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod app_workspace;
 mod arrangements;
+mod assembly_variants;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
 mod board_appearance;
@@ -185,6 +186,8 @@ enum Dialog {
     Footprint(Box<footprint_assignment::Edit>),
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
+    /// Board-local population edits share the engine's revision-checked variant commands.
+    AssemblyVariants(assembly_variants::Edit),
     LayerColor(board_appearance::Edit),
     /// Custom tool dimensions and optional reusable presets, independent of board setup.
     RoutingSize(board_presets::Edit),
@@ -2066,6 +2069,7 @@ impl PcbApp {
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
+            Dialog::AssemblyVariants(edit) => self.assembly_variants_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
@@ -2257,9 +2261,9 @@ impl PcbApp {
         self.library_editors.poll();
         self.adopt_opened_library(&ctx);
         self.sync_library_bindings();
-        match self.fabrication_exports.poll() {
-            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication outputs".into()),
-            Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
+        match self.fabrication_exports.poll_with_purpose() {
+            Some(Ok((purpose, board_outputs::Outcome::Saved))) => self.file_notice = Some(purpose.success_message().into()),
+            Some(Ok((_, board_outputs::Outcome::Cancelled))) | None => {}
             Some(Err(error)) => self.message = Some(error),
         }
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {

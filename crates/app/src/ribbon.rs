@@ -167,8 +167,8 @@ const ANALYZE: &[Group] = &[
     },
     Group {
         title: "Reports",
-        tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")],
-        extras: &[tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", "")],
+        tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Generate Base BOM and pick-and-place files.", "")],
+        extras: &[tool(Action::Variants, "Variants", Icon::Bom, "Manage board-local population variants.", "")],
     },
 ];
 const LIBRARIES: &[Group] = &[
@@ -201,7 +201,9 @@ impl Action {
     fn implemented(self) -> bool {
         matches!(
             self,
-            Self::Rules
+            Self::Bom
+                | Self::Variants
+                | Self::Rules
                 | Self::Ground
                 | Self::Label
                 | Self::Symbol
@@ -244,6 +246,7 @@ impl Action {
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
             Self::Rules => app.session.available(pcbcraft_engine::SET_RULES) && app.views.active.input(&app.session).is_some(),
+            Self::Bom | Self::Variants => app.assembly_reports_enabled(),
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
             Self::ResumeLibraryEditors => app.library_editors.has_documents(),
@@ -304,6 +307,14 @@ impl Action {
 }
 
 impl PcbApp {
+    /// Enable assembly reports only while the shared export command and archive pipeline are ready.
+    pub(super) fn assembly_reports_enabled(&self) -> bool {
+        self.session.available(pcbcraft_engine::EXPORT_ASSEMBLY)
+            && !self.fabrication_exports.busy()
+            && !self.files.busy()
+            && !self.project_action_pending()
+    }
+
     /// Render the ported group definitions with the upstream chrome and command authority.
     /// Compact ribbons retain working controls; planned tools remain in caption menus.
     pub(super) fn ported_ribbon_tab(&mut self, ui: &mut egui::Ui, slot: usize) {
@@ -352,6 +363,8 @@ impl PcbApp {
             Action::Sources => self.dialog = Dialog::LibrarySources,
             Action::Rules => self.begin_board_rules(),
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
+            Action::Bom => self.export_base_assembly(ctx),
+            Action::Variants => self.begin_assembly_variants(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),
             Action::ResumeLibraryEditors => self.resume_library_workspace(ctx),
             Action::EditDefinitionCopy => {

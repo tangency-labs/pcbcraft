@@ -30,6 +30,26 @@ fn completion_releases_the_export_slot_on_every_outcome() {
     assert!(!exports.busy());
 }
 
+/// Assembly archives retain their explicit variant name, success wording and owner through cancellation.
+#[test]
+fn assembly_exports_capture_the_variant_name_and_completion_purpose() {
+    let ctx = egui::Context::default();
+    let mut exports = Exports::default();
+    let name = assembly_archive_name("Prototype Project", Some("Rev C"));
+    assert_eq!(name, "Prototype_Project-Rev_C-assembly.zip");
+
+    for saved in [true, false] {
+        exports.start_for(&ctx, Purpose::Assembly, name.clone(), b"archive".to_vec()).unwrap();
+        assert_eq!(exports.captured.as_ref().unwrap(), &(name.clone(), b"archive".to_vec()));
+        exports.complete_captured(Ok(if saved { Outcome::Saved } else { Outcome::Cancelled })).unwrap();
+        let (purpose, outcome) = exports.poll_with_purpose().unwrap().unwrap();
+        assert_eq!(purpose, Purpose::Assembly);
+        assert_eq!(purpose.success_message(), "Saved assembly outputs");
+        assert_eq!(matches!(outcome, Outcome::Saved), saved);
+        assert!(!exports.busy());
+    }
+}
+
 /// A directory-sync failure occurs after a complete replacement, is reported to the owner, and
 /// leaves no temporary files behind. A refused non-file destination is untouched.
 #[test]
