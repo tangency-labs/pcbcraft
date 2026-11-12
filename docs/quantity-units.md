@@ -1,6 +1,6 @@
 # Shared quantities and units
 
-`pcbcraft-units::quantity` owns standard quantity identities, canonical unit
+`pcbcraft_units::quantity` owns standard quantity identities, canonical unit
 metadata, input aliases, display symbols, engineering prefixes and exact decimal
 normalization. Native categories refer to that shared `Quantity` type. The engine
 owns category bindings, requirements and persisted typed `Value` records, adapting
