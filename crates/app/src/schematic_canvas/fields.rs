@@ -40,7 +40,7 @@ fn instance_ink(ui: &Ui, project: &Project, symbol: &SymbolPlacement, camera: &C
     ink(
         ui.painter(),
         symbol,
-        Content { reference: component.reference(), value: component.value(), metadata: &component.metadata },
+        Content { reference: component.reference(), value: &component.display_value(), metadata: &component.metadata },
         camera.screen(symbol.position, rect),
         camera.unit_step(),
         color,

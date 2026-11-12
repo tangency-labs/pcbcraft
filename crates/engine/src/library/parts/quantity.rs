@@ -78,8 +78,48 @@ pub fn decimal(value: &str) -> bool {
         && value != "-0"
 }
 
-/// Shift decimal text by a power of ten without binary floating-point conversion or rounding.
+/// Readable text for a canonical base-unit quantity, such as `4700`/`Ohm` as `4.7 kΩ`.
+///
+/// Precision: every significant digit is kept and nothing is rounded, so [`Quantity::parse`]
+/// returns the same canonical value for the text. Prefix: the engineering prefix from p to T that
+/// puts one to three digits before the decimal point, clamped at p and T; zero has no prefix.
+/// Ratios (`1`) show the plain decimal; non-canonical input is shown unscaled with its unit.
+pub fn display_quantity(value: &str, unit: &str) -> String {
+    if unit == "1" {
+        return value.to_owned();
+    }
+    let symbol = if unit == "Ohm" { "Ω" } else { unit };
+    if !decimal(value) || value == "0" {
+        return format!("{value} {symbol}");
+    }
+    let digits = value.trim_start_matches('-');
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    let magnitude = if whole == "0" { -1 - (fraction.len() - fraction.trim_start_matches('0').len()) as i32 } else { whole.len() as i32 - 1 };
+    let exponent = (magnitude.div_euclid(3) * 3).clamp(-12, 12);
+    let prefix = match exponent {
+        -12 => "p",
+        -9 => "n",
+        -6 => "µ",
+        -3 => "m",
+        3 => "k",
+        6 => "M",
+        9 => "G",
+        12 => "T",
+        _ => "",
+    };
+    let scaled = shift_decimal(value, -exponent).unwrap_or_else(|_| value.to_owned());
+    format!("{scaled} {prefix}{symbol}")
+}
+
+/// Shift decimal text by a power of ten and reject results that are not canonical stored decimals.
 fn normalized_decimal(number: &str, shift: i32) -> Result<String, String> {
+    let value = shift_decimal(number, shift)?;
+    if decimal(&value) { Ok(value) } else { Err("Quantity exceeds 36 decimal digits or 18 fractional places; no rounding was applied.".into()) }
+}
+
+/// Shift decimal text by a power of ten without binary floating-point conversion or rounding.
+/// Errors on malformed digits or an exponent outside ±48; the result has no trailing zeros.
+fn shift_decimal(number: &str, shift: i32) -> Result<String, String> {
     let (mantissa, exponent) = match number.split_once(['e', 'E']) {
         Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().map_err(|_| "Invalid decimal exponent.")?),
         None => (number, 0),
@@ -114,6 +154,5 @@ fn normalized_decimal(number: &str, shift: i32) -> Result<String, String> {
             format!("0.{}{digits}", "0".repeat((-split) as usize))
         }
     };
-    let value = if negative { format!("-{value}") } else { value };
-    if decimal(&value) { Ok(value) } else { Err("Quantity exceeds 36 decimal digits or 18 fractional places; no rounding was applied.".into()) }
+    Ok(if negative { format!("-{value}") } else { value })
 }

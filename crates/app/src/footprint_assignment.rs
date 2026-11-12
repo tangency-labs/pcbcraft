@@ -180,8 +180,10 @@ impl PcbApp {
                             ui.add(form::input(&mut edit.component_query).desired_width(ui.available_width()).hint_text("Reference or value"))
                                 .labelled_by(label.id);
                             let query = edit.component_query.to_lowercase();
-                            let components: Vec<_> =
-                                project.components().filter(|c| format!("{} {}", c.reference(), c.value()).to_lowercase().contains(&query)).collect();
+                            let components: Vec<_> = project
+                                .components()
+                                .filter(|c| format!("{} {}", c.reference(), c.display_value()).to_lowercase().contains(&query))
+                                .collect();
                             if components.is_empty() {
                                 ui.label("No components match");
                             }
@@ -193,7 +195,7 @@ impl PcbApp {
                                 |ui, rows| {
                                     for component in &components[rows] {
                                         let id = component.id();
-                                        let name = format!("{} · {}", component.reference(), component.value());
+                                        let name = format!("{} · {}", component.reference(), component.display_value());
                                         if ui
                                             .add_sized(
                                                 egui::vec2(ui.available_width(), row_height),
@@ -243,7 +245,7 @@ impl PcbApp {
                     }
                     Region::Results => {
                         if let Some(component) = project.components().find(|c| c.id() == edit.component) {
-                            form::identity(ui, component.reference(), component.value());
+                            form::identity(ui, component.reference(), &component.display_value());
                         }
                         ui.label(if excluded {
                             "Excluded from board"

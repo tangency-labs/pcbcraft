@@ -161,6 +161,15 @@ shifts, never binary floating-point conversion or rounding. Excess magnitude
 or precision is rejected. Integer fields stay within ±9,007,199,254,740,991 so
 JSON consumers can represent them exactly.
 
+The editor shows stored quantities with an SI prefix and unit symbol, for
+example `0.0000001 F` as `100 nF`, `4700 Ohm` as `4.7 kΩ` and `32768 Hz` as
+`32.768 kHz`. It picks the prefix from `p` through `T` that leaves one to three
+digits before the decimal point; values beyond that range keep `p` or `T`
+(`0.001 pF`, `1000 THz`). Zero has no prefix and ratios show the plain decimal.
+Every significant digit is kept and nothing is rounded, so the shown text parses
+back to the same stored value: submitting it unchanged is a no-op. Display never
+changes saved data, MCP output or the component's stored Value text.
+
 `library.parse_quantity` accepts a declared quantity and up to 128 input bytes.
 It recognizes decimal/scientific input, compatible base units and case-sensitive
 SI prefixes `p`, `n`, `u`/`µ`/`μ`, `m`, `k`, `M`, `G`, `T`; resistance also accepts

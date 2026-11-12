@@ -16,7 +16,7 @@ mod value;
 pub use category::{Category, CategoryBinding, Field, FieldType, field_id};
 pub use definition::PartDefinition;
 pub use package::Package;
-pub use quantity::{Quantity, decimal};
+pub use quantity::{Quantity, decimal, display_quantity};
 pub use reference::Reference;
 pub use value::Value;
 /// Published reusable part record format.

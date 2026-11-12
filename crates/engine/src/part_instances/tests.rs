@@ -131,8 +131,16 @@ fn primary_value_uses_canonical_units_and_fixed_part_values() {
     apply(&mut session, PLACE_PART, params);
     let symbol = session.project().unwrap().symbols()[0].id();
     let revision = session.revision();
-    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":"100 mΩ"}));
+    let shown = {
+        let component = session.project().unwrap().components().next().unwrap();
+        assert_eq!(component.value(), "0.1 Ohm");
+        component.display_value().into_owned()
+    };
+    assert_eq!(shown, "100 mΩ");
+    // Submitting the shown text unchanged must not round, re-store or dirty the canonical value.
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":shown}));
     assert_eq!(session.revision(), revision);
+    assert_eq!(session.project().unwrap().components().next().unwrap().value(), "0.1 Ohm");
     let before = session.snapshot().unwrap();
     assert!(
         session

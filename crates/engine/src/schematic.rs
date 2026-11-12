@@ -304,6 +304,15 @@ impl PartInstance {
         &self.value
     }
 
+    /// Readable value for presentation: a typed primary quantity uses SI prefixes, other text is unchanged.
+    /// Editing the shown text parses back to the same canonical value, so it is safe to submit unchanged.
+    pub fn display_value(&self) -> std::borrow::Cow<'_, str> {
+        self.part
+            .as_ref()
+            .and_then(crate::part_instances::Selection::display_primary_value)
+            .map_or(std::borrow::Cow::Borrowed(&self.value), Into::into)
+    }
+
     /// Publish component-owned fields independently of schematic placement geometry.
     pub(crate) fn inspect(&self) -> Value {
         let mut value = json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),

@@ -164,7 +164,7 @@ impl SheetItems {
             .iter()
             .map(|symbol| {
                 let reference = project.reference(symbol);
-                let value = project.value(symbol);
+                let value = project.display_value(symbol);
                 let reference = if reference.is_empty() { symbol.id() } else { reference };
                 // Reference and value, two spaces apart, as PCBcraft Next lists them.
                 let item = Item {

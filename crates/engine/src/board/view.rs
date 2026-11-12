@@ -109,7 +109,8 @@ pub struct FootprintView<'a> {
     pub id: String,
     pub component: String,
     pub reference: &'a str,
-    pub value: &'a str,
+    /// Presentation value; typed primary quantities use SI prefixes.
+    pub value: std::borrow::Cow<'a, str>,
     pub definition: &'a str,
     pub position: Point,
     /// Counterclockwise whole degrees around the footprint origin, from 0 through 359.
@@ -217,7 +218,8 @@ impl<'a> BoardView<'a> {
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
-            let value = component.map(|component| component.value()).or_else(|| historical.map(|component| component.value.as_str()))?;
+            let value =
+                component.map(|component| component.display_value()).or_else(|| historical.map(|component| component.value.as_str().into()))?;
             Some(FootprintView {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),

@@ -275,7 +275,7 @@ fn deleting_after_shared_field_edits_keeps_last_visible_display_metadata() {
         let restored = decode_documents(&pending).unwrap();
         let view = restored.boards().next().unwrap();
         let retained = view.footprints().find(|footprint| footprint.component == format!("component-{component}")).unwrap();
-        assert_eq!((retained.reference, retained.value), ("R20", "33k"));
+        assert_eq!((retained.reference, &*retained.value), ("R20", "33k"));
         assert!(retained.pending_removal);
         assert_eq!(encode_documents(restored).unwrap(), pending);
         session.apply("edit.undo", &json!({})).unwrap();

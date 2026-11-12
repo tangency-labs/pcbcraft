@@ -319,3 +319,32 @@ fn manufacturer_records_validate_metadata_and_category_meaning() {
         .is_err()
     );
 }
+
+/// Display text uses engineering SI prefixes, keeps every digit and parses back to the stored value.
+#[test]
+fn quantities_display_with_si_prefixes_and_round_trip() {
+    use super::display_quantity;
+    for (quantity, value, shown) in [
+        (Quantity::Capacitance, "0.0000001", "100 nF"),
+        (Quantity::Resistance, "4700", "4.7 kΩ"),
+        (Quantity::Frequency, "32768", "32.768 kHz"),
+        (Quantity::Resistance, "0", "0 Ω"),
+        (Quantity::Voltage, "-0.0033", "-3.3 mV"),
+        (Quantity::Voltage, "1", "1 V"),
+        (Quantity::Voltage, "999.999", "999.999 V"),
+        (Quantity::Resistance, "1000", "1 kΩ"),
+        (Quantity::Resistance, "1000000", "1 MΩ"),
+        (Quantity::Current, "0.000001", "1 µA"),
+        (Quantity::Capacitance, "0.000000000001", "1 pF"),
+        (Quantity::Capacitance, "0.000000000000001", "0.001 pF"),
+        (Quantity::Frequency, "1000000000000000", "1000 THz"),
+        (Quantity::Inductance, "0.0000047123456789", "4.7123456789 µH"),
+        (Quantity::Length, "0.1", "100 mm"),
+        (Quantity::Ratio, "0.05", "0.05"),
+    ] {
+        assert_eq!(display_quantity(value, quantity.unit()), shown);
+        assert_eq!(quantity.parse(shown).unwrap(), Value::Quantity { value: value.into(), unit: quantity.unit().into() }, "{shown}");
+    }
+    assert_eq!(Value::Text { value: "DNP".into() }.display(), "DNP");
+    assert_eq!(display_quantity("01", "V"), "01 V");
+}
