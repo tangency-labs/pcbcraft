@@ -20,9 +20,13 @@ fn anchor_owner(anchor: &Anchor, project: &Project, historical: bool) -> Result<
 impl Registry {
     /// Reject malformed records, historical references, duplicate live authorities and dangling
     /// choices before adoption. Inactive source anchors are historical, never live references.
+    /// Empty registries need no graph; nonempty registries require adopted occurrences.
     pub(crate) fn validate(&self, project: &Project) -> Result<(), String> {
         if self.records.len() > MAX_RECORDS || (!self.records.is_empty() && !project.has_sheet_occurrences()) {
             return Err("Net registry requires adopted occurrences and a bounded record count.".into());
+        }
+        if self.records.is_empty() {
+            return Ok(());
         }
         let ids: BTreeSet<_> = self.records.iter().map(|r| r.id).collect();
         if ids.len() != self.records.len() || ids.contains(&uuid::Uuid::nil()) || self.records.windows(2).any(|p| p[0].id >= p[1].id) {
