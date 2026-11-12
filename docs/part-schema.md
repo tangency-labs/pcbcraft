@@ -161,13 +161,26 @@ shifts, never binary floating-point conversion or rounding. Excess magnitude
 or precision is rejected. Integer fields stay within ±9,007,199,254,740,991 so
 JSON consumers can represent them exactly.
 
+The editor shows stored quantities with an SI prefix and unit symbol, for
+example `0.0000001 F` as `100 nF`, `4700 Ohm` as `4.7 kΩ` and `32768 Hz` as
+`32.768 kHz`. It picks the engineering prefix from atto (`a`, 10⁻¹⁸) through
+exa (`E`, 10¹⁸) that leaves one to three digits before the decimal point.
+Examples include `1 fF`, `1 aF`, `1 PHz` and `1 EHz`; larger values keep exa
+(`1000 EHz`). Values below 10⁻¹⁸ base units exceed the stored decimal precision
+and are rejected without rounding. Zero has no prefix and ratios show the plain decimal.
+Every significant digit is kept and nothing is rounded, so the shown text parses
+back to the same stored value: submitting it unchanged is a no-op. Display never
+changes saved data, MCP output or the component's stored Value text.
+
 `library.parse_quantity` accepts a declared quantity and up to 128 input bytes.
 It recognizes decimal/scientific input, compatible base units and case-sensitive
-SI prefixes `p`, `n`, `u`/`µ`/`μ`, `m`, `k`, `M`, `G`, `T`; resistance also accepts
+SI prefixes `a`, `f`, `p`, `n`, `u`/`µ`/`μ`, `m`, `k`, `M`, `G`, `T`, `P`, `E`; resistance also accepts
 `Ohm`, `ohm`, `ohms`, `Ω`, `R` and the `milli` prefix. A bare prefix uses the
 field's unit. An explicit base unit takes precedence, so `100 m` in a length
-field means 100 metres and `100 mm` means 0.1 metres. Percentage input normalizes
-to a ratio: `1%` becomes `"0.01"` in unit `"1"`. Unsupported units, including
+field means 100 metres and `100 mm` means 0.1 metres.
+Scientific exponent notation is distinct from exa: `1E3 Hz` means 1000 Hz,
+while `1EHz` or `1E` in a frequency field means 10¹⁸ Hz.
+Percentage input normalizes to a ratio: `1%` becomes `"0.01"` in unit `"1"`. Unsupported units, including
 affine temperature conversions, are rejected. Celsius is not silently treated
 as Kelvin. Display formatting can choose a compatible scale without changing
 these stored values; this change does not add a new unit-preferences UI.

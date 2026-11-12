@@ -131,8 +131,16 @@ fn primary_value_uses_canonical_units_and_fixed_part_values() {
     apply(&mut session, PLACE_PART, params);
     let symbol = session.project().unwrap().symbols()[0].id();
     let revision = session.revision();
-    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":"100 mΩ"}));
+    let shown = {
+        let component = session.project().unwrap().components().next().unwrap();
+        assert_eq!(component.value(), "0.1 Ohm");
+        component.display_value().into_owned()
+    };
+    assert_eq!(shown, "100 mΩ");
+    // Submitting the shown text unchanged must not round, re-store or dirty the canonical value.
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":shown}));
     assert_eq!(session.revision(), revision);
+    assert_eq!(session.project().unwrap().components().next().unwrap().value(), "0.1 Ohm");
     let before = session.snapshot().unwrap();
     assert!(
         session
@@ -140,6 +148,39 @@ fn primary_value_uses_canonical_units_and_fixed_part_values() {
             .is_err()
     );
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// A shown value survives undo/redo and folder/archive reopen unchanged; an unset value is not zero.
+#[test]
+fn displayed_primary_value_survives_history_and_reopen() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    session.execute(sources::LOAD, &json!({"source":"native-parts","documents":documents()})).unwrap();
+    let params = placement(&session, false);
+    apply(&mut session, PLACE_PART, params);
+    let shown = |session: &Session| session.project().unwrap().components().next().unwrap().display_value().into_owned();
+    let unset = shown(&session);
+    assert!(session.project().unwrap().components().next().unwrap().part.as_ref().unwrap().display_primary_value().is_none());
+    assert_ne!(unset, "0 Ω");
+    let symbol = session.project().unwrap().symbols()[0].id();
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":"4.7k"}));
+    assert_eq!(shown(&session), "4.7 kΩ");
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let revision = session.revision();
+    let params = json!({"symbol":symbol,"reference":"R1","value":shown(&session)});
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, params);
+    assert_eq!(session.revision(), revision);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+    let archive = decode_packed(&encode_packed(session.snapshot().unwrap()).unwrap()).unwrap().project;
+    for project in [decode_documents(&saved).unwrap(), archive] {
+        let component = project.components().next().unwrap();
+        assert_eq!((component.value(), &*component.display_value()), ("4700 Ohm", "4.7 kΩ"));
+        assert_eq!(encode_documents(project).unwrap(), saved);
+    }
+    session.apply("edit.undo", &Json::Null).unwrap();
+    assert_eq!(shown(&session), unset);
+    session.apply("edit.redo", &Json::Null).unwrap();
+    assert_eq!(shown(&session), "4.7 kΩ");
 }
 
 /// Every mapped land participates in accepted copper connectivity, including a terminal with no wire.

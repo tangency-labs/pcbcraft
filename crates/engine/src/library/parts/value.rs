@@ -1,5 +1,5 @@
 //! Canonical typed field values validated against category field meanings.
-use super::{Field, FieldType, decimal};
+use super::{Field, FieldType, decimal, display_quantity};
 use serde::{Deserialize, Serialize};
 /// Known fixed requirements of a generic part. Unknown/missing specifications are not fixed values.
 /// Decimal strings are canonical base-unit values, preserving precision across JSON consumers.
@@ -29,6 +29,15 @@ impl Value {
             Self::Boolean { .. } | Self::Integer { .. } => {}
         }
         Ok(())
+    }
+    /// Readable presentation text; quantities use SI prefixes via [`display_quantity`] and parse back exactly.
+    pub fn display(&self) -> String {
+        match self {
+            Self::Quantity { value, unit } => display_quantity(value, unit),
+            Self::Integer { value } => value.to_string(),
+            Self::Choice { value } | Self::Text { value } => value.clone(),
+            Self::Boolean { value } => value.to_string(),
+        }
     }
     /// Check meaning against the pinned category, never the field's display label.
     pub fn validate_field(&self, field: &Field) -> Result<(), String> {

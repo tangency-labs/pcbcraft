@@ -17,7 +17,7 @@ impl Entry {
     /// A native part row derives its visible Value only from explicit primary requirements.
     fn part(part: Arc<ResolvedPart>) -> Self {
         let selection = initial(part.clone());
-        let value = selection.primary_value().unwrap_or_else(|| part.symbol.default_value().to_owned());
+        let value = selection.display_primary_value().unwrap_or_else(|| part.symbol.default_value().to_owned());
         Self(part.symbol.clone(), Some(part), value)
     }
     /// The native part identity stays distinct from its reusable symbol's identity.
@@ -106,7 +106,7 @@ impl PartsBrowser {
                             part.package = Some(record.package.clone());
                             part.manufacturer = Some(record);
                             part.manufacturer_primary_default();
-                            if let Some(value) = part.primary_value() {
+                            if let Some(value) = part.display_primary_value() {
                                 self.value = value;
                             }
                         }
@@ -132,7 +132,7 @@ impl PartsBrowser {
                             .and_then(|category| category.fields.get(id))
                             .map_or(id.as_str(), |field| field.name.as_str());
                         properties::field(ui, name, |ui| {
-                            ui.label(format_value(value));
+                            ui.label(value.display());
                         });
                     }
                 }
@@ -158,15 +158,5 @@ impl PartsBrowser {
             return None;
         }
         Some(Placement { definition: entry.0.clone(), value: value.to_owned(), part })
-    }
-}
-/// Display units never change the canonical values captured for the shared command.
-fn format_value(value: &pcbcraft_engine::library::parts::Value) -> String {
-    use pcbcraft_engine::library::parts::Value;
-    match value {
-        Value::Quantity { value, unit } => format!("{value} {unit}"),
-        Value::Integer { value } => value.to_string(),
-        Value::Choice { value } | Value::Text { value } => value.clone(),
-        Value::Boolean { value } => value.to_string(),
     }
 }

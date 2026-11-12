@@ -28,11 +28,11 @@ impl Draft {
     fn new(requirement: Option<&Requirement>) -> Self {
         let (operator, values) = match requirement {
             None => (Operator::Unspecified, vec![String::new()]),
-            Some(Requirement::Exact { value }) => (Operator::Exact, vec![text(value)]),
-            Some(Requirement::AtLeast { value }) => (Operator::AtLeast, vec![text(value)]),
-            Some(Requirement::AtMost { value }) => (Operator::AtMost, vec![text(value)]),
-            Some(Requirement::Range { minimum, maximum }) => (Operator::Range, vec![text(minimum), text(maximum)]),
-            Some(Requirement::OneOf { values }) => (Operator::OneOf, values.iter().map(text).collect()),
+            Some(Requirement::Exact { value }) => (Operator::Exact, vec![value.display()]),
+            Some(Requirement::AtLeast { value }) => (Operator::AtLeast, vec![value.display()]),
+            Some(Requirement::AtMost { value }) => (Operator::AtMost, vec![value.display()]),
+            Some(Requirement::Range { minimum, maximum }) => (Operator::Range, vec![minimum.display(), maximum.display()]),
+            Some(Requirement::OneOf { values }) => (Operator::OneOf, values.iter().map(Value::display).collect()),
         };
         Self { operator, values }
     }
@@ -263,7 +263,7 @@ impl PcbApp {
                         .and_then(|category| category.fields.get(id))
                         .map_or(id.as_str(), |field| field.name.as_str());
                     properties::field(ui, name, |ui| {
-                        ui.label(text(value));
+                        ui.label(value.display());
                     });
                 }
                 if let Some(datasheet) = &manufacturer.datasheet {
@@ -324,14 +324,5 @@ impl PcbApp {
         } else {
             self.dialog = Dialog::NativePart(Box::new(edit));
         }
-    }
-}
-/// Display values retain their explicit unit; all persisted values remain canonical engine data.
-fn text(value: &Value) -> String {
-    match value {
-        Value::Quantity { value, unit } => format!("{value} {unit}"),
-        Value::Integer { value } => value.to_string(),
-        Value::Text { value } | Value::Choice { value } => value.clone(),
-        Value::Boolean { value } => value.to_string(),
     }
 }

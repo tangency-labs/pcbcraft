@@ -128,7 +128,7 @@ impl PcbApp {
         let symbol = project.symbols().iter().find(|symbol| symbol.id() == id)?;
         let component = project.component(symbol)?;
         let reference = component.reference().to_owned();
-        let value = component.value().to_owned();
+        let value = component.display_value().into_owned();
         let rotation = u16::from(symbol.turns()) * 90;
         let units = self.preferences.units;
         Some(Edit {

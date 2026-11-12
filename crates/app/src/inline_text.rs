@@ -36,7 +36,7 @@ impl PcbApp {
             Target::Symbol { symbol, field } => {
                 project.symbols().iter().find(|s| s.id() == *symbol).and_then(|s| project.component(s)).and_then(|c| match field.as_str() {
                     "reference" => Some(("Reference".into(), c.reference().into())),
-                    "value" => Some(("Value".into(), c.value().into())),
+                    "value" => Some(("Value".into(), c.display_value().into_owned())),
                     _ => c.metadata.fields.get(field).map(|f| (f.name.clone(), f.value.clone())),
                 })
             }

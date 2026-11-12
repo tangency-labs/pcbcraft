@@ -91,7 +91,7 @@ fn literal_print_text_and_component_rename_have_independent_ownership() {
     let footprint = view(&session).footprints().next().unwrap();
     let id = footprint.id.clone();
     let literal = footprint.reference.to_owned();
-    let value = footprint.value.to_owned();
+    let value = footprint.value.clone().into_owned();
     let component = session.project().unwrap().board.footprints()[0].component;
     let symbol = session.project().unwrap().all_symbols().find(|symbol| symbol.component == component).unwrap().id();
     set(&mut session, &id, json!({"text":literal})).unwrap();

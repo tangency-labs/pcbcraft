@@ -1102,6 +1102,15 @@ contracts. The form reuses the pinned Craft toolkit through the existing chrome
 settings, field and control adapters. No external EDA implementation, library data,
 artwork or new dependency was introduced.
 
+## Quantity prefix range
+
+The atto–exa quantity prefix extension and shared input/display table are original
+MIT OR Apache-2.0 PCBcraft work over #291's exact decimal formatter. Prefix names,
+symbols and powers follow the published NIST SI prefix table
+(https://www.nist.gov/pml/owm/metric-si-prefixes). Boundary and notation regressions
+are original test inputs; no dependency, external implementation, library asset
+or native storage vocabulary was added.
+
 ## Performance fixtures and CPU replay
 
 The opt-in #240 harness, fixed-pattern workload recipes, input traces and evidence

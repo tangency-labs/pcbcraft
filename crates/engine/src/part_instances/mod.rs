@@ -84,14 +84,28 @@ impl Selection {
         values.extend(self.resolved.definition.fixed_parameters.iter().map(|(id, value)| (id.clone(), Requirement::Exact { value: value.clone() })));
         values
     }
-    /// Canonical primary quantity drives the legacy visible Value without changing stored units.
-    pub fn primary_value(&self) -> Option<String> {
+    /// Exact primary quantity as `(canonical decimal, base unit)`; a fixed parameter wins over a requirement.
+    fn primary_quantity(&self) -> Option<(&str, &str)> {
         let field = self.resolved.definition.category.as_ref()?.primary_value.as_ref()?;
-        let values = self.effective_requirements();
-        match values.get(field)? {
-            Requirement::Exact { value: Value::Quantity { value, unit } } => Some(format!("{value} {unit}")),
+        let value = match self.resolved.definition.fixed_parameters.get(field) {
+            Some(fixed) => fixed,
+            None => match self.requirements.get(field)? {
+                Requirement::Exact { value } => value,
+                _ => return None,
+            },
+        };
+        match value {
+            Value::Quantity { value, unit } => Some((value, unit)),
             _ => None,
         }
+    }
+    /// Canonical primary quantity drives the legacy visible Value without changing stored units.
+    pub fn primary_value(&self) -> Option<String> {
+        self.primary_quantity().map(|(value, unit)| format!("{value} {unit}"))
+    }
+    /// SI-prefixed primary quantity for presentation only; [`Self::set_primary_value`] parses it back exactly.
+    pub fn display_primary_value(&self) -> Option<String> {
+        self.primary_quantity().map(|(value, unit)| crate::library::parts::display_quantity(value, unit))
     }
     /// Return a validated preview with the primary quantity normalized using its pinned category.
     pub fn with_primary_value(&self, input: &str) -> Result<Self, String> {

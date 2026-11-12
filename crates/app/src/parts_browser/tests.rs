@@ -687,12 +687,13 @@ fn native_part_catalog_and_requirements_use_shared_transactions() {
     h.get_by_role_and_label(egui::Role::ComboBox, "Manufacturer part").click();
     h.run();
     click(&mut h, "Illustrative Manufacturer · TEST-R100M-0603");
-    assert_eq!(h.state().parts.value, "0.1 Ohm");
+    assert_eq!(h.state().parts.value, "100 mΩ");
     click(&mut h, "Place");
     click(&mut h, "Schematic canvas");
     let project = h.state().session.project().unwrap();
     let part = project.components().next().unwrap();
     assert!(part.part.as_ref().unwrap().manufacturer.is_some());
+    assert_eq!(part.value(), "0.1 Ohm");
     assert_eq!(project.footprint_assignments().len(), 1);
     h.state_mut().begin_footprint_assignment(None);
     h.run();
@@ -764,9 +765,9 @@ fn native_catalog_disambiguates_parts_sharing_a_symbol() {
     click(&mut h, "Native Parts Demo");
     h.get_by_label("Generic resistor · parts-demo/resistor r1");
     h.get_by_label("Generic resistor · parts-demo/fixed-resistor r1");
-    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text == "1000 Ohm")));
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text == "1 kΩ")));
     click(&mut h, "Generic resistor · parts-demo/fixed-resistor r1");
-    assert_eq!(h.state().parts.value, "1000 Ohm");
+    assert_eq!(h.state().parts.value, "1 kΩ");
     click(&mut h, "Place");
     click(&mut h, "Schematic canvas");
     assert_eq!(h.state().session.project().unwrap().components().next().unwrap().value(), "1000 Ohm");

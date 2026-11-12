@@ -54,7 +54,7 @@ impl Thumbnail {
             symbols.push(Symbol {
                 placement: symbol.clone(),
                 reference: project.reference(symbol),
-                value: project.value(symbol).to_owned(),
+                value: project.display_value(symbol).into_owned(),
                 metadata,
             });
         }

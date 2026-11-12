@@ -1958,6 +1958,11 @@ impl Project {
         self.component(symbol).map_or("", PartInstance::value)
     }
 
+    /// Return the owning component's presentation value (see [`PartInstance::display_value`]), or empty text.
+    pub fn display_value(&self, symbol: &SymbolPlacement) -> std::borrow::Cow<'_, str> {
+        self.component(symbol).map_or("".into(), PartInstance::display_value)
+    }
+
     /// Units of an existing part that can still be placed, including on another sheet.
     pub fn available_units(&self, component: &str) -> Vec<&schematic::SymbolUnit> {
         let Some(id) = schematic::wiring::parse_id(component, "component-") else {
