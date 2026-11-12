@@ -88,6 +88,10 @@ jobs:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
         run: |
           cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1
+      - name: Run shared length parser tests as WebAssembly
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
+        run: cargo test --locked -p pcbcraft-units --target wasm32-wasip1 --lib -- --test-threads=1
 
   licenses:
     runs-on: ubuntu-latest

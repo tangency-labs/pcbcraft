@@ -1082,3 +1082,13 @@ net-identity and storage contracts. Regression circuits are generated with nativ
 commands and original repository fixtures. The existing qualified UUID, hashing,
 serialization and publication dependencies are reused; no external EDA source,
 library data, artwork or dependency was added.
+
+## Shared length parsing
+
+`crates/units` extracts the existing original MIT OR Apache-2.0 length parser,
+conversion factors, unit type and exact editable formatter from
+`crates/chrome/src/units.rs` at `e72f743248e95c9f3af36b3c3aca8211eb39d4aa`.
+Chrome retains display formatting and its existing qualified unit button, with
+re-exports preserving current callers. The extraction reuses the existing serde
+dependency and parser regressions; no external implementation, library data,
+artwork or dependency version was introduced.
