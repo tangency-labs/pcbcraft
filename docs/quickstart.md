@@ -473,7 +473,10 @@ Zoom in with the wheel to inspect copper, then use **Fit board** to frame the bo
 Run **Analyze → DRC** to check the board. Pad clearance is measured against the
 resolved circular, oval, rounded-rectangle or rectangular copper contour, including
 rotation and board side. A gap exactly equal to the selected clearance passes;
-this does not add clearance enforcement while routing or a complete short check.
+clearance enforcement while routing remains separate. DRC also reports existing
+copper islands that join different intended nets, including direct pad and through-via
+contact at zero clearance. Once board updates are initialized, the check uses accepted
+connectivity until you review and accept a later schematic change.
 
 After reviewed updates are initialized, removing the last
 schematic unit retains its footprint until an update accepts the removal. A

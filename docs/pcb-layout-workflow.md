@@ -37,11 +37,15 @@ Each edit is one undo step.
 | Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
-Copper connectivity is derived from overlap on shared layers. Track edits refuse
-new shorts in the copper they touch. Footprint transforms can still create a
-short, and DRC can miss it because clearance checks skip copper within the same
-island. DRC checks the board without editing it. A `pcb.check_design` request can
-override the fixed defaults for that run.
+Copper connectivity is derived from overlap on shared layers. Track edits and
+footprint transforms refuse new shorts in the copper they touch. DRC separately
+reports existing islands that contain conflicting intended nets, including direct
+pad contact and via-mediated connections. It uses accepted board connectivity when
+available and otherwise the project-wide logical graph; names are display text,
+not the identity used to compare memberships. DRC checks the board without editing
+it. A `pcb.check_design` request can override the fixed defaults for that run. Short
+findings include sorted copper references and the involved component-terminal keys,
+grouped by snapshot-local net index. Those indices must not be used as saved bindings.
 
 ## Gaps, in recommended order
 
@@ -50,10 +54,10 @@ most everyday work and needs the fewest format decisions.
 
 ### 1. Footprint moves carry their copper
 
-**Problem.** `pcb.set_footprint_transform` and `pcb.align_footprints` move only
-the placement. Tracks that ended on its pads stay where they were, and the edit
-does not run the short check that track edits do. A pad can land on another net's
-track, and the resulting short can go unreported.
+**Status.** `pcb.set_footprint_transform` and `pcb.align_footprints` already carry
+attached track ends and run a scoped short check. The broader interior-contact,
+branch and fixed-via preservation cases below remain requirements to verify as
+routing develops; this section is not a claim that every case is implemented.
 
 **Behavior.** While a footprint moves, rotates or flips, each track end on one of
 its pads follows the pad, and the rest of that track stretches. Vias stay put.
