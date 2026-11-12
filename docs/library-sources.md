@@ -1,15 +1,18 @@
 # Library sources and the Parts Catalog
 
-November 6, 2026, revised November 10, 2026 · **Proposal for discussion.** Nothing
-here is decided until it has been discussed; push back on any of it. It extends
-[#28](https://github.com/tangency-labs/pcbcraft/issues/28), which holds the
-broader library requirements, and takes in the model discussion in
-[#217](https://github.com/tangency-labs/pcbcraft/issues/217).
+November 6, 2026, revised November 11, 2026. This document defines the library
+model behind [#28](https://github.com/tangency-labs/pcbcraft/issues/28), incorporating
+the discussion in [#217](https://github.com/tangency-labs/pcbcraft/issues/217).
+The [symbol](symbol-schema.md) and [part/category](part-schema.md) schemas and
+native codecs implement the definition contracts. Native part placement, typed
+instance requirements, manufacturer records and offline pinning are implemented
+as described in [part-schema.md](part-schema.md). The remaining manager, provider
+and import workflows below describe intended behavior.
 
 The Parts Catalog is meant to become the one place to find symbols, footprints
 and parts, from bundled, local and remote sources, including KiCad libraries and
-vendor downloads. This document proposes the library model behind it, so later
-slices build on the same terms. It also proposes what the library manager does
+vendor downloads. This document defines the library model behind it, so later
+slices build on the same terms. It also defines what the library manager does
 and how projects store 3D models. Supplier data, model rendering and the
 manager's implementation details each get their own design (see
 [Related designs](#related-designs)).
@@ -26,12 +29,12 @@ manager's implementation details each get their own design (see
   [native-project-storage.md](native-project-storage.md)). Opening a project
   never upgrades those copies.
 - **Explicit package assignment.** A shared schematic/PCB chooser assigns an
-  exact footprint and a validated terminal-to-pad mapping to a component, then
+  exact footprint and a validated terminal-to-pad mapping to a part instance, then
   places it on the board as a separate step.
 - **Personal native sources.** Folder registration and uploaded bundles are
   described in [native-library-sources.md](native-library-sources.md). Conflicting
   content claiming the same identity and revision is reported, not chosen.
-- **Parts Catalog.** Search over bundled and loaded native symbols, in an
+- **Parts Catalog.** Search over bundled symbols and loaded native parts/symbols, in an
   expanded chooser and a compact dockable view that share one placement path.
 
 ## Goals
@@ -44,7 +47,7 @@ manager's implementation details each get their own design (see
   parameters, so finding an alternate is a filter rather than a hunt.
 - **Unit-aware automation.** Validate physical values against their declared
   quantities, normalize equivalent input forms, and export typed requirements
-  that inventory systems can use even when a component has no chosen MPN.
+  that inventory systems can use even when a part instance has no chosen MPN.
 - **Project rules.** Let each project decide what must be filled in at each stage,
   without weakening the structural checks every project needs.
 - **Existing libraries.** Read KiCad libraries and vendor downloads without a
@@ -58,16 +61,16 @@ manager's implementation details each get their own design (see
 
 ## The records
 
-v1 has five library records and one per-instance record:
+The model separates five library record kinds from the placed instance:
 
 | Record | Holds | Never holds |
 | --- | --- | --- |
 | **Symbol** | Schematic drawing, terminals with stable IDs, units, and an optional explicit default category/primary-value binding | Footprints, pads, MPNs |
 | **Footprint** | Pads, outline, courtyard, silkscreen, paste and mask | Symbols, terminals, MPNs |
-| **Part** (generic) | One symbol, plus an optional category with typed parameters and a primary-value field, and zero or more package variants. Each variant is an exact footprint revision with its terminal-to-pad mapping. A part with no category or no variants is valid during schematic work. | Manufacturer identity, drawings or pads of its own |
+| **Part definition** (generic) | One symbol, plus an optional category with typed parameters and a primary-value field, and zero or more package variants. Each variant is an exact footprint revision with its terminal-to-pad mapping. A part with no category or no variants is valid during schematic work. | Manufacturer identity, drawings or pads of its own |
 | **Manufacturer part** | Manufacturer, exact MPN, the one part and package variant it is, its specified parameters and a datasheet link | Drawings, pads, supplier prices or stock |
 | **Category schema** | Field IDs, value types and units for a kind of part, such as a capacitor | Values |
-| **Component** (instance) | One use in a project, such as R1: its reference, its chosen part, package variant and manufacturer part (each possibly unset), and its own parameter values | Library definitions; it points at pinned copies |
+| **Part instance** | One use in a project, such as R1: its reference, its chosen part, package variant and manufacturer part (each possibly unset), and its own parameter values | Library definitions; it points at pinned copies |
 
 Symbols and footprints are versioned independently. One footprint can serve many
 parts, and a team can share a footprint-only library. The part is the only place
@@ -76,9 +79,11 @@ Many manufacturer parts can point at one part. That is how "one generic 0603
 resistor, many MPNs" works without copying drawings, and without part
 inheritance.
 
-"Component" already names the placed instance in the engine, so the library
-records use **part** and **manufacturer part** rather than "component
-definition".
+The engine type is `PartInstance`; reusable records use `PartDefinition`.
+Manufacturer parts identify orderable products and remain separate from both.
+Existing saved `components` collections and component-addressed command keys
+retain their compatibility spelling and refer only to placed part instances;
+new library records use exact library/item/revision references.
 
 ### Pin maps
 
@@ -92,15 +97,17 @@ on one terminal, or shield and mounting pads. So the mapping is:
 - **Completeness:** every terminal is mapped. A pad that is missing from the
   mapping is an error, never silently left out.
 
-Today's mapping is one pad per terminal, so this is a format change for review.
-Matching names or package size codes never establishes a mapping; choosing a
-package validates the selected variant instead.
+Native part definitions and project assignments support multiple pads per
+terminal, including explicitly unconnected pads. The board assignment codec
+and pinned part-instance storage validate complete coverage and exclusive pad
+ownership; positions and numbering never establish a mapping implicitly.
+Choosing a package validates the selected variant.
 
 ### Values on the instance
 
 In the generic-first workflow you place a resistor and type 10k. That value
-belongs to the instance, not to the library part. Today R1 has a free-text value
-and metadata fields; typed values build on that.
+belongs to the instance. Native part instances store typed requirements, while
+symbol-only instances retain a free-text value and metadata fields.
 
 Instance values and manufacturer values mean different things:
 
@@ -111,7 +118,7 @@ Instance values and manufacturer values mean different things:
 - **Specifications, on the manufacturer part.** What the product is rated for:
   10 kΩ, 50 V, ±1 %, X7R.
 
-The component's effective requirements include the values set on the instance
+The part instance's effective requirements include the values set on the instance
 and any values fixed by its generic part. A fixed value is an exact requirement
 even when the instance leaves that field unset, and the instance cannot override
 it. A field with neither kind of value leaves the choice open.
@@ -135,10 +142,10 @@ These rules drive the rest of the generic workflow:
   it were still valid.
 - **Fixing a mismatch:** you either choose another MPN, clear it, or relax the
   requirement.
-- **Assembly BOM:** refuses a component whose MPN doesn't meet its requirements
+- **Assembly BOM:** refuses a part instance whose MPN doesn't meet its requirements
   or doesn't match its part and package variant, whatever the project's
   completeness profile says.
-- **BOM review:** shows which components still need a package or an MPN, and
+- **BOM review:** shows which part instances still need a package or an MPN, and
   which chosen MPNs no longer meet their requirements.
 
 ### What stays out of v1
@@ -174,7 +181,7 @@ them, and the records above leave room to add them later.
   produces a complete part or reports what's missing, without assigning anything
   partway.
 - **Generic first (the fallback).** Place a part's symbol, set values on the
-  instance, then choose a package variant before the component goes to the
+  instance, then choose a package variant before the part instance goes to the
   board. Choosing a manufacturer part is optional unless the project requires it.
 - **From a symbol-only library.** Placing a plain symbol needs no library
   authoring first. The placement pins the symbol and creates a project-local
@@ -223,11 +230,13 @@ and from zero. GUI and MCP use the same parsing and validation rules.
 
 Store and compare the normalized quantity, not its display spelling, using a
 representation that preserves the accepted precision. Formatting may display
-`100 mΩ` or `0.1 Ω` without changing the meaning. Generic components can carry
+`100 mΩ` or `0.1 Ω` without changing the meaning. Generic part instances can carry
 additional typed requirements, such as tolerance or minimum power rating, without
-selecting an MPN or putting the requirement in a comment. Parser syntax, numeric
-bounds and canonical encoding need format review and regression cases before
-implementation.
+selecting an MPN or putting the requirement in a comment. The implemented parser syntax, canonical decimal representation and numeric
+bounds are specified in [part-schema.md](part-schema.md#canonical-quantities),
+with shared engine normalization and regression cases. The part properties form
+edits typed instance requirements and their operators through
+`part.set_selection`. Symbol-only Value editing retains its existing free text.
 
 An uncategorized imported symbol may retain its existing free-text value during
 editing. It is explicitly untyped, so automation cannot treat it as a validated
@@ -246,11 +255,11 @@ or saving unfinished work.
 | Stage | Always required | Required if the project says so |
 | --- | --- | --- |
 | Schematic editing | Valid symbols | Category values |
-| Sending a component to the board | An exact footprint and a valid pin map | — |
-| Assembly BOM | Every fitted component has a package variant with an exact footprint and a valid pin map. Every chosen MPN meets its component's requirements and matches its part and package variant. | MPNs and category values for fitted parts |
+| Sending a part instance to the board | An exact footprint and a valid pin map | — |
+| Assembly BOM | Every fitted part instance has a package variant with an exact footprint and a valid pin map. Every chosen MPN meets its part instance's requirements and matches its part and package variant. | MPNs and category values for fitted parts |
 | Final 3D render or mechanical export | — | An exact model for every fitted part |
 
-Unresolved requirements name the component, the field and the stage, in the same
+Unresolved requirements name the part instance, the field and the stage, in the same
 inspection results for GUI and MCP. Checking never fetches from a supplier,
 picks a replacement or assigns a package by itself.
 
@@ -260,10 +269,10 @@ The unit system must also cross the application boundary. This addresses the
 inventory workflow described in
 [griush's follow-up on #217](https://github.com/tangency-labs/pcbcraft/issues/217#issuecomment-6762481616):
 an external inventory system needs enough structured information to find owned
-parts or suggest alternatives, including for a generic component without an MPN.
+parts or suggest alternatives, including for a generic part instance without an MPN.
 
 Provide a versioned machine-readable BOM/export contract through shared GUI/MCP
-operations. Its library-data fields include stable component references and
+operations. Its library-data fields include stable part instance references and
 quantities, category/schema identities and revisions, typed requirements with
 their operators, canonical numeric values and explicit unit identifiers, selected
 package references, and the manufacturer/MPN when present. Optional tolerance, voltage
@@ -280,7 +289,7 @@ and diagnostic exports identify unresolved rows. Exact encodings, assembly
 selection and row grouping belong to the export design, while the category and
 unit semantics are shared with search/comparison.
 
-Inventory connectors may use this same contract to compare a component's
+Inventory connectors may use this same contract to compare a part instance's
 requirements with owned-part specifications. Unknown specifications do not count
 as a match, and a candidate still needs compatible package/mapping information.
 Accepting a replacement is an explicit validated edit. Supplier-cart export and
@@ -581,7 +590,7 @@ These need their own documents and must respect the boundaries above:
   explicit update.
 - **Completeness rules:** check board transfer and assembly-BOM requirements
   under a permissive profile and an MPN-required one, through GUI and MCP.
-  Direct assembly BOM export under either profile reports a fitted component
+  Direct assembly BOM export under either profile reports a fitted part instance
   with a missing package or invalid pin map even before board transfer. The
-  permissive profile allows a fitted component with a valid package and pin map
+  permissive profile allows a fitted part instance with a valid package and pin map
   to have no MPN. Unfinished work still opens and saves.

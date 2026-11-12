@@ -243,11 +243,23 @@ impl Fragment {
         if self.has_hierarchy() {
             return self.placed_hierarchy(destination, at, first_id, options);
         }
+        self.placed_with_parts(destination, at, first_id, options, &mut BTreeMap::new())
+    }
+
+    /// A hierarchy paste shares this remap across sheets so a multi-unit part is copied once.
+    fn placed_with_parts(
+        &self,
+        destination: &Project,
+        at: Point,
+        first_id: u64,
+        options: &PasteOptions,
+        shared_parts: &mut BTreeMap<u64, u64>,
+    ) -> Result<(Project, Selection), CommandError> {
         if options.reuse_sheets {
             return Err(invalid("flat fragments have no child sheets to relocate"));
         }
 
-        if destination.components.len() + self.project.components.len() > crate::schematic::MAX_SYMBOLS
+        if destination.all_symbols().count() + self.project.all_symbols().count() > crate::schematic::MAX_SYMBOLS
             || destination.sheets.iter().map(|s| s.wires.len()).sum::<usize>() + self.project.wires().len() > crate::schematic::wiring::MAX_WIRES
             || destination.sheets.iter().map(|s| s.net_labels.len()).sum::<usize>() + self.project.net_labels().len() > crate::net_labels::MAX_LABELS
         {
@@ -273,7 +285,15 @@ impl Fragment {
             let d = &component.definition;
             pinned.insert((d.library.clone(), d.id.clone(), d.revision()), d);
         }
+        let retained_parts: BTreeSet<_> = shared_parts.keys().copied().collect();
         for component in self.project.components.values() {
+            if let Some(id) = shared_parts.get(&component.ordinal) {
+                if !next.components.contains_key(id) {
+                    return Err(invalid("missing shared pasted part"));
+                }
+                components.insert(component.ordinal, *id);
+                continue;
+            }
             let definition = &component.definition;
             if pinned.get(&(definition.library.clone(), definition.id.clone(), definition.revision())).is_some_and(|existing| *existing != definition)
             {
@@ -281,6 +301,7 @@ impl Fragment {
             }
             let id = allocate(&mut cursor)?;
             components.insert(component.ordinal, id);
+            shared_parts.insert(component.ordinal, id);
             let mut copy = component.clone();
             copy.ordinal = id;
             if options.preserve_references {
@@ -308,6 +329,9 @@ impl Fragment {
             Arc::make_mut(&mut next.components).insert(id, copy);
         }
         for assignment in self.project.schematic_packages.assignments.values() {
+            if retained_parts.contains(&assignment.component) {
+                continue;
+            }
             let mut copy = assignment.clone();
             copy.component = components[&assignment.component];
             let definition = self.project.assignment_definition(&copy.key()).ok_or_else(|| invalid("missing copied package"))?;
@@ -365,7 +389,7 @@ impl Fragment {
                     WireEndpoint::Terminal(pin) => {
                         let old = self.project.terminal_symbol(pin).ok_or_else(|| invalid("missing copied pin"))?;
                         WireEndpoint::Terminal(
-                            Terminal::from_number(symbols[&pin.symbol], &old.definition, pin.number())
+                            Terminal::from_number(symbols[&pin.symbol], old.unit_definition(), pin.number())
                                 .ok_or_else(|| invalid("missing copied terminal"))?,
                         )
                     }
@@ -455,7 +479,9 @@ impl Session {
         Arc::make_mut(&mut next.sheet_mut().net_labels).retain(|l| !items.net_labels.contains(&l.object_id()));
         Arc::make_mut(&mut next.units).retain(|_, s| !removed_symbols.contains(s));
         for component in project.symbols().iter().filter(|s| removed_symbols.contains(&s.ordinal)).map(|s| s.component) {
-            next.retire_component(component);
+            if !next.all_symbols().any(|symbol| symbol.component == component) {
+                next.retire_component(component);
+            }
         }
         next.prune_junctions();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));

@@ -1,0 +1,45 @@
+//! Canonical typed field values validated against category field meanings.
+use super::{Field, FieldType, decimal};
+use serde::{Deserialize, Serialize};
+/// Known fixed requirements of a generic part. Unknown/missing specifications are not fixed values.
+/// Decimal strings are canonical base-unit values, preserving precision across JSON consumers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Value {
+    Quantity { value: String, unit: String },
+    Integer { value: i64 },
+    Choice { value: String },
+    Text { value: String },
+    Boolean { value: bool },
+}
+impl Value {
+    /// Bound values before category resolution; quantities use plain canonical decimal notation.
+    pub(super) fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Quantity { value, unit } => {
+                if !decimal(value) || !["Ohm", "F", "H", "V", "A", "W", "Hz", "s", "m", "K", "1"].contains(&unit.as_str()) {
+                    return Err("Quantity requires a canonical decimal and base-unit identifier.".into());
+                }
+            }
+            Self::Choice { value } => crate::library::check_text("choice value", value, 64)?,
+            Self::Integer { value } if value.unsigned_abs() > 9_007_199_254_740_991 => {
+                return Err("Integer must be exactly representable by JSON consumers.".into());
+            }
+            Self::Text { value } => crate::library::check_text("text value", value, 128)?,
+            Self::Boolean { .. } | Self::Integer { .. } => {}
+        }
+        Ok(())
+    }
+    /// Check meaning against the pinned category, never the field's display label.
+    pub fn validate_field(&self, field: &Field) -> Result<(), String> {
+        self.validate()?;
+        let valid = match (self, &field.value_type) {
+            (Self::Quantity { unit, .. }, FieldType::Quantity { unit: expected, .. }) => unit == expected,
+            (Self::Choice { value }, FieldType::Choice { choices }) => choices.contains(value),
+            (Self::Integer { value }, FieldType::Integer { minimum, maximum }) => (*minimum..=*maximum).contains(value),
+            (Self::Text { .. }, FieldType::Text {}) | (Self::Boolean { .. }, FieldType::Boolean {}) => true,
+            _ => false,
+        };
+        if valid { Ok(()) } else { Err("Value type, unit or choice does not match its category field.".into()) }
+    }
+}

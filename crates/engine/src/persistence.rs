@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     MAX_NAME, MAX_OBJECT_ID, MAX_REFERENCE_NUMBER, Project,
     board::{Board, Footprint},
-    schematic::{Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, WireEndpoint, wiring::MAX_WIRES},
+    schematic::{MAX_CENTER_NM, MAX_SYMBOLS, PartInstance, Point, SymbolPlacement, Terminal, Wire, WireEndpoint, wiring::MAX_WIRES},
 };
 
 mod archive;
@@ -174,7 +174,7 @@ struct BoardRecords {
     footprints: Vec<Footprint>,
 }
 
-/// Component data has no schematic coordinates or footprint geometry.
+/// Part instance data has no schematic coordinates or footprint geometry.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ComponentRecord<'a> {
@@ -188,6 +188,8 @@ struct ComponentRecord<'a> {
     value: std::borrow::Cow<'a, str>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     metadata: Option<crate::schematic::fields::Metadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    part: Option<crate::part_instances::Record>,
 }
 
 /// A schematic unit stores only its identity, owner and geometry.
@@ -296,6 +298,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
             .footprints
             .into_iter()
             .map(|record| Footprint {
+                unconnected_pads: Vec::new(),
                 id: record.id,
                 component: record.symbol,
                 definition: record.definition,
@@ -361,6 +364,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             reference: record.reference.into(),
             value: record.value.into(),
             metadata: None,
+            part: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
     }
@@ -460,6 +464,9 @@ impl Encoder {
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
     /// drawings and rotation require split documents or an archive; refuse lossy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.components.values().any(|c| c.part.is_some()) {
+            return Err("Native library part selections require split documents or a packed archive.".into());
+        }
         if project.components.values().any(|c| !c.metadata.is_empty())
             || project.sheets.iter().any(|s| s.symbols.iter().any(|s| !s.field_layout.is_empty()))
         {
@@ -557,6 +564,7 @@ impl Encoder {
                     reference: component.reference.as_str().into(),
                     value: component.value.as_str().into(),
                     metadata: None,
+                    part: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
                 write_record(&mut self.bytes, &record, more)?;
@@ -753,6 +761,9 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.part.is_some() {
+            return Err("Pinned part references require the split native part format.".into());
+        }
         validate_id(&mut component_ids, record.id)?;
         let (definition, used) =
             saved.get_mut(&(record.library.to_string(), record.definition.to_string(), record.definition_revision)).ok_or_else(|| {
@@ -777,13 +788,14 @@ fn validate_with_hierarchy(
         metadata.validate()?;
         components.insert(
             record.id,
-            Component {
+            PartInstance {
                 ordinal: record.id,
                 definition,
                 reference_number: record.reference_number,
                 reference: record.reference.into_owned(),
                 value: record.value.into_owned(),
                 metadata,
+                part: None,
             },
         );
     }
@@ -796,10 +808,13 @@ fn validate_with_hierarchy(
     for record in sheet.symbols {
         validate_id(&mut ids, record.id)?;
         let component = components.get(&record.component).ok_or_else(|| "symbol points to a missing component".to_owned())?;
-        let unit = component.definition.unit_id();
-        if record.unit != unit {
-            return Err(format!("unavailable unit {} on component {}", record.unit, record.component));
-        }
+        let unit = record.unit.as_ref();
+        let unit_index = component
+            .definition
+            .units
+            .iter()
+            .position(|drawing| drawing.unit_id() == unit)
+            .ok_or_else(|| format!("unavailable unit {} on component {}", record.unit, record.component))?;
         if units.insert((record.component, unit.to_owned()), record.id).is_some() {
             return Err("component unit is placed more than once".to_owned());
         }
@@ -817,12 +832,14 @@ fn validate_with_hierarchy(
             ordinal: record.id,
             component: record.component,
             unit: unit.to_owned(),
+            unit_index,
             position: Point { x_nm: record.x_nm, y_nm: record.y_nm },
             field_layout,
             rotation,
         });
     }
-    if components.len() != units.len() {
+    let placed_components: BTreeSet<_> = units.keys().map(|(component, _)| component).collect();
+    if components.keys().any(|id| !placed_components.contains(id)) {
         return Err("component has no placed unit".to_owned());
     }
     symbols.sort_unstable_by_key(|symbol| symbol.ordinal);
@@ -855,7 +872,7 @@ fn validate_with_hierarchy(
         Endpoint::Pin { symbol, pin } => symbols
             .binary_search_by_key(&symbol, |placed| placed.ordinal)
             .ok()
-            .and_then(|index| Terminal::from_number(symbol, &symbols[index].definition, &pin))
+            .and_then(|index| Terminal::from_number(symbol, symbols[index].unit_definition(), &pin))
             .map(WireEndpoint::Terminal)
             .ok_or_else(|| format!("wire points to missing pin {pin} on symbol {symbol}")),
         Endpoint::Junction { junction } => junctions
@@ -1275,7 +1292,7 @@ mod tests {
         assert!(error(&|d| d["symbol_definitions"][0]["library"] = json!("Bad Library")).contains("library ID"));
     }
 
-    /// Component fields and unit rotation survive a save, while invalid rotations and
+    /// Part instance fields and unit rotation survive a save, while invalid rotations and
     /// duplicate component references are refused.
     #[test]
     fn rotation_and_edited_fields_round_trip() {
@@ -1375,7 +1392,7 @@ mod tests {
         assert!(decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
     }
 
-    /// Component and symbol IDs may differ. Field edits only change the component record;
+    /// Part instance and symbol IDs may differ. Field edits only change the component record;
     /// wire/pad addresses, geometry, undo/redo and last-unit deletion follow explicit ownership.
     #[test]
     fn independent_component_identity_survives_edit_history_and_board_links() {

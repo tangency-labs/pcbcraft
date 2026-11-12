@@ -29,14 +29,14 @@ fn layer_disclosures_have_independent_identities_and_state() {
     let before = h.state().session.inspect();
     h.get_by_label("Collapse Copper");
     h.get_by_label("Collapse Board");
-    h.get_by_label("Expand Component details");
+    h.get_by_label("Expand Part details");
     h.get_by_label("Expand Manufacturing");
     click(&mut h, "Collapse Copper");
     h.get_by_label("Expand Copper");
     h.get_by_label("Collapse Board");
     assert!(h.query_by_label("Activate layer Top").is_none());
-    click(&mut h, "Expand Component details");
-    h.get_by_label("Collapse Component details");
+    click(&mut h, "Expand Part details");
+    h.get_by_label("Collapse Part details");
     h.get_by_label("Expand Copper");
     click(&mut h, "Expand Copper");
     h.get_by_label("Collapse Copper");

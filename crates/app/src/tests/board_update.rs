@@ -632,3 +632,79 @@ fn placement_option_can_leave_an_updated_report_without_starting_a_cursor_group(
     assert!(matches!(h.state().dialog, Dialog::None));
     assert!(h.state().views.active.board.placement.is_some());
 }
+
+/// Native package selection keeps its parent review on cancellation and refreshes it after Apply.
+#[test]
+fn native_package_blocker_returns_to_board_update_review() {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    h.state_mut().run("project.new", &json!({"create_board":true}));
+    h.run();
+    let documents: pcbcraft_engine::library::sources::Documents = [
+        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
+        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
+        ("footprints/resistor.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
+        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
+        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.into(), text.into()))
+    .collect();
+    h.state_mut().session.execute("library.load_source", &json!({"source":"native","documents":documents})).unwrap();
+    let reference = pcbcraft_engine::library::parts::Reference { library: "parts-demo".into(), id: "resistor".into(), revision: 1 };
+    let resolved = h.state().session.libraries().resolve_part(&reference).unwrap();
+    let digest = pcbcraft_engine::library::sources::part_digest(resolved);
+    edit(
+        &mut h,
+        pcbcraft_engine::part_instances::PLACE_PART,
+        json!({"library":"parts-demo","definition":"resistor","definition_revision":1,
+        "definition_digest":digest,"package":null,"x_nm":0,"y_nm":0}),
+    );
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    open(&mut h);
+    click(&mut h, "Assign footprint to R1");
+    assert!(matches!(h.state().dialog, Dialog::NativePart(_)));
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Assign footprint to R1");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Package").click();
+    h.run();
+    click(&mut h, "0603");
+    click(&mut h, "Apply");
+    assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)));
+    assert!(!h.get_by_label("Update PCB").accesskit_node().is_disabled());
+    click(&mut h, "Update PCB");
+    click(&mut h, "PCB canvas");
+    assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), 1);
+}
+
+/// A mapping review identifies pads moved to or from NC in both old and proposed summaries.
+#[test]
+fn mapping_review_shows_current_and_previous_unconnected_pads() {
+    let mut h = fixture(false);
+    h.state_mut()
+        .session
+        .execute("library.load_source", &json!({"source":"multipad","documents":super::footprint_assignment::four_pad_source()}))
+        .unwrap();
+    let component = h.state().session.project().unwrap().components().next().unwrap().id();
+    for (mapped, unconnected) in [("3", "4"), ("4", "3")] {
+        edit(
+            &mut h,
+            ASSIGN_FOOTPRINT,
+            json!({"component":component,"library":"parts-demo","definition":"resistor-0603","definition_revision":1,
+            "mapping":{"1":["1",mapped],"2":"2"},"unconnected_pads":[unconnected]}),
+        );
+        if unconnected == "4" {
+            place_first(&mut h, 0, 0);
+            edit(&mut h, pcbcraft_engine::board::update::INITIALIZE_BASELINE, json!({}));
+        }
+    }
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    open(&mut h);
+    h.get_by_label("R1 pin mapping: Pin 1 → pad 1, 4, Pin 2 → pad 2, unconnected pads 3.");
+    h.get_by_label(
+        "Previous footprint for R1: parts-demo / resistor-0603 · r1. Previous mapping: Pin 1 → pad 1, 3, Pin 2 → pad 2, unconnected pads 4.",
+    );
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

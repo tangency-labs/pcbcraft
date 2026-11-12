@@ -192,7 +192,7 @@ fn shared_colors_survive_renaming_and_do_not_leak_to_other_boards() {
     let mut setup = h.state().session.inspect()["project"]["board"]["setup"].clone();
     for layer in setup["layers"].as_array_mut().unwrap() {
         if layer["id"] == top {
-            layer["name"] = json!("Component copper");
+            layer["name"] = json!("Part copper");
         }
     }
     let revision = h.state().session.revision();

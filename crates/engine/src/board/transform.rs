@@ -188,6 +188,7 @@ impl Session {
         for footprint in board.footprints.iter().filter(|f| ids.contains(&f.id)) {
             if let (Some(library), Some(mapping)) = (&footprint.library, &footprint.mapping) {
                 board.assignments.entry(footprint.component).or_insert_with(|| super::assignment::Assignment {
+                    unconnected_pads: footprint.unconnected_pads.clone(),
                     component: footprint.component,
                     library: library.clone(),
                     definition: footprint.definition.clone(),

@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err(format!("Bundled library `{id}` has no library.json").into());
         }
         let mut files = vec![("library.json".to_owned(), manifest_path)];
-        for directory in ["symbols", "footprints"] {
+        for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts"] {
             let folder = library.join(directory);
             if !folder.is_dir() {
                 continue;

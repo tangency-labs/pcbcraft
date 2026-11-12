@@ -408,7 +408,7 @@ fn layer_groups(
         reveal
     });
     let layers = ordered_layers(board);
-    for (index, title) in ["Copper", "Board", "Component details", "Manufacturing", "User"].into_iter().enumerate() {
+    for (index, title) in ["Copper", "Board", "Part details", "Manufacturing", "User"].into_iter().enumerate() {
         let items: Vec<_> = layers.iter().filter(|layer| group(layer.purpose) == index).collect();
         if items.is_empty() {
             continue;

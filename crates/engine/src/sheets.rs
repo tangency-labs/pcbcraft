@@ -91,7 +91,7 @@ impl Project {
     /// Internal commands clone only the addressed sheet's metadata and touched geometry.
     pub(crate) fn sheet_mut(&mut self) -> &mut SchematicSheet {
         // Labels can contact geometry and join other sheets, including in pure previews.
-        if self.has_named_nets() {
+        if self.requires_project_graph() {
             self.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut self.sheets) {
                 sheet.connectivity = Arc::default();
@@ -252,7 +252,9 @@ impl Session {
                 }
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
                 for symbol in removed.symbols.iter() {
-                    project.retire_component(symbol.component);
+                    if !project.all_symbols().any(|other| other.component == symbol.component) {
+                        project.retire_component(symbol.component);
+                    }
                     Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
                 }
             }

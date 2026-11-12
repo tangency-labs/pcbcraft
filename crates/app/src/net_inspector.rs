@@ -34,7 +34,15 @@ impl Snapshot {
     /// Resolve displayed references from the same typed endpoints used by command inspection.
     fn read(project: &Project) -> Self {
         let pins = |pins: &[Terminal]| {
-            pins.iter().filter_map(|&pin| Some(format!("{}.{}", project.reference(project.terminal_symbol(pin)?), pin.number()))).collect::<Vec<_>>()
+            pins.iter()
+                .filter_map(|&pin| {
+                    Some(format!(
+                        "{}.{}",
+                        project.terminal_symbol(pin)?.display_reference(&project.reference(project.terminal_symbol(pin)?)),
+                        pin.number()
+                    ))
+                })
+                .collect::<Vec<_>>()
         };
         let graph = project.connectivity();
         Self {

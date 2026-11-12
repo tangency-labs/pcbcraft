@@ -12,7 +12,7 @@ pub fn next_number(item: &Item, seed: &str) -> Result<String, String> {
         let n = first.checked_add(step).ok_or("Electrical number limit reached.")?;
         let candidate = format!("{prefix}{n}");
         if crate::schematic::PinNumber::new(&candidate).is_some()
-            && !item.objects.values().any(|p| match p {
+            && !item.objects.values().chain(item.other_units.values().flat_map(|objects| objects.values())).any(|p| match p {
                 Primitive::Pin { number, .. } => number == &candidate,
                 Primitive::Pad { pad } => pad.number == candidate,
                 _ => false,
@@ -108,7 +108,7 @@ pub(super) fn paste(item: &mut Item, primitives: &[Primitive], offset: Point, cu
 /// An explicit fork can integrate an unambiguous legacy lead/label into its pin. The source
 /// definition and old files stay untouched; ambiguous drawing strokes remain independent.
 pub(super) fn legacy_pin(
-    definition: &SymbolDefinition,
+    definition: &crate::schematic::SymbolUnit,
     pin: &crate::schematic::PinDefinition,
     consumed: &mut std::collections::BTreeSet<usize>,
 ) -> Option<crate::schematic::PinAppearance> {

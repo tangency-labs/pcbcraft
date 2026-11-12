@@ -57,10 +57,13 @@ impl Label {
     }
 }
 impl Project {
-    /// Whether any sheet contributes authored net names, including hierarchical interfaces.
-    pub(crate) fn has_named_nets(&self) -> bool {
+    /// Whether names, hierarchy or multi-unit parts require project-wide electrical resolution.
+    pub(crate) fn requires_project_graph(&self) -> bool {
         self.sheets.iter().any(|sheet| {
-            !sheet.net_labels.is_empty() || !sheet.labels.is_empty() || sheet.symbols.iter().any(|s| s.definition.power_terminal().is_some())
+            sheet.symbols.iter().any(|symbol| symbol.definition.units.len() > 1)
+                || !sheet.net_labels.is_empty()
+                || !sheet.labels.is_empty()
+                || sheet.symbols.iter().any(|s| s.definition.power_terminal().is_some())
         })
     }
     /// Explicit definition roles name ordinary terminals from the owning component's Value.
@@ -68,7 +71,7 @@ impl Project {
     pub fn power_terminals(&self) -> impl Iterator<Item = (WireEndpoint, &str, Point)> {
         self.symbols().iter().filter_map(|symbol| {
             let number = symbol.definition.power_terminal()?;
-            let index = symbol.definition.pin_index(number)?;
+            let index = symbol.unit_definition().pin_index(number)?;
             let component = self.component(symbol)?;
             Some((WireEndpoint::Terminal(symbol.terminals()[index]), component.value(), symbol.pins()[index]))
         })

@@ -23,6 +23,34 @@ fn body(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// MCP uses the native record resolver and exact quantity normalizer without an open project.
+#[test]
+fn native_part_resolution_and_units_are_available_through_mcp() {
+    let mut server = server();
+    let documents = json!({
+        "library.json":include_str!("../../../examples/native-parts/library.json"),
+        "symbols/resistor.json":include_str!("../../../examples/native-parts/symbols/resistor.json"),
+        "footprints/resistor-0603.json":include_str!("../../../examples/native-parts/footprints/resistor-0603.json"),
+        "categories/resistor.json":include_str!("../../../examples/native-parts/categories/resistor.json"),
+        "parts/resistor.json":include_str!("../../../examples/native-parts/parts/resistor.json")
+    });
+    let loaded = call(&mut server, "execute", json!({"command":"library.load_source","params":{"source":"demo","documents":documents}}));
+    assert_ne!(loaded["isError"], true);
+    let result = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":"library.resolve_part","inspect":false,"params":{"library":"parts-demo","definition":"resistor","definition_revision":1}}),
+    ));
+    assert_eq!(result["part"]["format"], "pcbcraft-part/1");
+    assert_eq!(result["symbol"]["format"], "pcbcraft-symbol/3");
+    let normalized = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":"library.parse_quantity","inspect":false,"params":{"quantity":"resistance","value":"100 mΩ"}}),
+    ));
+    assert_eq!(normalized, json!({"type":"quantity","value":"0.1","unit":"Ohm"}));
+}
+
 /// Headless and live clients share preview/apply capability validation, including
 /// dedicated read-query results when the caller suppresses project inspection.
 #[cfg(not(target_arch = "wasm32"))]
@@ -322,7 +350,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 4);
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 6);
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
@@ -1096,4 +1124,96 @@ fn hierarchical_clipboard_commands_preserve_payload_and_child_identity() {
     crate::backend::call_session(&mut s, "engine.execute", &paste).unwrap();
     assert_eq!(s.project().unwrap().parent_sheet(child), Some(root));
     assert_eq!(s.project().unwrap().sheets().len(), 2);
+}
+
+/// MCP advertises explicit pinned unit placement and shares one part instance across drawings.
+#[test]
+fn multiunit_placement_uses_shared_commands_and_part_identity() {
+    let mut s = server();
+    let schema = body(&call(&mut s, "describe_command", json!({"command":pcbcraft_engine::PLACE_UNIT})));
+    assert_eq!(schema["params"]["properties"]["unit"]["type"], "string");
+    let opened = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let loaded = call(
+        &mut s,
+        "execute",
+        json!({"command":"library.load_source","params":{"source":"units","documents":{
+            "library.json":include_str!("../../../examples/native-parts/library.json"),
+            "symbols/dual.json":include_str!("../../../examples/native-parts/symbols/dual-amplifier.json")
+        }}}),
+    );
+    assert_ne!(loaded["isError"], true);
+    let found = body(&call(&mut s, "execute", json!({"command":"library.search","params":{"query":"dual-amplifier","kind":"symbol"}})));
+    assert_eq!(found[0]["units"], json!(["a", "b"]));
+    let first = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":PLACE_SYMBOL,"params":{
+            "library":"parts-demo","definition":"dual-amplifier","definition_revision":1,"definition_digest":found[0]["digest"],
+            "unit":"b","x_nm":0,"y_nm":0,"expected_revision":opened["revision"]
+        }}),
+    ));
+    let symbol = &first["project"]["schematic"]["symbols"][0];
+    assert_eq!(symbol["display_reference"], "U1 B");
+    assert_eq!(symbol["available_units"], json!(["a"]));
+    let second = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":pcbcraft_engine::PLACE_UNIT,"params":{
+            "component":symbol["component_id"],"unit":"a","x_nm":30_480_000,"y_nm":0,"expected_revision":first["revision"]
+        }}),
+    ));
+    assert_eq!(second["project"]["components"].as_array().unwrap().len(), 1);
+    let symbols = second["project"]["schematic"]["symbols"].as_array().unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0]["component_id"], symbols[1]["component_id"]);
+}
+
+/// MCP places a central native part/MPN atomically and edits requirements offline through the same engine authority.
+#[test]
+fn native_part_selection_and_compatibility_are_available_through_mcp() {
+    let mut s = server();
+    let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let loaded = call(
+        &mut s,
+        "execute",
+        json!({"command":"library.load_source","params":{"source":"native-parts","documents":{
+            "library.json":include_str!("../../../examples/native-parts/library.json"),
+            "symbols/resistor.json":include_str!("../../../examples/native-parts/symbols/resistor.json"),
+            "footprints/resistor.json":include_str!("../../../examples/native-parts/footprints/resistor-0603.json"),
+            "categories/resistor.json":include_str!("../../../examples/native-parts/categories/resistor.json"),
+            "parts/resistor.json":include_str!("../../../examples/native-parts/parts/resistor.json"),
+            "manufacturer-parts/test.json":include_str!("../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")
+        }}}),
+    );
+    assert_ne!(loaded["isError"], true);
+    let resolved = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":"library.resolve_part","params":{"library":"parts-demo","definition":"resistor","definition_revision":1}}),
+    ));
+    let manufacturers =
+        body(&call(&mut s, "execute", json!({"command":"library.search","params":{"kind":"manufacturer_part","query":"TEST-R100M"}})));
+    let placed = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":"schematic.place_part","params":{
+            "library":"parts-demo","definition":"resistor","definition_revision":1,"definition_digest":resolved["digest"],
+            "manufacturer":{"library":"parts-demo","id":"test-resistor-100m","revision":1},"manufacturer_digest":manufacturers[0]["digest"],
+            "x_nm":0,"y_nm":0,"expected_revision":created["revision"]
+        }}),
+    ));
+    let instance = &placed["project"]["components"][0];
+    assert_eq!(instance["part"]["manufacturer"]["mpn"], "TEST-R100M-0603");
+    assert_eq!(instance["part"]["compatibility"]["status"], "meets_requirements");
+    let removed = call(&mut s, "execute", json!({"command":"library.remove_source","params":{"source":"native-parts"}}));
+    assert_ne!(removed["isError"], true, "{removed}");
+    let params = json!({"component":instance["id"],"requirements":{
+        "pcbcraft:tolerance":{"operator":"at_most","value":{"type":"quantity","value":"0.005","unit":"1"}}
+    },"expected_revision":placed["revision"]});
+    let edited = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
+    assert_ne!(edited["isError"], true);
+    let edited = body(&edited);
+    assert_eq!(edited["project"]["components"][0]["part"]["compatibility"]["status"], "does_not_meet_requirements");
+    let stale = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
+    assert_eq!(stale["isError"], true);
 }

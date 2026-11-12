@@ -1,0 +1,48 @@
+{
+  "format": "pcbcraft-part/1",
+  "library": "parts-demo",
+  "id": "dual-amplifier",
+  "revision": 1,
+  "name": "Illustrative dual amplifier",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "PCBcraft native multi-unit example",
+    "locator": "Original illustrative logical part; no manufacturer identity or qualification"
+  },
+  "symbol": {
+    "library": "parts-demo",
+    "id": "dual-amplifier",
+    "revision": 1
+  },
+  "packages": {
+    "six-pad": {
+      "name": "Illustrative six-pad package",
+      "footprint": {
+        "library": "parts-demo",
+        "id": "illustrative-six-pad",
+        "revision": 1
+      },
+      "mapping": {
+        "1": [
+          "1"
+        ],
+        "2": [
+          "2"
+        ],
+        "3": [
+          "3"
+        ],
+        "4": [
+          "4"
+        ],
+        "5": [
+          "5"
+        ],
+        "6": [
+          "6"
+        ]
+      }
+    }
+  }
+}

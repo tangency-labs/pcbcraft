@@ -136,30 +136,38 @@ pub struct SymbolDefinition {
     /// Versioned electrical semantics and instance defaults; independent of library identity.
     pub behavior: Option<crate::library::Behavior>,
     pub defaults: Option<crate::library::Defaults>,
+    /// Explicit default category for symbol-only workflows; never inferred from names or drawings.
+    pub category: Option<crate::library::parts::CategoryBinding>,
     pub(crate) reference_prefix: String,
     pub(crate) value: String,
-    /// The library-defined identity of the supported unit.
-    pub(crate) unit: String,
-    /// Every pin, in the library's terminal order.
+    /// Logical terminals in native terminal order; geometry is the first appearance only.
     pub(crate) pins: Vec<PinDefinition>,
-    /// The strokes drawn on the schematic canvas.
+    /// Independently placeable drawings belonging to the same part definition.
+    pub(crate) units: Vec<SymbolUnit>,
+}
+
+/// One independently placeable view of a subset of a part's logical terminals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolUnit {
+    pub(crate) unit: String,
+    pub(crate) pins: Vec<PinDefinition>,
     pub drawing: Vec<Shape>,
 }
 
-impl SymbolDefinition {
-    /// The globally named terminal, if explicitly declared by this definition.
-    pub fn power_terminal(&self) -> Option<&str> {
-        self.behavior.as_ref().map(|behavior| match behavior {
-            crate::library::Behavior::Power { terminal } => terminal.as_str(),
-        })
+impl SymbolUnit {
+    /// Stable library identity, unrelated to its array position or displayed designator.
+    pub fn unit_id(&self) -> &str {
+        &self.unit
     }
-
-    /// Native schema retained when pinning or exporting an unchanged definition.
-    pub fn format(&self) -> &'static str {
-        if self.format_version == 2 { crate::library::SYMBOL_FORMAT_V2 } else { crate::library::SYMBOL_FORMAT }
+    /// Terminal appearances in the global terminal table's order.
+    pub fn pins(&self) -> &[PinDefinition] {
+        &self.pins
     }
-
-    /// Resolve raw drawing plus integrated pin graphics without changing native serialization.
+    /// Resolve a terminal's index within this drawing, rather than the complete part.
+    pub fn pin_index(&self, number: &str) -> Option<usize> {
+        self.pins.iter().position(|pin| pin.number == number)
+    }
+    /// Resolve strokes and integrated pin ink for this unit only.
     pub fn graphics(&self) -> Vec<Shape> {
         self.drawing
             .iter()
@@ -174,9 +182,53 @@ impl SymbolDefinition {
             }))
             .collect()
     }
-    /// Return the unit identity supplied by the library, used by saved placements.
+    /// Rotate this unit's pin anchors into absolute schematic coordinates.
+    pub fn pin_positions(&self, Point { x_nm, y_nm }: Point, turns: u8) -> Vec<Point> {
+        self.pins
+            .iter()
+            .map(|pin| {
+                let (x, y) = rotate(pin.offset.x_nm, pin.offset.y_nm, turns);
+                Point { x_nm: x_nm + x, y_nm: y_nm + y }
+            })
+            .collect()
+    }
+}
+
+impl SymbolDefinition {
+    /// The globally named terminal, if explicitly declared by this definition.
+    pub fn power_terminal(&self) -> Option<&str> {
+        self.behavior.as_ref().map(|behavior| match behavior {
+            crate::library::Behavior::Power { terminal } => terminal.as_str(),
+        })
+    }
+
+    /// Native schema retained when pinning or exporting an unchanged definition.
+    pub fn format(&self) -> &'static str {
+        match self.format_version {
+            4 => crate::library::SYMBOL_FORMAT_V4,
+            3 => crate::library::SYMBOL_FORMAT_V3,
+            2 => crate::library::SYMBOL_FORMAT_V2,
+            _ => crate::library::SYMBOL_FORMAT,
+        }
+    }
+
+    /// Initial drawing for a new part or catalog preview; existing placements select their unit explicitly.
+    pub fn default_unit(&self) -> &SymbolUnit {
+        &self.units[0]
+    }
+    /// Stable identity of the initial drawing, retained by legacy single-unit placement callers.
     pub fn unit_id(&self) -> &str {
-        &self.unit
+        self.default_unit().unit_id()
+    }
+
+    /// All drawings belonging to the same immutable logical terminal table.
+    pub fn units(&self) -> &[SymbolUnit] {
+        &self.units
+    }
+
+    /// Look up a stable unit identity without assuming a numeric or alphabetic name.
+    pub fn unit(&self, id: &str) -> Option<&SymbolUnit> {
+        self.units.iter().find(|unit| unit.unit_id() == id)
     }
 
     /// Return the definition revision pinned by a component.
@@ -194,7 +246,8 @@ impl SymbolDefinition {
         &self.reference_prefix
     }
 
-    /// Every pin in the library's terminal order, as defined before rotation.
+    /// Complete logical terminal table in native order. Geometry is its first appearance;
+    /// use a selected unit's pins for drawing or coordinate lookup.
     pub fn pins(&self) -> &[PinDefinition] {
         &self.pins
     }
@@ -207,18 +260,6 @@ impl SymbolDefinition {
     /// Whether the starter two-pad footprint can map this symbol: it has exactly pins 1 and 2.
     pub(crate) fn fits_two_pad_footprint(&self) -> bool {
         self.pins.len() == 2 && self.pins.iter().zip(["1", "2"]).all(|(pin, number)| pin.number == number)
-    }
-
-    /// Return every pin's position, in [`Self::pins`] order, for this symbol centered at this
-    /// point and turned this many quarter turns counterclockwise.
-    pub fn pin_positions(&self, Point { x_nm, y_nm }: Point, turns: u8) -> Vec<Point> {
-        self.pins
-            .iter()
-            .map(|pin| {
-                let (x, y) = rotate(pin.offset.x_nm, pin.offset.y_nm, turns);
-                Point { x_nm: x_nm + x, y_nm: y_nm + y }
-            })
-            .collect()
     }
 }
 
@@ -233,19 +274,21 @@ pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
     }
 }
 
-/// One logical component, independent of the position of its schematic unit.
-/// The component owns the definition, designator and value; footprints link to its ID.
+/// One placed part instance, independent of the position of its schematic unit.
+/// It owns the definition, designator and value; footprints link to its stable legacy component ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Component {
+pub struct PartInstance {
     pub definition: Arc<SymbolDefinition>,
     pub(crate) ordinal: u64,
     pub(crate) reference_number: usize,
     pub(crate) reference: String,
     pub(crate) value: String,
     pub metadata: fields::Metadata,
+    /// Optional reusable part and manufacturer selection, shared by every schematic unit.
+    pub part: Option<crate::part_instances::Selection>,
 }
 
-impl Component {
+impl PartInstance {
     /// Return the component identity, which is independent of any symbol placement ID.
     pub fn id(&self) -> String {
         format!("component-{}", self.ordinal)
@@ -263,8 +306,12 @@ impl Component {
 
     /// Publish component-owned fields independently of schematic placement geometry.
     pub(crate) fn inspect(&self) -> Value {
-        json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
-            "reference": self.reference, "value": self.value, "metadata": self.metadata})
+        let mut value = json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
+            "reference": self.reference, "value": self.value, "metadata": self.metadata});
+        if let Some(part) = &self.part {
+            value["part"] = part.inspect();
+        }
+        value
     }
 }
 
@@ -303,7 +350,8 @@ pub struct SymbolPlacement {
     pub definition: Arc<SymbolDefinition>,
     pub(crate) ordinal: u64,
     pub(crate) component: u64,
-    pub unit: String,
+    pub(crate) unit: String,
+    pub(crate) unit_index: usize,
     pub position: Point,
     /// Per-instance field appearance, independent of the drawing and pin geometry.
     pub field_layout: fields::Layouts,
@@ -316,7 +364,8 @@ impl SymbolPlacement {
     /// project. The shared placement command allocates real component and unit identities.
     pub fn preview(definition: Arc<SymbolDefinition>, turns: u8, field_layout: fields::Layouts) -> Self {
         Self {
-            unit: definition.unit.clone(),
+            unit: definition.unit_id().to_owned(),
+            unit_index: 0,
             definition,
             ordinal: 0,
             component: 0,
@@ -324,6 +373,24 @@ impl SymbolPlacement {
             field_layout,
             rotation: turns % 4,
         }
+    }
+
+    /// Preview an explicitly selected unit, refusing an identity absent from the definition.
+    pub fn preview_unit(definition: Arc<SymbolDefinition>, unit: &str, turns: u8, field_layout: fields::Layouts) -> Option<Self> {
+        let unit_index = definition.units.iter().position(|drawing| drawing.unit_id() == unit)?;
+        let mut preview = Self::preview(definition, turns, field_layout);
+        preview.unit = unit.to_owned();
+        preview.unit_index = unit_index;
+        Some(preview)
+    }
+    /// Stable identity of this placed drawing within its part definition.
+    pub fn unit_id(&self) -> &str {
+        &self.unit
+    }
+
+    /// Resolve the drawing selected by this placement. Commands and codecs validate its identity.
+    pub fn unit_definition(&self) -> &SymbolUnit {
+        &self.definition.units[self.unit_index]
     }
 
     /// Quarter turns counterclockwise, 0 to 3.
@@ -341,15 +408,25 @@ impl SymbolPlacement {
         symbol_id(self.ordinal)
     }
 
+    /// Keep the part's designator shared while distinguishing its unit on the drawing.
+    /// Whitespace cannot occur in either identity, so the separator prevents collisions with another part's base reference.
+    pub fn display_reference(&self, reference: &str) -> String {
+        if reference.is_empty() || self.definition.units.len() == 1 {
+            reference.to_owned()
+        } else {
+            format!("{reference} {}", self.unit.to_uppercase())
+        }
+    }
+
     /// Return the terminal references in the same order as the pin positions.
     pub fn terminals(&self) -> Vec<Terminal> {
-        Terminal::for_symbol(self.ordinal, &self.definition)
+        Terminal::for_symbol(self.ordinal, self.unit_definition())
     }
 
     /// Return every pin in absolute schematic coordinates, turned with the symbol, in the
     /// definition's pin order.
     pub fn pins(&self) -> Vec<Point> {
-        self.definition.pin_positions(self.position, self.rotation)
+        self.unit_definition().pin_positions(self.position, self.rotation)
     }
 
     /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
@@ -358,7 +435,7 @@ impl SymbolPlacement {
         let pins = self
             .pins()
             .into_iter()
-            .zip(&self.definition.pins)
+            .zip(self.unit_definition().pins())
             .map(|(position, definition)| {
                 let mut pin = json!({
                     "number": definition.number,
@@ -378,6 +455,7 @@ impl SymbolPlacement {
             "unit": self.unit,
             "kind": self.definition.id,
             "reference": reference,
+            "display_reference": self.display_reference(reference),
             "value": value,
             "rotation": u16::from(self.rotation) * 90,
             "x_nm": self.position.x_nm,

@@ -119,7 +119,14 @@ the same `VCC` net name, which can be changed before placement.
    library folders on desktop or uploads a portable library bundle on either
    platform. Try the original [Workshop source example](native-library-sources.md),
    then select Workshop in the catalog. Placed symbols keep their pinned
-   definition and license attribution after the source is removed.
+   definition and license attribution after the source is removed. The
+   [native part example](../examples/native-parts/README.md) also offers a generic
+   resistor with a 0603 package and an optional synthetic manufacturer part.
+   Choose **Unassigned** to defer the package, or select the manufacturer record
+   to place the resolved combination. A placed native part's **Footprint** action
+   opens its package, manufacturer and typed requirement form; changes use one
+   undo step and flag a retained MPN when its specifications no longer meet the
+   requirements. These records travel with folder and `.pc` saves.
    **Dock** switches the large form to a compact catalog beneath Browser; its
    header's **Expand** control returns to the large form with the same library,
    search and selection. The compact catalog stays open during placement and can

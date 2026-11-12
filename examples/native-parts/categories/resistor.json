@@ -1,0 +1,36 @@
+{
+  "format": "pcbcraft-category/1",
+  "library": "parts-demo",
+  "id": "resistor",
+  "revision": 1,
+  "name": "Resistor",
+  "license": "MIT OR Apache-2.0",
+  "fields": {
+    "pcbcraft:resistance": {
+      "name": "Resistance",
+      "value_type": {
+        "type": "quantity",
+        "quantity": "resistance",
+        "unit": "Ohm"
+      }
+    },
+    "pcbcraft:tolerance": {
+      "name": "Tolerance",
+      "value_type": {
+        "type": "quantity",
+        "quantity": "ratio",
+        "unit": "1"
+      }
+    },
+    "parts-demo:technology": {
+      "name": "Technology",
+      "value_type": {
+        "type": "choice",
+        "choices": [
+          "thick-film",
+          "thin-film"
+        ]
+      }
+    }
+  }
+}

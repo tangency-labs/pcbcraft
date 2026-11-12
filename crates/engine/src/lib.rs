@@ -15,6 +15,7 @@ pub mod hierarchy;
 pub mod library;
 pub mod library_graphics;
 pub mod net_labels;
+pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
@@ -33,7 +34,7 @@ use std::{
 };
 
 use schematic::{
-    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint,
+    MAX_CENTER_NM, MAX_SYMBOLS, PartInstance, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint,
     wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
@@ -71,7 +72,11 @@ enum ParamKind {
     ClipboardHierarchyObjects,
     ReferencePolicy,
     CreateBoard,
-    ComponentMetadata,
+    PartMetadata,
+    OptionalNativeId,
+    NativeReference,
+    PartRequirements,
+    UnconnectedPads,
     FieldLayouts,
     ReferenceText,
     TextLayout,
@@ -81,6 +86,7 @@ enum ParamKind {
     LibraryDocuments,
     LibraryQuery,
     LibraryKind,
+    LibraryQuantity,
     LibraryDigest,
     DefinitionRevision,
     AutoHeal,
@@ -96,7 +102,7 @@ enum ParamKind {
     FootprintMapping,
     FootprintId,
     FootprintIds,
-    ComponentIds,
+    PartIds,
     ResolveExistingFootprints,
     BoardRotation,
     PadNumber,
@@ -159,7 +165,15 @@ impl ParamKind {
             Self::ClipboardText => json!({"type":"string","maxLength":clipboard::MAX_BYTES}),
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
-            Self::ComponentMetadata => schematic::fields::metadata_schema(),
+            Self::PartMetadata => schematic::fields::metadata_schema(),
+            Self::UnconnectedPads => {
+                json!({"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+            }
+            Self::OptionalNativeId => json!({"type":["string","null"],"minLength":1,"maxLength":64}),
+            Self::NativeReference => {
+                json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["library","id","revision"],"properties":{"library":Self::LibrarySource.schema(),"id":Self::LibrarySource.schema(),"revision":Self::DefinitionRevision.schema()}}]})
+            }
+            Self::PartRequirements => crate::library::parts::requirements_schema(),
             Self::ReferenceText => board::reference::Text::schema(),
             Self::FieldLayouts => schematic::fields::layouts_schema(),
             Self::TextLayout => schematic::fields::layouts_schema()["additionalProperties"].clone(),
@@ -170,7 +184,10 @@ impl ParamKind {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
-            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint"]}),
+            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
+            Self::LibraryQuantity => {
+                json!({"type":"string","enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"]})
+            }
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
@@ -212,7 +229,7 @@ impl ParamKind {
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
             Self::FootprintId => json!({"type":"string", "pattern":"^footprint-[1-9][0-9]*$"}),
-            Self::ComponentIds => {
+            Self::PartIds => {
                 json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":{"type":"string","pattern":"^component-[1-9][0-9]*$"}})
             }
             Self::FootprintIds => json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":Self::FootprintId.schema()}),
@@ -222,7 +239,7 @@ impl ParamKind {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
-                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -296,7 +313,33 @@ impl ParamKind {
                 })
                 .map(|_| ())
                 .ok_or("must contain a valid text appearance"),
-            Self::ComponentMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
+            Self::UnconnectedPads
+                if serde_json::from_value::<Vec<String>>(value.clone()).is_ok_and(|pads| {
+                    pads.len() <= 128
+                        && pads.iter().all(|pad| schematic::PinNumber::new(pad).is_some())
+                        && pads.iter().collect::<std::collections::BTreeSet<_>>().len() == pads.len()
+                }) =>
+            {
+                Ok(())
+            }
+            Self::UnconnectedPads => Err("must be distinct bounded pad identities"),
+            Self::OptionalNativeId if value.is_null() || value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
+            Self::OptionalNativeId => Err("must be a native identity or null"),
+            Self::NativeReference
+                if value.is_null()
+                    || serde_json::from_value::<library::parts::Reference>(value.clone()).is_ok_and(|reference| reference.validate().is_ok()) =>
+            {
+                Ok(())
+            }
+            Self::NativeReference => Err("must be an exact native reference or null"),
+            Self::PartRequirements
+                if serde_json::from_value::<BTreeMap<String, library::parts::Requirement>>(value.clone())
+                    .is_ok_and(|values| values.len() <= 64 && values.keys().all(|id| library::parts::field_id(id))) =>
+            {
+                Ok(())
+            }
+            Self::PartRequirements => Err("must be at most 64 typed requirements keyed by category field ID"),
+            Self::PartMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
                 .ok()
                 .filter(|m| m.validate().is_ok())
                 .map(|_| ())
@@ -322,11 +365,13 @@ impl ParamKind {
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
-            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint")) => Ok(()),
+            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
+            Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
-            Self::LibraryKind => Err("must be symbol or footprint"),
+            Self::LibraryKind => Err("must be symbol, footprint, category or part"),
+            Self::LibraryQuantity => Err("must name a supported physical quantity"),
             Self::DrawingPoints
                 if value.as_array().is_some_and(|v| (2..=256).contains(&v.len()) && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
             {
@@ -434,7 +479,7 @@ impl ParamKind {
             {
                 Ok(())
             }
-            Self::ComponentIds if board::assignment::component_ids(value).is_some() => Ok(()),
+            Self::PartIds if board::assignment::component_ids(value).is_some() => Ok(()),
             Self::ResolveExistingFootprints if value.is_boolean() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
@@ -467,7 +512,7 @@ impl ParamKind {
             Self::FootprintMapping => Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _"),
             Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
             Self::FootprintId => Err("must identify a placed footprint"),
-            Self::ComponentIds => Err("must contain unique component IDs within the symbol limit"),
+            Self::PartIds => Err("must contain unique component IDs within the symbol limit"),
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
@@ -555,7 +600,10 @@ const NEW_NAME: Param = Param { required: false, name: "name", summary: "The pro
 const NEW_BOARD_NAME: Param = Param { required: false, name: "name", summary: "The board's name (default Board)", kind: ParamKind::Name };
 /// Compatibility command for callers that placed resistors before the symbol picker.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
-/// Place the specified starter library symbol on the schematic.
+/// Place an unplaced unit of an existing part using its pinned definition.
+pub const PLACE_UNIT: &str = "schematic.place_unit";
+
+/// Place a new part from a native symbol and select its initial schematic unit.
 pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
 /// The command that joins two inspected symbol terminals with an undoable wire.
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
@@ -974,8 +1022,23 @@ const CATALOG: &[Command] = &[
                 summary: "Exact loaded symbol revision; required for explicit library selections",
                 kind: ParamKind::DefinitionRevision,
             },
+            Param { required: false, name: "unit", summary: "Unit ID; defaults to the first native unit", kind: ParamKind::LibrarySource },
             Param { required: false, name: "rotation", summary: "Counterclockwise degrees; defaults to 0", kind: ParamKind::Rotation },
             Param { required: false, name: "value", summary: "Initial editable component Value; defaults to the definition", kind: ParamKind::Text },
+            SYMBOL_X,
+            SYMBOL_Y,
+            EXPECTED_REVISION,
+            AUTO_HEAL,
+        ],
+    },
+    Command {
+        id: PLACE_UNIT,
+        title: "Place Part Unit",
+        summary: "Place an unplaced unit of an existing part using its pinned definition, including on another sheet. Shares reference, value and footprint. Undoable.",
+        params: &[
+            Param { required: true, name: "component", summary: "Existing part instance ID from schematic inspection", kind: ParamKind::Text },
+            Param { required: true, name: "unit", summary: "Unplaced unit ID from the pinned symbol definition", kind: ParamKind::LibrarySource },
+            Param { required: false, name: "rotation", summary: "Counterclockwise degrees; defaults to 0", kind: ParamKind::Rotation },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
@@ -1166,7 +1229,7 @@ const CATALOG: &[Command] = &[
                 required: false,
                 name: "metadata",
                 summary: "Replace component fields and attributes; omission preserves them",
-                kind: ParamKind::ComponentMetadata,
+                kind: ParamKind::PartMetadata,
             },
             Param {
                 required: false,
@@ -1227,6 +1290,7 @@ const CATALOG: &[Command] = &[
                 summary: "Explicit bijection from logical terminals to pad numbers",
                 kind: ParamKind::FootprintMapping,
             },
+            Param { name: "unconnected_pads", required: false, summary: "Explicit non-electrical pad IDs", kind: ParamKind::UnconnectedPads },
             EXPECTED_REVISION,
         ],
     },
@@ -1248,7 +1312,7 @@ const CATALOG: &[Command] = &[
         summary: "Place a group of accepted assigned packages in a spaced grid at the given anchor. One atomic undo step; existing placements stay fixed.",
         params: &[
             BOARD,
-            Param { required: true, name: "components", summary: "Unique assigned component IDs, in placement order", kind: ParamKind::ComponentIds },
+            Param { required: true, name: "components", summary: "Unique assigned component IDs, in placement order", kind: ParamKind::PartIds },
             SYMBOL_X,
             SYMBOL_Y,
             Param {
@@ -1443,6 +1507,10 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[1],
     library::sources::COMMANDS[2],
     library::sources::COMMANDS[3],
+    library::sources::COMMANDS[4],
+    library::sources::COMMANDS[5],
+    part_instances::commands::COMMANDS[0],
+    part_instances::commands::COMMANDS[1],
     Command {
         id: ADD_DRAWING,
         title: "Draw Board Graphic",
@@ -1707,7 +1775,7 @@ pub struct Project {
     /// Transient immutable projection; canonical session snapshots always use index zero.
     sheet_index: usize,
     /// Logical components own their definition, reference and value.
-    components: Arc<BTreeMap<u64, Component>>,
+    components: Arc<BTreeMap<u64, PartInstance>>,
     /// Derived index of each placed component unit to its symbol ID.
     units: Arc<BTreeMap<(u64, String), u64>>,
     /// Unplaced package choices are project-owned while no physical board exists.
@@ -1743,7 +1811,7 @@ impl Project {
     }
 
     /// Return the logical components in stable component ID order.
-    pub fn components(&self) -> impl Iterator<Item = &Component> {
+    pub fn components(&self) -> impl Iterator<Item = &PartInstance> {
         self.components.values()
     }
 
@@ -1755,7 +1823,7 @@ impl Project {
     }
 
     /// Resolve a placement's owner in this snapshot. Foreign placements may have no component.
-    pub fn component(&self, symbol: &SymbolPlacement) -> Option<&Component> {
+    pub fn component(&self, symbol: &SymbolPlacement) -> Option<&PartInstance> {
         self.components.get(&symbol.component)
     }
 
@@ -1776,14 +1844,33 @@ impl Project {
 
     /// Return the owning component's value, or empty text for a foreign placement.
     pub fn value(&self, symbol: &SymbolPlacement) -> &str {
-        self.component(symbol).map_or("", Component::value)
+        self.component(symbol).map_or("", PartInstance::value)
     }
 
-    /// Resolve a component pin through the unit-placement index. Only one unit is supported today.
+    /// Units of an existing part that can still be placed, including on another sheet.
+    pub fn available_units(&self, component: &str) -> Vec<&schematic::SymbolUnit> {
+        let Some(id) = schematic::wiring::parse_id(component, "component-") else {
+            return Vec::new();
+        };
+        self.components
+            .get(&id)
+            .map(|part| part.definition.units.iter().filter(|unit| !self.units.contains_key(&(id, unit.unit_id().to_owned()))).collect())
+            .unwrap_or_default()
+    }
+
+    /// Resolve one placed appearance of a logical part terminal across all sheets.
     pub(crate) fn component_terminal(&self, component: u64, pin: &str) -> Option<Terminal> {
-        let definition = &self.components.get(&component)?.definition;
-        let symbol = self.units.get(&(component, definition.unit_id().to_owned()))?;
-        Terminal::from_number(*symbol, definition, pin)
+        self.component_terminals(component, pin).next()
+    }
+
+    /// Every placed appearance in stable unit-ID order. The part/unit index avoids scanning
+    /// unrelated placements for each pin during board capture and cross-probing.
+    pub(crate) fn component_terminals<'a>(&'a self, component: u64, pin: &'a str) -> impl Iterator<Item = Terminal> + 'a {
+        let definition = self.components.get(&component).map(|part| &part.definition);
+        self.units
+            .range((component, String::new())..)
+            .take_while(move |((owner, _), _)| *owner == component)
+            .filter_map(move |((_, unit), symbol)| Terminal::from_number(*symbol, definition?.unit(unit)?, pin))
     }
 
     /// The older single-document format migrated when this snapshot was opened, such as 1.
@@ -1805,7 +1892,7 @@ impl Project {
     /// Resolve the current coordinates of a terminal in this snapshot.
     pub fn terminal_position(&self, terminal: Terminal) -> Option<Point> {
         let symbol = self.terminal_symbol(terminal)?;
-        let index = symbol.definition.pin_index(terminal.number())?;
+        let index = symbol.unit_definition().pin_index(terminal.number())?;
         symbol.pins().get(index).copied()
     }
 
@@ -1813,14 +1900,19 @@ impl Project {
     /// before projection; geometry edits invalidate their contact graph. Unnamed geometry edits
     /// can continue sharing a topology-only cache.
     pub fn connectivity(&self) -> &Connectivity {
-        self.connectivity
-            .get_or_init(|| if self.has_named_nets() { self.named_connectivity(false) } else { Connectivity::build(&self.symbols, &self.wires) })
+        self.connectivity.get_or_init(|| {
+            if self.requires_project_graph() { self.named_connectivity(false) } else { Connectivity::build(&self.symbols, &self.wires) }
+        })
     }
 
     /// Inspect the schematic in the shared command format, without including the board.
     pub fn inspect_schematic(&self) -> Value {
         json!({
-            "symbols": self.symbols.iter().map(|symbol| symbol.inspect(&self.reference(symbol), self.value(symbol))).collect::<Vec<_>>(),
+            "symbols": self.symbols.iter().map(|symbol| {
+                let mut value = symbol.inspect(&self.reference(symbol), self.value(symbol));
+                value["available_units"] = json!(self.available_units(&symbol.component_id()).iter().map(|unit| unit.unit_id()).collect::<Vec<_>>());
+                value
+            }).collect::<Vec<_>>(),
             "wires": self.wires.iter().map(|wire| {
                 let mut inspected = wire.inspect();
                 inspected["path"] = json!(self.wire_path(wire));
@@ -2027,7 +2119,12 @@ impl Session {
             return false;
         }
         match id {
-            library::sources::LOAD | library::sources::REMOVE | library::sources::LIST | library::sources::SEARCH => true,
+            library::sources::LOAD
+            | library::sources::REMOVE
+            | library::sources::LIST
+            | library::sources::SEARCH
+            | library::sources::RESOLVE_PART
+            | library::sources::PARSE_QUANTITY => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -2046,6 +2143,9 @@ impl Session {
             | "project.rename"
             | PLACE_RESISTOR
             | PLACE_SYMBOL
+            | PLACE_UNIT
+            | part_instances::PLACE_PART
+            | part_instances::SET_PART
             | CONNECT_PINS
             | MOVE_SYMBOL
             | ROTATE_SYMBOL
@@ -2128,7 +2228,7 @@ impl Session {
                 "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
-                "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
+                "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
                 "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
@@ -2270,6 +2370,9 @@ impl Session {
                 | "project.rename"
                 | PLACE_RESISTOR
                 | PLACE_SYMBOL
+                | PLACE_UNIT
+                | part_instances::PLACE_PART
+                | part_instances::SET_PART
                 | CONNECT_PINS
                 | MOVE_SYMBOL
                 | ROTATE_SYMBOL
@@ -2354,6 +2457,17 @@ impl Session {
                     .latest_symbol("starter", "resistor")
                     .ok_or_else(|| CommandError::Unavailable("the default library has no resistor symbol".to_owned()))?;
                 self.place_symbol(resistor, params)?;
+            }
+            part_instances::PLACE_PART => self.place_library_part(params)?,
+            part_instances::SET_PART => self.edit_library_part(params)?,
+            PLACE_UNIT => {
+                self.check_revision(params)?;
+                let component = params["component"]
+                    .as_str()
+                    .and_then(|id| schematic::wiring::parse_id(id, "component-"))
+                    .and_then(|id| self.project.as_ref()?.components.get(&id))
+                    .ok_or_else(|| CommandError::InvalidParams("unknown part instance".into()))?;
+                self.place_symbol(component.definition.clone(), params)?;
             }
             PLACE_SYMBOL => {
                 let library = params["library"].as_str().unwrap_or("starter");
@@ -2447,7 +2561,8 @@ impl Session {
         self.project.as_deref().ok_or_else(|| CommandError::Unavailable("no project is open".to_owned()))
     }
 
-    /// Add a symbol from validated parameters if the caller's revision is still current.
+    /// Add a new part or an unplaced unit from validated parameters at the caller's revision.
+    /// An existing part retains its shared fields and package; only the new drawing is allocated.
     /// Reserve above the allocation watermark and runtime revision so undo cannot recycle it.
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
     /// Explicit native selections reject conflicting pinned content. Calls omitting all
@@ -2455,7 +2570,7 @@ impl Session {
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        if project.components.len() >= MAX_SYMBOLS {
+        if project.all_symbols().count() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
         // A project keeps one copy per library, ID and revision: reuse the one it already saves.
@@ -2472,43 +2587,60 @@ impl Session {
             Some(saved) => saved.clone(),
             None => definition,
         };
-        let mut reference_number = project
-            .components
-            .values()
-            .filter(|component| component.definition.reference_prefix == definition.reference_prefix)
-            .map(|component| component.reference_number)
-            .max()
-            .unwrap_or_default()
-            + 1;
-        // An edited reference may already use the next automatic one, such as R1 renamed to R2.
-        let shown: std::collections::BTreeSet<String> = project.components.values().map(|component| component.reference.clone()).collect();
-        while shown.contains(&format!("{}{reference_number}", definition.reference_prefix)) {
-            reference_number += 1;
-        }
-        if reference_number > MAX_REFERENCE_NUMBER {
-            return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
-        }
-        if let Some(value) = params.get("value") {
-            schematic::check_value(value.as_str().unwrap_or_default()).map_err(CommandError::InvalidParams)?;
-        }
+        let unit = params["unit"].as_str().unwrap_or(definition.unit_id()).to_owned();
+        let unit_index = definition
+            .units
+            .iter()
+            .position(|drawing| drawing.unit_id() == unit)
+            .ok_or_else(|| CommandError::InvalidParams("unknown symbol unit".into()))?;
         let defaults = definition.defaults.clone().unwrap_or_default();
         let ordinal = self.next_object_id()?;
-        let component = Component {
-            ordinal,
-            definition: definition.clone(),
-            reference_number,
-            reference: format!("{}{reference_number}", definition.reference_prefix),
-            value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
-            metadata: defaults.metadata,
+        let existing = params.get("component").and_then(Value::as_str).and_then(|id| schematic::wiring::parse_id(id, "component-"));
+        let component = if let Some(id) = existing {
+            if project.units.contains_key(&(id, unit.clone())) {
+                return Err(CommandError::InvalidParams("part unit is already placed".into()));
+            }
+            project.components.get(&id).ok_or_else(|| CommandError::InvalidParams("unknown part instance".into()))?.clone()
+        } else {
+            let mut reference_number = project
+                .components
+                .values()
+                .filter(|component| component.definition.reference_prefix == definition.reference_prefix)
+                .map(|component| component.reference_number)
+                .max()
+                .unwrap_or_default()
+                + 1;
+            // An edited reference may already use the next automatic one, such as R1 renamed to R2.
+            let shown: std::collections::BTreeSet<String> = project.components.values().map(|component| component.reference.clone()).collect();
+            while shown.contains(&format!("{}{reference_number}", definition.reference_prefix)) {
+                reference_number += 1;
+            }
+            if reference_number > MAX_REFERENCE_NUMBER {
+                return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
+            }
+            if let Some(value) = params.get("value") {
+                schematic::check_value(value.as_str().unwrap_or_default()).map_err(CommandError::InvalidParams)?;
+            }
+            PartInstance {
+                ordinal,
+                definition: definition.clone(),
+                reference_number,
+                reference: format!("{}{reference_number}", definition.reference_prefix),
+                value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
+                metadata: defaults.metadata,
+                part: None,
+            }
         };
+        let component_id = component.ordinal;
         let mut project = project.clone();
-        Arc::make_mut(&mut project.components).insert(ordinal, component);
-        Arc::make_mut(&mut project.units).insert((ordinal, definition.unit_id().to_owned()), ordinal);
+        Arc::make_mut(&mut project.components).insert(component_id, component);
+        Arc::make_mut(&mut project.units).insert((component_id, unit.clone()), ordinal);
         Arc::make_mut(&mut project.sheet_mut().symbols).push(SymbolPlacement {
-            unit: definition.unit_id().to_owned(),
+            unit,
+            unit_index,
             definition,
             ordinal,
-            component: ordinal,
+            component: component_id,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
             field_layout: defaults.field_layout,
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
@@ -2581,7 +2713,7 @@ impl Session {
         Arc::make_mut(&mut project.sheet_mut().wires).retain(|wire| wire.terminals().iter().all(|terminal| terminal.symbol != ordinal));
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
-        if !project.symbols.iter().any(|other| other.component == symbol.component) {
+        if !project.all_symbols().any(|other| other.component == symbol.component) {
             project.retire_component(symbol.component);
         }
         project.sheet_mut().connectivity = Arc::default();
@@ -2606,7 +2738,14 @@ impl Session {
         let component =
             project.component(&project.symbols[index]).ok_or_else(|| CommandError::InvalidParams("symbol has no component".to_owned()))?;
         let reference = params["reference"].as_str().unwrap_or_default().trim().to_owned();
-        let value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        let mut value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        let mut part_selection = component.part.clone();
+        if value != component.value
+            && let Some(selection) = &mut part_selection
+            && let Some(canonical) = selection.set_primary_value(&value).map_err(CommandError::InvalidParams)?
+        {
+            value = canonical;
+        }
         schematic::check_reference(&reference).map_err(CommandError::InvalidParams)?;
         schematic::check_value(&value).map_err(CommandError::InvalidParams)?;
         if project.components.values().any(|other| other.ordinal != component.ordinal && other.reference == reference) {
@@ -2640,6 +2779,7 @@ impl Session {
         schematic::fields::validate_layouts(&field_layout, &metadata).map_err(CommandError::InvalidParams)?;
         if component.reference == reference
             && component.value == value
+            && component.part == part_selection
             && component.metadata == metadata
             && project.symbols[index].field_layout == field_layout
             && project.symbols[index].rotation == rotation
@@ -2650,6 +2790,7 @@ impl Session {
         let mut component = component.clone();
         component.reference = reference;
         component.value = value;
+        component.part = part_selection;
         component.metadata = metadata;
         let mut next = if position != original_position {
             project.transformed_symbol(&project.symbols[index].id(), position, Some(rotation), false, self.revision(), wire::auto_heal(params))?
@@ -2687,7 +2828,7 @@ impl Session {
             board::parse_mapping(value).ok_or_else(|| CommandError::InvalidParams("invalid terminal-to-pad mapping".into()))?
         } else {
             let first = params["pin_1_pad"].as_u64().ok_or_else(|| CommandError::InvalidParams("supply mapping or pin_1_pad".into()))? as u8;
-            BTreeMap::from([("1".into(), first.to_string()), ("2".into(), (3 - first).to_string())])
+            BTreeMap::from([("1".into(), first.to_string().into()), ("2".into(), (3 - first).to_string().into())])
         };
         let mut project = project.clone();
         let mut footprint = Footprint::new(self.next_object_id()?, component, 0, position);
@@ -2695,8 +2836,8 @@ impl Session {
             if !symbol.fits_two_pad_footprint() {
                 return Err(CommandError::InvalidParams("the two-pad footprint only fits symbols with exactly pins 1 and 2".into()));
             }
-            let first = mapping.get("1").and_then(|pad| pad.parse::<u8>().ok()).filter(|pad| (1..=2).contains(pad));
-            let Some(first) = first.filter(|pad| mapping.len() == 2 && mapping.get("2") == Some(&(3 - pad).to_string())) else {
+            let first = mapping.get("1").and_then(|pad| pad.first()).and_then(|pad| pad.parse::<u8>().ok()).filter(|pad| (1..=2).contains(pad));
+            let Some(first) = first.filter(|pad| mapping.len() == 2 && mapping.get("2") == Some(&(3 - pad).to_string().into())) else {
                 return Err(CommandError::InvalidParams("legacy footprint requires an exact two-pad bijection".into()));
             };
             footprint.pin_1_pad = first;
@@ -2805,7 +2946,7 @@ impl Session {
         }
         project.refresh_board_folder();
         // Named anchors can attach to moving geometry and join other sheets.
-        if project.has_named_nets() || self.project.as_ref().is_some_and(|p| p.has_named_nets()) {
+        if project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
                 sheet.connectivity = Arc::default();
@@ -3365,3 +3506,6 @@ mod wiring_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod multiunit_tests;

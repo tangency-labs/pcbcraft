@@ -2,7 +2,7 @@
 use pcbcraft_engine::library::sources::{Documents, MAX_FILE_BYTES, MAX_FILES, MAX_SOURCE_BYTES, NativeSource, is_document_path};
 use std::{fs, io::Read, path::Path};
 
-/// Read only library.json and the flat symbols/footprints directories. Symlinks and special
+/// Read only library.json and flat native item directories. Symlinks and special
 /// files are refused. Bad item files become individual diagnostics; a bad manifest or source
 /// exceeding aggregate bounds fails without returning a partial snapshot. No locks or writes occur.
 pub fn load(root: &Path) -> Result<NativeSource, String> {
@@ -15,7 +15,7 @@ pub fn load(root: &Path) -> Result<NativeSource, String> {
     let mut problems = Vec::new();
     let mut total = documents["library.json"].len();
     let mut count = 1;
-    for directory in ["symbols", "footprints"] {
+    for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts"] {
         let path = root.join(directory);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -86,6 +86,28 @@ fn read_file(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Categorized parts and a multi-unit part resolve through the real bounded folder adapter.
+    #[test]
+    fn native_part_examples_resolve_exact_dependencies_from_a_folder() {
+        use pcbcraft_engine::library::{parts::Reference, sources::Catalog};
+        use std::sync::Arc;
+        let source = load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts"))).unwrap();
+        assert_eq!(source.items().len(), 14);
+        assert!(source.problems().is_empty(), "{:?}", source.problems());
+        let mut catalog = Catalog::default();
+        catalog.install("demo", Arc::new(source)).unwrap();
+        for id in ["resistor", "connector", "ic"] {
+            let reference = Reference { library: "parts-demo".into(), id: id.into(), revision: 1 };
+            let result = catalog.resolve_part(&reference).unwrap();
+            assert!(result.category.is_some());
+            assert_eq!(result.footprints.is_empty(), id != "resistor");
+        }
+        let reference = Reference { library: "parts-demo".into(), id: "dual-amplifier".into(), revision: 1 };
+        let result = catalog.resolve_part(&reference).unwrap();
+        assert_eq!(result.symbol.units().len(), 2);
+        assert_eq!(result.footprints.len(), 1);
+    }
 
     /// The documented original fixture is an actual loadable symbol-and-footprint source.
     #[test]

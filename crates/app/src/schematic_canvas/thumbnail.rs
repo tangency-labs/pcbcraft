@@ -33,7 +33,7 @@ impl Thumbnail {
         let mut symbols = Vec::new();
         for symbol in project.symbols() {
             points += symbol
-                .definition
+                .unit_definition()
                 .graphics()
                 .iter()
                 .map(|shape| match shape {
@@ -45,7 +45,7 @@ impl Thumbnail {
             if points > MAX_POINTS {
                 return None;
             }
-            bounds = bounds.union(grid_bounds(&symbol.definition, symbol.turns()).translate(grid_pos(symbol.position).to_vec2()));
+            bounds = bounds.union(grid_bounds(symbol.unit_definition(), symbol.turns()).translate(grid_pos(symbol.position).to_vec2()));
             let metadata = project.component(symbol)?.metadata.clone();
             points += metadata.fields.values().map(|f| f.value.len()).sum::<usize>();
             if points > MAX_POINTS {
@@ -131,7 +131,7 @@ impl Thumbnail {
             let placement = &symbol.placement;
             paint_symbol(
                 &painter,
-                &placement.definition,
+                placement.unit_definition(),
                 screen(grid_pos(placement.position)),
                 step,
                 placement.turns(),

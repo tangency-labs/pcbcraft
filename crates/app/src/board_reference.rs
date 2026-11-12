@@ -132,7 +132,7 @@ impl State {
         let edit = self.draft.as_mut()?;
         edit.set_units(unit);
         ui.strong("Silkscreen text");
-        properties::field(ui, "Component", |ui| {
+        properties::field(ui, "Part", |ui| {
             ui.label(footprint.reference);
             if ui
                 .add_enabled(enabled && !edit.dirty && edit.source == source, egui::Button::new("Rename…").small())
@@ -151,7 +151,7 @@ impl State {
         }
         if let Some(reference) = &mut edit.rename {
             properties::text(ui, "Reference", reference);
-            let apply = ui.add_enabled(enabled, egui::Button::new("Rename component")).clicked();
+            let apply = ui.add_enabled(enabled, egui::Button::new("Rename part")).clicked();
             let reference = reference.clone();
             if ui.button("Cancel rename").clicked() {
                 edit.rename = None;
@@ -214,7 +214,7 @@ impl State {
 fn appearance_fields(ui: &mut Ui, edit: &mut Edit, resolved: &Resolved, reference: &str, physical: bool) {
     ui.add_enabled_ui(physical, |ui| {
         let mut linked = edit.appearance.text.is_none();
-        if ui.checkbox(&mut linked, "Use component reference").changed() {
+        if ui.checkbox(&mut linked, "Use part reference").changed() {
             edit.appearance.text = (!linked).then(|| reference.to_owned());
             edit.dirty = true;
         }

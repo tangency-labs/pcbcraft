@@ -26,7 +26,14 @@ fn rotated_led_labels_clear_the_drawing() {
             let symbol = &project.symbols()[0];
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
-            paint_symbol(&painter, &definition, pos2(250.0, 250.0), step, turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE));
+            paint_symbol(
+                &painter,
+                definition.default_unit(),
+                pos2(250.0, 250.0),
+                step,
+                turns,
+                Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE),
+            );
             fields::paint_labels(
                 &painter,
                 symbol,
@@ -66,9 +73,9 @@ fn integrated_pin_labels_do_not_enlarge_the_symbol_body_hitbox() {
     }
     let after = item.symbol().unwrap();
     for turns in 0..4 {
-        assert_eq!(body(&before, turns), body(&after, turns));
+        assert_eq!(body(before.default_unit(), turns), body(after.default_unit(), turns));
     }
-    assert!(grid_bounds(&after, 0).width() > grid_bounds(&before, 0).width());
+    assert!(grid_bounds(after.default_unit(), 0).width() > grid_bounds(before.default_unit(), 0).width());
 }
 
 /// Generated stroke lettering follows the same zoom cutoff as ordinary schematic labels;
@@ -90,7 +97,14 @@ fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
     pcbcraft_chrome::fonts::install(&ctx);
     let count = |definition: &SymbolDefinition, step| {
         ctx.begin_pass(egui::RawInput::default());
-        paint_symbol(&ctx.layer_painter(egui::LayerId::background()), definition, pos2(100., 100.), step, 0, Stroke::new(1., egui::Color32::WHITE));
+        paint_symbol(
+            &ctx.layer_painter(egui::LayerId::background()),
+            definition.default_unit(),
+            pos2(100., 100.),
+            step,
+            0,
+            Stroke::new(1., egui::Color32::WHITE),
+        );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         output.shapes.len()

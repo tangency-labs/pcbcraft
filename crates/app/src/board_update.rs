@@ -325,8 +325,13 @@ impl PcbApp {
                 self.views.bind(edit.source.view());
                 self.begin_footprint_assignment(Some(format!("component-{component}")));
                 self.views.bind(previous);
-                if let Dialog::Footprint(chooser) = &mut self.dialog {
-                    chooser.update_review = Some(edit);
+                let review_slot = match &mut self.dialog {
+                    Dialog::Footprint(chooser) => Some(&mut chooser.update_review),
+                    Dialog::NativePart(chooser) => Some(&mut chooser.update_review),
+                    _ => None,
+                };
+                if let Some(slot) = review_slot {
+                    *slot = Some(edit);
                     self.repaint_editors(ctx);
                     return;
                 }
@@ -409,7 +414,7 @@ fn component_number(component: &str) -> Option<u64> {
 
 /// Resolve review labels from the captured input so removed parts keep their original annotation.
 fn component_label(preview: &BoardUpdatePreview<'_>, component: u64) -> String {
-    preview.component(component).map_or_else(|| "Component".into(), |part| part.reference.clone())
+    preview.component(component).map_or_else(|| "Part".into(), |part| part.reference.clone())
 }
 
 /// Keep package identity and revision visible without exposing runtime capabilities or source hashes.
@@ -420,11 +425,17 @@ fn package_label(package: Option<&Package>) -> String {
     )
 }
 
-/// Show an explicit mapping in terminal order without implying that pin text determines identity.
+/// Show terminal mappings and explicit unconnected pads in both current and previous review summaries.
 fn mapping_label(package: Option<&Package>) -> String {
     package.map_or_else(
         || "Unassigned".into(),
-        |package| package.mapping.iter().map(|(terminal, pad)| format!("Pin {terminal} → pad {pad}")).collect::<Vec<_>>().join(", "),
+        |package| {
+            let mut entries: Vec<_> = package.mapping.iter().map(|(terminal, pad)| format!("Pin {terminal} → pad {pad}")).collect();
+            if !package.unconnected_pads.is_empty() {
+                entries.push(format!("unconnected pads {}", package.unconnected_pads.join(", ")));
+            }
+            entries.join(", ")
+        },
     )
 }
 

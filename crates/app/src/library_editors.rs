@@ -248,16 +248,20 @@ impl Document {
         Ok(())
     }
     /// Validate a shared transaction and invalidate cached forms/tools only after success.
+    /// Selecting a unit clears primitive selection rather than treating its existing objects as inserts.
     fn execute(&mut self, revision: u64, action: Action) -> Result<(), String> {
         if self.pending() {
             return Err("Apply or reset the property fields before editing the document.".into());
         }
+        let selecting_unit = matches!(&action, Action::SelectUnit { .. } | Action::AddUnit { .. });
         let old = self.session.snapshot();
         self.session.execute(revision, action)?;
         let next = self.session.snapshot();
         let inserted: std::collections::BTreeSet<_> = next.objects.keys().filter(|id| !old.objects.contains_key(id)).copied().collect();
         self.selection.retain(|id| next.objects.contains_key(id));
-        if !inserted.is_empty() {
+        if selecting_unit {
+            self.selection.clear();
+        } else if !inserted.is_empty() {
             self.selection = inserted;
         }
         self.selected = if self.selection.len() == 1 { self.selection.first().copied() } else { None };
@@ -272,6 +276,40 @@ impl Document {
     /// A form retains invalid input and its original revision until Apply or Reset.
     fn properties(&mut self, ui: &mut Ui, expanded: bool) {
         properties::inspector_body(ui);
+        let item = self.session.snapshot();
+        if item.kind == Kind::Symbol {
+            let mut action = None;
+            ui.horizontal(|ui| {
+                let label = ui.label("Unit");
+                egui::ComboBox::from_id_salt("symbol_unit")
+                    .selected_text(&item.unit)
+                    .show_ui(ui, |ui| {
+                        for unit in std::iter::once(&item.unit).chain(item.other_units.keys()) {
+                            if ui.selectable_label(unit == &item.unit, unit).clicked() && unit != &item.unit {
+                                action = Some(Action::SelectUnit { unit: unit.clone() });
+                            }
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                if pcbcraft_chrome::controls::enabled_button(ui, item.other_units.len() < 31, "Add unit")
+                    .on_hover_text("Add schematic unit")
+                    .clicked()
+                {
+                    let id = (1..=32).map(|n| format!("unit-{n}")).find(|id| id != &item.unit && !item.other_units.contains_key(id));
+                    if let Some(unit) = id {
+                        action = Some(Action::AddUnit { unit });
+                    }
+                }
+            });
+            if let Some(action) = action {
+                if self.pending() {
+                    self.error = Some("Apply or reset the property fields before changing units.".into());
+                } else if let Err(error) = self.execute(self.session.revision(), action) {
+                    self.error = Some(error);
+                }
+            }
+        }
         if self.selection.len() > 1 {
             properties::identity(ui, &format!("{} objects", self.selection.len()), &self.session.snapshot().name);
             return;

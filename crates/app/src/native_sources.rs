@@ -264,8 +264,26 @@ impl Sources {
 }
 
 impl PcbApp {
-    /// Bind a placement command to the exact definition shown by the preview, so source refresh
-    /// or removal cannot substitute geometry while the project's revision remains unchanged.
+    /// Commit captured symbol-only or native-part data through the appropriate shared engine command.
+    pub(super) fn place_native_template(&mut self, placement: &crate::parts_browser::Placement, mut params: serde_json::Value) {
+        if let Some(part) = &placement.part {
+            let definition = &part.resolved.definition;
+            params["library"] = json!(definition.library);
+            params["definition"] = json!(definition.id);
+            params["definition_revision"] = json!(definition.revision);
+            params["definition_digest"] = json!(sources::part_digest(&part.resolved));
+            params["package"] = json!(part.package);
+            params["requirements"] = json!(part.requirements);
+            if let Some(manufacturer) = &part.manufacturer {
+                params["manufacturer"] = json!(manufacturer.reference());
+                params["manufacturer_digest"] = json!(sources::manufacturer_digest(manufacturer));
+            }
+            self.run(pcbcraft_engine::part_instances::PLACE_PART, &params);
+        } else {
+            self.place_catalog_symbol(&placement.definition, params);
+        }
+    }
+    /// Bind symbol placement to the exact previewed content, including across source refresh/removal.
     pub(super) fn place_catalog_symbol(&mut self, definition: &pcbcraft_engine::schematic::SymbolDefinition, mut params: serde_json::Value) {
         params["definition"] = json!(definition.id);
         match sources::symbol_digest(definition) {
@@ -331,6 +349,8 @@ impl PcbApp {
                                 problems: &problems,
                                 symbols: data.and_then(|s| s["symbols"].as_u64()).unwrap_or_default(),
                                 footprints: data.and_then(|s| s["footprints"].as_u64()).unwrap_or_default(),
+                                parts: data.and_then(|s| s["parts"].as_u64()).unwrap_or_default(),
+                                categories: data.and_then(|s| s["categories"].as_u64()).unwrap_or_default(),
                                 builtin: false,
                                 available: data.is_some_and(|s| s["available"] != false),
                                 loading: self.library_sources.job.as_ref().is_some_and(|job| job.source == *id),
@@ -352,6 +372,9 @@ impl PcbApp {
                         None => chrome::Filter::All,
                         Some(Kind::Symbol) => chrome::Filter::Symbols,
                         Some(Kind::Footprint) => chrome::Filter::Footprints,
+                        Some(Kind::Part) => chrome::Filter::Parts,
+                        Some(Kind::Category) => chrome::Filter::Categories,
+                        Some(Kind::ManufacturerPart) => chrome::Filter::ManufacturerParts,
                     };
                     chrome::search(ui, &mut self.library_sources.query);
                     chrome::filters(ui, &mut kind);
@@ -359,6 +382,9 @@ impl PcbApp {
                         chrome::Filter::All => None,
                         chrome::Filter::Symbols => Some(Kind::Symbol),
                         chrome::Filter::Footprints => Some(Kind::Footprint),
+                        chrome::Filter::Parts => Some(Kind::Part),
+                        chrome::Filter::Categories => Some(Kind::Category),
+                        chrome::Filter::ManufacturerParts => Some(Kind::ManufacturerPart),
                     };
                     let mut params = json!({"query":self.library_sources.query});
                     if let Some(kind) = self.library_sources.kind {
@@ -375,6 +401,14 @@ impl PcbApp {
                                 id: item["key"]["id"].as_str().unwrap_or_default(),
                                 revision: item["key"]["revision"].as_u64().unwrap_or_default(),
                                 footprint: item["key"]["kind"] == "footprint",
+                                kind: match item["key"]["kind"].as_str() {
+                                    Some("part") => "Part definition",
+                                    Some("category") => "Category",
+                                    Some("manufacturer_part") => "Manufacturer part",
+                                    Some("footprint") => "Footprint",
+                                    _ => "Symbol",
+                                },
+                                problem: item["resolution"]["reason"].as_str(),
                                 license: item["license"].as_str().unwrap_or_default(),
                             })
                             .collect();

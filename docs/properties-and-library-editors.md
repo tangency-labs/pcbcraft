@@ -22,7 +22,7 @@ icons, artwork, library assets or example project files informed the implementat
 | Reference | Documented feature | PCBcraft direction |
 | --- | --- | --- |
 | [KiCad 10 Schematic Editor](https://docs.kicad.org/10.0/en/eeschema/eeschema.html), Editing symbol properties / Properties Manager | A selection inspector complements a detailed properties dialog; compatible properties can be edited across a selection. | Keep the compact inspector and expanded form on the same command path. Add bulk editing only for explicitly supported common properties. |
-| Same manual, Creating and editing symbols | The symbol editor separates graphics, terminals and fields; library edits and schematic-copy edits have different update scopes. Pin tables support larger devices. | Preserve stable terminal identities. Make source versus project-copy editing explicit, and review updates to existing components. Treat multi-unit support and pin-table import as later bounded work. |
+| Same manual, Creating and editing symbols | The symbol editor separates graphics, terminals and fields; library edits and schematic-copy edits have different update scopes. Pin tables support larger devices. | Preserve stable terminal identities. Make source versus project-copy editing explicit, and review updates to existing components. Multi-unit authoring is available; pin-table import remains later bounded work. |
 | [KiCad 10 PCB Editor](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html), Footprint editor / Footprint pads | Footprint authoring has its own canvas; pads have explicit numbers, geometry and technology. Repeated placement, pad tables, arrays and defaults assist larger packages. | Start with original SMD and plated-hole geometry supported by the native schema. Keep pad numbers distinct from positions and preserve mappings. Provide arrays with automatic unused numbers; leave bulk pad tables for a subsequent slice. |
 | Same manual, Checking footprints | Checks cover courtyard problems, holes/annuli, incompatible layers and copper or silkscreen collisions. | Report the checks actually implemented. A definition passing schema validation must not be presented as manufacturing-qualified or as passing full DRC. |
 | [Altium: Creating a Schematic Symbol](https://www.altium.com/documentation/altium-designer/components-libraries/creating-schematic-symbol) | Graphics and electrically active pin ends are separate; symbol-level and primitive-level properties are contextual. | Keep the selected primitive's inspector separate from definition metadata. Show connection points clearly while editing. |
@@ -79,7 +79,7 @@ The existing project remains the authority for applying a reviewed definition
 change to a placed component. Project-local variants leave source libraries alone.
 
 These notes do not close #50, #78 or #79 by themselves. Electrical-rule coverage,
-multi-unit devices, further source integration, manufacturing layers, arbitrary shapes
+further source integration, manufacturing layers, arbitrary shapes
 and reviewed library-to-project updates need their own supported contracts and
 acceptance evidence.
 
@@ -188,8 +188,7 @@ navigation. `app.set_workspace` accepts source pane and placement; ordinary
 `view.split`, `view.open_beside`, `view.detach`, `view.dock`, `view.open_window` and
 `view.close` use the same layout path for definition and project views. Edits require
 that library revision and use the same engine authoring transactions as the GUI.
-Headless project sessions do not yet host these editor documents. Multi-unit
-symbols, bulk tables, arbitrary pad shapes, mask/paste, 3D, source publishing
+Headless project sessions do not yet host these editor documents. Bulk tables, arbitrary pad shapes, mask/paste, 3D, source publishing
 and reviewed updates to placed components remain follow-up scope under #78/#79.
 
 ## Additional manual review and local verification
@@ -216,3 +215,11 @@ file workers. Reading the callers confirmed that transforms/clipboard/arrays
 perform no new blocking I/O, validate temporary candidates before publication
 and leave stale field drafts with their original revision. Native tests exercise
 close cancellation and continued definition editing after the original host closes.
+
+Multi-unit symbols use the unit selector above symbol properties. **Add unit** creates
+an empty drawing under a new stable unit ID; selecting a unit retains the other
+drawings and their primitive IDs. Shared terminal names and electrical types
+remain part-wide. Multi-unit editor documents use `pcbcraft-library-item/2`,
+while existing single-unit documents retain version 1. See the
+[symbol contract](symbol-schema.md#multiple-schematic-units) for placement and
+physical mapping behavior.

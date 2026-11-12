@@ -237,7 +237,7 @@ impl Session {
                 })
         });
         Arc::make_mut(&mut next.units).retain(|_, symbol| !deleted.contains(symbol));
-        let used: BTreeSet<_> = next.symbols.iter().map(|s| s.component).collect();
+        let used: BTreeSet<_> = next.all_symbols().map(|s| s.component).collect();
         let removed: BTreeSet<_> =
             project.symbols().iter().filter(|s| deleted.contains(&s.ordinal) && !used.contains(&s.component)).map(|s| s.component).collect();
         for id in removed {

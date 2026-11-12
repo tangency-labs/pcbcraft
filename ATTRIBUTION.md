@@ -1015,3 +1015,28 @@ and Microsoft's [CreateFile sharing/reparse-point contract](https://learn.micros
 were consulted on November 11, 2026. Windows directory handles omit delete sharing
 and reject reparse points; no Windows implementation source was copied. No new
 crate version, external EDA source or asset was added.
+
+## Native part/category definitions and symbol schemas
+
+The native `pcbcraft-part/1`, `pcbcraft-category/1` and `pcbcraft-symbol/3`
+contracts, semantic resolver, exact decimal normalization and schema tooling
+are original PCBcraft work based on this repository's library-model document.
+`examples/native-parts` derives its resistor, four-pin schematic drawings and
+0603 land pattern from the existing original starter definitions at
+`0ed4f13986a4b08364b963f8b3dde4303166b6f1`, retaining MIT OR Apache-2.0 and the
+footprint's recorded dimensional provenance. The IC example is an original
+illustrative definition with no claimed manufacturer qualification. The format-4
+dual-amplifier symbol, linked part, illustrative six-pad package and multi-unit
+runtime/authoring extension are original PCBcraft work following the repository's
+circuit-instance and library contracts. No external
+EDA implementation, library data, artwork or new runtime dependency was introduced.
+
+### Native part selections and manufacturer records
+
+The typed requirement comparison, native manufacturer record/schema, project
+selection transactions, dependency pinning and presentation in this slice are
+original MIT OR Apache-2.0 PCBcraft code. The manufacturer fixture under
+`examples/native-parts/manufacturer-parts/` is explicitly synthetic, with no real
+vendor product, supplier stock or pricing claim. It links the original example
+part and footprint, whose existing provenance remains attached. No KiCad import,
+implementation source or external vendor adapter is included.

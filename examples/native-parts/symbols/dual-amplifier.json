@@ -1,0 +1,206 @@
+{
+  "format": "pcbcraft-symbol/4",
+  "id": "dual-amplifier",
+  "revision": 1,
+  "name": "Illustrative dual amplifier",
+  "reference_prefix": "U",
+  "default_value": "Dual amplifier",
+  "terminals": [
+    {
+      "id": "1",
+      "name": "OUT A",
+      "electrical_type": "output"
+    },
+    {
+      "id": "2",
+      "name": "IN A",
+      "electrical_type": "input"
+    },
+    {
+      "id": "3",
+      "name": "V+",
+      "electrical_type": "power_in"
+    },
+    {
+      "id": "4",
+      "name": "V-",
+      "electrical_type": "power_in"
+    },
+    {
+      "id": "5",
+      "name": "IN B",
+      "electrical_type": "input"
+    },
+    {
+      "id": "6",
+      "name": "OUT B",
+      "electrical_type": "output"
+    }
+  ],
+  "units": [
+    {
+      "id": "a",
+      "drawing": [
+        {
+          "type": "rect",
+          "min_nm": [
+            -3810000,
+            -2540000
+          ],
+          "max_nm": [
+            3810000,
+            2540000
+          ]
+        }
+      ],
+      "pins": [
+        {
+          "terminal": "2",
+          "at_nm": [
+            -5080000,
+            0
+          ],
+          "appearance": {
+            "orientation": "right",
+            "length_nm": 1270000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        },
+        {
+          "terminal": "1",
+          "at_nm": [
+            5080000,
+            0
+          ],
+          "appearance": {
+            "orientation": "left",
+            "length_nm": 1270000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        },
+        {
+          "terminal": "3",
+          "at_nm": [
+            0,
+            -5080000
+          ],
+          "appearance": {
+            "orientation": "down",
+            "length_nm": 2540000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        },
+        {
+          "terminal": "4",
+          "at_nm": [
+            0,
+            5080000
+          ],
+          "appearance": {
+            "orientation": "up",
+            "length_nm": 2540000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        }
+      ]
+    },
+    {
+      "id": "b",
+      "drawing": [
+        {
+          "type": "rect",
+          "min_nm": [
+            -3810000,
+            -2540000
+          ],
+          "max_nm": [
+            3810000,
+            2540000
+          ]
+        }
+      ],
+      "pins": [
+        {
+          "terminal": "5",
+          "at_nm": [
+            -5080000,
+            0
+          ],
+          "appearance": {
+            "orientation": "right",
+            "length_nm": 1270000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        },
+        {
+          "terminal": "6",
+          "at_nm": [
+            5080000,
+            0
+          ],
+          "appearance": {
+            "orientation": "left",
+            "length_nm": 1270000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        },
+        {
+          "terminal": "3",
+          "at_nm": [
+            0,
+            -5080000
+          ],
+          "appearance": {
+            "orientation": "down",
+            "length_nm": 2540000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        },
+        {
+          "terminal": "4",
+          "at_nm": [
+            0,
+            5080000
+          ],
+          "appearance": {
+            "orientation": "up",
+            "length_nm": 2540000,
+            "style": "line",
+            "show_name": true,
+            "show_number": true,
+            "name_height_nm": 800000,
+            "number_height_nm": 700000
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -39,6 +39,27 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     .inner
 }
 
+/// Keep a labelled value and its trailing action inside the form, reserving the action's measured width.
+/// The returned flag reports only the action; its accessible name includes the field label.
+pub fn text_action(ui: &mut Ui, label: &str, value: &mut String, action: &str) -> bool {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        let label_response = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
+        let action_width =
+            egui::WidgetText::from(action).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x
+                + ui.spacing().button_padding.x * 2.0
+                + ui.spacing().item_spacing.x;
+        let field_width = (ui.available_width() - action_width).max(0.0);
+        ui.allocate_ui_with_layout(vec2(field_width, t.control_height), Layout::left_to_right(Align::Center), |ui| {
+            crate::controls::text(ui, value).labelled_by(label_response.id);
+        });
+        let response = crate::controls::bounded_button(ui, label, action, action_width - ui.spacing().item_spacing.x, true);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{action} {label}")));
+        response.clicked()
+    })
+    .inner
+}
+
 /// A labelled choice field keeps stored enum names separate from readable option labels and
 /// supplies an accessible name even when the selected value contains no field identity.
 pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)]) -> egui::Response {
@@ -114,6 +135,33 @@ pub fn mapping_choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String
             })
             .response
             .labelled_by(label.id)
+    })
+    .inner
+}
+
+/// Edit a terminal's physical pad set in the same aligned row as a single-pad mapping.
+/// Checkbox choices keep the popup open; callers validate exclusive ownership across rows.
+pub fn mapping_multi_choice(ui: &mut Ui, label: &str, id: egui::Id, values: &mut Vec<String>, options: &[(&str, String)]) -> egui::Response {
+    let t = Tokens::get();
+    let label_width = mapping_label_width(ui.available_width());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_8;
+        ui.spacing_mut().interact_size.y = t.control_height;
+        let label = field_name(ui, label, label_width, false);
+        let selected = if values.is_empty() { "None".into() } else { values.join(", ") };
+        solidcraft_ui_kit::dropdown_menu_with_close_behavior(ui, id, &selected, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            for (key, text) in options {
+                let mut checked = values.iter().any(|value| value == key);
+                if crate::controls::checkbox(ui, &mut checked, text).changed() {
+                    if checked {
+                        values.push((*key).into());
+                    } else {
+                        values.retain(|value| value != key);
+                    }
+                }
+            }
+        })
+        .labelled_by(label.id)
     })
     .inner
 }

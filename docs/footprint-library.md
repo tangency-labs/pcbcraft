@@ -15,8 +15,10 @@ project's components, including components not yet placed on the board. A
 schematic-only project can assign packages before creating a PCB. Search
 and choose a package, then review the editable pad choices for each logical terminal.
 The chooser shows the library, item, revision, license and dimensional source.
-**Assign** validates a complete bijection and pins the exact definition and map;
-it creates no copper, placement ID or board coordinates. The schematic wiring
+Each terminal may select several pads; **Unconnected pads** explicitly accounts
+for remaining pads. **Assign** validates complete coverage and exclusive pad
+ownership, then pins the exact definition and map. It creates no copper,
+placement ID or board coordinates. The schematic wiring
 and reference stay unchanged.
 
 Assignments survive folder/archive save and offline reopen without a board.
@@ -29,8 +31,10 @@ package and placing it are separate undo steps. A modified chooser must apply
 its assignment before it can place; a stale form closes without changing data.
 
 `pcb.assign_footprint` accepts an optional board UUID, a stable `component` ID,
-`library`, `definition`, `definition_revision`, explicit `mapping` and
-`expected_revision`. `pcb.place_assigned_footprint` takes the board/component,
+`library`, `definition`, `definition_revision`, explicit `mapping`, optional
+`unconnected_pads` and `expected_revision`. Mapping values are a pad ID or a
+nonempty pad-ID list. Native part instances open their package/requirements
+form so the selected package retains its definition-owned map. `pcb.place_assigned_footprint` takes the board/component,
 `x_nm`, `y_nm` and revision, resolving solely from the project. Both use the same
 engine command catalog in GUI, live and headless MCP. `inspect_project` reports
 `project.footprint_assignments` with `placed` status and a null `board` for
@@ -58,10 +62,11 @@ incompatible numbering still requires an explicit mapping.
 The Preferences-style mapping section separates **Symbol terminal** from
 **Footprint pad** in aligned columns. **Match numbers** explicitly replaces the
 mapping with equal identifiers, which can differ from a package's library default.
-The chooser does not register
-folders, import external footprints or create library parts. Those source and
-library workflows remain under #92/#28. This slice supports the original starter
-packages and physical definitions already pinned into an opened project.
+The chooser includes original starter packages, project-pinned physical definitions
+and footprints from loaded native sources. Folder registration and native bundle
+uploads use the separate Library sources manager, described in the
+[native source guide](native-library-sources.md) and #92/#28. External-format
+import and library-part creation remain separate workflows.
 
 ## Packages and sources
 
@@ -215,8 +220,8 @@ component still supplies the printed reference text.
 Selecting reference lettering opens **Silkscreen text** in PCB Properties. The
 component reference remains visible alongside **Printed text**, font, size,
 stroke width, local rotation, alignment, visibility and offsets. Clear **Use
-component reference** to print local words such as `Power input`. These edits
-belong to the placed footprint and its Gerber ink. **Rename… → Rename component**
+part reference** to print local words such as `Power input`. These edits
+belong to the placed footprint and its Gerber ink. **Rename… → Rename part**
 explicitly changes the shared component reference through its validated command,
 including the schematic. A local text literal retains its wording across a
 component rename. **Reset silkscreen** restores inherited wording and appearance.

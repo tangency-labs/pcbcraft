@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint-placement:17",
+  "title": "PCBcraft physical footprint placement in board format 17",
+  "description": "Board format 17 supports one or more lands per logical terminal and explicitly unconnected pads; whole-board guards and complete mapping checks belong to the engine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "component",
+    "definition",
+    "definition_revision",
+    "library",
+    "mapping",
+    "x_nm",
+    "y_nm"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "component": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "library": {
+      "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/library_id"
+    },
+    "definition": {
+      "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/library_id"
+    },
+    "definition_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "mapping": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": {
+        "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+            }
+          }
+        ]
+      }
+    },
+    "x_nm": {
+      "type": "integer",
+      "minimum": -987300000,
+      "maximum": 987300000
+    },
+    "y_nm": {
+      "type": "integer",
+      "minimum": -987300000,
+      "maximum": 987300000
+    },
+    "rotation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 359
+    },
+    "bottom": {
+      "const": true
+    },
+    "reference_offset": {
+      "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/reference_offset"
+    },
+    "reference_text": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+        },
+        "font": {
+          "type": "string",
+          "enum": [
+            "pcbcraft-technical-1",
+            "pcbcraft-stroke-1"
+          ]
+        },
+        "size": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "height_nm",
+            "stroke_width_nm"
+          ],
+          "properties": {
+            "height_nm": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000000
+            },
+            "stroke_width_nm": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000000
+            }
+          }
+        },
+        "rotation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 359
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "start",
+            "middle",
+            "end"
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "unconnected_pads": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+      }
+    }
+  }
+}

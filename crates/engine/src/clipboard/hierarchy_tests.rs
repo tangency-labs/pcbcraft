@@ -127,6 +127,13 @@ fn cut_tree_relocation_preserves_original_children_and_dangling_parent_routes() 
         model::EDIT_LABEL,
         json!({"sheet":child.id(),"id":format!("label-{}",old_label.id),"name":"EDITED_AFTER_CUT","direction":"input","x_nm":old_label.at.x_nm,"y_nm":old_label.at.y_nm}),
     );
+    let component = s.project().unwrap().for_sheet(child).unwrap().symbols()[0].component;
+    apply(
+        &mut s,
+        crate::ASSIGN_FOOTPRINT,
+        json!({"component":format!("component-{component}"),"library":"starter",
+        "definition":"resistor-0603","definition_revision":4,"mapping":{"1":"1","2":"2"}}),
+    );
     let cut = s.snapshot().unwrap();
     let mut args = paste(&s, &text, other);
     args["reuse_sheets"] = json!(true);
@@ -136,6 +143,10 @@ fn cut_tree_relocation_preserves_original_children_and_dangling_parent_routes() 
     assert_eq!(p.components.len(), 4);
     assert_eq!(p.parent_sheet(child), Some(other));
     assert_eq!(p.for_sheet(child).unwrap().labels[0].name, "EDITED_AFTER_CUT");
+    assert_eq!(p.schematic_packages.assignments[&component].definition, "resistor-0603");
+    assert_eq!(p.schematic_packages.assignments[&component].mapping["1"], "1");
+    let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     assert_eq!(p.for_sheet(child).unwrap().symbols()[0].id(), before.for_sheet(child).unwrap().symbols()[0].id());
     assert_eq!(p.wire_path(&p.wires()[0]), path);
     s.apply("edit.undo", &Value::Null).unwrap();

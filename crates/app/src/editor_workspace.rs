@@ -1138,9 +1138,20 @@ impl PcbApp {
             &self.views.active.schematic.selection,
             &self.views.active.board.selection,
         );
-        if let Some(pick) = self.parts.show(ui, area, self.browser.rect(), source, self.session.libraries()) {
+        if let Some(pick) = self.parts.show(ui, area, self.browser.rect(), source, self.session.libraries(), self.session.project()) {
             match pick {
                 crate::parts_browser::Pick::Place(placement) => self.begin_template(placement),
+                crate::parts_browser::Pick::Unit { definition, component, unit, value } => {
+                    self.views.active.schematic.tool = Some(crate::schematic_canvas::Tool::PlaceSymbol {
+                        definition,
+                        component: Some(component),
+                        part: None,
+                        unit,
+                        value,
+                        revision: self.session.revision(),
+                        turns: 0,
+                    });
+                }
                 crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,
                 crate::parts_browser::Pick::Stale => self.message = Some("View or project changed; reopen the Parts Catalog to continue.".into()),
             }

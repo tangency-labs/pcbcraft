@@ -16,7 +16,7 @@ impl Draft {
     pub(super) fn new(item: &Item, object: Option<u64>, revision: u64) -> Self {
         let mut value=object.and_then(|id|item.objects.get(&id)).and_then(|primitive|serde_json::to_value(primitive).ok()).unwrap_or_else(||json!({"operation":"metadata","name":item.name,"license":item.license,"source":item.source,"reference_prefix":item.reference_prefix,"default_value":item.default_value}));
         if object.is_none() && item.kind == Kind::Symbol {
-            value["symbol_settings"] = json!({"behavior":item.behavior,"defaults":item.defaults});
+            value["symbol_settings"] = json!({"behavior":item.behavior,"defaults":item.defaults,"category":item.category});
         }
         if object.is_none() && item.kind == Kind::Footprint {
             value["footprint_reference"] = json!({
@@ -41,6 +41,11 @@ impl Draft {
         }
         let pad = self.value["type"] == "pad";
         let mut hidden = Vec::new();
+        // Preserve category references in metadata edits without exposing raw identity fields
+        // as a substitute for a category-selection workflow.
+        if self.kind == Kind::Symbol {
+            hidden.push("category");
+        }
         if self.kind == Kind::Footprint {
             hidden.push("fill");
         }
@@ -189,6 +194,7 @@ fn choices(path: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
+
 /// Recurse over typed native properties. Compact forms omit long provenance/point tables;
 /// expanded forms retain the exact same field values and revision as the inspector.
 fn fields(ui: &mut Ui, value: &mut Value, numbers: &mut BTreeMap<String, (String, String)>, path: &str, expanded: bool, hidden: &[&str]) {
@@ -322,5 +328,26 @@ fn display(text: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod category_tests {
+    use super::*;
+
+    /// Editing ordinary definition metadata must not discard a loaded symbol's typed category.
+    #[test]
+    fn metadata_draft_retains_an_existing_category_binding() {
+        let mut symbol = pcbcraft_engine::library::parse_symbol(include_str!("../../../../examples/native-parts/symbols/resistor.json")).unwrap();
+        symbol.library = "parts-demo".into();
+        symbol.provenance =
+            Some(pcbcraft_engine::library::sources::Provenance { library_name: "Native Parts Demo".into(), license: "MIT OR Apache-2.0".into() });
+        let item = Item::from_symbol(&symbol).unwrap();
+        let mut draft = Draft::new(&item, None, 0);
+        draft.value["name"] = json!("Renamed resistor");
+        let mut session = Session::new(item, false).unwrap();
+        session.execute(0, draft.action().unwrap()).unwrap();
+        assert_eq!(session.snapshot().category, symbol.category);
+        assert_eq!(session.snapshot().export_native().unwrap()["format"], "pcbcraft-symbol/3");
     }
 }
