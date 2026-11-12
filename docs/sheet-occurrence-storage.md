@@ -11,7 +11,7 @@ instances, component-definition splitting and persistent net IDs remain separate
 Project format 16 extends project/15, retaining native part selections and multi-pad package maps. For a schematic-only project it requires
 `schematic_instances` in `project.json`. For a board project that field is
 absent and the board registration owns an `instances.json` beside `board.json`.
-The board document's format is `pcbcraft-instances/1`, and its `board` header
+The instance document's format is `pcbcraft-instances/1`, and its `board` header
 must match the registered board UUID. A second storage home is rejected.
 Container, sheet, board and pinned-definition versions do not change.
 
@@ -23,7 +23,7 @@ has one occurrence, with these fields:
 | --- | --- |
 | `id` | Stable, non-nil occurrence UUID |
 | `definition` | Existing sheet UUID |
-| `circuit_use` | The sole legacy circuit-use UUID |
+| `circuit_use` | Reference to the sole circuit-use record |
 | `parent` | Parent occurrence UUID, or null for a flat root |
 | `parent_slot` | Stable numeric subsheet-symbol ID in that parent, or null for a root |
 
