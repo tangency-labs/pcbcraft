@@ -678,3 +678,33 @@ fn native_package_blocker_returns_to_board_update_review() {
     click(&mut h, "PCB canvas");
     assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), 1);
 }
+
+/// A mapping review identifies pads moved to or from NC in both old and proposed summaries.
+#[test]
+fn mapping_review_shows_current_and_previous_unconnected_pads() {
+    let mut h = fixture(false);
+    h.state_mut()
+        .session
+        .execute("library.load_source", &json!({"source":"multipad","documents":super::footprint_assignment::four_pad_source()}))
+        .unwrap();
+    let component = h.state().session.project().unwrap().components().next().unwrap().id();
+    for (mapped, unconnected) in [("3", "4"), ("4", "3")] {
+        edit(
+            &mut h,
+            ASSIGN_FOOTPRINT,
+            json!({"component":component,"library":"parts-demo","definition":"resistor-0603","definition_revision":1,
+            "mapping":{"1":["1",mapped],"2":"2"},"unconnected_pads":[unconnected]}),
+        );
+        if unconnected == "4" {
+            place_first(&mut h, 0, 0);
+            edit(&mut h, pcbcraft_engine::board::update::INITIALIZE_BASELINE, json!({}));
+        }
+    }
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    open(&mut h);
+    h.get_by_label("R1 pin mapping: Pin 1 → pad 1, 4, Pin 2 → pad 2, unconnected pads 3.");
+    h.get_by_label(
+        "Previous footprint for R1: parts-demo / resistor-0603 · r1. Previous mapping: Pin 1 → pad 1, 3, Pin 2 → pad 2, unconnected pads 4.",
+    );
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

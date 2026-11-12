@@ -425,11 +425,17 @@ fn package_label(package: Option<&Package>) -> String {
     )
 }
 
-/// Show an explicit mapping in terminal order without implying that pin text determines identity.
+/// Show terminal mappings and explicit unconnected pads in both current and previous review summaries.
 fn mapping_label(package: Option<&Package>) -> String {
     package.map_or_else(
         || "Unassigned".into(),
-        |package| package.mapping.iter().map(|(terminal, pad)| format!("Pin {terminal} → pad {pad}")).collect::<Vec<_>>().join(", "),
+        |package| {
+            let mut entries: Vec<_> = package.mapping.iter().map(|(terminal, pad)| format!("Pin {terminal} → pad {pad}")).collect();
+            if !package.unconnected_pads.is_empty() {
+                entries.push(format!("unconnected pads {}", package.unconnected_pads.join(", ")));
+            }
+            entries.join(", ")
+        },
     )
 }
 

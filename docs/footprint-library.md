@@ -62,10 +62,11 @@ incompatible numbering still requires an explicit mapping.
 The Preferences-style mapping section separates **Symbol terminal** from
 **Footprint pad** in aligned columns. **Match numbers** explicitly replaces the
 mapping with equal identifiers, which can differ from a package's library default.
-The chooser does not register
-folders, import external footprints or create library parts. Those source and
-library workflows remain under #92/#28. This slice supports the original starter
-packages and physical definitions already pinned into an opened project.
+The chooser includes original starter packages, project-pinned physical definitions
+and footprints from loaded native sources. Folder registration and native bundle
+uploads use the separate Library sources manager, described in the
+[native source guide](native-library-sources.md) and #92/#28. External-format
+import and library-part creation remain separate workflows.
 
 ## Packages and sources
 

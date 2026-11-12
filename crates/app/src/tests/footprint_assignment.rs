@@ -4,6 +4,21 @@ use pcbcraft_engine::{
     persistence::{decode_documents, encode_documents},
 };
 
+/// Original four-pad data exercises both terminal fan-out and explicit NC intent.
+pub(super) fn four_pad_source() -> pcbcraft_engine::library::sources::Documents {
+    let mut footprint: Value = serde_json::from_str(include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")).unwrap();
+    for number in ["3", "4"] {
+        let mut pad = footprint["pads"][0].clone();
+        pad["number"] = json!(number);
+        pad["center"] = json!({"x_nm":if number == "3" {-2_000_000} else {2_000_000},"y_nm":3_000_000});
+        footprint["pads"].as_array_mut().unwrap().push(pad);
+    }
+    pcbcraft_engine::library::sources::Documents::from([
+        ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
+        ("footprints/four.json".into(), footprint.to_string()),
+    ])
+}
+
 /// Start with a generic resistor, keeping native IDs from inspection rather than view ordering.
 fn component_harness() -> Harness<'static, PcbApp> {
     let mut h = harness();
@@ -362,23 +377,7 @@ fn external_native_footprint_is_assignable_and_pinned_from_the_chooser() {
 #[test]
 fn generic_chooser_preserves_multi_pad_and_unconnected_assignments() {
     let mut h = component_harness();
-    let mut footprint: Value = serde_json::from_str(include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")).unwrap();
-    for number in ["3", "4"] {
-        let mut pad = footprint["pads"][0].clone();
-        pad["number"] = json!(number);
-        pad["center"] = json!({"x_nm":if number == "3" {-2_000_000} else {2_000_000},"y_nm":3_000_000});
-        footprint["pads"].as_array_mut().unwrap().push(pad);
-    }
-    h.state_mut()
-        .session
-        .execute(
-            "library.load_source",
-            &json!({"source":"multipad","documents":{
-                "library.json":include_str!("../../../../examples/native-parts/library.json"),
-                "footprints/four.json":footprint.to_string()
-            }}),
-        )
-        .unwrap();
+    h.state_mut().session.execute("library.load_source", &json!({"source":"multipad","documents":four_pad_source()})).unwrap();
     h.state_mut().begin_footprint_assignment(None);
     h.run();
     click(&mut h, "Match pin count");
