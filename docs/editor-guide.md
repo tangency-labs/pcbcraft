@@ -673,11 +673,16 @@ is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
 **Analyze → Checks → DRC** checks the board without editing it and opens a DRC card
-listing each finding. It reports copper of different nets closer than the clearance
+listing each finding. It reports a short when one copper island joins pads from
+different intended nets, copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
 connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
-of its edge, and overlapping footprint courtyards. Copper joined by tracks or on the
-same net needs no clearance. Click a finding to center the view on its marker; the
+of its edge, and overlapping footprint courtyards. Short checks include direct pad
+contact and via-mediated connections, even with a zero clearance rule. A board with
+reviewed connectivity uses its accepted terminal membership; pending schematic edits
+do not change that intent until accepted. Clearance remains a separate check, so
+direct pad contact can produce both a short and a clearance finding. Click a finding
+to center the view on its marker; the
 status bar shows the result, and an edit marks it out of date until **Run again**.
 These rule values are fixed defaults until net classes and board rules arrive (#77);
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is

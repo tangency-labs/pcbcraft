@@ -112,6 +112,58 @@ fn clearance(session: &Session, required: i64) -> Vec<Violation> {
         .collect()
 }
 
+/// Pad contact uses the same rounded contours as clearance, including half-nanometer radii.
+/// Touching conflicting intended nets remain shorts at a zero clearance rule; a one-nanometer
+/// gap is only a clearance violation. Rotation and bottom-side reflection preserve that boundary.
+#[test]
+fn conflicting_pad_nets_use_the_rounded_contact_boundary_at_zero_clearance() {
+    for shape in [PadShape::Circle, PadShape::Oval, PadShape::RoundedRectangle, PadShape::Rectangle] {
+        let odd = matches!(shape, PadShape::Circle | PadShape::Oval);
+        let height = 600_000 + i64::from(odd);
+        let width = if shape == PadShape::Circle { height } else { 1_000_000 + i64::from(odd) };
+        let probe = 60_000 + i64::from(odd);
+        for (rotation, bottom) in [(0, false), (90, true)] {
+            for delta in [-1, 0, 1] {
+                let mut s = fixture(shape, width, height, p(0, (height + probe) / 2 + delta), probe);
+                pose(&mut s, rotation, bottom);
+                let symbol = &s.project().unwrap().symbols()[0];
+                let terminals: Vec<_> =
+                    symbol.terminals().iter().map(|terminal| s.project().unwrap().terminal_position(*terminal).unwrap()).collect();
+                for (index, at) in terminals.into_iter().enumerate() {
+                    s.apply(
+                        crate::net_labels::ADD,
+                        &json!({"name":format!("INTENDED_{index}"),"style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,
+                        "expected_revision":s.revision()}),
+                    )
+                    .unwrap();
+                }
+                for clearance_nm in [0, DEFAULT_CLEARANCE_NM] {
+                    let report = view(&s).check_design(Rules { clearance_nm, ..Rules::default() });
+                    assert_eq!(
+                        report.counts.get(&Kind::Short).copied().unwrap_or(0),
+                        usize::from(delta <= 0),
+                        "{shape:?}, {rotation}, {bottom}, {delta}, {clearance_nm}: {report:#?}"
+                    );
+                    assert_eq!(
+                        report.counts.get(&Kind::Clearance).copied().unwrap_or(0),
+                        usize::from(delta < 0 || clearance_nm > 0),
+                        "the existing strict clearance comparison remains separate: {shape:?}, {delta}, {clearance_nm}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Short detection must not suppress the existing clearance finding on unnamed overlapping pads.
+#[test]
+fn overlapping_pads_without_intended_nets_retain_their_clearance_finding() {
+    let s = fixture(PadShape::Circle, 600_000, 600_000, p(0, 200_000), 60_000);
+    let report = view(&s).check_design(Rules::default());
+    assert_eq!(report.counts.get(&Kind::Short), None);
+    assert_eq!(report.counts.get(&Kind::Clearance), Some(&1));
+}
+
 /// All supported rounded shapes clear probes in their enclosing corners, on rotated and flipped pads.
 #[test]
 fn rounded_corners_do_not_create_false_pad_track_or_via_clearance_findings() {

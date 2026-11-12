@@ -1,8 +1,9 @@
 //! A bounded design rules check over one board snapshot.
 //!
 //! The check reads the board without editing it. It reports copper clearance between different
-//! nets, minimum track width, via annular ring, unrouted connections, the board outline (missing,
-//! copper outside it, copper too close to its edge) and overlapping footprint courtyards. Rule
+//! nets, conflicting intended nets within a copper island, minimum track width, via annular ring,
+//! unrouted connections, the board outline (missing, copper outside it, copper too close to its
+//! edge) and overlapping footprint courtyards. Rule
 //! values are explicit parameters with documented defaults until net classes and board rules
 //! exist (#77). Results are deterministic, so the same board and rules give the same report.
 //! This is not a manufacturing sign-off: arcs, zones, hole-to-hole spacing, silkscreen and
@@ -10,7 +11,8 @@
 use super::{
     definition::GraphicPurpose,
     setup::LayerPurpose,
-    track::{Land, PadContour, islands, lands, segment_distance},
+    track::{Land, PadContour, islands, lands, segment_distance, with_pad_contacts},
+    update::TerminalKey,
     view::BoardView,
 };
 use crate::{CommandError, Session, schematic::Point};
@@ -56,6 +58,9 @@ impl Default for Rules {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    /// One physical copper island joins pads from distinct intended nets, independently of
+    /// the clearance rule, including when the required clearance is zero.
+    Short,
     Clearance,
     TrackWidth,
     AnnularRing,
@@ -66,6 +71,19 @@ pub enum Kind {
     CourtyardOverlap,
 }
 
+/// Intended membership participating in a short. `net` is an index in this snapshot's accepted
+/// baseline, or its project-wide logical graph when no baseline exists, never a persisted ID.
+/// Names are display text only; component-terminal keys identify the involved logical objects.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ShortNet {
+    /// Index in the checked snapshot's accepted baseline or logical graph, never a saved net ID.
+    pub net: usize,
+    /// Display label for this membership; equal labels do not imply equal nets.
+    pub name: String,
+    /// Involved logical terminals, sorted and deduplicated by component identity and pin text.
+    pub terminals: Vec<TerminalKey>,
+}
+
 /// One finding: what, where (a representative point in board nanometers) and which items.
 /// Items are footprint IDs (`footprint-N`), pads (`footprint-N:pad`) or track/via UUIDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -74,6 +92,10 @@ pub struct Violation {
     pub message: String,
     pub at: Point,
     pub items: Vec<String>,
+    /// Conflicting memberships for short findings, absent from other kinds. Copper item
+    /// references above and logical terminals here belong to the checked board snapshot.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nets: Vec<ShortNet>,
 }
 
 /// The result of one check. `violations` is capped; `counts` covers every finding.
@@ -227,6 +249,7 @@ impl BoardView<'_> {
                     message: format!("Track is {} wide, below the {} minimum", mm(track.width_nm as f64), mm(rules.min_track_width_nm as f64)),
                     at: midpoint(track.start, track.end),
                     items: vec![track.id.to_string()],
+                    nets: Vec::new(),
                 });
             }
         }
@@ -247,12 +270,16 @@ impl BoardView<'_> {
                     message: format!("Via annular ring is {}, below the {} minimum", mm(ring as f64), mm(rules.min_annular_ring_nm as f64)),
                     at: via.at,
                     items: vec![via.id.to_string()],
+                    nets: Vec::new(),
                 });
             }
         }
 
-        // Clearance between copper on different nets that shares a layer. Items in one copper
-        // island are connected, and items on the same named net need no clearance.
+        let touching = with_pad_contacts(&lands, &copper, members);
+        self.check_shorts(&lands, &touching, &items, &mut found);
+
+        // Retain the separate clearance check, including direct pad contacts without intended
+        // nets. Shorts are diagnosed independently, including at zero required clearance.
         let clearance = rules.clearance_nm as f64;
         let bounds: Vec<_> = items.iter().map(|item| item.shape.bounds()).collect();
         let mut order: Vec<usize> = (0..items.len()).collect();
@@ -284,7 +311,7 @@ impl BoardView<'_> {
                     };
                     let mut names = vec![a.name.clone(), b.name.clone()];
                     names.sort();
-                    found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names });
+                    found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
                 }
             }
         }
@@ -299,6 +326,7 @@ impl BoardView<'_> {
                         format!("{}:{}", line.from.footprint, line.from.pad.number.as_str()),
                         format!("{}:{}", line.to.footprint, line.to.pad.number.as_str()),
                     ],
+                    nets: Vec::new(),
                 });
             }
         }
@@ -314,6 +342,63 @@ impl BoardView<'_> {
         let total = found.len();
         found.truncate(MAX_LISTED);
         Report { rules, violations: found, counts, total }
+    }
+
+    /// Report one short per physical island containing pads from distinct intended nets.
+    /// Resolve terminal-to-pad mappings against accepted history when present, including retained
+    /// removals; otherwise use the project-wide graph. All indices and lookups stay snapshot-local.
+    /// Every involved copper item and mapped terminal is retained, in canonical identity order.
+    fn check_shorts(self, lands: &[Land], members: &[Vec<usize>], items: &[Item], found: &mut Vec<Violation>) {
+        let project = self.project();
+        let baseline = project.board.baseline.as_ref();
+        let accepted = baseline.map(|baseline| baseline.terminal_net_index());
+        let graph = baseline.is_none().then(|| project.electrical_connectivity());
+        let memberships: Vec<_> = lands
+            .iter()
+            .map(|land| {
+                let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
+                let (component, terminal) = project.board.component_pin_for(pad)?;
+                let net = if let Some(accepted) = &accepted {
+                    *accepted.get(&(component, terminal))?
+                } else {
+                    graph.as_ref()?.net_index_for(project.component_terminal(component, terminal)?)?
+                };
+                Some((net, TerminalKey { component, terminal: terminal.to_owned() }))
+            })
+            .collect();
+        for island in members {
+            let mut nets = BTreeMap::<usize, Vec<TerminalKey>>::new();
+            for &node in island {
+                if let Some(Some((net, terminal))) = memberships.get(node) {
+                    nets.entry(*net).or_default().push(terminal.clone());
+                }
+            }
+            if nets.len() < 2 {
+                continue;
+            }
+            let nets: Vec<_> = nets
+                .into_iter()
+                .map(|(net, mut terminals)| {
+                    terminals.sort();
+                    terminals.dedup();
+                    let name = baseline.and_then(|baseline| baseline.net_name(net)).or_else(|| graph.as_ref().map(|graph| graph.net_name(net)));
+                    ShortNet { net, name: name.unwrap_or_default(), terminals }
+                })
+                .collect();
+            let names: Vec<_> = nets.iter().map(|net| format!("{} (net {})", net.name, net.net + 1)).collect();
+            let at = island.iter().find_map(|&node| memberships.get(node)?.as_ref().map(|_| items[node].at));
+            let mut names_of_items: Vec<_> = island.iter().map(|&node| items[node].name.clone()).collect();
+            names_of_items.sort();
+            if let Some(at) = at {
+                found.push(Violation {
+                    kind: Kind::Short,
+                    message: format!("Copper island connects intended nets {}", names.join(", ")),
+                    at,
+                    items: names_of_items,
+                    nets,
+                });
+            }
+        }
     }
 
     /// Require a closed Board Outline, every copper item inside it, and copper at least the edge
@@ -334,6 +419,7 @@ impl BoardView<'_> {
                     message: "The board has no closed Board Outline".into(),
                     at: Point { x_nm: 0, y_nm: 0 },
                     items: Vec::new(),
+                    nets: Vec::new(),
                 });
             }
             return;
@@ -358,6 +444,7 @@ impl BoardView<'_> {
                     message: "Copper lies outside the Board Outline".into(),
                     at: item.at,
                     items: vec![item.name.clone()],
+                    nets: Vec::new(),
                 });
                 continue;
             }
@@ -378,6 +465,7 @@ impl BoardView<'_> {
                     },
                     at: item.at,
                     items: vec![item.name.clone()],
+                    nets: Vec::new(),
                 });
             }
         }
@@ -411,6 +499,7 @@ impl BoardView<'_> {
                         message: "Footprint courtyards overlap".into(),
                         at,
                         items: vec![a.clone(), b.clone()],
+                        nets: Vec::new(),
                     });
                 }
             }
@@ -470,3 +559,6 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod contour_tests;
+
+#[cfg(test)]
+mod short_tests;

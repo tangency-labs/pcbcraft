@@ -363,6 +363,44 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
     build_islands(lands, tracks, vias, false)
 }
 
+/// Join direct pad contacts onto existing islands without repeating track/via contact searches.
+/// The original island map remains available for the separate clearance check. Returned members
+/// retain canonical node ordering, independently of the pad sweep's contact order.
+pub(super) fn with_pad_contacts(lands: &[Land], copper: &Copper, members: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
+    let contours: Vec<_> = lands.iter().map(Land::contour).collect();
+    let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
+    let mut parent: Vec<usize> = (0..members.len()).collect();
+    for_each_pad_contact(lands, &contours, &bounds, |i, j| join(&mut parent, copper.pads[&lands[i].key], copper.pads[&lands[j].key]));
+    let mut merged = BTreeMap::<usize, Vec<usize>>::new();
+    for (island, nodes) in members.into_iter().enumerate() {
+        merged.entry(find(&mut parent, island)).or_default().extend(nodes);
+    }
+    merged
+        .into_values()
+        .map(|mut nodes| {
+            nodes.sort_unstable();
+            nodes
+        })
+        .collect()
+}
+
+/// Find an island's canonical root, compressing its path in the local union-find table.
+fn find(parent: &mut [usize], mut node: usize) -> usize {
+    while parent[node] != node {
+        parent[node] = parent[parent[node]];
+        node = parent[node];
+    }
+    node
+}
+
+/// Merge two local contact groups, retaining the lower root for deterministic island ordering.
+fn join(parent: &mut [usize], a: usize, b: usize) {
+    let (a, b) = (find(parent, a), find(parent, b));
+    if a != b {
+        parent[a.max(b)] = a.min(b);
+    }
+}
+
 /// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
 fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
     let contours: Vec<_> = lands.iter().map(Land::contour).collect();
@@ -376,19 +414,6 @@ fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs:
             && contours[i].overlaps_segment(a, b, radius)
     };
     let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
-    fn find(parent: &mut [usize], mut node: usize) -> usize {
-        while parent[node] != node {
-            parent[node] = parent[parent[node]];
-            node = parent[node];
-        }
-        node
-    }
-    let join = |parent: &mut Vec<usize>, a: usize, b: usize| {
-        let (a, b) = (find(parent, a), find(parent, b));
-        if a != b {
-            parent[a.max(b)] = a.min(b);
-        }
-    };
     if join_pad_pairs {
         for_each_pad_contact(lands, &contours, &bounds, |i, j| join(&mut parent, i, j));
     }

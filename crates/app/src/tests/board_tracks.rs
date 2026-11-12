@@ -683,6 +683,61 @@ fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
     assert!(h.query_by_label_contains("Unrouted connection").is_none());
     assert!(h.state().views.active.board.drc.markers(board).is_empty(), "closing the card clears its markers");
 }
+
+/// Keep a legal routed connection while accepting two independently named schematic nets.
+/// Every fixture edit uses the same engine commands as the app and MCP.
+fn shorted_routable<'a>() -> Harness<'a, PcbApp> {
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let layer = layer_named(&h, "Top");
+    let s = &mut h.state_mut().session;
+    let board = line.from.terminal.board.board;
+    s.apply(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"board":board,"layer":layer,"width_nm":250_000,
+        "points":[line.from.position,line.to.position],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let terminals: Vec<_> =
+        s.project().unwrap().symbols().iter().map(|symbol| s.project().unwrap().terminal_position(symbol.terminals()[0]).unwrap()).collect();
+    for (index, at) in terminals.into_iter().enumerate() {
+        s.apply(
+            "schematic.place_net_label",
+            &json!({"name":format!("INTENDED_{index}"),"style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,
+            "expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    let wire = s.project().unwrap().wires()[0].id();
+    s.apply(pcbcraft_engine::DELETE_WIRE, &json!({"wire":wire,"expected_revision":s.revision()})).unwrap();
+    s.apply(pcbcraft_engine::board::update::PREVIEW_UPDATE, &json!({"board":board,"expected_revision":s.revision()})).unwrap();
+    let token = s.cached_board_update().unwrap().plan_token;
+    s.apply(pcbcraft_engine::board::update::APPLY_UPDATE, &json!({"board":board,"plan_token":token,"expected_revision":s.revision()})).unwrap();
+    h.run();
+    h
+}
+
+/// The existing DRC card exposes the engine's short finding and focuses the corresponding marker.
+/// GUI and shared command checks agree and leave design bytes and revision untouched.
+#[test]
+fn drc_shows_and_focuses_an_existing_short() {
+    let mut h = shorted_routable();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let board = h.state().views.active.board.target.unwrap();
+    let report = h.state().session.check_design(&json!({"board":board.board})).unwrap();
+    assert_eq!(report["counts"]["short"], 1);
+    let finding = report["violations"][0]["message"].as_str().unwrap();
+    click(&mut h, "Analyze");
+    click(&mut h, "Run design rules check");
+    assert!(h.query_by_label_contains("1 short").is_some());
+    let label = format!("Short · {finding}");
+    h.get_by_label(&label).click();
+    h.run();
+    assert!(h.state().views.active.board.drc.markers(Some(board)).iter().any(|(_, focused)| *focused));
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
 /// Vias of different sizes show their sizes as "Mixed" and offer no field that would overwrite
 /// the other dimension; vias of one size stay editable.
 #[test]
