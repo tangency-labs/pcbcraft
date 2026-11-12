@@ -327,7 +327,7 @@ an existing placement stages its removal for Apply; otherwise remove its footpri
 its component. The **Do not populate** attribute omits the component from Base assembly
 outputs. **Exclude from BOM** and **Exclude from pick-and-place files** independently omit it
 from those respective files. Named board-local population alternatives are available from
-Design → Variants; each inherits Base DNP until you set a per-component override. Export an
+Analyze → Reports → Variants; each inherits Base DNP until you set a per-component override. Export an
 explicit Base or named variant to create BOM and placement CSVs without changing board geometry.
 Simulation flags remain available for future simulation consumers. See
 [assembly variants and outputs](assembly-variants.md) for the file and coordinate contract.

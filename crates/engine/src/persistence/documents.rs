@@ -1179,6 +1179,9 @@ impl DocumentsEncoder {
                         if p.numeric_id_high_water.is_none() {
                             return Err("assembly variants require an adopted numeric ID watermark".into());
                         }
+                        if !p.has_sheet_occurrences() {
+                            return Err("assembly variants require adopted sheet occurrences".into());
+                        }
                         VARIANT_PROJECT_FORMAT
                     } else if !p.net_registry.records.is_empty() {
                         NET_PROJECT_FORMAT

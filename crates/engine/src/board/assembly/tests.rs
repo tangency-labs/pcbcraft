@@ -135,6 +135,39 @@ fn complementary_variants_change_outputs_without_changing_physical_or_electrical
     assert_eq!(snapshot["boards"][0]["tracks"].as_array().unwrap().len(), 1);
 }
 
+/// BOMs name a pinned package even before its footprint has been placed on the board.
+#[test]
+fn bom_uses_the_pinned_assignment_when_the_component_is_unplaced() {
+    let mut session = session();
+    let board = board_id(&session);
+    let (_symbol, component) = resistor(&mut session, 0);
+    edit(
+        &mut session,
+        crate::board::assignment::ASSIGN_FOOTPRINT,
+        json!({
+            "component":component,
+            "library":"starter",
+            "definition":"resistor-0402",
+            "definition_revision":4,
+            "mapping":{"1":"2","2":"1"}
+        }),
+    );
+
+    assert!(session.project().unwrap().board.footprints().is_empty());
+    let output = report(&mut session, &board, Value::Null);
+    let bom = contents(&output, "BOM.csv");
+    assert!(bom.lines().nth(1).unwrap().contains("\"resistor-0402\""), "the pinned package is exported: {bom}");
+}
+
+/// CSV output marks formula/control prefixes as text and preserves legitimate signed values.
+#[test]
+fn csv_cells_neutralize_formula_and_control_prefixes() {
+    let mut output = String::new();
+    csv_row(&mut output, &["=1+1", "@SUM(1,1)", "\ttext", "\rtext", "\ntext", "+5V", "-5V", "-0.250000"]);
+    let expected = "\"'=1+1\",\"'@SUM(1,1)\",\"'\ttext\",\"'\rtext\",\"'\ntext\",\"+5V\",\"-5V\",\"-0.250000\"\r\n".to_owned();
+    assert_eq!(output, expected);
+}
+
 /// Base DNP, BOM exclusion, position exclusion and board exclusion stay independent.
 #[test]
 fn base_dnp_and_output_specific_exclusions_are_independent() {
@@ -298,6 +331,10 @@ fn invalid_and_stale_variant_references_are_rejected_by_commands_exports_and_sto
         session.execute(crate::board::assembly::EXPORT_ASSEMBLY, &json!({"board":board})).is_err(),
         "variant selection is mandatory, including for Base"
     );
+    assert!(
+        matches!(session.export_assembly(&json!({"board":board})), Err(crate::CommandError::InvalidParams(message)) if message.contains("variant")),
+        "direct callers must provide the variant key and use null for Base"
+    );
     assert!(session.execute(crate::board::assembly::EXPORT_ASSEMBLY, &json!({"board":board,"variant":Uuid::max()})).is_err());
 
     let mut documents = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -319,4 +356,17 @@ fn invalid_and_stale_variant_references_are_rejected_by_commands_exports_and_sto
     corrupted.open_snapshot(Arc::new(stale));
     let error = corrupted.export_assembly(&json!({"board":board,"variant":variant})).unwrap_err().to_string();
     assert!(error.contains("component-999999"), "export reports a stale live reference: {error}");
+}
+
+/// Format 18 cannot be emitted until the decoder-required sheet occurrence document exists.
+#[test]
+fn variants_require_adopted_sheet_occurrences_before_encoding() {
+    let mut session = session();
+    let board = board_id(&session);
+    create_variant(&mut session, "Proto", &board);
+    let mut project = (*session.snapshot().unwrap()).clone();
+    project.circuit_use = None;
+
+    let error = encode_documents(Arc::new(project)).unwrap_err();
+    assert!(error.contains("adopted sheet occurrences"), "encoder explains the missing decoder-required document: {error}");
 }

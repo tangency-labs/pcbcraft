@@ -246,12 +246,7 @@ impl Action {
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
             Self::Rules => app.session.available(pcbcraft_engine::SET_RULES) && app.views.active.input(&app.session).is_some(),
-            Self::Bom | Self::Variants => {
-                app.session.available(pcbcraft_engine::EXPORT_ASSEMBLY)
-                    && !app.fabrication_exports.busy()
-                    && !app.files.busy()
-                    && !app.project_action_pending()
-            }
+            Self::Bom | Self::Variants => app.assembly_reports_enabled(),
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
             Self::ResumeLibraryEditors => app.library_editors.has_documents(),
@@ -312,6 +307,14 @@ impl Action {
 }
 
 impl PcbApp {
+    /// Enable assembly reports only while the shared export command and archive pipeline are ready.
+    pub(super) fn assembly_reports_enabled(&self) -> bool {
+        self.session.available(pcbcraft_engine::EXPORT_ASSEMBLY)
+            && !self.fabrication_exports.busy()
+            && !self.files.busy()
+            && !self.project_action_pending()
+    }
+
     /// Render the ported group definitions with the upstream chrome and command authority.
     /// Compact ribbons retain working controls; planned tools remain in caption menus.
     pub(super) fn ported_ribbon_tab(&mut self, ui: &mut egui::Ui, slot: usize) {

@@ -213,6 +213,9 @@ impl Session {
     pub fn export_assembly(&self, params: &Value) -> Result<Vec<crate::board::fabrication::Output>, CommandError> {
         let project = self.open_project()?;
         let target = project.resolve_board(params["board"].as_str())?;
+        if params.get("variant").is_none() {
+            return Err(CommandError::InvalidParams("`variant` is required; pass null to export Base".into()));
+        }
         let variant = selected(project, target, &params["variant"])?;
         let empty_overrides = BTreeMap::new();
         let overrides = variant.map_or(&empty_overrides, |variant| &variant.population);
@@ -222,9 +225,19 @@ impl Session {
                 continue;
             }
             let footprint = project.board.footprints().iter().find(|footprint| footprint.component == component.ordinal);
+            let assigned = project.board.assignments.get(&component.ordinal);
             csv_row(
                 &mut bom,
-                &[&component.reference, &component.value, footprint.map_or("", |footprint| footprint.definition.as_str()), &component.id(), "1"],
+                &[
+                    &component.reference,
+                    &component.value,
+                    footprint
+                        .map(|footprint| footprint.definition.as_str())
+                        .or_else(|| assigned.map(|assignment| assignment.definition.as_str()))
+                        .unwrap_or(""),
+                    &component.id(),
+                    "1",
+                ],
             );
         }
         let mut placement =
@@ -269,6 +282,9 @@ fn csv_row(output: &mut String, values: &[&str]) {
             output.push(',');
         }
         output.push('"');
+        if matches!(value.chars().next(), Some('=' | '@' | '\t' | '\r' | '\n')) {
+            output.push('\'');
+        }
         for character in value.chars() {
             if character == '"' {
                 output.push('"');
