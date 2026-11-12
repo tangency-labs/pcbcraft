@@ -30,6 +30,7 @@ FORMATS = {
     "pcbcraft-footprint/1": "urn:pcbcraft:schema:footprint:1",
     "pcbcraft-category/1": "urn:pcbcraft:schema:category:1",
     "pcbcraft-part/1": "urn:pcbcraft:schema:part:1",
+    "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
 }
 
 
@@ -65,7 +66,7 @@ def validators():
 
 def records(root):
     """Discover flat native item directories; manifests are validated by the source loader."""
-    return [path for name in ("symbols", "footprints", "categories", "parts") for path in sorted((root / name).glob("*.json"))]
+    return [path for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts") for path in sorted((root / name).glob("*.json"))]
 
 
 def validate(paths, sources):

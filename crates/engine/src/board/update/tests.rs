@@ -268,7 +268,7 @@ fn duplicate_or_excessive_package_mappings_are_rejected_while_decoding() {
 
 /// Corrupt only a negative test payload by duplicating a mapping key with the
 /// same value, so ordinary last-key-wins JSON decoding would conceal the error.
-pub(super) fn duplicate_mapping(bytes: &[u8], mapping: &BTreeMap<String, String>) -> Vec<u8> {
+pub(super) fn duplicate_mapping(bytes: &[u8], mapping: &BTreeMap<String, crate::library::parts::PadIds>) -> Vec<u8> {
     let text = std::str::from_utf8(bytes).unwrap();
     let encoded = serde_json::to_string(mapping).unwrap();
     let (terminal, pad) = mapping.first_key_value().unwrap();

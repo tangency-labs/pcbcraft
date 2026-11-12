@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:manufacturer-part:1",
+  "title": "PCBcraft manufacturer part, format 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "library",
+    "id",
+    "revision",
+    "name",
+    "license",
+    "source",
+    "manufacturer",
+    "mpn",
+    "part",
+    "package"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-manufacturer-part/1"
+    },
+    "library": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "id": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "revision": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/revision"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "source": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/source"
+    },
+    "manufacturer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "mpn": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "part": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+    },
+    "package": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "datasheet": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https?://[^\\s/?#]+(?:[^\\s]*)(?![\\s\\S])"
+    },
+    "specifications": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/field_id"
+      },
+      "additionalProperties": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/parameter_value"
+      }
+    }
+  }
+}

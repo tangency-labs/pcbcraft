@@ -15,7 +15,7 @@ pub fn load(root: &Path) -> Result<NativeSource, String> {
     let mut problems = Vec::new();
     let mut total = documents["library.json"].len();
     let mut count = 1;
-    for directory in ["symbols", "footprints", "categories", "parts"] {
+    for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts"] {
         let path = root.join(directory);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -93,7 +93,7 @@ mod tests {
         use pcbcraft_engine::library::{parts::Reference, sources::Catalog};
         use std::sync::Arc;
         let source = load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts"))).unwrap();
-        assert_eq!(source.items().len(), 13);
+        assert_eq!(source.items().len(), 14);
         assert!(source.problems().is_empty(), "{:?}", source.problems());
         let mut catalog = Catalog::default();
         catalog.install("demo", Arc::new(source)).unwrap();

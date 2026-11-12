@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:part-selection:15",
+  "title": "PCBcraft project format 15 part selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "definition"
+  ],
+  "properties": {
+    "definition": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+    },
+    "package": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "manufacturer": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+    },
+    "requirements": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/field_id"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operator",
+              "value"
+            ],
+            "properties": {
+              "operator": {
+                "enum": [
+                  "exact",
+                  "at_least",
+                  "at_most"
+                ]
+              },
+              "value": {
+                "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/parameter_value"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operator",
+              "minimum",
+              "maximum"
+            ],
+            "properties": {
+              "operator": {
+                "enum": [
+                  "range"
+                ]
+              },
+              "minimum": {
+                "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/parameter_value"
+              },
+              "maximum": {
+                "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/parameter_value"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operator",
+              "values"
+            ],
+            "properties": {
+              "operator": {
+                "enum": [
+                  "one_of"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/parameter_value"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

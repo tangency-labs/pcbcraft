@@ -4,9 +4,10 @@ November 6, 2026, revised November 11, 2026. This document defines the library
 model behind [#28](https://github.com/tangency-labs/pcbcraft/issues/28), incorporating
 the discussion in [#217](https://github.com/tangency-labs/pcbcraft/issues/217).
 The [symbol](symbol-schema.md) and [part/category](part-schema.md) schemas and
-native codecs implement the definition contracts. Project part selection,
-typed instance requirements, manufacturer records and the remaining manager
-workflows below still need their own integrations.
+native codecs implement the definition contracts. Native part placement, typed
+instance requirements, manufacturer records and offline pinning are implemented
+as described in [part-schema.md](part-schema.md). The remaining manager, provider
+and import workflows below describe intended behavior.
 
 The Parts Catalog is meant to become the one place to find symbols, footprints
 and parts, from bundled, local and remote sources, including KiCad libraries and
@@ -33,7 +34,7 @@ manager's implementation details each get their own design (see
 - **Personal native sources.** Folder registration and uploaded bundles are
   described in [native-library-sources.md](native-library-sources.md). Conflicting
   content claiming the same identity and revision is reported, not chosen.
-- **Parts Catalog.** Search over bundled and loaded native symbols, in an
+- **Parts Catalog.** Search over bundled symbols and loaded native parts/symbols, in an
   expanded chooser and a compact dockable view that share one placement path.
 
 ## Goals

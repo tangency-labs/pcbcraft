@@ -27,12 +27,12 @@ if (int(installed_version[0]), int(installed_version[1])) < (4, 18):
     raise SystemExit('This checker requires jsonschema 4.18 or later. Run python3 -m pip install "jsonschema>=4.18".')
 
 
-def validate(definitions: list[Path], placements: list[Path]) -> None:
-    """Check both schemas offline, then validate bundled and supplied records."""
+def validate(definitions: list[Path], placements: list[Path], placement_version: int = 15) -> None:
+    """Check the selected vocabulary offline, then validate bundled and supplied records."""
     root = Path(__file__).resolve().parent.parent
     schemas = [
         json.loads((root / "docs/schemas" / name).read_text(encoding="utf-8"))
-        for name in ("footprint-v1.schema.json", "footprint-placement-v15.schema.json")
+        for name in ("footprint-v1.schema.json", f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
     ]
     for schema in schemas:
         Draft202012Validator.check_schema(schema)
@@ -43,7 +43,7 @@ def validate(definitions: list[Path], placements: list[Path]) -> None:
     bundled = sorted((root / "libraries/starter/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")
-    for validator, paths in zip(validators, [bundled + definitions, placements], strict=True):
+    for validator, paths in zip(validators[:2], [bundled + definitions, placements], strict=True):
         for path in paths:
             try:
                 validator.validate(json.loads(path.read_text(encoding="utf-8")))
@@ -60,9 +60,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("definitions", nargs="*", type=Path, help="additional footprint definition JSON files")
     parser.add_argument("--placement", action="append", default=[], type=Path, help="one physical placement JSON record")
+    parser.add_argument("--placement-version", type=int, choices=(15, 17), default=15, help="board vocabulary for physical placement records")
     arguments = parser.parse_args()
     try:
-        validate(arguments.definitions, arguments.placement)
+        validate(arguments.definitions, arguments.placement, arguments.placement_version)
     except (OSError, ValueError, SchemaError) as error:
         parser.exit(1, f"{error}\n")
 

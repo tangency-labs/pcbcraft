@@ -1,5 +1,5 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
-use super::parts::{Category, PartDefinition, Reference};
+use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
 use serde::{Deserialize, Serialize};
@@ -159,6 +159,7 @@ pub enum Kind {
     Footprint,
     Category,
     Part,
+    ManufacturerPart,
 }
 
 /// An exact native item revision, independent of source registration and file location.
@@ -176,6 +177,7 @@ enum Definition {
     Footprint(Arc<FootprintDefinition>),
     Category(Arc<Category>),
     Part(Arc<PartDefinition>),
+    ManufacturerPart(Arc<ManufacturerPart>),
 }
 
 /// A validated catalog item with portable provenance and its source-relative diagnostic path.
@@ -196,6 +198,9 @@ impl Item {
             "format":self.canonical["format"]});
         if let Definition::Symbol(symbol) = &self.definition {
             value["units"] = json!(symbol.units.iter().map(|unit| unit.unit_id()).collect::<Vec<_>>());
+        }
+        if let Some(record) = self.manufacturer_part() {
+            value["manufacturer_part"] = json!(record.as_ref());
         }
         value
     }
@@ -220,6 +225,13 @@ impl Item {
             _ => None,
         }
     }
+    /// Exact manufacturer metadata remains a library record, independent of supplier integrations.
+    pub fn manufacturer_part(&self) -> Option<Arc<ManufacturerPart>> {
+        match &self.definition {
+            Definition::ManufacturerPart(record) => Some(record.clone()),
+            _ => None,
+        }
+    }
     /// Inspect a parsed typed category without changing source or project state.
     pub fn category(&self) -> Option<Arc<Category>> {
         match &self.definition {
@@ -232,6 +244,9 @@ impl Item {
         self.name.to_lowercase().contains(query)
             || self.key.id.contains(query)
             || self.key.library.contains(query)
+            || self
+                .manufacturer_part()
+                .is_some_and(|part| part.manufacturer.to_lowercase().contains(query) || part.mpn.to_lowercase().contains(query))
             || self.symbol().is_some_and(|symbol| symbol.reference_prefix().eq_ignore_ascii_case(query))
     }
 }
@@ -321,6 +336,14 @@ impl NativeSource {
             let key = Key { library: part.library.clone(), kind: Kind::Part, id: part.id.clone(), revision: part.revision };
             let canonical = serde_json::to_value(part.as_ref()).map_err(|e| e.to_string())?;
             (Definition::Part(part.clone()), key, part.name.clone(), part.license.clone(), canonical)
+        } else if file.starts_with("manufacturer-parts/") {
+            let record = Arc::new(ManufacturerPart::read(text)?);
+            if record.library != self.library {
+                return Err("Manufacturer-part library does not match library.json".into());
+            }
+            let key = Key { library: record.library.clone(), kind: Kind::ManufacturerPart, id: record.id.clone(), revision: record.revision };
+            let canonical = serde_json::to_value(record.as_ref()).map_err(|error| error.to_string())?;
+            (Definition::ManufacturerPart(record.clone()), key, record.name.clone(), record.license.clone(), canonical)
         } else {
             let category = Arc::new(Category::read(text)?);
             if category.library != self.library {
@@ -380,7 +403,7 @@ pub fn is_document_path(path: &str) -> bool {
         return true;
     }
     let Some((directory, name)) = path.split_once('/') else { return false };
-    matches!(directory, "symbols" | "footprints" | "categories" | "parts")
+    matches!(directory, "symbols" | "footprints" | "categories" | "parts" | "manufacturer-parts")
         && name.ends_with(".json")
         && name.len() <= 128
         && !name.starts_with('.')
@@ -426,7 +449,7 @@ pub struct Catalog {
 }
 
 /// One validated library snapshot of a part and all definitions it requires; no project mutation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedPart {
     pub definition: Arc<PartDefinition>,
     pub symbol: Arc<SymbolDefinition>,
@@ -435,10 +458,24 @@ pub struct ResolvedPart {
 }
 impl ResolvedPart {
     /// Expose exact native documents for shared GUI/MCP inspection without fetching or changing them.
-    pub fn inspect(&self) -> Value {
+    fn snapshot(&self) -> Value {
         let footprints: BTreeMap<_, _> = self.footprints.iter().map(|(id, definition)| (id, definition.as_ref())).collect();
         json!({"part":self.definition.as_ref(),"symbol":saved_copy(&self.symbol),"category":self.category.as_deref(),"footprints":footprints})
     }
+    /// Return immutable native documents and a digest covering the complete dependency closure.
+    pub fn inspect(&self) -> Value {
+        let mut value = self.snapshot();
+        value["digest"] = json!(part_digest(self));
+        value
+    }
+}
+/// Fingerprint exact dependency content, so refreshing a category or footprint invalidates a pending placement.
+pub fn part_digest(part: &ResolvedPart) -> String {
+    format!("{:x}", Sha256::digest(part.snapshot().to_string().as_bytes()))
+}
+/// Manufacturer selections pin supplied specification content in addition to the generic-part closure.
+pub fn manufacturer_digest(part: &ManufacturerPart) -> String {
+    format!("{:x}", Sha256::digest(serde_json::to_value(part).unwrap_or(Value::Null).to_string().as_bytes()))
 }
 impl Catalog {
     /// Resolve an exact item, refusing missing, conflicting and unavailable definitions without fallback.
@@ -463,6 +500,26 @@ impl Catalog {
         Ok(category)
     }
 
+    /// Resolve an exact unambiguous footprint for native assignment without substituting a newer revision.
+    pub fn footprint(&self, library: &str, id: &str, revision: u32) -> Option<Arc<FootprintDefinition>> {
+        self.exact(&Reference { library: library.into(), id: id.into(), revision }, Kind::Footprint).ok()?.footprint()
+    }
+    /// Resolve native manufacturer metadata and its exact part/package/category dependencies.
+    pub fn manufacturer_part(&self, reference: &Reference) -> Result<Arc<ManufacturerPart>, String> {
+        let record = self.exact(reference, Kind::ManufacturerPart)?.manufacturer_part().ok_or("Expected a manufacturer-part record.")?;
+        record.validate_part(self.resolve_part(&record.part)?)?;
+        Ok(record)
+    }
+    /// List resolvable manufacturer records belonging to one exact reusable part revision.
+    pub fn manufacturers_for(&self, part: &Reference) -> Vec<Arc<ManufacturerPart>> {
+        self.search("", Some(Kind::ManufacturerPart))
+            .into_iter()
+            .filter_map(|(_, item)| {
+                let record = item.manufacturer_part()?;
+                (record.part == *part).then(|| self.manufacturer_part(&record.reference()).ok()).flatten()
+            })
+            .collect()
+    }
     /// Validate a part against exact currently available dependencies, including every package option.
     /// The operation is read-only, performs no network I/O, and never substitutes a newer revision.
     pub fn resolve_part(&self, reference: &Reference) -> Result<&ResolvedPart, String> {
@@ -654,6 +711,9 @@ impl Catalog {
                 {
                     problems.push(format!("{}: {error}",item.file));
                 }
+                if let Some(record) = item.manufacturer_part() && let Err(error) = self.manufacturer_part(&record.reference()) {
+                    problems.push(format!("{}: {error}",item.file));
+                }
                 if let Some(symbol) = item.symbol()
                     && let Some(binding) = &symbol.category
                     && let Err(error) = self.category(&binding.definition).and_then(|category| binding.validate_category(&category))
@@ -663,6 +723,7 @@ impl Catalog {
             }
             json!({"source":id,"library":source.library,"name":source.name,"license":source.license,"available":!self.unavailable.contains(id),"problems":problems,
                 "symbols":source.items.iter().filter(|i|i.key.kind==Kind::Symbol).count(),"footprints":source.items.iter().filter(|i|i.key.kind==Kind::Footprint).count(),
+                "manufacturer_parts":source.items.iter().filter(|i|i.key.kind==Kind::ManufacturerPart).count(),
                 "parts":source.items.iter().filter(|i|i.key.kind==Kind::Part).count(),"categories":source.items.iter().filter(|i|i.key.kind==Kind::Category).count()})
         }));
         json!(sources)
@@ -735,6 +796,11 @@ impl Session {
                     .map(|(source, item)| {
                         let mut value = item.inspect();
                         value["source"] = json!(source);
+                        if let Some(part) = item.part()
+                            && let Ok(resolved) = self.libraries.resolve_part(&part.reference())
+                        {
+                            value["digest"] = json!(part_digest(resolved));
+                        }
                         if let Some(part) = item.part() {
                             value["resolution"] = match self.libraries.resolve_part(&part.reference()) {
                                 Ok(_) => json!({"status":"resolved"}),

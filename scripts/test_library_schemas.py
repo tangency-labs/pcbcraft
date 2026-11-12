@@ -44,6 +44,30 @@ class LibrarySchemaTests(unittest.TestCase):
         uncategorized["fixed_parameters"] = {"pcbcraft:resistance": {"type": "quantity", "value": "0.1", "unit": "Ohm"}}
         self.assertFalse(validator.is_valid(uncategorized))
 
+    def test_manufacturer_metadata_and_instance_requirements(self):
+        manufacturer = checker.read_json(ROOT / "examples/native-parts/manufacturer-parts/test-resistor-100m.json")
+        validator = self.checks[checker.FORMATS["pcbcraft-manufacturer-part/1"]]
+        validator.validate(manufacturer)
+        for field, value in [("stock", 10), ("price", 1), ("datasheet", "file:///tmp/test.pdf")]:
+            changed = copy.deepcopy(manufacturer)
+            changed[field] = value
+            self.assertFalse(validator.is_valid(changed))
+        selection = {"definition": manufacturer["part"], "package": "0603", "requirements": {
+            "pcbcraft:resistance": {"operator": "range", "minimum": {"type": "quantity", "value": "0.1", "unit": "Ohm"},
+                                    "maximum": {"type": "quantity", "value": "100", "unit": "Ohm"}}}}
+        validator = self.checks["urn:pcbcraft:schema:part-selection:15"]
+        validator.validate(selection)
+        selection["requirements"]["pcbcraft:resistance"]["minimum"]["unit"] = "mOhm"
+        self.assertFalse(validator.is_valid(selection))
+
+    def test_multipad_placement_requires_extended_vocabulary(self):
+        placement = {"id": 1, "component": 2, "library": "parts-demo", "definition": "test", "definition_revision": 1,
+                     "x_nm": 0, "y_nm": 0, "mapping": {"1": ["1", "EP"], "2": "2"}, "unconnected_pads": ["MH"]}
+        self.checks["urn:pcbcraft:schema:footprint-placement:17"].validate(placement)
+        self.assertFalse(self.checks["urn:pcbcraft:schema:footprint-placement:15"].is_valid(placement))
+        placement["mapping"]["1"] = ["1", "1"]
+        self.assertFalse(self.checks["urn:pcbcraft:schema:footprint-placement:17"].is_valid(placement))
+
     def test_symbol_binding_is_explicit_and_versioned(self):
         validator = self.checks[checker.FORMATS["pcbcraft-symbol/3"]]
         validator.validate(self.symbol)

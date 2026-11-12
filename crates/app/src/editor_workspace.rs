@@ -1145,6 +1145,7 @@ impl PcbApp {
                     self.views.active.schematic.tool = Some(crate::schematic_canvas::Tool::PlaceSymbol {
                         definition,
                         component: Some(component),
+                        part: None,
                         unit,
                         value,
                         revision: self.session.revision(),

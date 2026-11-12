@@ -1005,3 +1005,13 @@ dual-amplifier symbol, linked part, illustrative six-pad package and multi-unit
 runtime/authoring extension are original PCBcraft work following the repository's
 circuit-instance and library contracts. No external
 EDA implementation, library data, artwork or new runtime dependency was introduced.
+
+### Native part selections and manufacturer records
+
+The typed requirement comparison, native manufacturer record/schema, project
+selection transactions, dependency pinning and presentation in this slice are
+original MIT OR Apache-2.0 PCBcraft code. The manufacturer fixture under
+`examples/native-parts/manufacturer-parts/` is explicitly synthetic, with no real
+vendor product, supplier stock or pricing claim. It links the original example
+part and footprint, whose existing provenance remains attached. No KiCad import,
+implementation source or external vendor adapter is included.

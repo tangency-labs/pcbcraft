@@ -38,7 +38,9 @@ pub(crate) struct Assignment {
     pub library: String,
     pub definition: String,
     pub definition_revision: u32,
-    pub mapping: BTreeMap<String, String>,
+    pub mapping: BTreeMap<String, crate::library::parts::PadIds>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unconnected_pads: Vec<String>,
 }
 
 impl Assignment {
@@ -50,6 +52,7 @@ impl Assignment {
     /// Construct placement vocabulary for the existing shared geometry/mapping validator.
     pub(crate) fn footprint(&self, id: u64, position: Point) -> Footprint {
         Footprint {
+            unconnected_pads: self.unconnected_pads.clone(),
             id,
             component: self.component,
             library: Some(self.library.clone()),
@@ -72,10 +75,21 @@ impl Assignment {
         let logical = project.components.get(&self.component).map_or_else(
             || project.board.baseline.as_ref().is_some_and(|baseline| baseline.validate_assignment(self)),
             |component| {
-                project.assignment_definition(&self.key()).is_some_and(|definition| mapping_covers(&self.mapping, &component.definition, definition))
+                project.assignment_definition(&self.key()).is_some_and(|definition| {
+                    crate::library::parts::mapping::validate(&self.mapping, &self.unconnected_pads, &component.definition, definition).is_ok()
+                })
             },
         );
+        let part_matches = project.components.get(&self.component).and_then(|part| part.part.as_ref()).is_none_or(|selection| {
+            selection.package.as_ref().and_then(|id| selection.resolved.definition.packages.get(id)).is_some_and(|package| {
+                self.key() == (package.footprint.library.clone(), package.footprint.id.clone(), package.footprint.revision)
+                    && self.mapping.iter().map(|(terminal, pads)| (terminal.clone(), pads.pads().to_vec())).collect::<BTreeMap<_, _>>()
+                        == package.mapping
+                    && self.unconnected_pads == package.unconnected_pads
+            })
+        });
         footprint.valid()
+            && part_matches
             && logical
             && (project.board.baseline.is_some()
                 || project
@@ -111,7 +125,7 @@ impl Assignment {
 struct MappingDefault {
     symbol: MappingItem,
     footprint: MappingItem,
-    mapping: BTreeMap<String, String>,
+    mapping: BTreeMap<String, crate::library::parts::PadIds>,
 }
 
 /// Revision-qualified item identities in the embedded starter mapping data.
@@ -125,14 +139,11 @@ struct MappingItem {
 
 /// Accept a proposed default only when it is a complete bijection for the selected definitions.
 fn mapping_covers(
-    mapping: &BTreeMap<String, String>,
+    mapping: &BTreeMap<String, crate::library::parts::PadIds>,
     symbol: &crate::schematic::SymbolDefinition,
     footprint: &definition::FootprintDefinition,
 ) -> bool {
-    mapping.keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>() == symbol.pins().iter().map(|pin| pin.number.as_str()).collect()
-        && mapping.values().map(String::as_str).collect::<std::collections::BTreeSet<_>>()
-            == footprint.pads.iter().map(|pad| pad.number.as_str()).collect()
-        && mapping.len() == footprint.pads.len()
+    crate::library::parts::mapping::validate(mapping, &[], symbol, footprint).is_ok()
 }
 
 impl Project {
@@ -165,7 +176,11 @@ impl Project {
     /// default, then matching terminal/pad IDs (including named terminals). Unknown components,
     /// incompatible numbering and invalid default data return None; positions and array order
     /// never establish correspondence. Assignment still validates the explicitly submitted map.
-    pub fn default_footprint_mapping(&self, component: &str, footprint: &definition::FootprintDefinition) -> Option<BTreeMap<String, String>> {
+    pub fn default_footprint_mapping(
+        &self,
+        component: &str,
+        footprint: &definition::FootprintDefinition,
+    ) -> Option<BTreeMap<String, crate::library::parts::PadIds>> {
         let id = component.strip_prefix("component-")?.parse::<u64>().ok()?;
         if component != format!("component-{id}") {
             return None;
@@ -195,7 +210,7 @@ impl Project {
         }) {
             return mapping_covers(&default.mapping, symbol, footprint).then_some(default.mapping);
         }
-        let numbers = symbol.pins().iter().map(|pin| (pin.number.clone(), pin.number.clone())).collect();
+        let numbers = symbol.pins().iter().map(|pin| (pin.number.clone(), pin.number.clone().into())).collect();
         mapping_covers(&numbers, symbol, footprint).then_some(numbers)
     }
 
@@ -221,6 +236,7 @@ impl Project {
         for f in self.board.footprints() {
             if let (Some(library), Some(mapping)) = (&f.library, &f.mapping) {
                 assignments.entry(f.component).or_insert_with(|| Assignment {
+                    unconnected_pads: f.unconnected_pads.clone(),
                     component: f.component,
                     library: library.clone(),
                     definition: f.definition.clone(),
@@ -252,6 +268,12 @@ impl Session {
         let project = self.open_project()?;
         let component = component_id(params, project)?;
         let assignment = Assignment {
+            unconnected_pads: params
+                .get("unconnected_pads")
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()
+                .map_err(|error| CommandError::InvalidParams(error.to_string()))?
+                .unwrap_or_default(),
             component,
             library: params["library"].as_str().unwrap_or_default().into(),
             definition: params["definition"].as_str().unwrap_or_default().into(),
@@ -263,6 +285,7 @@ impl Session {
             .assignment_definition(&key)
             .cloned()
             .or_else(|| definition::starter(&assignment.definition).filter(|d| d.key() == key))
+            .or_else(|| self.libraries.footprint(&key.0, &key.1, key.2))
             .ok_or_else(|| CommandError::InvalidParams("unavailable footprint identity/revision".into()))?;
         let mut next = project.clone();
         if project.board_target().is_some() {

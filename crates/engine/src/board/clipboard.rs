@@ -373,6 +373,7 @@ impl BoardFragment {
                     packages.assignments.insert(
                         footprint.component,
                         Assignment {
+                            unconnected_pads: footprint.unconnected_pads.clone(),
                             component: footprint.component,
                             library: key.0,
                             definition: key.1,

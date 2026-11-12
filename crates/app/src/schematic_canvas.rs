@@ -55,6 +55,7 @@ pub(crate) enum Tool {
         definition: Arc<SymbolDefinition>,
         unit: String,
         component: Option<String>,
+        part: Option<pcbcraft_engine::part_instances::Selection>,
         value: String,
         revision: u64,
         turns: u8,

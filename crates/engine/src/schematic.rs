@@ -284,6 +284,8 @@ pub struct PartInstance {
     pub(crate) reference: String,
     pub(crate) value: String,
     pub metadata: fields::Metadata,
+    /// Optional reusable part and manufacturer selection, shared by every schematic unit.
+    pub part: Option<crate::part_instances::Selection>,
 }
 
 impl PartInstance {
@@ -304,8 +306,12 @@ impl PartInstance {
 
     /// Publish component-owned fields independently of schematic placement geometry.
     pub(crate) fn inspect(&self) -> Value {
-        json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
-            "reference": self.reference, "value": self.value, "metadata": self.metadata})
+        let mut value = json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
+            "reference": self.reference, "value": self.value, "metadata": self.metadata});
+        if let Some(part) = &self.part {
+            value["part"] = part.inspect();
+        }
+        value
     }
 }
 

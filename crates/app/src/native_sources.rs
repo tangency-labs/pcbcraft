@@ -264,8 +264,26 @@ impl Sources {
 }
 
 impl PcbApp {
-    /// Bind a placement command to the exact definition shown by the preview, so source refresh
-    /// or removal cannot substitute geometry while the project's revision remains unchanged.
+    /// Commit captured symbol-only or native-part data through the appropriate shared engine command.
+    pub(super) fn place_native_template(&mut self, placement: &crate::parts_browser::Placement, mut params: serde_json::Value) {
+        if let Some(part) = &placement.part {
+            let definition = &part.resolved.definition;
+            params["library"] = json!(definition.library);
+            params["definition"] = json!(definition.id);
+            params["definition_revision"] = json!(definition.revision);
+            params["definition_digest"] = json!(sources::part_digest(&part.resolved));
+            params["package"] = json!(part.package);
+            params["requirements"] = json!(part.requirements);
+            if let Some(manufacturer) = &part.manufacturer {
+                params["manufacturer"] = json!(manufacturer.reference());
+                params["manufacturer_digest"] = json!(sources::manufacturer_digest(manufacturer));
+            }
+            self.run(pcbcraft_engine::part_instances::PLACE_PART, &params);
+        } else {
+            self.place_catalog_symbol(&placement.definition, params);
+        }
+    }
+    /// Bind symbol placement to the exact previewed content, including across source refresh/removal.
     pub(super) fn place_catalog_symbol(&mut self, definition: &pcbcraft_engine::schematic::SymbolDefinition, mut params: serde_json::Value) {
         params["definition"] = json!(definition.id);
         match sources::symbol_digest(definition) {
@@ -356,6 +374,7 @@ impl PcbApp {
                         Some(Kind::Footprint) => chrome::Filter::Footprints,
                         Some(Kind::Part) => chrome::Filter::Parts,
                         Some(Kind::Category) => chrome::Filter::Categories,
+                        Some(Kind::ManufacturerPart) => chrome::Filter::ManufacturerParts,
                     };
                     chrome::search(ui, &mut self.library_sources.query);
                     chrome::filters(ui, &mut kind);
@@ -365,6 +384,7 @@ impl PcbApp {
                         chrome::Filter::Footprints => Some(Kind::Footprint),
                         chrome::Filter::Parts => Some(Kind::Part),
                         chrome::Filter::Categories => Some(Kind::Category),
+                        chrome::Filter::ManufacturerParts => Some(Kind::ManufacturerPart),
                     };
                     let mut params = json!({"query":self.library_sources.query});
                     if let Some(kind) = self.library_sources.kind {
@@ -384,6 +404,7 @@ impl PcbApp {
                                 kind: match item["key"]["kind"].as_str() {
                                     Some("part") => "Part definition",
                                     Some("category") => "Category",
+                                    Some("manufacturer_part") => "Manufacturer part",
                                     Some("footprint") => "Footprint",
                                     _ => "Symbol",
                                 },

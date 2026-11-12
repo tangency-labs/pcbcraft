@@ -259,3 +259,63 @@ fn multiunit_part_resolves_one_symbol_and_whole_package_map() {
     assert_eq!(resolved.footprints.len(), 1);
     assert_eq!(resolved.inspect()["symbol"]["format"], "pcbcraft-symbol/4");
 }
+
+/// Canonical decimal comparisons retain all 18 fractional places across signs and magnitude changes.
+#[test]
+fn requirements_preserve_precision_types_and_unknown_specifications() {
+    let category = Category::read(include_str!("../../../../../examples/native-parts/categories/resistor.json")).unwrap();
+    let field = &category.fields["pcbcraft:resistance"];
+    let quantity = |value: &str| Value::Quantity { value: value.into(), unit: "Ohm".into() };
+    let range = Requirement::Range { minimum: quantity("-10.000000000000000001"), maximum: quantity("0.000000000000000001") };
+    range.validate(field).unwrap();
+    for value in ["-10", "-0.000000000000000001", "0", "0.000000000000000001"] {
+        assert!(range.matches(&quantity(value)), "{value}");
+    }
+    for value in ["-10.000000000000000002", "0.000000000000000002", "100"] {
+        assert!(!range.matches(&quantity(value)), "{value}");
+    }
+    assert!(!range.matches(&Value::Quantity { value: "0".into(), unit: "V".into() }));
+    assert!(Requirement::Range { minimum: quantity("10"), maximum: quantity("9") }.validate(field).is_err());
+    let one = Requirement::OneOf { values: vec![quantity("0.1"), quantity("100")] };
+    one.validate(field).unwrap();
+    assert!(one.matches(&quantity("0.1")));
+    assert!(!one.matches(&quantity("1")));
+    assert!(Requirement::OneOf { values: vec![quantity("0.1"), quantity("0.1")] }.validate(field).is_err());
+    assert!(Requirement::AtMost { value: Value::Choice { value: "thin-film".into() } }.validate(&category.fields["parts-demo:technology"]).is_err());
+    assert_eq!(field.parse_input("100 mΩ").unwrap(), quantity("0.1"));
+}
+
+/// Manufacturer records accept only canonical declared fields and explicit native package relationships.
+#[test]
+fn manufacturer_records_validate_metadata_and_category_meaning() {
+    let text = include_str!("../../../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json");
+    let record = ManufacturerPart::read(text).unwrap();
+    assert_eq!(ManufacturerPart::read(&record.encode().unwrap()).unwrap(), record);
+    let mut catalog = Catalog::default();
+    catalog.install("test", Arc::new(NativeSource::load(&documents()).unwrap())).unwrap();
+    let part = catalog.resolve_part(&record.part).unwrap();
+    record.validate_part(part).unwrap();
+    let mut bad = record.clone();
+    bad.specifications.insert("pcbcraft:resistance".into(), Value::Quantity { value: "100".into(), unit: "mOhm".into() });
+    assert!(bad.validate().is_err());
+    bad = record.clone();
+    bad.package = "missing".into();
+    assert!(bad.validate_part(part).is_err());
+    bad = record.clone();
+    bad.specifications.insert("vendor:unknown".into(), Value::Boolean { value: true });
+    assert!(bad.validate_part(part).is_err());
+    for url in ["https://", "file:///tmp/example.pdf", "https://example.invalid/a b.pdf"] {
+        bad = record.clone();
+        bad.datasheet = Some(url.into());
+        assert!(bad.validate().is_err(), "{url}");
+    }
+    assert!(
+        ManufacturerPart::read(
+            &text.replace(
+                "\"specifications\": {",
+                "\"specifications\": {\"pcbcraft:tolerance\":{\"type\":\"quantity\",\"value\":\"1\",\"unit\":\"1\"},"
+            )
+        )
+        .is_err()
+    );
+}

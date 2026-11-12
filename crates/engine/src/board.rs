@@ -72,7 +72,9 @@ pub(crate) struct Footprint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) library: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) mapping: Option<BTreeMap<String, String>>,
+    pub(crate) mapping: Option<BTreeMap<String, crate::library::parts::PadIds>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) unconnected_pads: Vec<String>,
     #[serde(default, skip_serializing_if = "zero_pad")]
     pub(crate) pin_1_pad: u8,
     pub(crate) x_nm: i64,
@@ -119,6 +121,7 @@ impl Footprint {
             definition_revision: FOOTPRINT_REVISION,
             library: None,
             mapping: None,
+            unconnected_pads: Vec::new(),
             pin_1_pad,
             x_nm: position.x_nm,
             y_nm: position.y_nm,
@@ -144,6 +147,7 @@ impl Footprint {
                     && self.definition_revision == FOOTPRINT_REVISION
                     && (1..=2).contains(&self.pin_1_pad)
                     && self.mapping.is_none()
+                    && self.unconnected_pads.is_empty()
             }
         };
         identity
@@ -157,10 +161,17 @@ impl Footprint {
     pub(crate) fn key(&self) -> Option<definition::Key> {
         Some((self.library.clone()?, self.definition.clone(), self.definition_revision))
     }
-    /// Locate a mapped physical pad from a logical terminal, preserving explicit permutation.
+    /// Enumerate every physical land belonging to a logical terminal; NC pads have no terminal.
+    fn pads_for(&self, pin: &str) -> Vec<PinNumber> {
+        if let Some(mapping) = &self.mapping {
+            return mapping.get(pin).into_iter().flat_map(|pads| pads.pads()).filter_map(|pad| PinNumber::new(pad)).collect();
+        }
+        self.pad_for(pin).into_iter().collect()
+    }
+    /// Locate a representative pad for cross-probing, preserving explicit permutation.
     fn pad_for(&self, pin: &str) -> Option<PinNumber> {
         if let Some(mapping) = &self.mapping {
-            return PinNumber::new(mapping.get(pin)?);
+            return PinNumber::new(mapping.get(pin)?.first()?);
         }
         let number = match pin {
             "1" => self.pin_1_pad,
@@ -172,7 +183,7 @@ impl Footprint {
     /// Find the logical terminal associated with a physical pad, without numeric conversion.
     fn component_pin(&self, pad: PinNumber) -> Option<(u64, &str)> {
         if let Some(mapping) = &self.mapping {
-            return mapping.iter().find(|(_, number)| number.as_str() == pad.as_str()).map(|(pin, _)| (self.component, pin.as_str()));
+            return mapping.iter().find(|(_, number)| number.contains(pad.as_str())).map(|(pin, _)| (self.component, pin.as_str()));
         }
         match pad.as_str() {
             "1" | "2" => Some((self.component, if pad.as_str() == self.pin_1_pad.to_string() { "1" } else { "2" })),
@@ -208,9 +219,12 @@ impl Footprint {
             "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},
             "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
                 let point=self.pad_position(pad,&project.board)?;
-                let (_,pin)=self.component_pin(pad)?;
+                let pin=self.component_pin(pad).map(|(_, pin)| pin);
                 let mut record=json!({"pad":Pad{board:project.board_target().map(|target|target.board),footprint:self.id,number:pad}.inspect(),
-                    "terminal":project.component_terminal(self.component,pin).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
+                    "terminal":pin.and_then(|pin|project.component_terminal(self.component,pin)).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
+                if self.unconnected_pads.iter().any(|number| number == pad.as_str()) {
+                    record["unconnected"] = json!(true);
+                }
                 if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.as_str())) {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper,self.bottom));
                 }
@@ -219,6 +233,9 @@ impl Footprint {
         if let Some(library) = &self.library {
             value["library"] = json!(library);
             value["mapping"] = json!(self.mapping);
+            if !self.unconnected_pads.is_empty() {
+                value["unconnected_pads"] = json!(self.unconnected_pads);
+            }
         }
         if let Some(offset) = self.reference_offset {
             value["reference_offset"] = json!(offset);
@@ -303,10 +320,7 @@ impl Board {
         let Some(mapping) = &footprint.mapping else {
             return false;
         };
-        mapping.len() == definition.pads.len()
-            && mapping.len() == symbol.pins().len()
-            && mapping.keys().map(String::as_str).collect::<BTreeSet<_>>() == symbol.pins().iter().map(|p| p.number.as_str()).collect()
-            && mapping.values().map(String::as_str).collect::<BTreeSet<_>>() == definition.pads.iter().map(|p| p.number.as_str()).collect()
+        crate::library::parts::mapping::validate(mapping, &footprint.unconnected_pads, symbol, definition).is_ok()
     }
     /// Append a placement after identity, mapping shape and definition resolution succeed.
     pub(crate) fn append(&mut self, footprint: Footprint) -> Result<(), &'static str> {
@@ -397,7 +411,7 @@ impl Board {
 }
 
 /// Parse bounded terminal-to-pad mappings before schema dispatch; resolution checks actual identities.
-pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, String>> {
+pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, crate::library::parts::PadIds>> {
     let object = value.as_object()?;
     if object.is_empty() || object.len() > 128 {
         return None;
@@ -405,10 +419,9 @@ pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, String>> {
     object
         .iter()
         .map(|(terminal, pad)| {
-            let pad = pad.as_str()?;
             PinNumber::new(terminal)?;
-            PinNumber::new(pad)?;
-            Some((terminal.clone(), pad.to_owned()))
+            let pads: crate::library::parts::PadIds = serde_json::from_value(pad.clone()).ok()?;
+            pads.valid().then(|| (terminal.clone(), crate::library::parts::PadIds::from(pads.pads().to_vec())))
         })
         .collect()
 }

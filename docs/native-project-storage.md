@@ -69,13 +69,31 @@ one undoable transaction. Undo restores project-owned choices. Existing board
 files keep their current encoding and behavior. Folder and packed saves carry
 these choices, while the diagnostic single-document writer refuses lossy export.
 
+Split project format `pcbcraft-project/15` adds an optional `part` selection to
+each native part instance, retaining the existing board registration semantics.
+The small selection references deduplicated `library/parts/`,
+`library/categories/` and `library/manufacturer-parts/` documents using the same
+`<library>/<id>.r<revision>.json` convention as symbols and footprints. Every
+package footprint is pinned, including unselected variants. Missing or
+conflicting dependencies reject opening before adoption. Native part selections
+also travel with schematic clipboard fragments; diagnostic single-document
+export refuses to discard them.
+
+Board format `pcbcraft-board/17` extends the physical vocabulary through board/16
+with multi-pad terminal maps and explicitly `unconnected_pads`. Accepted input
+uses `pcbcraft-board-baseline/2` for these mappings. A schematic-only extended
+package choice uses project/15. Each new format rejects use under an older
+version; projects without the new data preserve their earlier no-op encoding.
+These formats require the newer app and do not migrate board folders or lists.
+See [part-schema.md](part-schema.md) for record and transaction details.
+
 ## Document ownership
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
+| `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` or `/15` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/15` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides |
+| `board.json` | `pcbcraft-board/1` through `/17` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 

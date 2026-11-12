@@ -231,6 +231,7 @@ pub enum Filter {
     Footprints,
     Parts,
     Categories,
+    ManufacturerParts,
 }
 
 /// A compact segmented filter, with the selection exposed to keyboard and accessibility users.
@@ -244,6 +245,7 @@ pub fn filters(ui: &mut Ui, kind: &mut Filter) {
             (Filter::Footprints, "Footprints"),
             (Filter::Parts, "Parts"),
             (Filter::Categories, "Categories"),
+            (Filter::ManufacturerParts, "Manufacturer parts"),
         ] {
             let selected = *kind == value;
             let response = kit::button(ui, label, if selected { kit::Button::SmallSelected } else { kit::Button::Small });

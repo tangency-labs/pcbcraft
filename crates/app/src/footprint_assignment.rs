@@ -85,6 +85,12 @@ impl PcbApp {
     /// the PCB entry point offers all project components, including those not yet placed.
     /// Package selection needs no board; placement requires an existing physical target.
     pub(super) fn begin_footprint_assignment(&mut self, component: Option<String>) {
+        if let Some(id) = &component
+            && self.session.project().and_then(|project| project.components().find(|part| part.id() == *id)).is_some_and(|part| part.part.is_some())
+        {
+            self.begin_native_part_properties(id.clone());
+            return;
+        }
         let Some(source) = self.views.active.input(&self.session) else { return };
         let Some(project) = self.session.project() else { return };
         let component_browser = component.is_none();
@@ -126,7 +132,16 @@ impl PcbApp {
             return;
         }
         let Some(project) = self.session.snapshot() else { return };
-        let catalog = project.footprint_catalog();
+        let mut catalog = project.footprint_catalog();
+        for (_, item) in self.session.libraries().search("", Some(pcbcraft_engine::library::sources::Kind::Footprint)) {
+            if let Some(definition) = item.footprint()
+                && !catalog
+                    .iter()
+                    .any(|current| current.library == definition.library && current.id == definition.id && current.revision == definition.revision)
+            {
+                catalog.push(definition);
+            }
+        }
         let component = project.components().find(|c| c.id() == edit.component);
         let placed = project
             .board_target()
@@ -280,7 +295,12 @@ impl PcbApp {
                                     if pcbcraft_chrome::catalog::footprint_result(ui, &label, &definition.name, &detail, selected).clicked()
                                         && !selected
                                     {
-                                        edit.mapping = project.default_footprint_mapping(&edit.component, &definition).unwrap_or_default();
+                                        edit.mapping = project
+                                            .default_footprint_mapping(&edit.component, &definition)
+                                            .unwrap_or_default()
+                                            .into_iter()
+                                            .map(|(terminal, pads)| (terminal, pads.to_string()))
+                                            .collect();
                                         edit.definition = Some(definition);
                                         edit.camera = Default::default();
                                         edit.error = None;

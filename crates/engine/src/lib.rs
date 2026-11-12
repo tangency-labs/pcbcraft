@@ -15,6 +15,7 @@ pub mod hierarchy;
 pub mod library;
 pub mod library_graphics;
 pub mod net_labels;
+pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
@@ -72,6 +73,10 @@ enum ParamKind {
     ReferencePolicy,
     CreateBoard,
     PartMetadata,
+    OptionalNativeId,
+    NativeReference,
+    PartRequirements,
+    UnconnectedPads,
     FieldLayouts,
     ReferenceText,
     TextLayout,
@@ -161,6 +166,14 @@ impl ParamKind {
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::PartMetadata => schematic::fields::metadata_schema(),
+            Self::UnconnectedPads => {
+                json!({"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+            }
+            Self::OptionalNativeId => json!({"type":["string","null"],"minLength":1,"maxLength":64}),
+            Self::NativeReference => {
+                json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["library","id","revision"],"properties":{"library":Self::LibrarySource.schema(),"id":Self::LibrarySource.schema(),"revision":Self::DefinitionRevision.schema()}}]})
+            }
+            Self::PartRequirements => crate::library::parts::requirements_schema(),
             Self::ReferenceText => board::reference::Text::schema(),
             Self::FieldLayouts => schematic::fields::layouts_schema(),
             Self::TextLayout => schematic::fields::layouts_schema()["additionalProperties"].clone(),
@@ -171,7 +184,7 @@ impl ParamKind {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
-            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part"]}),
+            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
                 json!({"type":"string","enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"]})
             }
@@ -226,7 +239,7 @@ impl ParamKind {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
-                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -300,6 +313,32 @@ impl ParamKind {
                 })
                 .map(|_| ())
                 .ok_or("must contain a valid text appearance"),
+            Self::UnconnectedPads
+                if serde_json::from_value::<Vec<String>>(value.clone()).is_ok_and(|pads| {
+                    pads.len() <= 128
+                        && pads.iter().all(|pad| schematic::PinNumber::new(pad).is_some())
+                        && pads.iter().collect::<std::collections::BTreeSet<_>>().len() == pads.len()
+                }) =>
+            {
+                Ok(())
+            }
+            Self::UnconnectedPads => Err("must be distinct bounded pad identities"),
+            Self::OptionalNativeId if value.is_null() || value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
+            Self::OptionalNativeId => Err("must be a native identity or null"),
+            Self::NativeReference
+                if value.is_null()
+                    || serde_json::from_value::<library::parts::Reference>(value.clone()).is_ok_and(|reference| reference.validate().is_ok()) =>
+            {
+                Ok(())
+            }
+            Self::NativeReference => Err("must be an exact native reference or null"),
+            Self::PartRequirements
+                if serde_json::from_value::<BTreeMap<String, library::parts::Requirement>>(value.clone())
+                    .is_ok_and(|values| values.len() <= 64 && values.keys().all(|id| library::parts::field_id(id))) =>
+            {
+                Ok(())
+            }
+            Self::PartRequirements => Err("must be at most 64 typed requirements keyed by category field ID"),
             Self::PartMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
                 .ok()
                 .filter(|m| m.validate().is_ok())
@@ -326,7 +365,7 @@ impl ParamKind {
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
-            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part")) => Ok(()),
+            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
@@ -1251,6 +1290,7 @@ const CATALOG: &[Command] = &[
                 summary: "Explicit bijection from logical terminals to pad numbers",
                 kind: ParamKind::FootprintMapping,
             },
+            Param { name: "unconnected_pads", required: false, summary: "Explicit non-electrical pad IDs", kind: ParamKind::UnconnectedPads },
             EXPECTED_REVISION,
         ],
     },
@@ -1469,6 +1509,8 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[3],
     library::sources::COMMANDS[4],
     library::sources::COMMANDS[5],
+    part_instances::commands::COMMANDS[0],
+    part_instances::commands::COMMANDS[1],
     Command {
         id: ADD_DRAWING,
         title: "Draw Board Graphic",
@@ -2071,6 +2113,8 @@ impl Session {
             | PLACE_RESISTOR
             | PLACE_SYMBOL
             | PLACE_UNIT
+            | part_instances::PLACE_PART
+            | part_instances::SET_PART
             | CONNECT_PINS
             | MOVE_SYMBOL
             | ROTATE_SYMBOL
@@ -2294,6 +2338,8 @@ impl Session {
                 | PLACE_RESISTOR
                 | PLACE_SYMBOL
                 | PLACE_UNIT
+                | part_instances::PLACE_PART
+                | part_instances::SET_PART
                 | CONNECT_PINS
                 | MOVE_SYMBOL
                 | ROTATE_SYMBOL
@@ -2378,6 +2424,8 @@ impl Session {
                     .ok_or_else(|| CommandError::Unavailable("the default library has no resistor symbol".to_owned()))?;
                 self.place_symbol(resistor, params)?;
             }
+            part_instances::PLACE_PART => self.place_library_part(params)?,
+            part_instances::SET_PART => self.edit_library_part(params)?,
             PLACE_UNIT => {
                 self.check_revision(params)?;
                 let component = params["component"]
@@ -2546,6 +2594,7 @@ impl Session {
                 reference: format!("{}{reference_number}", definition.reference_prefix),
                 value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
                 metadata: defaults.metadata,
+                part: None,
             }
         };
         let component_id = component.ordinal;
@@ -2655,7 +2704,14 @@ impl Session {
         let component =
             project.component(&project.symbols[index]).ok_or_else(|| CommandError::InvalidParams("symbol has no component".to_owned()))?;
         let reference = params["reference"].as_str().unwrap_or_default().trim().to_owned();
-        let value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        let mut value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        let mut part_selection = component.part.clone();
+        if value != component.value
+            && let Some(selection) = &mut part_selection
+            && let Some(canonical) = selection.set_primary_value(&value).map_err(CommandError::InvalidParams)?
+        {
+            value = canonical;
+        }
         schematic::check_reference(&reference).map_err(CommandError::InvalidParams)?;
         schematic::check_value(&value).map_err(CommandError::InvalidParams)?;
         if project.components.values().any(|other| other.ordinal != component.ordinal && other.reference == reference) {
@@ -2689,6 +2745,7 @@ impl Session {
         schematic::fields::validate_layouts(&field_layout, &metadata).map_err(CommandError::InvalidParams)?;
         if component.reference == reference
             && component.value == value
+            && component.part == part_selection
             && component.metadata == metadata
             && project.symbols[index].field_layout == field_layout
             && project.symbols[index].rotation == rotation
@@ -2699,6 +2756,7 @@ impl Session {
         let mut component = component.clone();
         component.reference = reference;
         component.value = value;
+        component.part = part_selection;
         component.metadata = metadata;
         let mut next = if position != original_position {
             project.transformed_symbol(&project.symbols[index].id(), position, Some(rotation), false, self.revision(), wire::auto_heal(params))?
@@ -2736,7 +2794,7 @@ impl Session {
             board::parse_mapping(value).ok_or_else(|| CommandError::InvalidParams("invalid terminal-to-pad mapping".into()))?
         } else {
             let first = params["pin_1_pad"].as_u64().ok_or_else(|| CommandError::InvalidParams("supply mapping or pin_1_pad".into()))? as u8;
-            BTreeMap::from([("1".into(), first.to_string()), ("2".into(), (3 - first).to_string())])
+            BTreeMap::from([("1".into(), first.to_string().into()), ("2".into(), (3 - first).to_string().into())])
         };
         let mut project = project.clone();
         let mut footprint = Footprint::new(self.next_object_id()?, component, 0, position);
@@ -2744,8 +2802,8 @@ impl Session {
             if !symbol.fits_two_pad_footprint() {
                 return Err(CommandError::InvalidParams("the two-pad footprint only fits symbols with exactly pins 1 and 2".into()));
             }
-            let first = mapping.get("1").and_then(|pad| pad.parse::<u8>().ok()).filter(|pad| (1..=2).contains(pad));
-            let Some(first) = first.filter(|pad| mapping.len() == 2 && mapping.get("2") == Some(&(3 - pad).to_string())) else {
+            let first = mapping.get("1").and_then(|pad| pad.first()).and_then(|pad| pad.parse::<u8>().ok()).filter(|pad| (1..=2).contains(pad));
+            let Some(first) = first.filter(|pad| mapping.len() == 2 && mapping.get("2") == Some(&(3 - pad).to_string().into())) else {
                 return Err(CommandError::InvalidParams("legacy footprint requires an exact two-pad bijection".into()));
             };
             footprint.pin_1_pad = first;

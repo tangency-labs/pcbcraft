@@ -395,6 +395,9 @@ impl PcbApp {
         let previous = self.views.active.id();
         let sheet_form = matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_));
         match &self.dialog {
+            Dialog::NativePart(edit) => {
+                self.views.bind(edit.source.view());
+            }
             Dialog::EditFields(edit) => {
                 self.views.bind(edit.source.view());
             }

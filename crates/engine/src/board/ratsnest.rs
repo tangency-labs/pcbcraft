@@ -94,13 +94,21 @@ impl BoardView<'_> {
                 let resolution = (|| {
                     let footprint =
                         board.by_component.get(&key.component).and_then(|index| board.footprints.get(*index)).ok_or(MissingReason::Unplaced)?;
-                    let number = footprint.pad_for(&key.terminal).ok_or(MissingReason::MissingMapping)?;
-                    let position = footprint.pad_position(number, board).ok_or(MissingReason::MissingPad)?;
-                    let pad = Pad { board: Some(self.target.board), footprint: footprint.id, number };
-                    Ok((pad, format!("footprint-{}", footprint.id), position))
+                    let numbers = footprint.pads_for(&key.terminal);
+                    if numbers.is_empty() {
+                        return Err(MissingReason::MissingMapping);
+                    }
+                    numbers
+                        .into_iter()
+                        .map(|number| {
+                            let position = footprint.pad_position(number, board).ok_or(MissingReason::MissingPad)?;
+                            let pad = Pad { board: Some(self.target.board), footprint: footprint.id, number };
+                            Ok(Endpoint { terminal: terminal.clone(), pad, footprint: format!("footprint-{}", footprint.id), position })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
                 })();
                 match resolution {
-                    Ok((pad, footprint, position)) => endpoints.push(Endpoint { terminal, pad, footprint, position }),
+                    Ok(resolved) => endpoints.extend(resolved),
                     Err(reason) => result.missing.push(MissingEndpoint { terminal, reason }),
                 }
             }

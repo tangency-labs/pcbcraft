@@ -200,6 +200,11 @@ impl PcbApp {
         let enabled = matches!(self.dialog, Dialog::None);
         let units = self.preferences.units;
         let footprint = self.package_label(&current.component);
+        let native_part = self
+            .session
+            .project()
+            .and_then(|project| project.components().find(|part| part.id() == current.component))
+            .is_some_and(|part| part.part.is_some());
         let state = &mut self.views.active.schematic.properties;
         let mut edit = match state.draft.take() {
             Some(edit) if edit.source == current.source && edit.symbol == current.symbol => edit,
@@ -237,6 +242,22 @@ impl PcbApp {
                         .on_hover_text("Choose footprint")
                         .clicked();
                 });
+                if native_part
+                    && let Some(part) = self
+                        .session
+                        .project()
+                        .and_then(|project| project.components().find(|part| part.id() == edit.component))
+                        .and_then(|part| part.part.as_ref())
+                {
+                    if let Some(manufacturer) = &part.manufacturer {
+                        chrome::field(ui, "MPN", |ui| {
+                            ui.label(&manufacturer.mpn);
+                        });
+                    }
+                    if part.compatibility()["status"] == "does_not_meet_requirements" {
+                        ui.label(shell::error("Manufacturer part needs review"));
+                    }
+                }
                 if let Some(error) = &edit.error {
                     ui.label(shell::error(error));
                 }
@@ -273,13 +294,18 @@ impl PcbApp {
             self.dialog = Dialog::EditFields(Box::new(edit.clone()));
         }
         if choose {
-            self.begin_footprint_assignment(Some(edit.component.clone()));
+            if native_part {
+                self.begin_native_part_properties(edit.component.clone());
+            } else {
+                self.begin_footprint_assignment(Some(edit.component.clone()));
+            }
         }
         if let Some(unit) = place_unit {
             self.views.active.schematic.tool = Some(crate::schematic_canvas::Tool::PlaceSymbol {
                 definition: edit.definition.clone(),
                 unit,
                 component: Some(edit.component.clone()),
+                part: None,
                 value: edit.value.clone(),
                 revision: self.session.revision(),
                 turns: 0,

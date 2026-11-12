@@ -42,6 +42,7 @@ mod library_editors;
 mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
+mod native_part_properties;
 mod native_sources;
 mod net_inspector;
 mod net_labels;
@@ -160,6 +161,7 @@ enum Dialog {
     #[default]
     None,
     LibrarySources,
+    NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
     ExternalPasteOptions(Box<external_clipboard::Options>),
@@ -410,6 +412,7 @@ impl PcbApp {
         self.views.active.schematic.tool = Some(Tool::PlaceSymbol {
             unit: definition.unit_id().to_owned(),
             component: None,
+            part: None,
             value: definition.default_value().to_owned(),
             definition,
             revision: self.session.revision(),
@@ -420,6 +423,9 @@ impl PcbApp {
     /// Arm the ordinary placement tool with an instance Value captured by any catalog gesture.
     fn begin_template(&mut self, placement: parts_browser::Placement) {
         self.begin_placement(placement.definition);
+        if let Some(Tool::PlaceSymbol { part, .. }) = &mut self.views.active.schematic.tool {
+            *part = placement.part;
+        }
         if let Some(Tool::PlaceSymbol { value, .. }) = &mut self.views.active.schematic.tool {
             *value = placement.value;
         }
@@ -1528,7 +1534,7 @@ impl PcbApp {
             (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
             (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
             (None, Click::HierarchyClipboard(kind, id, action, ctx)) => self.hierarchy_clipboard_action(&ctx, kind, id, action),
-            (Some(Tool::PlaceSymbol { definition, unit, component, value, revision, turns }), Click::Place(point)) => {
+            (Some(Tool::PlaceSymbol { definition, unit, component, part, value, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
                 let mut params =
                     json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90, "unit":unit});
@@ -1537,10 +1543,13 @@ impl PcbApp {
                     self.run(pcbcraft_engine::PLACE_UNIT, &params);
                 } else {
                     params["value"] = json!(value);
-                    self.place_catalog_symbol(&definition, params);
+                    self.place_native_template(
+                        &parts_browser::Placement { definition: definition.clone(), value: value.clone(), part: part.clone() },
+                        params,
+                    );
                     if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
                         self.views.active.schematic.tool =
-                            Some(Tool::PlaceSymbol { definition, unit, component: None, value, revision: self.session.revision(), turns });
+                            Some(Tool::PlaceSymbol { definition, unit, component: None, part, value, revision: self.session.revision(), turns });
                     }
                 }
             }
@@ -1631,8 +1640,8 @@ impl PcbApp {
                 }
                 let revision = drag_source.revision;
                 self.views.active.schematic.tool = None;
-                self.place_catalog_symbol(
-                    &placement.definition,
+                self.place_native_template(
+                    &placement,
                     json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "value":placement.value}),
                 );
                 if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
@@ -2006,6 +2015,7 @@ impl PcbApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::LibrarySources => self.library_sources_dialog(ctx),
+            Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {

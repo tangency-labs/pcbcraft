@@ -2,14 +2,14 @@
 
 This slice of #92 loads native symbols, footprints, category definitions and
 part definitions from personal sources.
-Symbols can be searched and placed through the Parts Catalog. Footprints can be searched and
-inspected in Library sources; connecting external footprints to the assignment
-chooser remains separate work. Registering, refreshing or removing a source
+Native parts and symbols can be searched and placed through the Parts Catalog.
+Native footprints are available in the assignment chooser, and manufacturer
+records can be selected with their exact generic part and package. Registering, refreshing or removing a source
 does not change the project, its revision, dirty state or undo history.
 
 Open **Libraries → Sources**. On desktop, **Add folder…** selects a native
 library containing `library.json` and optional flat `symbols/`, `footprints/`,
-`categories/` and `parts/` directories. Registrations are saved in personal
+`categories/`, `parts/` and `manufacturer-parts/` directories. Registrations are saved in personal
 application settings, including
 their machine-specific folder paths. They are read in the background on startup.
 Each source card's **⋯** menu contains **Refresh**, **Relocate…** and **Remove**
@@ -94,10 +94,9 @@ registration discards the result, and application shutdown does not wait for the
 reader. Project commands and editing remain independent of the reader.
 
 Native part/category definitions and exact dependency resolution are described
-in [part-schema.md](part-schema.md). Part selection and pinning into project
-instances, project source tables, external footprint assignment, library
-authoring integration, Git/providers and external-format imports remain
-separate work. The remaining acceptance in #92 stays open.
+in [part-schema.md](part-schema.md). Native part selection pins its complete dependency closure into project
+instances. Project source tables, library authoring tools, Git/providers and
+external-format imports remain separate work. The remaining acceptance in #92 stays open.
 
 ## Part definitions and categories
 
@@ -114,5 +113,17 @@ diagnostics rather than silently choosing another revision.
 
 Both are read-only shared engine operations and need no open project. Resolving
 a definition neither pins it into a project nor changes assignment/placement.
-Current project Value controls retain their existing free-text behavior until
-typed part-instance editing is integrated.
+Native part Value controls normalize the explicit primary quantity. The part
+selection form edits typed requirements, package and MPN; symbol-only Value
+controls retain free text.
+
+`schematic.place_part` accepts the exact part identity and `definition_digest`
+from `library.resolve_part`, coordinates and `expected_revision`. Optional
+`package`, typed `requirements`, `manufacturer` reference and
+`manufacturer_digest` select the initial combination. `part.set_selection`
+accepts the instance `component` ID, optional changed selection fields and
+`expected_revision`. Omitting a field preserves it; null clears a package or
+manufacturer. A placed footprint must be removed before its package is cleared.
+Manufacturer search uses `kind: "manufacturer_part"`; item inspection includes
+the record and digest. A part's digest covers all its dependencies, so refreshing
+a category or footprint invalidates a pending placement too.

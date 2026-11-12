@@ -1,0 +1,38 @@
+{
+  "format": "pcbcraft-manufacturer-part/1",
+  "library": "parts-demo",
+  "id": "test-resistor-100m",
+  "revision": 1,
+  "name": "Illustrative 0.1 ohm resistor",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "PCBcraft synthetic native fixture",
+    "locator": "Illustrative metadata for testing; not an actual manufacturer product"
+  },
+  "manufacturer": "Illustrative Manufacturer",
+  "mpn": "TEST-R100M-0603",
+  "part": {
+    "library": "parts-demo",
+    "id": "resistor",
+    "revision": 1
+  },
+  "package": "0603",
+  "datasheet": "https://example.invalid/test-resistor.pdf",
+  "specifications": {
+    "pcbcraft:resistance": {
+      "type": "quantity",
+      "value": "0.1",
+      "unit": "Ohm"
+    },
+    "pcbcraft:tolerance": {
+      "type": "quantity",
+      "value": "0.01",
+      "unit": "1"
+    },
+    "parts-demo:technology": {
+      "type": "choice",
+      "value": "thick-film"
+    }
+  }
+}

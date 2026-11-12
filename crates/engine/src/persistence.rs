@@ -174,6 +174,8 @@ struct ComponentRecord<'a> {
     value: std::borrow::Cow<'a, str>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     metadata: Option<crate::schematic::fields::Metadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    part: Option<crate::part_instances::Record>,
 }
 
 /// A schematic unit stores only its identity, owner and geometry.
@@ -282,6 +284,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
             .footprints
             .into_iter()
             .map(|record| Footprint {
+                unconnected_pads: Vec::new(),
                 id: record.id,
                 component: record.symbol,
                 definition: record.definition,
@@ -347,6 +350,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             reference: record.reference.into(),
             value: record.value.into(),
             metadata: None,
+            part: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
     }
@@ -446,6 +450,9 @@ impl Encoder {
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
     /// drawings and rotation require split documents or an archive; refuse lossy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.components.values().any(|c| c.part.is_some()) {
+            return Err("Native library part selections require split documents or a packed archive.".into());
+        }
         if project.components.values().any(|c| !c.metadata.is_empty())
             || project.sheets.iter().any(|s| s.symbols.iter().any(|s| !s.field_layout.is_empty()))
         {
@@ -543,6 +550,7 @@ impl Encoder {
                     reference: component.reference.as_str().into(),
                     value: component.value.as_str().into(),
                     metadata: None,
+                    part: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
                 write_record(&mut self.bytes, &record, more)?;
@@ -739,6 +747,9 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.part.is_some() {
+            return Err("Pinned part references require the split native part format.".into());
+        }
         validate_id(&mut component_ids, record.id)?;
         let (definition, used) =
             saved.get_mut(&(record.library.to_string(), record.definition.to_string(), record.definition_revision)).ok_or_else(|| {
@@ -770,6 +781,7 @@ fn validate_with_hierarchy(
                 reference: record.reference.into_owned(),
                 value: record.value.into_owned(),
                 metadata,
+                part: None,
             },
         );
     }

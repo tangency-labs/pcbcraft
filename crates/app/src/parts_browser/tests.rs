@@ -451,7 +451,7 @@ fn power_catalog_drags_preview_place_and_repeat_in_both_presentations() {
             assert_eq!(h.state().parts.open, compact);
             assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
             let drag = egui::DragAndDrop::payload::<crate::PartDrag>(&h.ctx).expect("power payload follows the pointer onto the canvas");
-            assert!(matches!(&drag.placement, Placement { definition,value } if value == name && definition.id == style));
+            assert!(matches!(&drag.placement, Placement { definition,value, .. } if value == name && definition.id == style));
             let canvas = h.get_by_label("Schematic canvas").rect();
             let point = h.state().views.active.camera.snap(to, canvas);
             h.drop_at(to);
@@ -671,4 +671,53 @@ fn equivalent_source_registrations_do_not_duplicate_catalog_libraries() {
     h.get_by_label("Default");
     click(&mut h, "Default");
     h.get_by_label("Capacitor");
+}
+
+/// Catalog placement and property edits preserve the central native part/MPN relation through the GUI path.
+#[test]
+fn native_part_catalog_and_requirements_use_shared_transactions() {
+    let mut h = editor(1400.);
+    click(&mut h, "Cancel");
+    let documents: library::sources::Documents = [
+        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
+        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
+        ("footprints/resistor-0603.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
+        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
+        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
+        ("manufacturer-parts/test.json", include_str!("../../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.into(), text.into()))
+    .collect();
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":documents})).unwrap();
+    h.key_press(Key::A);
+    h.run();
+    click(&mut h, "Native Parts Demo");
+    click(&mut h, "Generic resistor");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Manufacturer part").click();
+    h.run();
+    click(&mut h, "Illustrative Manufacturer · TEST-R100M-0603");
+    assert_eq!(h.state().parts.value, "0.1 Ohm");
+    click(&mut h, "Place");
+    click(&mut h, "Schematic canvas");
+    let project = h.state().session.project().unwrap();
+    let part = project.components().next().unwrap();
+    assert!(part.part.as_ref().unwrap().manufacturer.is_some());
+    assert_eq!(project.footprint_assignments().len(), 1);
+    let component = part.id();
+    h.state_mut().begin_native_part_properties(component);
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Tolerance").click();
+    h.run();
+    click(&mut h, "At most");
+    h.get_by_role_and_label(egui::Role::TextInput, "Tolerance value").click();
+    h.run();
+    h.get_by_role_and_label(egui::Role::TextInput, "Tolerance value").type_text("0.005");
+    h.run();
+    assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Tolerance value").value().as_deref(), Some("0.005"));
+    click(&mut h, "Apply");
+    assert!(matches!(h.state().dialog, crate::Dialog::None), "{:?}", h.state().dialog);
+    let selection = h.state().session.project().unwrap().components().next().unwrap().part.as_ref().unwrap();
+    assert_eq!(selection.compatibility()["status"], "does_not_meet_requirements");
+    assert!(selection.manufacturer.is_some());
 }

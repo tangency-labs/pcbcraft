@@ -12,6 +12,7 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 pub const MAX_DOCUMENTS: usize = 4096;
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
+const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
 const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
@@ -37,6 +38,7 @@ const TRACK_BOARD_FORMAT: &str = "pcbcraft-board/12";
 const VIA_BOARD_FORMAT: &str = "pcbcraft-board/13";
 const SIDE_BOARD_FORMAT: &str = "pcbcraft-board/14";
 const REFERENCE_BOARD_FORMAT: &str = "pcbcraft-board/15";
+const MULTIPAD_BOARD_FORMAT: &str = "pcbcraft-board/17";
 const STROKED_BOARD_FORMAT: &str = "pcbcraft-board/16";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
@@ -113,7 +115,7 @@ pub fn is_document_path(path: &str) -> bool {
     let pieces: Vec<_> = path.split('/').collect();
     match pieces.as_slice() {
         ["sheets", name] => name.strip_suffix(".json").and_then(|name| Uuid::parse_str(name).ok()).is_some(),
-        ["library", "symbols" | "footprints", library, name] => {
+        ["library", "symbols" | "footprints" | "parts" | "categories" | "manufacturer-parts", library, name] => {
             let id = |text: &str| {
                 (1..=64).contains(&text.len())
                     && text.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
@@ -134,10 +136,23 @@ pub fn is_document_path(path: &str) -> bool {
 /// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
-    let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let registered =
-        matches!(project.format.as_str(), OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
-    let fields = matches!(project.format.as_str(), FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
+    let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
+    let part_format = project.format == PART_PROJECT_FORMAT;
+    if !part_format
+        && project
+            .footprint_choices
+            .as_ref()
+            .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
+    {
+        return Err("Extended package mappings require project format 15.".into());
+    }
+    let registered = (part_format && project.boards.is_some())
+        || matches!(
+            project.format.as_str(),
+            OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT
+        );
+    let fields = part_format
+        || matches!(project.format.as_str(), FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
     let schematic_packages = project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT;
     if !matches!(
         project.format.as_str(),
@@ -148,15 +163,19 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | FIELDS_PROJECT_FORMAT
             | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
             | SCHEMATIC_PACKAGES_PROJECT_FORMAT
+            | PART_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
-    if schematic_packages != project.footprint_choices.is_some()
-        || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
+    if (!part_format && schematic_packages != project.footprint_choices.is_some())
+        || (project.footprint_choices.is_some() && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
         return Err("project footprint choices require format 13, no board and a nonempty bounded list".into());
+    }
+    if !part_format && project.components.iter().any(|component| component.part.is_some()) {
+        return Err("Pinned part selections require project format 15.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
         return Err("component metadata requires project format 11, 12 or 13".into());
@@ -168,6 +187,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | FIELDS_PROJECT_FORMAT
             | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
             | SCHEMATIC_PACKAGES_PROJECT_FORMAT
+            | PART_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
         return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12 or 13"));
@@ -311,31 +331,51 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let multipad = board.format == MULTIPAD_BOARD_FORMAT;
+    let extended = board.footprints.iter().any(|footprint| {
+        footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
+    }) || board.assignments.as_ref().is_some_and(|assignments| {
+        assignments.iter().any(|assignment| crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads))
+    }) || board
+        .baseline
+        .as_ref()
+        .is_some_and(|baseline| baseline.components.values().any(|component| component.package.as_ref().is_some_and(|package| package.extended())));
+    if multipad != extended {
+        return Err("board.json: multi-pad/unconnected-pad mappings require board format 17, which requires such a mapping.".into());
+    }
     let stroked = board.format == STROKED_BOARD_FORMAT;
     let physical_graphics = board.graphics.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some()));
-    if stroked != physical_graphics {
+    if !multipad && stroked != physical_graphics {
         return Err("board.json: physical graphic strokes require format 16, which requires at least one".into());
     }
     let sided = board.format == SIDE_BOARD_FORMAT;
     let references = board.format == REFERENCE_BOARD_FORMAT;
-    let tracked =
-        matches!(board.format.as_str(), TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT | STROKED_BOARD_FORMAT);
+    let tracked = matches!(
+        board.format.as_str(),
+        TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT | STROKED_BOARD_FORMAT | MULTIPAD_BOARD_FORMAT
+    );
     if board.tracks.as_ref().is_some_and(Vec::is_empty) || board.vias.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
     }
     if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())
         || (board.vias.is_some()
-            && !matches!(board.format.as_str(), VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT | STROKED_BOARD_FORMAT))
+            && !matches!(
+                board.format.as_str(),
+                VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT | STROKED_BOARD_FORMAT | MULTIPAD_BOARD_FORMAT
+            ))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
     }
     if (board.format == TRACK_BOARD_FORMAT && board.tracks.is_none()) || (!tracked && board.tracks.is_some()) {
         return Err("board.json: tracks require board format 12 or later, and format 12 requires at least one track".into());
     }
-    if !references && !stroked && sided != board.footprints.iter().any(|footprint| footprint.bottom) {
+    if !multipad && !references && !stroked && sided != board.footprints.iter().any(|footprint| footprint.bottom) {
         return Err("board.json: bottom-side footprints require board format 14 or later, and format 14 requires at least one".into());
     }
-    if !stroked && references != board.footprints.iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some()) {
+    if !multipad
+        && !stroked
+        && references != board.footprints.iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some())
+    {
         return Err("board.json: footprint reference offsets and print overrides require board format 15, which requires at least one".into());
     }
     if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
@@ -402,6 +442,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | SIDE_BOARD_FORMAT
             | REFERENCE_BOARD_FORMAT
             | STROKED_BOARD_FORMAT
+            | MULTIPAD_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -419,6 +460,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | SIDE_BOARD_FORMAT
                 | REFERENCE_BOARD_FORMAT
                 | STROKED_BOARD_FORMAT
+                | MULTIPAD_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -438,6 +480,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let setup = match (board.format.as_str(), board.setup) {
         (STROKED_BOARD_FORMAT, None) => None,
+        (MULTIPAD_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (MULTIPAD_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (REFERENCE_BOARD_FORMAT, None) => None,
         (REFERENCE_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
@@ -469,6 +513,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
     let mut definitions = Vec::new();
+    let mut symbol_copies = BTreeMap::new();
     for component in &project.components {
         let path = format!("library/symbols/{}/{}.r{}.json", component.library, component.definition, component.definition_revision);
         if !is_document_path(&path) {
@@ -483,6 +528,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             {
                 return Err(format!("{path}: saved symbol identity does not match its file name"));
             }
+            symbol_copies.insert((definition.library.clone(), definition.id.clone(), definition.revision()), definition);
             definitions.push(value);
         }
     }
@@ -511,6 +557,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             }
         }
     }
+    let mut reader = crate::part_instances::storage::Reader::default();
+    let mut selections = BTreeMap::new();
+    for component in &mut project.components {
+        if let Some(record) = component.part.take() {
+            let symbol = symbol_copies
+                .get(&(component.library.to_string(), component.definition.to_string(), component.definition_revision))
+                .cloned()
+                .ok_or("Part has no pinned symbol.")?;
+            selections.insert(component.id, reader.selection(record, symbol, documents, &mut used)?);
+        }
+    }
     if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
         return Err(format!("{path}: unexpected or unused project document"));
     }
@@ -531,7 +588,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
         .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
-    if schematic_packages {
+    if schematic_packages || project_data.board_target().is_none() {
         Arc::make_mut(&mut project_data.schematic_packages).definitions = std::mem::take(&mut Arc::make_mut(&mut project_data.board).definitions);
     }
     project_data.numeric_id_high_water = numeric_id_high_water;
@@ -552,6 +609,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
+    for (id, selection) in selections {
+        let component = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing part instance.")?;
+        component.part = Some(selection);
+    }
     if let Some(baseline) = &project_data.board.baseline {
         if !project_data.boards().any(|board| board.target.board == baseline.board) {
             return Err("board.json: accepted baseline has a foreign board owner".into());
@@ -585,6 +646,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         routed.tracks = tracks;
         routed.vias = vias;
     }
+    crate::part_instances::storage::validate_project(project_data)?;
     validate_watermark(&project)?;
     Ok(project)
 }
@@ -696,6 +758,7 @@ impl DocumentsEncoder {
             match self.phase {
                 0 => {
                     let p = &self.project;
+                    crate::part_instances::storage::validate_project(p)?;
                     let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
                     let sheets = p
                         .sheets
@@ -712,7 +775,15 @@ impl DocumentsEncoder {
                     if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
                         return Err("schematic package choices require no board and an allocation watermark".into());
                     }
-                    let format = if has_packages {
+                    let has_parts = p.components.values().any(|part| part.part.is_some());
+                    let extended_choices = p
+                        .schematic_packages
+                        .assignments
+                        .values()
+                        .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
+                    let format = if has_parts || extended_choices {
+                        PART_PROJECT_FORMAT
+                    } else if has_packages {
                         SCHEMATIC_PACKAGES_PROJECT_FORMAT
                     } else {
                         match (registrations.is_some(), has_metadata) {
@@ -751,8 +822,12 @@ impl DocumentsEncoder {
                                 reference: c.reference.as_str().into(),
                                 value: c.value.as_str().into(),
                                 metadata: (!c.metadata.is_empty()).then(|| c.metadata.clone()),
+                                part: c.part.as_ref().map(|part| part.record()),
                             },
                         )?;
+                        if let Some(part) = &c.part {
+                            crate::part_instances::storage::collect(part, &mut self.documents)?;
+                        }
                         self.definitions
                             .insert((c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()), c.definition.clone());
                         self.cursor = id;
@@ -930,7 +1005,11 @@ impl DocumentsEncoder {
                     if let Some(((library, id, revision), definition)) = self.footprint_definitions.pop_first() {
                         let mut bytes = serde_json::to_vec_pretty(definition.as_ref()).map_err(|e| e.to_string())?;
                         bytes.push(b'\n');
-                        self.documents.insert(format!("library/footprints/{library}/{id}.r{revision}.json"), bytes);
+                        crate::part_instances::storage::insert(
+                            &mut self.documents,
+                            format!("library/footprints/{library}/{id}.r{revision}.json"),
+                            bytes,
+                        )?;
                     } else {
                         check_documents(&self.documents)?;
                         self.phase = 13;
@@ -988,8 +1067,20 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
     let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some());
+    let extended = board.footprints().iter().any(|footprint| {
+        footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
+    }) || board
+        .assignments
+        .values()
+        .any(|assignment| crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads))
+        || board.baseline.as_ref().is_some_and(|baseline| {
+            baseline.components.values().any(|component| component.package.as_ref().is_some_and(|package| package.extended()))
+        });
+
     if let Some(setup) = setup {
-        let format = if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
+        let format = if extended {
+            MULTIPAD_BOARD_FORMAT
+        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
             STROKED_BOARD_FORMAT
         } else if references {
             REFERENCE_BOARD_FORMAT
@@ -1041,7 +1132,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
+        let format = if extended {
+            MULTIPAD_BOARD_FORMAT
+        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
             STROKED_BOARD_FORMAT
         } else if references {
             REFERENCE_BOARD_FORMAT

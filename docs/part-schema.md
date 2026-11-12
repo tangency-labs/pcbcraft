@@ -23,23 +23,31 @@ while **Edit copy** authors a separate library definition.
 | Record | Format | Machine-readable schema |
 | --- | --- | --- |
 | Part definition | `pcbcraft-part/1` | [part-v1.schema.json](schemas/part-v1.schema.json) |
+| Manufacturer part | `pcbcraft-manufacturer-part/1` | [manufacturer-part-v1.schema.json](schemas/manufacturer-part-v1.schema.json) |
+| Project part selection | Project format 15 | [part-selection-v15.schema.json](schemas/part-selection-v15.schema.json) |
 | Category definition | `pcbcraft-category/1` | [category-v1.schema.json](schemas/category-v1.schema.json) |
 | Shared references and value vocabulary | Schema vocabulary version 1 | [library-common-v1.schema.json](schemas/library-common-v1.schema.json) |
 
-The engine reads, validates and deterministically encodes both record kinds.
+The engine reads, validates and deterministically encodes these record kinds.
 Native folder loading, portable bundles, source inspection and search accept
-`parts/*.json` and `categories/*.json`. `library.resolve_part` validates exact
+`parts/*.json`, `categories/*.json` and `manufacturer-parts/*.json`. `library.resolve_part` validates exact
 dependencies, typed fixed values and every package map without mutating a
 project. The same source/resolution operations are available through MCP.
 Library sources displays the record kinds and reports unresolved dependencies.
 
-This implements the definition contract and library ingestion/resolution, not
-the entire manager or placement workflow. Ordinary Parts Catalog placement still
-selects symbols; selecting/pinning a reusable part and category into project
-instances, typed per-instance requirements, manufacturer-part records and
-assembly-BOM matching remain integration work under #92/#28. In particular, a
-resolved library record is not a claim that it has been placed or manufacturing
-qualified. The existing footprint and pad-stack formats remain unchanged.
+The Parts Catalog places resolved native parts, with an optional manufacturer
+selection and package, in one revision-checked transaction. The project pins the
+part, category, symbol, all supported package footprints and selected manufacturer
+record so it remains editable after source removal. Symbol-only placement remains
+available for libraries without central part definitions. The native assignment
+chooser also lists external native footprints.
+
+This slice does not include KiCad import, vendor HTTP connectors, supplier stock
+or prices, parametric catalog filtering, library authoring tools or the complete
+manager. Manufacturer records use the same library ingestion and provenance
+contracts that a later vendor adapter can produce. No provider is required to
+open or edit a saved project. Footprint geometry and general pad stacks retain
+their existing contracts.
 
 ## Exact references
 
@@ -86,10 +94,16 @@ and alphanumeric names. Names, positions and package size codes never establish
 a map. Parts support at most 64 packages; this first native contract retains
 the current 128-terminal/pad limits.
 
-The existing board assignment command still uses its older one-to-one map.
-Loading or resolving a multi-pad package does not silently flatten it into that
-command. Project assignment integration needs its own versioned transaction and
-saved mapping representation.
+Physical assignments preserve a single-pad string or a multi-pad array per
+terminal, plus optional `unconnected_pads`. Multi-pad/NC assignments require
+board format 17 and accepted baseline format 2, or project format 15 for a
+schematic-only choice. The [placement schema](schemas/footprint-placement-v17.schema.json)
+covers the new physical record; `check-footprint-schemas.py --placement-version
+17 --placement <record.json>` validates it offline. The engine additionally checks
+complete mapping.
+Every mapped land participates in net membership and the ratsnest, including
+multiple lands on an otherwise unwired terminal. An NC pad is inspectable but
+has no logical terminal or inherited net.
 
 ## Category fields and electrical characteristics
 
@@ -187,3 +201,49 @@ cargo test --locked -p pcbcraft-engine library::parts
 Formats and content revisions remain independent. Future authored fields or
 changed meanings require an explicit schema version and compatibility tests;
 unchanged project/symbol/footprint records retain their existing encodings.
+
+## Manufacturer parts and design requirements
+
+A manufacturer record has its own exact identity, provenance and license, plus
+`manufacturer`, `mpn`, an exact `part` reference, a declared `package`, optional
+HTTP(S) `datasheet` URL and typed `specifications`. Loading a record never fetches
+the URL. Specifications must use fields from the referenced part's category and
+canonical base units. Manufacturer names and MPNs are metadata, not native
+identity keys; the synthetic example is explicitly illustrative.
+
+An instance selection stores its exact part reference, optional package and
+manufacturer references, and `requirements`. Each field supports `exact`,
+`at_least`, `at_most`, `range` or `one_of`; ordered comparisons require numeric
+values of the declared type and unit. Decimal comparisons retain the full
+canonical precision, without floating-point conversion. Generic fixed values
+remain exact requirements and cannot be overridden. Missing manufacturer
+specifications produce unknown suitability rather than zero or a guessed value.
+
+`schematic.place_part` validates the part dependency digest and optional
+manufacturer digest before publishing its symbol, package assignment and
+selection together. Choosing an incompatible MPN is refused. `part.set_selection`
+edits package, requirements and optional MPN through the same transaction path
+from either editor. Later requirement or package edits retain an existing MPN
+and report incompatibility; they never silently pick an alternate. The part
+properties form exposes both requirements and manufacturer specifications.
+Editing the ordinary Value of a categorized native instance normalizes its
+explicit primary quantity, while symbol-only instances retain free text.
+
+## Source organization and versioning
+
+`crates/engine/src/library/parts/` owns reusable definitions, categories, values,
+quantities, package maps, manufacturer metadata and requirement comparisons in
+separate modules. `library/sources.rs` owns catalog resolution and dependency
+digests. `part_instances/` owns project selections, shared transactions and pinned
+storage; the app's `parts_browser/native_parts.rs` and
+`native_part_properties.rs` own presentation. UI controls delegate parsing and
+compatibility rules to the engine.
+
+Record `revision` identifies a new immutable item revision. A `format` or schema
+version changes when a parser needs a different structural contract. The app
+release version advances independently; this branch retains the 0.1.0 version
+already introduced on main by PR #268. Project format 14 is reserved for that
+merge's storage layout; part selections use format 15. Existing projects
+without the new data retain their existing encoding and no-op save behavior.
+Older apps cannot read project/15, board/17 or baseline/2; saving these features
+therefore requires the newer app. This introduces no board-list migration.

@@ -14,7 +14,7 @@ def bundle(root: Path) -> bytes:
     if root.is_symlink() or not root.is_dir():
         raise ValueError("The library must be a regular directory")
     paths = [root / "library.json"]
-    for directory in (root / name for name in ("symbols", "footprints", "categories", "parts")):
+    for directory in (root / name for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts")):
         if directory.is_symlink():
             raise ValueError(f"{directory}: symlinks are unsupported")
         if directory.exists():
