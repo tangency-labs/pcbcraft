@@ -1429,6 +1429,7 @@ impl PcbApp {
                             project,
                             self.session.revision(),
                             &mut self.views.active.camera,
+                            &mut self.views.active.schematic.overlap_cache,
                             self.views.active.schematic.tool.clone(),
                             &self.views.active.schematic.selection,
                             self.views.active.schematic.selected_leg.as_ref(),

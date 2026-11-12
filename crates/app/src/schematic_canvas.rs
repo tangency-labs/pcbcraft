@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 pub(crate) mod fields;
+mod overlaps;
+pub(crate) use overlaps::Cache as OverlapCache;
 mod selection;
 mod tool_menu;
 pub(crate) use tool_menu::Action as ToolAction;
@@ -10,6 +12,14 @@ mod thumbnail;
 pub(crate) use thumbnail::Thumbnail;
 mod wires;
 pub(crate) use selection::BoxDrag;
+
+/// A popup owns a revision-bound list without retaining an old project or re-resolving every row.
+#[derive(Clone)]
+struct SymbolChoices {
+    target: pcbcraft_engine::SheetTarget,
+    revision: u64,
+    entries: Vec<(String, String)>,
+}
 
 #[cfg(test)]
 mod tests;
@@ -238,6 +248,8 @@ pub(crate) enum SymbolAction {
 /// `label` distinguishes simultaneously visible canvases in accessibility output.
 /// `highlighted` marks counterparts selected in another view. It affects paint only; hit
 /// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
+/// Drawing-bound overlaps have persistent view-only markers and placement warnings; coincident
+/// bodies remain allowed. The symbol context menu clarifies selection without authoring edits.
 /// `filters` restricts item picking, boxes and context menus without disabling explicit drawing tools.
 /// Navigation authority is separate from authoring input, allowing a read-only clipboard ghost
 /// to pan/zoom without enabling picking, tools or model edits.
@@ -247,6 +259,7 @@ pub(crate) fn show(
     project: &Project,
     revision: u64,
     camera: &mut Camera,
+    overlap_cache: &mut OverlapCache,
     tool: Option<Tool>,
     selected: &Selection,
     selected_leg: Option<&LegTarget>,
@@ -371,6 +384,7 @@ pub(crate) fn show(
         .unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
+    let overlap_index = overlap_cache.get(project, revision);
     let screen = |point| camera.screen(point, rect);
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let unit_step = camera.unit_step();
@@ -399,7 +413,12 @@ pub(crate) fn show(
         wires::paint_selected_leg(&painter, rect, camera, leg, offset);
     }
     let visible = rect.expand((unit_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
-    for symbol in project.symbols() {
+    for symbol in project
+        .symbols()
+        .iter()
+        .filter(|s| !selected.symbols.contains(&s.id()))
+        .chain(project.symbols().iter().filter(|s| selected.symbols.contains(&s.id())))
+    {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
         if visible.contains(center) {
@@ -415,6 +434,7 @@ pub(crate) fn show(
     }
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
+    overlap_index.paint(ui, response.id, &painter, camera, rect);
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
@@ -451,6 +471,7 @@ pub(crate) fn show(
                     SymbolPlacement::preview_unit(definition.clone(), unit, *turns, definition.defaults.clone().unwrap_or_default().field_layout)
             {
                 paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent);
+                overlap_index.preview(&painter, camera, rect, drawing, *turns, at);
             }
         }
         if let Some(Tool::Wire { start, .. }) = tool {
@@ -475,6 +496,7 @@ pub(crate) fn show(
         let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
             paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
+            overlap_index.preview(&painter, camera, rect, drag.placement.definition.default_unit(), 0, point);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
@@ -609,16 +631,37 @@ pub(crate) fn show(
         {
             return Some(Click::GrabReshape(drag));
         }
-        return grab_symbol(project, camera, rect, origin, false);
+        return grab_symbol(project, camera, rect, origin, false, selected);
     }
 
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {
         // A right-click names its symbol this frame; afterwards the menu follows the selection.
         let pressed = response.secondary_clicked().then(|| response.interact_pointer_pos()).flatten();
+        let choices_key = response.id.with("symbol_choices");
+        if let Some(pointer) = pressed {
+            let hits = if filters.symbols {
+                symbols_at(project, camera, rect, pointer)
+                    .into_iter()
+                    .map(|(symbol, _)| (symbol.id(), format!("Select {}", symbol.display_reference(&project.reference(symbol)))))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            ui.data_mut(|data| data.insert_temp(choices_key, Arc::new(SymbolChoices { target: project.sheet_target(), revision, entries: hits })));
+        } else if !response.context_menu_opened() {
+            ui.data_mut(|data| data.remove::<Arc<SymbolChoices>>(choices_key));
+        }
+        let captured_choices = ui
+            .data(|data| data.get_temp::<Arc<SymbolChoices>>(choices_key))
+            .filter(|choices| choices.target == project.sheet_target() && choices.revision == revision && filters.symbols);
+        let choices = captured_choices.as_ref().map_or(&[][..], |choices| choices.entries.as_slice());
         let mut target = match pressed {
             Some(pointer) => filters.symbols.then(|| symbol_at(project, camera, rect, pointer)).flatten().map(|(symbol, _)| symbol.id()),
             None => selected.single_symbol().filter(|_| filters.symbols).map(str::to_owned),
         };
+        if let Some(current) = selected.single_symbol().filter(|current| choices.iter().any(|(id, _)| id == current)) {
+            target = Some(current.to_owned());
+        }
         let mut group = selected.len() > 1
             && (pressed.is_none()
                 || pressed.is_some_and(|p| {
@@ -656,6 +699,29 @@ pub(crate) fn show(
             Some(drag)
         });
         let picked = menu::context(&response, |ui| {
+            if choices.len() > 1 {
+                if let Some(chosen) = MenuItem::new("Select symbol")
+                    .submenu(ui, |ui| {
+                        let tokens = Tokens::get();
+                        let height = tokens.control_height + tokens.space_2;
+                        egui::ScrollArea::vertical()
+                            .max_height(height * 8.)
+                            .show_rows(ui, height, choices.len(), |ui, range| {
+                                choices[range].iter().find_map(|(id, label)| {
+                                    MenuItem::new(label)
+                                        .choice(selected.single_symbol() == Some(id.as_str()))
+                                        .show(ui)
+                                        .then(|| Click::Select(Some(id.clone())))
+                                })
+                            })
+                            .inner
+                    })
+                    .and_then(|shown| shown.inner)
+                {
+                    return Some(chosen);
+                }
+                menu::separator(ui);
+            }
             if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty() || selected_sheet.is_some()) {
                 return Some(Click::ToolAction(action, ui.ctx().clone()));
             }
@@ -757,7 +823,7 @@ pub(crate) fn show(
             }
         }
         if filters.symbols && fields::at(ui, project, camera, rect, pointer).is_none() {
-            return grab_symbol(project, camera, rect, pointer, true);
+            return grab_symbol(project, camera, rect, pointer, true, selected);
         }
     }
     // Field editing and body properties precede click-to-wire for enabled symbols.
@@ -811,7 +877,8 @@ pub(crate) fn show(
     }
     match tool? {
         Tool::PlaceSymbol { definition, unit, value, turns, .. } => {
-            placement_preview(&painter, rect, response, camera, tokens, &definition, &unit, &value, turns, project, draft, revision).map(Click::Place)
+            placement_preview(&painter, rect, response, camera, tokens, &definition, &unit, &value, turns, project, draft, revision, &overlap_index)
+                .map(Click::Place)
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
@@ -857,9 +924,12 @@ fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: w
     picked.map(|action| Click::WireEdit(action, leg))
 }
 
-/// Pick the nearest symbol body under the original press and preserve the grab offset.
-fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, pickup: bool) -> Option<Click> {
-    let (symbol, center) = symbol_at(project, camera, rect, pointer)?;
+/// Preserve the chosen stacked symbol under the press, otherwise pick the nearest body.
+/// The grab offset remains relative to that symbol so selection clarification also works for moves.
+fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, pickup: bool, selected: &Selection) -> Option<Click> {
+    let hits = symbols_at(project, camera, rect, pointer);
+    let (symbol, center) =
+        hits.iter().find(|(symbol, _)| selected.single_symbol() == Some(symbol.id().as_str())).or_else(|| hits.first()).copied()?;
     Some(Click::Grab(symbol.clone(), center - pointer, pickup))
 }
 
@@ -870,12 +940,26 @@ pub(super) fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, p
         .iter()
         .rev()
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
-        .filter(|(symbol, center)| {
-            body(symbol.unit_definition(), symbol.turns())
-                .translate(center.to_vec2() / camera.unit_step())
-                .contains((pointer.to_vec2() / camera.unit_step()).to_pos2())
-        })
+        .filter(|(symbol, center)| symbol_contains(symbol, *center, camera.unit_step(), pointer))
         .min_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)))
+}
+
+/// Test the same drawn body area for ordinary picking and selection clarification.
+fn symbol_contains(symbol: &SymbolPlacement, center: Pos2, step: f32, pointer: Pos2) -> bool {
+    body(symbol.unit_definition(), symbol.turns()).translate(center.to_vec2() / step).contains((pointer.to_vec2() / step).to_pos2())
+}
+
+/// Return all bodies under the pointer in nearest-center order, newest first for ties.
+fn symbols_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Vec<(&'a SymbolPlacement, Pos2)> {
+    let mut hits: Vec<_> = project
+        .symbols()
+        .iter()
+        .rev()
+        .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
+        .filter(|(symbol, center)| symbol_contains(symbol, *center, camera.unit_step(), pointer))
+        .collect();
+    hits.sort_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)));
+    hits
 }
 
 /// Turn an offset in grid steps by quarter turns counterclockwise, as the engine turns pins.
@@ -916,6 +1000,7 @@ fn placement_preview(
     project: &Project,
     draft: &Draft,
     revision: u64,
+    overlaps: &overlaps::Index,
 ) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
@@ -925,6 +1010,7 @@ fn placement_preview(
     }
     let preview = SymbolPlacement::preview_unit(definition.clone(), unit, turns, definition.defaults.clone().unwrap_or_default().field_layout)?;
     paint_unit_template(painter, &preview, value, screen(point), camera.unit_step(), tokens.accent);
+    overlaps.preview(painter, camera, rect, preview.unit_definition(), turns, point);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
         response.ctx.data_mut(|data| data.insert_temp(response.id.with("placed_on_press"), true));
