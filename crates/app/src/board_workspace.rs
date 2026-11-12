@@ -459,7 +459,7 @@ impl PcbApp {
             .and_then(|outputs| pcbcraft_engine::board::fabrication::zip(&outputs))
             .and_then(|bytes| {
                 let name = crate::board_outputs::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
-                self.fabrication_exports.start(ctx, name, bytes)
+                self.fabrication_exports.start_for(ctx, crate::board_outputs::Purpose::Fabrication, name, bytes)
             });
         self.message = result.err();
     }

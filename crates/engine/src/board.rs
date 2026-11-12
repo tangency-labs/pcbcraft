@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod assembly;
 pub mod assignment;
 pub mod clearance;
 pub mod clipboard;
@@ -289,6 +290,8 @@ pub(crate) struct Board {
     pub(crate) setup: Option<setup::BoardSetup>,
     pub(crate) silkscreen: Option<silkscreen::Settings>,
     pub(crate) rules: Option<rules::Settings>,
+    /// Board-local named population choices, keyed by stable variant UUID.
+    pub(crate) assembly_variants: BTreeMap<uuid::Uuid, assembly::AssemblyVariant>,
     /// Copper segments in stable ID order; empty boards keep their earlier saved format.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
@@ -349,6 +352,7 @@ impl Board {
     /// Format-3 history also retains the last visible typed quantity; older history
     /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
+        self.retire_assembly_component(component);
         let assigned = self.assignments.remove(&component).is_some();
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;

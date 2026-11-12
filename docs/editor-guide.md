@@ -322,13 +322,15 @@ dragging; release commits its position and angle together, and Escape discards b
 restores automatic placement and default appearance for that field.
 
 The attributes beside placement record population and output/simulation exclusions.
-Board
-exclusion prevents new placement. With reviewed board updates enabled, excluding
+Board exclusion prevents new placement. With reviewed board updates enabled, excluding
 an existing placement stages its removal for Apply; otherwise remove its footprint before excluding
-its component. BOM and simulation flags are retained intent for their future consumers.
-**Exclude from pick-and-place files** records omission from assembly position exports
-(reference, coordinates, orientation and board side); PCBcraft retains the flag,
-but does not yet generate those files.
+its component. The **Do not populate** attribute omits the component from Base assembly
+outputs. **Exclude from BOM** and **Exclude from pick-and-place files** independently omit it
+from those respective files. Named board-local population alternatives are available from
+Design → Variants; each inherits Base DNP until you set a per-component override. Export an
+explicit Base or named variant to create BOM and placement CSVs without changing board geometry.
+Simulation flags remain available for future simulation consumers. See
+[assembly variants and outputs](assembly-variants.md) for the file and coordinate contract.
 
 **Reset changes** discards the compact draft, and **Cancel** discards the
 expanded draft. Attached wires follow coordinate changes through the same contact

@@ -102,6 +102,17 @@ pub(crate) fn is_instances_path(path: &str) -> bool {
     path.strip_suffix("instances.json").is_some_and(|prefix| is_board_path(&format!("{prefix}board.json")))
 }
 
+/// Classify only portable variant documents rooted beside a flat or registered board.
+pub(crate) fn is_assembly_variant_path(path: &str) -> bool {
+    let uuid_file = |name: &str| name.strip_suffix(".json").and_then(|id| Uuid::parse_str(id).ok()).is_some_and(|id| format!("{id}.json") == name);
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["variants", name] => uuid_file(name),
+        ["boards", folder, "variants", name] => portable_segment(folder) && uuid_file(name),
+        [root, "boards", folder, "variants", name] => valid_root(root) && *root != "." && portable_segment(folder) && uuid_file(name),
+        _ => false,
+    }
+}
+
 impl Project {
     /// Instance records share the registered board folder; schematic-only records have no file.
     pub fn instances_document_path(&self) -> Option<String> {
@@ -109,6 +120,15 @@ impl Project {
             return None;
         }
         self.board_document_path()?.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))
+    }
+
+    /// Resolve a named assembly variant beside the registered board, independent of its name.
+    pub fn assembly_variant_document_path(&self, id: Uuid) -> Option<String> {
+        if id.is_nil() || !self.board.assembly_variants.contains_key(&id) {
+            return None;
+        }
+        let prefix = self.board_document_path()?.strip_suffix("board.json")?.to_owned();
+        Some(format!("{prefix}variants/{id}.json"))
     }
     /// The persisted physical-data namespace, or None for an untouched flat-board project.
     pub fn layout_root(&self) -> Option<&str> {
