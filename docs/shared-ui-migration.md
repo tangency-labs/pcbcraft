@@ -32,6 +32,10 @@ slots, while `NavigationBar` holds presentation settings. These APIs support
 compact/regular sizing, top/bottom placement, horizontal alignment, tooltips,
 accessibility and idle appearance without importing SolidCraft's application.
 
+At this pinned revision, `SlotView.enabled = false` fades a slot but can still
+produce `NavAction::Slot` when clicked, including through More. The host must
+reject actions for disabled or unavailable slots before dispatching commands.
+
 The implementation is in the pinned toolkit's
 [`nav_bar.rs`](https://github.com/tangency-labs/solidcraft/blob/f56114219b2d7f6d16de8dd58700479646948f8a/crates/ui-kit/src/nav_bar.rs),
 [`nav_bar_layout.rs`](https://github.com/tangency-labs/solidcraft/blob/f56114219b2d7f6d16de8dd58700479646948f8a/crates/ui-kit/src/nav_bar_layout.rs)
