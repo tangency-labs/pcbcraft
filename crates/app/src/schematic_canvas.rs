@@ -434,7 +434,7 @@ pub(crate) fn show(
     }
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
-    overlap_index.paint(ui, response.id, &painter, camera, rect);
+    overlap_index.paint(ui, response.id, project, camera, rect);
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
@@ -471,7 +471,7 @@ pub(crate) fn show(
                     SymbolPlacement::preview_unit(definition.clone(), unit, *turns, definition.defaults.clone().unwrap_or_default().field_layout)
             {
                 paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent);
-                overlap_index.preview(&painter, camera, rect, drawing, *turns, at);
+                overlap_index.preview(ui, camera, rect, drawing, *turns, at);
             }
         }
         if let Some(Tool::Wire { start, .. }) = tool {
@@ -496,7 +496,7 @@ pub(crate) fn show(
         let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
             paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
-            overlap_index.preview(&painter, camera, rect, drag.placement.definition.default_unit(), 0, point);
+            overlap_index.preview(ui, camera, rect, drag.placement.definition.default_unit(), 0, point);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
@@ -877,7 +877,7 @@ pub(crate) fn show(
     }
     match tool? {
         Tool::PlaceSymbol { definition, unit, value, turns, .. } => {
-            placement_preview(&painter, rect, response, camera, tokens, &definition, &unit, &value, turns, project, draft, revision, &overlap_index)
+            placement_preview(ui, rect, response, camera, tokens, &definition, &unit, &value, turns, project, draft, revision, &overlap_index)
                 .map(Click::Place)
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
@@ -988,7 +988,7 @@ fn valid_position(point: Point) -> bool {
 /// Explicit placement owns this press; the following release never places a second symbol.
 #[allow(clippy::too_many_arguments)]
 fn placement_preview(
-    painter: &Painter,
+    ui: &mut Ui,
     rect: Rect,
     response: Response,
     camera: &Camera,
@@ -1009,8 +1009,8 @@ fn placement_preview(
         return None;
     }
     let preview = SymbolPlacement::preview_unit(definition.clone(), unit, turns, definition.defaults.clone().unwrap_or_default().field_layout)?;
-    paint_unit_template(painter, &preview, value, screen(point), camera.unit_step(), tokens.accent);
-    overlaps.preview(painter, camera, rect, preview.unit_definition(), turns, point);
+    paint_unit_template(&ui.painter_at(rect), &preview, value, screen(point), camera.unit_step(), tokens.accent);
+    overlaps.preview(ui, camera, rect, preview.unit_definition(), turns, point);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
         response.ctx.data_mut(|data| data.insert_temp(response.id.with("placed_on_press"), true));

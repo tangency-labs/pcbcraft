@@ -31,15 +31,6 @@ component properties, independent fields and G/M/R tools as other symbols;
 
 **Capture → Net label** or **L** opens a local label form; **Ctrl+L** opens a
 global label form. Set its net name, scope and rotation, then choose its anchor.
-Symbols whose drawing bounds overlap show **Symbol overlap** in the placement
-preview and warning markers on the canvas. Placement remains allowed. The check
-excludes separate pin leads and instance fields; it is a visual bounds warning,
-not an electrical rule or exact stroke-intersection test. Finish placement with
-**Esc**, then right-click over stacked
-bodies and use **Select symbol** to choose a reference, then drag that chosen part
-to separate it. The warnings update after edits, undo and reopen without changing
-saved files or document history.
-
 **R** rotates a placement preview and **Esc** cancels it. Power instances use
 ordinary component fields and terminal identities throughout the editor.
 
@@ -48,6 +39,17 @@ global labels and power/ground symbols join project-wide. A marker anchored
 exactly on a pin or wire contacts it. The Browser, Net Inspector and PCB pad
 annotations show the resolved name. [Named nets](net-labels.md) explains scope,
 aliases, shared commands and limits.
+
+## Overlapping symbols
+
+Overlapping symbol drawing bounds show a **Symbol overlap** notice during
+placement and a compact amber count badge on the canvas, with affected references
+on hover. Placement remains allowed. The check excludes separate pin leads and
+instance fields, so it provides a visual bounds warning rather than an electrical
+rule or exact stroke-intersection test. Finish any active placement with **Esc**,
+then right-click over stacked bodies and use **Select symbol** to choose a reference
+before dragging that part away. Warnings update after edits, undo and reopen
+without changing saved files or document history.
 
 ## Preferences and grid
 

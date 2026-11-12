@@ -14,6 +14,8 @@ fn drawing_candidates_preserve_intersections_and_touching_boundaries() {
     ];
     entries.extend((0..256).map(|i| (format!("stack-{i}"), Rect::from_min_max(pos2(100., 100.), pos2(104., 104.)))));
     let index = Index::new(entries);
+    assert_eq!(index.groups.len(), 1);
+    assert_eq!(index.groups[0].len(), 256);
     for (i, (_, rect)) in index.entries.iter().enumerate() {
         let expected = index.entries.iter().enumerate().any(|(j, (_, other))| i != j && rect.intersect(*other).is_positive());
         assert_eq!(index.overlaps.contains(&i), expected, "body {i}");
@@ -47,6 +49,7 @@ fn bounds_and_cached_warnings_follow_geometry_without_document_edits() {
     let again = cache.get(&project, session.revision());
     assert!(Arc::ptr_eq(&first, &again));
     assert_eq!(first.overlaps.len(), 2);
+    assert_eq!(first.groups[0].len(), 2);
     session
         .apply(pcbcraft_engine::MOVE_SYMBOL, &json!({"symbol":symbol.id(),"x_nm":25_400_000,"y_nm":0,"expected_revision":session.revision()}))
         .unwrap();

@@ -4,8 +4,9 @@
 
 - Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
 
-Overlapping schematic symbol drawings show a placement warning and persistent
-canvas markers while placement remains allowed. Right-click and use Select symbol
+Overlapping schematic symbol drawings show a placement warning and compact amber
+count badges, with affected references on hover. Placement remains allowed.
+Right-click and use Select symbol
 to choose a hidden part; a subsequent drag moves the chosen symbol. Warnings
 follow the current sheet and stay outside project files and undo history.
 

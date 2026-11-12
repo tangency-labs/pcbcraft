@@ -1,6 +1,6 @@
 //! View-only warnings over drawing bounds, excluding pins, instance fields and wire connections.
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 const CELL: f32 = 16.;
 const MAX_CELLS: i64 = 256;
@@ -24,6 +24,7 @@ pub(super) struct Index {
     cells: BTreeMap<(i32, i32), Vec<usize>>,
     large: Vec<usize>,
     overlaps: Vec<usize>,
+    groups: Vec<Vec<usize>>,
 }
 
 impl Cache {
@@ -77,7 +78,7 @@ impl Index {
     /// Index drawing bounds once, then retain only whether each body has another intersecting
     /// body. Dense stacks stop at their first neighbor rather than enumerating every pair.
     fn new(entries: Vec<(String, Rect)>) -> Self {
-        let mut index = Self { entries, cells: BTreeMap::new(), large: Vec::new(), overlaps: Vec::new() };
+        let mut index = Self { entries, cells: BTreeMap::new(), large: Vec::new(), overlaps: Vec::new(), groups: Vec::new() };
         for (i, (_, bounds)) in index.entries.iter().enumerate() {
             if let Some((left, top, right, bottom)) = cells(*bounds) {
                 for x in left..=right {
@@ -89,65 +90,102 @@ impl Index {
                 index.large.push(i);
             }
         }
-        index.overlaps = index.entries.iter().enumerate().filter_map(|(i, (_, bounds))| index.any(*bounds, Some(i)).then_some(i)).collect();
+        let mut parents: Vec<_> = (0..index.entries.len()).collect();
+        for (i, (_, bounds)) in index.entries.iter().enumerate() {
+            if let Some(other) = index.neighbor(*bounds, Some(i)) {
+                let a = root(&mut parents, i);
+                let b = root(&mut parents, other);
+                parents[a] = b;
+                index.overlaps.push(i);
+            }
+        }
+        let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+        for &i in &index.overlaps {
+            groups.entry(root(&mut parents, i)).or_default().push(i);
+        }
+        index.groups = groups.into_values().collect();
         index
     }
 
     /// Find an actual positive-area bounds intersection, excluding self and edge-only contact.
     fn any(&self, bounds: Rect, except: Option<usize>) -> bool {
-        let intersects = |i: usize| Some(i) != except && self.entries[i].1.intersect(bounds).is_positive();
-        let Some((left, top, right, bottom)) = cells(bounds) else {
-            return (0..self.entries.len()).any(intersects);
-        };
-        self.large.iter().copied().any(intersects)
-            || (left..=right)
-                .any(|x| (top..=bottom).any(|y| self.cells.get(&(x, y)).is_some_and(|candidates| candidates.iter().copied().any(intersects))))
+        self.neighbor(bounds, except).is_some()
     }
 
-    /// Paint a persistent outline and shared warning marker, coalescing identical stacked bounds.
+    /// Retain one intersecting witness per body, keeping dense-stack work bounded.
+    fn neighbor(&self, bounds: Rect, except: Option<usize>) -> Option<usize> {
+        let intersects = |i: usize| Some(i) != except && self.entries[i].1.intersect(bounds).is_positive();
+        let Some((left, top, right, bottom)) = cells(bounds) else {
+            return (0..self.entries.len()).find(|&i| intersects(i));
+        };
+        self.large.iter().copied().find(|&i| intersects(i)).or_else(|| {
+            (left..=right).find_map(|x| {
+                (top..=bottom).find_map(|y| self.cells.get(&(x, y)).and_then(|candidates| candidates.iter().copied().find(|&i| intersects(i))))
+            })
+        })
+    }
+
+    /// Paint one small shared warning badge per witness group, leaving symbol ink unobscured.
     /// Warnings are presentation only and remain visible for placements made through MCP/reopen.
-    pub(super) fn paint(&self, ui: &Ui, id: egui::Id, painter: &Painter, camera: &Camera, canvas: Rect) {
+    pub(super) fn paint(&self, ui: &mut Ui, id: egui::Id, project: &Project, camera: &Camera, canvas: Rect) {
         if !canvas.is_positive() {
             return;
         }
         let origin = camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
-        let inset = canvas.shrink2(vec2(10f32.min(canvas.width() / 2.), 10f32.min(canvas.height() / 2.)));
-        let mut painted = BTreeSet::new();
-        for &i in &self.overlaps {
-            let (symbol, world) = &self.entries[i];
-            let key = (world.min.x.to_bits(), world.min.y.to_bits(), world.max.x.to_bits(), world.max.y.to_bits());
+        for group in &self.groups {
+            let world = group.iter().fold(Rect::NOTHING, |bounds, &i| bounds.union(self.entries[i].1));
             let rect = Rect::from_min_max(origin + world.min.to_vec2() * camera.unit_step(), origin + world.max.to_vec2() * camera.unit_step());
-            if !rect.intersects(canvas) || !painted.insert(key) {
+            if !rect.intersects(canvas) {
                 continue;
             }
-            painter.rect_stroke(rect.expand(2.), 1., Stroke::new(1., Tokens::get().error), egui::StrokeKind::Outside);
-            let marker = (rect.right_top() + vec2(8., -8.)).clamp(inset.min, inset.max);
-            pcbcraft_chrome::board::drc_marker(painter, marker, false);
-            let response = ui.interact(Rect::from_center_size(marker, vec2(18., 18.)), id.with(("overlap", symbol)), Sense::hover());
+            let response = pcbcraft_chrome::canvas_warning::badge(
+                ui,
+                id.with(("overlap", &self.entries[group[0]].0)),
+                rect.right_top() + vec2(6., -9.),
+                canvas,
+                &group.len().to_string(),
+            );
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Overlapping symbols"));
-            response.on_hover_text("Symbol bodies overlap here. Finish placement, then right-click a symbol and use Select symbol to choose one.");
+            response.on_hover_ui(|ui| {
+                let mut names: Vec<_> = group
+                    .iter()
+                    .take(8)
+                    .filter_map(|&i| {
+                        let symbol = project.symbols().iter().find(|symbol| symbol.id() == self.entries[i].0)?;
+                        Some(symbol.display_reference(&project.reference(symbol)))
+                    })
+                    .collect();
+                if group.len() > names.len() {
+                    names.push(format!("and {} more", group.len() - names.len()));
+                }
+                ui.label(format!("{} overlapping symbols: {}.", group.len(), names.join(", ")));
+                ui.label("Finish placement, then right-click → Select symbol.");
+            });
         }
     }
 
     /// Warn beside a new placement without preventing its commit or changing connection rules.
-    pub(super) fn preview(
-        &self,
-        painter: &Painter,
-        camera: &Camera,
-        canvas: Rect,
-        unit: &pcbcraft_engine::schematic::SymbolUnit,
-        turns: u8,
-        at: Point,
-    ) {
+    pub(super) fn preview(&self, ui: &mut Ui, camera: &Camera, canvas: Rect, unit: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, at: Point) {
         if bounds(unit, turns, at).is_some_and(|bounds| self.any(bounds, None)) {
-            let color = Tokens::get().error;
-            let label = painter.layout_no_wrap("Symbol overlap".into(), FontId::proportional(Tokens::get().font_small), color);
-            let size = vec2(label.size().x + 28., label.size().y.max(18.));
-            let position = (camera.screen(at, canvas) + vec2(14., 18.)).clamp(canvas.min, (canvas.max - size).max(canvas.min));
-            pcbcraft_chrome::board::drc_marker(painter, position + vec2(8., size.y / 2.), false);
-            painter.galley(position + vec2(22., (size.y - label.size().y) / 2.), label, color);
+            pcbcraft_chrome::canvas_warning::badge(
+                ui,
+                ui.scope_id().with("overlap_preview"),
+                camera.screen(at, canvas) + vec2(14., 18.),
+                canvas,
+                "Symbol overlap",
+            );
         }
     }
+}
+
+/// Compress witness links so stacked symbols share a count without enumerating every pair.
+fn root(parents: &mut [usize], mut i: usize) -> usize {
+    while parents[i] != i {
+        let next = parents[parents[i]];
+        parents[i] = next;
+        i = next;
+    }
+    i
 }
 
 #[cfg(test)]
