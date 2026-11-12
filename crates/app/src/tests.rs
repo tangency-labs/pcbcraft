@@ -35,6 +35,7 @@ mod ribbon;
 mod save_changes;
 mod selection_filters;
 mod split_editors;
+mod symbol_overlap;
 mod tool_modes;
 mod zoom;
 

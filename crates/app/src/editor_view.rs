@@ -171,6 +171,8 @@ pub(super) struct CopperConnectivityCache {
 /// Schematic interaction state is separate from board selection and input handling.
 #[derive(Debug, Default)]
 pub(super) struct SchematicState {
+    /// Derived drawing warnings follow this view's lifetime, outside project files and history.
+    pub(super) overlap_cache: crate::schematic_canvas::OverlapCache,
     pub(super) clipboard: crate::clipboard::State,
     pub(super) properties: crate::properties::State,
     pub(super) selection: Selection,

@@ -490,6 +490,7 @@ impl PcbApp {
             &candidate,
             self.session.revision(),
             &mut self.views.active.camera,
+            &mut self.views.active.schematic.overlap_cache,
             None,
             &selection,
             None,

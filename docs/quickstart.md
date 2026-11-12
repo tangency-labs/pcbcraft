@@ -122,6 +122,9 @@ the same `VCC` net name, which can be changed before placement.
    catalog or the active tool's right-click menu, then press **Esc** to stop.
    Double-clicking a result or pressing **Enter**
    also starts placement; dragging a result onto the canvas places it directly.
+   Overlapping drawings show an amber count badge with references on hover.
+   Placement remains allowed; finish placement, then right-click → **Select symbol**
+   to choose a hidden symbol before moving it.
    **Manage libraries…** in the catalog or **Libraries → Sources** adds native
    library folders on desktop or uploads a portable library bundle on either
    platform. Try the original [Workshop source example](native-library-sources.md),

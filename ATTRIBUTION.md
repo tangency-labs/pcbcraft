@@ -2,6 +2,17 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Schematic overlap visibility
+
+The drawing-bound warnings, view-owned candidate cache and stacked-symbol context
+chooser are original PCBcraft code using the existing Craft menu rows, fonts,
+tokens and semantic state badge. The canvas badge adapter uses the pinned kit's
+warning presentation and leaves positioning and overlap counts in PCBcraft.
+The public [KiCad 9 schematic editor manual](https://docs.kicad.org/9.0/en/eeschema/eeschema.html)
+was consulted for its selection-clarification workflow; no implementation source,
+artwork or library asset was used. Regression schematics use shared native commands.
+No dependency, saved-format or electrical connectivity rule was added.
+
 ## Component fields and text placement
 
 Component metadata, population/exclusion intent, per-unit field appearance and

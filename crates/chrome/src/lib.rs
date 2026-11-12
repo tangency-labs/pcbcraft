@@ -10,6 +10,7 @@ pub mod arrangements;
 pub mod assistant;
 pub mod authoring;
 pub mod board;
+pub mod canvas_warning;
 pub mod catalog;
 pub mod controls;
 pub mod cursor;
