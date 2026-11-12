@@ -9,7 +9,7 @@ pub use report::{Environment, Metric, Report};
 use pcbcraft_engine::{
     Session,
     board::{
-        clearance::Results,
+        clearance::{ClearanceQuery, Results},
         drc::{DEFAULT_CLEARANCE_NM, Rules},
         geometry::Contour,
         track::MOVE_TRACKS,
@@ -21,9 +21,14 @@ use pcbcraft_engine::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, hint::black_box};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hint::black_box,
+};
+use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, String>;
+type Finding = (Option<usize>, usize, bool, bool, bool);
 
 /// A harness envelope, not a native project format. Embedded bytes are an ordinary `.pc`
 /// archive produced by the production encoder; the board and trace are explicitly addressed.
@@ -84,13 +89,46 @@ fn timed<T>(samples: &mut BTreeMap<String, Vec<f64>>, id: &str, operation: impl 
 }
 
 /// Retain only observable contact/violations when comparing pruned candidates to all pairs.
-fn findings(results: &Results) -> Vec<(Option<usize>, usize, bool, bool, bool)> {
+fn findings(results: &Results) -> Vec<Finding> {
     results
         .decisions
         .iter()
         .filter(|d| d.touches || d.clearance_violation)
         .map(|d| (d.first, d.second, d.touches, d.clearance_violation, d.conflicting_nets))
         .collect()
+}
+
+/// Independently evaluate an initially unknown probe against every shared-layer object.
+/// Contact combines intended memberships before decisions; only one equal resolved net
+/// exempts strict clearance, and disposable probes have no physical-island exemption.
+/// This oracle deliberately bypasses candidate enumeration and the probe decision path.
+fn exhaustive_probe_findings(query: &ClearanceQuery, contour: &Contour, layers: &[Uuid]) -> Vec<Finding> {
+    let gaps: Vec<_> = query
+        .objects()
+        .iter()
+        .enumerate()
+        .filter(|(_, object)| object.layers.iter().any(|layer| layers.contains(layer)))
+        .map(|(index, object)| (index, object, contour.gap(&object.contour)))
+        .collect();
+    let connected: BTreeSet<_> =
+        gaps.iter().filter(|(_, _, gap)| *gap <= 0.0).flat_map(|(_, object, _)| object.intended_nets.iter().copied()).collect();
+    gaps.into_iter()
+        .filter_map(|(index, object, gap)| {
+            let touches = gap <= 0.0;
+            let same_net = connected.len() == 1 && object.intended_nets.len() == 1 && connected.contains(&object.intended_nets[0]);
+            let clearance_violation = !same_net && gap < query.authority().clearance_nm() as f64;
+            (touches || clearance_violation).then_some((None, index, touches, clearance_violation, touches && connected.len() > 1))
+        })
+        .collect()
+}
+
+/// Refuse a timing report when a probe omits or misclassifies exhaustive contact/clearance
+/// findings. The caller keeps both this reference and comparison outside the timed boundary.
+fn verify_probe(query: &ClearanceQuery, contour: &Contour, layers: &[Uuid], actual: &Results) -> Result<()> {
+    if findings(actual) != exhaustive_probe_findings(query, contour, layers) {
+        return Err("probe findings differ from exhaustive reference".into());
+    }
+    Ok(())
 }
 
 /// Run cold-snapshot and warm-query workloads plus the production editor's CPU input/paint
@@ -108,6 +146,12 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         || artifact.trace.len() > 4096
     {
         return Err("unsupported fixture schema, corrupt project or invalid trace length".into());
+    }
+    if artifact.trace_id == replay::STANDARD_TRACE_ID
+        && serde_json::to_value(&artifact.trace).map_err(|e| e.to_string())?
+            != serde_json::to_value(replay::Step::standard()).map_err(|e| e.to_string())?
+    {
+        return Err("standard trace ID does not match its versioned steps".into());
     }
     let source = decode_packed(&artifact.project)?.project;
     let view = source.board_view(artifact.board).ok_or("fixture board target does not exist")?;
@@ -145,8 +189,9 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
             {
                 return Err(format!("{id}: probe candidates omit an exhaustive geometric neighbor"));
             }
-            timed(&mut samples, &format!("clearance.probe.{id}"), || black_box(query.probe(&probe, &object.layers, None)))
+            let actual = timed(&mut samples, &format!("clearance.probe.{id}"), || black_box(query.probe(&probe, &object.layers, None)))
                 .map_err(|e| e.to_string())?;
+            verify_probe(&query, &probe, &object.layers, &actual).map_err(|e| format!("{id}: {e}"))?;
         }
         timed(&mut samples, "drc.synchronous", || black_box(project.board_view(artifact.board).map(|b| b.check_design(Rules::default()))));
         timed(&mut samples, "command.move_tracks", || {
@@ -219,6 +264,46 @@ mod tests {
             assert!(report.metrics.iter().any(|m| m.id == id), "missing boundary {id}");
         }
         assert!(!report.unmeasured.is_empty());
+    }
+
+    /// A shortened idle-only trace must not produce successful evidence under the standard
+    /// route/reversal/layer/cancel/edit identity. Custom trace identities keep their old behavior.
+    #[test]
+    fn standard_trace_identity_rejects_unrelated_steps() {
+        let mut artifact: serde_json::Value = serde_json::from_str(&generate("reference-v1", "test").unwrap()).unwrap();
+        artifact["trace"] = json!([artifact["trace"][14].clone()]);
+        assert!(run(&artifact.to_string(), environment(), 1).unwrap_err().contains("standard trace ID"));
+        artifact["trace_id"] = json!("custom-idle-v1");
+        assert!(run(&artifact.to_string(), environment(), 1).is_ok());
+    }
+
+    /// The oracle must catch omitted findings and wrong contact, clearance and conflicting-net
+    /// flags, independently of the broad-phase candidate-completeness assertion.
+    #[test]
+    fn exhaustive_probe_guard_rejects_corrupted_decisions() {
+        let artifact: Artifact = serde_json::from_str(&generate("reference-v1", "test").unwrap()).unwrap();
+        let mut session = Session::default();
+        session.open_snapshot(decode_packed(&artifact.project).unwrap().project);
+        for rule in [0, DEFAULT_CLEARANCE_NM] {
+            let query = session.clearance_query(artifact.board, rule).unwrap();
+            let object = &query.objects()[0];
+            let actual = query.probe(&object.contour, &object.layers, None).unwrap();
+            assert!(verify_probe(&query, &object.contour, &object.layers, &actual).is_ok());
+            let index = actual.decisions.iter().position(|d| d.touches || d.clearance_violation).unwrap();
+            let mut omitted = actual.clone();
+            omitted.decisions.remove(index);
+            assert!(verify_probe(&query, &object.contour, &object.layers, &omitted).is_err());
+            for flag in 0..3 {
+                let mut wrong = actual.clone();
+                let decision = &mut wrong.decisions[index];
+                match flag {
+                    0 => decision.touches = !decision.touches,
+                    1 => decision.clearance_violation = !decision.clearance_violation,
+                    _ => decision.conflicting_nets = !decision.conflicting_nets,
+                }
+                assert!(verify_probe(&query, &object.contour, &object.layers, &wrong).is_err());
+            }
+        }
     }
 
     /// Multi-row placement must finish before wiring; otherwise automatic wire healing can

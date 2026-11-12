@@ -167,7 +167,10 @@ Correctness assertions are mandatory even when timing gets better: compare query
 findings with the exhaustive reference, reject stale authority and retain the
 feature's own cancellation/rollback tests. The harness checks current query
 contact/violation completeness against all pairs outside the timed boundary on
-the first iteration; it does not replace a feature's exhaustive correctness suite.
+the first iteration. Every disposable probe also compares contact, clearance and
+conflicting-membership findings against an exhaustive shared-layer contour and
+membership reference outside its timed boundary. These guards do not replace a
+feature's exhaustive correctness suite.
 
 The proposed #237 targets are routing-input p95 < 4 ms, input-to-valid-visible-preview
 p95 < 16.7 ms / p99 < 33 ms, cancellation by the next rendered frame and commit

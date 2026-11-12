@@ -15,6 +15,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 pub(super) const WARMUP: usize = 8;
+/// Stable identity for the exact versioned route, reversal, layer, cancellation and edit steps.
+pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
 #[derive(Serialize, Deserialize)]

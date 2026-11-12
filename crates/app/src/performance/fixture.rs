@@ -81,7 +81,7 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
         board,
         project_sha256: digest(&bytes),
         project: bytes,
-        trace_id: "route-reverse-layer-cancel-edit-v1".into(),
+        trace_id: super::replay::STANDARD_TRACE_ID.into(),
         trace: Step::standard(),
     })
 }
