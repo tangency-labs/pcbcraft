@@ -488,7 +488,7 @@ impl Session {
         next.prune_junctions();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         validate_candidate(&next)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -506,7 +506,7 @@ impl Session {
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
         validate_candidate(&next)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

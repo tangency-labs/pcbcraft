@@ -362,7 +362,7 @@ fn an_existing_short_blocks_only_routes_into_it() {
     let number = crate::schematic::wiring::parse_id(&id, "footprint-").unwrap();
     let footprint = std::sync::Arc::make_mut(&mut next.board).footprints.iter_mut().find(|f| f.id == number).unwrap();
     (footprint.x_nm, footprint.y_nm) = (stub_end.x_nm - offset.0, stub_end.y_nm - offset.1);
-    s.change(next);
+    s.change(next).unwrap();
     assert!(short(s.project().unwrap(), &view(&s).tracks().iter().map(|t| t.id).collect()).is_some(), "the legacy placement creates a short");
     route(&mut s, front, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 5_000_000, y_nm: 30_000_000 }])
         .expect("an unrelated route is not blamed for an existing short");
@@ -410,6 +410,7 @@ fn a_track_crossing_a_pad_off_center_touches_it() {
     let square =
         [Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 600_000, y_nm: 0 }, Point { x_nm: 600_000, y_nm: 600_000 }, Point { x_nm: 0, y_nm: 600_000 }];
     let crossing = Track {
+        locked: false,
         id: Uuid::from_u128(1),
         layer: front,
         width_nm: 100_000,

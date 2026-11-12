@@ -409,8 +409,10 @@ impl BoardFragment {
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft board fragment."))?;
-        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2")
-            || (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some())
+        let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
+        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3")
+            || (envelope.format == "pcbcraft-clipboard/3") != locked
+            || (!locked && (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()))
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -559,8 +561,14 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()) { "pcbcraft-clipboard/2" } else { "pcbcraft-clipboard/1" }
-                .into(),
+            format: if self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked) {
+                "pcbcraft-clipboard/3"
+            } else if self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()) {
+                "pcbcraft-clipboard/2"
+            } else {
+                "pcbcraft-clipboard/1"
+            }
+            .into(),
             kind: "board".into(),
             source_project: self.source_project,
             source_board: self.source_board,
@@ -864,7 +872,7 @@ impl Session {
         }
         let next = transaction.open_project()?.clone();
         crate::clipboard::validate_candidate(&next)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
     /// Revalidate a complete paste at the captured revision and publish one electrical/history
@@ -893,7 +901,7 @@ impl Session {
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(project, at, self.next_object_id()?, &options)?;
         crate::clipboard::validate_candidate(&next)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

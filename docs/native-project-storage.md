@@ -432,6 +432,17 @@ and their connectivity/DRC/export rules. Removing the last stroked graphic retur
 the board to the format required by its remaining data. Unchanged legacy boards
 retain their previous encoding and bytes.
 
+Board format 18 adds optional `locked: true` on track and via records and
+requires at least one authored lock. It is a superset of format 17, including
+multi-pad mappings, physical graphics, accepted baselines and pending intent.
+Absent lock flags mean false; canonical saves omit false. Existing boards with
+no locks retain their previous supported encoding and no-op bytes. Unlocking the
+last object returns to the format required by its remaining data. Lower format
+headers carrying active locks are refused, and older readers refuse format 18.
+Flags survive folder/archive reopen and undo/redo without changing object IDs,
+geometry or connectivity. The shared lock command and protection policy are in
+[the layout workflow](pcb-layout-workflow.md#fixed-tracks-and-vias).
+
 The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in
 format 9. Versions 1–7 keep their encoding until new data is authored; they reject

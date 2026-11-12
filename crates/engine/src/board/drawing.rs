@@ -267,7 +267,7 @@ impl Session {
             let board = std::sync::Arc::make_mut(&mut next.board);
             board.outline = None;
             board.drawings = Some(data);
-            self.change(next);
+            self.change(next)?;
         }
         Ok(())
     }

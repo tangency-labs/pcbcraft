@@ -202,6 +202,11 @@ and Board Outline graphics together; Shift adds and Ctrl/Command toggles.
 selection filters constrain editing targets; correspondence highlights do not.
 Mixed Delete and Cut are one undo step and retain schematic components.
 
+Track/via lock flags survive Copy, Duplicate and Paste on the new object IDs.
+Existing source copper remains protected, and Cut/Delete refuse the whole
+selection if removing any locked object would be required. Lock-bearing board
+fragments use `pcbcraft-clipboard/3`; older readers refuse that extension.
+
 Pasting copied footprints opens **PCB Paste Options**, where each source circuit
 has an explicit destination schematic sheet and independent schematic X/Y anchor.
 Suggested anchors leave a gap below existing sheet content. Paste duplicates

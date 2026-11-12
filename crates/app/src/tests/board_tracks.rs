@@ -1551,3 +1551,115 @@ fn footprint_moves_carry_routed_tracks() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// The shared lock control handles mixed copper and keeps its geometry fields inspectable but disabled.
+#[test]
+fn copper_lock_control_preserves_selection_and_guards_delete() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,
+        "points":[{"x_nm":1_270_000,"y_nm":2_540_000},{"x_nm":6_350_000,"y_nm":2_540_000}],"expected_revision":revision}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":2_540_000,"y_nm":5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    assert!(h.state().message.is_none());
+    let track = tracks(&h)[0].id;
+    let via = h.state().session.project().unwrap().boards().next().unwrap().vias()[0].id;
+    for id in [track, via] {
+        h.state_mut().views.active.board.tracks.selected = std::collections::BTreeSet::from([id]);
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "Copper lock");
+        click(&mut h, "Locked");
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        assert!(board.tracks().iter().any(|track| track.id == id && track.locked) || board.vias().iter().any(|via| via.id == id && via.locked));
+        click(&mut h, "Copper lock");
+        click(&mut h, "Unlocked");
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+    h.state_mut().views.active.board.tracks.selected.extend([track, via]);
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Copper lock");
+    click(&mut h, "Locked");
+    assert!(tracks(&h)[0].locked);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().vias()[0].locked);
+    assert!(h.get_by_label("Selected track width").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Selected via pad").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Selected via drill").accesskit_node().is_disabled());
+    let locked = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().message.as_ref().is_some_and(|message| message.contains("locked")));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), locked);
+    assert!(h.state().views.active.board.tracks.selected.contains(&track));
+    click(&mut h, "Copper lock");
+    click(&mut h, "Unlocked");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(tracks(&h)[0].locked);
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+    h.run();
+    assert!(!tracks(&h)[0].locked);
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":board,"tracks":[track],"locked":true,"expected_revision":revision}));
+    h.state_mut().views.active.board.tracks.selected.extend([track, via]);
+    h.run();
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Mixed")));
+    click(&mut h, "Copper lock");
+    click(&mut h, "Locked");
+    let before_duplicate = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().duplicate_board_clipboard();
+    h.run();
+    assert!(h.state().views.active.board.clipboard.active(), "{:?}", h.state().message);
+    let target = at(&h, Point { x_nm: 7_620_000, y_nm: 5_080_000 });
+    click_canvas_at(&mut h, target);
+    h.run();
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(tracks(&h).len(), 2);
+    assert!(tracks(&h).iter().all(|track| track.locked));
+    let board = h.state().session.project().unwrap().boards().next().unwrap();
+    assert_eq!(board.vias().len(), 2);
+    assert!(board.vias().iter().all(|via| via.locked));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before_duplicate);
+}
+
+/// Dragging an unlocked middle segment cannot stretch a neighboring locked segment.
+#[test]
+fn segment_drag_cannot_move_a_locked_neighbor() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let p = |x| Point { x_nm: x, y_nm: 2_540_000 };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,
+        "points":[p(1_270_000),p(3_810_000),p(6_350_000),p(8_890_000)],"expected_revision":revision}),
+    );
+    let first = tracks(&h).iter().find(|track| track.start == p(1_270_000)).unwrap().id;
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":board,"tracks":[first],"locked":true,"expected_revision":revision}));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.hover_at(at(&h, p(5_080_000)));
+    h.run();
+    h.key_press(Key::D);
+    h.run();
+    let target = at(&h, Point { x_nm: 5_080_000, y_nm: 1_270_000 });
+    click_canvas_at(&mut h, target);
+    assert!(h.state().message.as_ref().is_some_and(|message| message.contains("locked")));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

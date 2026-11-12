@@ -265,7 +265,7 @@ impl Session {
             project.validate_net_labels().map_err(CommandError::InvalidParams)?;
         }
         project.sheet_mut().connectivity = Arc::default();
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 }

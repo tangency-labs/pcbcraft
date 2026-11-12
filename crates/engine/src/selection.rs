@@ -210,7 +210,7 @@ impl Session {
             || next.junctions != project.junctions
             || next.net_labels != project.net_labels
         {
-            self.change(next);
+            self.change(next)?;
         }
         Ok(())
     }
@@ -245,7 +245,7 @@ impl Session {
         }
         next.prune_junctions();
         next.sheet_mut().connectivity = Arc::default();
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

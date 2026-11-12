@@ -219,7 +219,7 @@ impl Session {
             .ok_or_else(|| CommandError::InvalidParams("invalid junction".to_owned()))?;
         let to = super::Anchor::parse(&params["to"]).ok_or_else(|| CommandError::InvalidParams("invalid attachment target".to_owned()))?;
         let next = self.open_project()?.attached(junction, to, self.revision(), super::auto_heal(params))?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -262,7 +262,7 @@ impl Session {
         }
         let next = project.reshaped(edit, to)?.healed_with_connections(project, self.revision(), super::auto_heal(params), &connections)?;
         if next.wires != project.wires || next.junctions != project.junctions {
-            self.change(next);
+            self.change(next)?;
         }
         Ok(())
     }

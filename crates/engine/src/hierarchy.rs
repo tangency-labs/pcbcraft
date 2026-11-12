@@ -438,7 +438,7 @@ impl Session {
         for sheet in Arc::make_mut(&mut project.sheets) {
             sheet.connectivity = Arc::default();
         }
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 }

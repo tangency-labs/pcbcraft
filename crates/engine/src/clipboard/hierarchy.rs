@@ -385,7 +385,7 @@ impl Session {
         next.named_graph = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         validate_candidate(&next)?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

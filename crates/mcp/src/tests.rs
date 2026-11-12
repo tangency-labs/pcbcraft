@@ -1229,3 +1229,55 @@ fn native_part_selection_and_compatibility_are_available_through_mcp() {
     let stale = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
     assert_eq!(stale["isError"], true);
 }
+
+/// MCP exposes explicit board lock intent and the same atomic protection as the editor.
+#[test]
+fn copper_lock_commands_and_protected_edits_share_mcp_inspection() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap();
+    let layer = setup
+        .project()
+        .unwrap()
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+        .unwrap()
+        .id;
+    setup
+        .apply(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"board":board.board,"layer":layer,"width_nm":250_000,
+        "points":[{"x_nm":0,"y_nm":0},{"x_nm":5_000_000,"y_nm":0}],"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let track = setup.project().unwrap().board_view(board).unwrap().tracks()[0].id;
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(before["project"]["boards"][0]["tracks"][0]["locked"], false);
+    let locked = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::SET_COPPER_LOCKED,
+        "params":{"board":board.board,"tracks":[track],"locked":true,"expected_revision":before["revision"]}}),
+    );
+    assert_ne!(locked["isError"], true, "{locked}");
+    let locked = body(&locked);
+    assert_eq!(locked["project"]["boards"][0]["tracks"][0]["locked"], true);
+    for command in [pcbcraft_engine::DELETE_TRACKS, pcbcraft_engine::MOVE_TRACKS] {
+        let mut params = json!({"board":board.board,"tracks":[track],"expected_revision":locked["revision"]});
+        if command == pcbcraft_engine::MOVE_TRACKS {
+            params["dx_nm"] = json!(1000);
+            params["dy_nm"] = json!(0);
+        }
+        let result = call(&mut server, "execute", json!({"command":command,"params":params}));
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"].as_str().unwrap().contains("locked"));
+        assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), locked);
+    }
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["boards"][0]["tracks"][0]["locked"], false);
+}

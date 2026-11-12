@@ -746,7 +746,15 @@ both snap to the grid, Esc or right-click cancels, and each completed move is on
 step. Properties shows the selected tracks and vias, with editable **Width**, **Via
 pad** and **Via drill** fields in the display units; a value applies to every selected
 item when you release a drag or press Enter. A move or resize whose copper would reach
-another net's pad is refused, leaving the board unchanged. The **Tracks** and **Vias**
+another net's pad is refused, leaving the board unchanged. The **Lock** choice in copper Properties locks or unlocks the selected tracks
+and vias together; it shows **Mixed** when their states differ. Locked objects
+remain selectable, with size fields read-only. Moving, resizing, reshaping,
+segment-dragging or deleting protected copper is refused for the whole edit,
+including changes carried by a footprint move or alignment. Unlock it first.
+Copy/duplicate/paste retain locks on the new objects; Cut refuses protected
+objects. Undo/redo and native saves preserve lock state.
+
+The **Tracks** and **Vias**
 selection filters turn picking of each off, by click, drag, U or box, and drop that kind
 from the current selection. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. With the pointer over a segment and no tool armed, **D** drags that segment with the

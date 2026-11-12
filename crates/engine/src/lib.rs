@@ -25,7 +25,7 @@ pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
-pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
+pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -135,6 +135,7 @@ enum ParamKind {
     ViaDiameter,
     ViaDrill,
     Closed,
+    Locked,
     BoardId,
     SheetId,
     CopperLayers,
@@ -205,7 +206,7 @@ impl ParamKind {
             Self::TrackIds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":{"type":"string","format":"uuid"}})
             }
-            Self::Closed => json!({"type":"boolean"}),
+            Self::Closed | Self::Locked => json!({"type":"boolean"}),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
@@ -379,7 +380,7 @@ impl ParamKind {
                 Ok(())
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
-            Self::Closed if value.is_boolean() => Ok(()),
+            Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
             Self::TrackPath
                 if value
                     .as_array()
@@ -440,7 +441,7 @@ impl ParamKind {
             Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
             Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
             Self::DrawingId => Err("must identify a drawing or layer by non-nil UUID"),
-            Self::Closed => Err("must be a boolean"),
+            Self::Closed | Self::Locked => Err("must be a boolean"),
             Self::HierarchyId
                 if value.as_str().is_some_and(|s| {
                     schematic::wiring::parse_id(s, "label-").is_some() || schematic::wiring::parse_id(s, "sheet-symbol-").is_some()
@@ -767,7 +768,7 @@ const CATALOG: &[Command] = &[
             SYMBOL_X,
             SYMBOL_Y,
             NET_ROTATION,
-            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "Native board clipboard/1 UTF-8 envelope" },
+            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "Native board clipboard/1, /2 or /3 UTF-8 envelope" },
             Param {
                 name: "reuse_components",
                 required: false,
@@ -1711,6 +1712,18 @@ const CATALOG: &[Command] = &[
         params: &[BOARD],
     },
     Command {
+        id: SET_COPPER_LOCKED,
+        title: "Set Copper Lock",
+        summary: "Lock or unlock selected tracks and vias atomically. Locked copper stays selectable; edits to geometry, sizes or deletion fail as a whole. Copies preserve locks.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param { name: "tracks", required: false, summary: "Unique track UUIDs on the addressed board", kind: ParamKind::TrackIds },
+            Param { name: "vias", required: false, summary: "Unique via UUIDs on the addressed board", kind: ParamKind::TrackIds },
+            Param { name: "locked", required: true, summary: "True fixes the copper; false unlocks it", kind: ParamKind::Locked },
+        ],
+    },
+    Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
         summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
@@ -2186,6 +2199,7 @@ impl Session {
             | SET_TRACK_WIDTH
             | SET_VIA_SIZE
             | DELETE_TRACKS
+            | SET_COPPER_LOCKED
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -2236,7 +2250,7 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2371,6 +2385,7 @@ impl Session {
                 | SET_TRACK_WIDTH
                 | SET_VIA_SIZE
                 | DELETE_TRACKS
+                | SET_COPPER_LOCKED
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -2449,13 +2464,13 @@ impl Session {
                 upgraded_from: None,
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
-            }),
+            })?,
             "project.rename" => {
                 let name = name_param(params)?;
                 let mut project = self.open_project()?.clone();
                 if project.name != name {
                     project.name = name;
-                    self.change(project);
+                    self.change(project)?;
                 }
             }
             board::identity::CREATE_BOARD => self.create_board(params)?,
@@ -2550,7 +2565,7 @@ impl Session {
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_ASSIGNED_FOOTPRINTS => {
                 let candidate = self.preview_footprint_placement(params)?;
-                self.change((*candidate).clone());
+                self.change((*candidate).clone())?;
             }
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
@@ -2566,6 +2581,7 @@ impl Session {
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }
+            SET_COPPER_LOCKED => self.set_copper_locked(params)?,
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
@@ -2665,7 +2681,7 @@ impl Session {
         });
         project.sheet_mut().connectivity = Arc::default();
         let project = project.healed(self.open_project()?, self.revision(), wire::auto_heal(params))?;
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 
@@ -2691,7 +2707,7 @@ impl Session {
                 self.revision(),
                 wire::auto_heal(params),
             )?;
-            self.change(next);
+            self.change(next)?;
         }
         Ok(())
     }
@@ -2713,7 +2729,7 @@ impl Session {
         let index = Self::symbol_param(project, params)?;
         let symbol = &project.symbols[index];
         let next = project.retained_symbol_pose(index, symbol.position, (symbol.rotation + 1) % 4, self.revision())?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -2735,7 +2751,7 @@ impl Session {
             project.retire_component(symbol.component);
         }
         project.sheet_mut().connectivity = Arc::default();
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 
@@ -2820,7 +2836,7 @@ impl Session {
         Arc::make_mut(&mut next.components).insert(component.ordinal, component);
         let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
         symbol.field_layout = field_layout;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -2883,7 +2899,7 @@ impl Session {
             return Err(CommandError::InvalidParams("placement conflicts with the pinned assignment; use pcb.place_assigned_footprint".into()));
         }
         Arc::make_mut(&mut project.board).append(footprint).map_err(|error| CommandError::InvalidParams(error.into()))?;
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 
@@ -2917,7 +2933,7 @@ impl Session {
             bends: None,
         });
         project.sheet_mut().connectivity = Arc::default();
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 
@@ -2939,10 +2955,13 @@ impl Session {
         Ok(())
     }
 
-    /// Commit a snapshot and bound undo history. Preserve adopted allocation metadata across
+    /// Refuse changes to existing locked copper before publishing any state, then bound undo history. Preserve adopted allocation metadata across
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
-    fn change(&mut self, mut project: Project) {
+    fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
+        if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
+            board::track::protect_locked(previous, &project)?;
+        }
         self.update_plan = None;
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
@@ -2985,6 +3004,7 @@ impl Session {
         }
         self.redo.clear();
         self.revision = (self.revision + 1).max(highest);
+        Ok(())
     }
 
     /// Restore authored content and advance the revision, retaining the allocation watermark

@@ -198,7 +198,7 @@ impl Session {
                 return Err(CommandError::Unavailable("project exceeds the symbol or wire limit".into()));
             }
             project.sheet_index = 0;
-            self.change(project);
+            self.change(project)?;
         }
         Ok(self.revision)
     }
@@ -266,7 +266,7 @@ impl Session {
             _ => return Err(CommandError::InvalidParams("unknown sheet operation or target".into())),
         }
         project.sheet_index = 0;
-        self.change(project);
+        self.change(project)?;
         Ok(())
     }
 }

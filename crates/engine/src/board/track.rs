@@ -31,6 +31,14 @@ pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
 pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
+/// Lock or unlock explicitly addressed tracks and vias without changing geometry.
+pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
+
+mod locks;
+pub(crate) use locks::protect_locked;
+#[cfg(test)]
+mod lock_tests;
+
 /// The width the PCB route tool starts with, 0.25 mm.
 pub const DEFAULT_WIDTH_NM: i64 = 250_000;
 /// Narrowest accepted track, 0.01 mm. Manufacturability is a separate, later check.
@@ -57,6 +65,9 @@ pub const MAX_VIA_DIAMETER_NM: i64 = 10_000_000;
 #[serde(deny_unknown_fields)]
 pub struct Track {
     pub id: Uuid,
+    /// Fixed copper refuses geometry, size and deletion edits until explicitly unlocked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
     pub layer: Uuid,
     pub width_nm: i64,
     pub start: Point,
@@ -64,6 +75,13 @@ pub struct Track {
 }
 
 impl Track {
+    /// Inspection always exposes lock state, including the default false omitted from native files.
+    pub fn inspect(&self) -> Value {
+        let mut value = json!(self);
+        value["locked"] = json!(self.locked);
+        value
+    }
+
     /// Reject nil identities, out-of-range widths or coordinates, and zero-length segments.
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
@@ -86,12 +104,22 @@ impl Track {
 #[serde(deny_unknown_fields)]
 pub struct Via {
     pub id: Uuid,
+    /// Lock intent travels with this via through native save and clipboard copies.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
     pub at: Point,
     pub diameter_nm: i64,
     pub drill_nm: i64,
 }
 
 impl Via {
+    /// Inspection always exposes lock state, including the default false omitted from native files.
+    pub fn inspect(&self) -> Value {
+        let mut value = json!(self);
+        value["locked"] = json!(self.locked);
+        value
+    }
+
     /// Reject nil identities, out-of-range positions, and drills that do not fit inside the pad.
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
@@ -730,11 +758,11 @@ impl Session {
                     layer = change.layer;
                     let id = crate::fresh_id()?;
                     added.insert(id);
-                    vias.push(Via { id, at: pair[0], diameter_nm, drill_nm });
+                    vias.push(Via { id, locked: false, at: pair[0], diameter_nm, drill_nm });
                 }
                 let id = crate::fresh_id()?;
                 added.insert(id);
-                tracks.push(Track { id, layer, width_nm, start: pair[0], end: pair[1] });
+                tracks.push(Track { id, locked: false, layer, width_nm, start: pair[0], end: pair[1] });
             }
             // A change at the final vertex ends the route on a via, ready to continue on that layer.
             if let Some(change) = changes.next() {
@@ -743,7 +771,7 @@ impl Session {
                 }
                 let id = crate::fresh_id()?;
                 added.insert(id);
-                vias.push(Via { id, at: points[change.at], diameter_nm, drill_nm });
+                vias.push(Via { id, locked: false, at: points[change.at], diameter_nm, drill_nm });
             }
         } else if command == ADD_VIA {
             let at: Point = param(params, "at")?;
@@ -755,7 +783,7 @@ impl Session {
             }
             let id = crate::fresh_id()?;
             added.insert(id);
-            vias.push(Via { id, at, diameter_nm: param(params, "via_diameter_nm")?, drill_nm: param(params, "via_drill_nm")? });
+            vias.push(Via { id, locked: false, at, diameter_nm: param(params, "via_diameter_nm")?, drill_nm: param(params, "via_drill_nm")? });
         } else if command == MOVE_TRACKS {
             let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
             let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
@@ -830,7 +858,7 @@ impl Session {
         if let Some((a, b)) = short(&next, &added) {
             return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
         }
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

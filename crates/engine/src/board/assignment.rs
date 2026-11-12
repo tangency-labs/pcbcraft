@@ -332,7 +332,7 @@ impl Session {
             }
             crate::persistence::encode_documents(Arc::new(next.clone())).map_err(CommandError::InvalidParams)?;
         }
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 
@@ -358,7 +358,7 @@ impl Session {
         let footprint = assignment.footprint(self.next_object_id()?, position);
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).append(footprint).map_err(|e| CommandError::InvalidParams(e.into()))?;
-        self.change(next);
+        self.change(next)?;
         Ok(())
     }
 }

@@ -240,7 +240,7 @@ fn committed_degrees(ui: &mut Ui, salt: (&str, impl std::hash::Hash + std::fmt::
     (commit && degrees != model).then_some(degrees)
 }
 
-/// Show the selected tracks and vias, with their width and via size editable in the display units.
+/// Inspect selected copper and atomically change its lock state; locked or mixed-locked selections keep sizes read-only.
 /// Returns at most one command, submitted when a field is released or confirmed; the caller adds
 /// the board and revision. Mixed track widths show the first width and set all of them; vias
 /// of different sizes show "Mixed" and stay read-only, since each via field sends both sizes.
@@ -257,6 +257,33 @@ fn copper_properties(
     let mut edit = None;
     property(ui, "Selected tracks", &tracks.len().to_string());
     property(ui, "Selected vias", &vias.len().to_string());
+    let any_locked = tracks.iter().any(|track| track.locked) || vias.iter().any(|via| via.locked);
+    let all_locked = tracks.iter().all(|track| track.locked) && vias.iter().all(|via| via.locked);
+    let mut lock = if all_locked {
+        "Locked"
+    } else if any_locked {
+        "Mixed"
+    } else {
+        "Unlocked"
+    };
+    let original_lock = lock;
+    ui.label("Lock");
+    let response = pcbcraft_chrome::controls::Choice::from_id_salt(("copper_lock", salt)).selected_text(lock).show_ui(ui, |ui| {
+        ui.selectable_value(&mut lock, "Unlocked", "Unlocked");
+        ui.selectable_value(&mut lock, "Locked", "Locked");
+    });
+    response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), "Copper lock"));
+    ui.end_row();
+    if lock != original_lock {
+        let mut params = serde_json::json!({"locked":lock == "Locked"});
+        if !tracks.is_empty() {
+            params["tracks"] = serde_json::json!(tracks.iter().map(|track| track.id).collect::<Vec<_>>());
+        }
+        if !vias.is_empty() {
+            params["vias"] = serde_json::json!(vias.iter().map(|via| via.id).collect::<Vec<_>>());
+        }
+        return Some((pcbcraft_engine::SET_COPPER_LOCKED, params));
+    }
     if let Some(first) = tracks.first() {
         let layers = target.layers();
         if tracks.iter().all(|track| track.layer == first.layer)
@@ -265,7 +292,10 @@ fn copper_properties(
             property(ui, "Layer", layer_name(layer, &layers));
         }
         ui.label("Width");
-        if let Some(width) = committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit) {
+        if let Some(width) = ui
+            .add_enabled_ui(!any_locked, |ui| committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit))
+            .inner
+        {
             edit = Some((
                 pcbcraft_engine::SET_TRACK_WIDTH,
                 serde_json::json!({"tracks":tracks.iter().map(|t| t.id).collect::<Vec<_>>(),"width_nm":width}),
@@ -282,7 +312,12 @@ fn copper_properties(
     } else if let Some(first) = vias.first() {
         let ids: Vec<_> = vias.iter().map(|via| via.id).collect();
         ui.label("Via pad");
-        if let Some(pad) = committed_length(ui, ("Selected via pad", salt), first.diameter_nm, MIN_VIA_DRILL_NM + 1..=MAX_VIA_DIAMETER_NM, unit) {
+        if let Some(pad) = ui
+            .add_enabled_ui(!any_locked, |ui| {
+                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, MIN_VIA_DRILL_NM + 1..=MAX_VIA_DIAMETER_NM, unit)
+            })
+            .inner
+        {
             edit = Some((
                 pcbcraft_engine::SET_VIA_SIZE,
                 serde_json::json!({"vias":ids,"via_diameter_nm":pad,"via_drill_nm":first.drill_nm.min(pad - 1)}),
@@ -290,7 +325,12 @@ fn copper_properties(
         }
         ui.end_row();
         ui.label("Via drill");
-        if let Some(drill) = committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit) {
+        if let Some(drill) = ui
+            .add_enabled_ui(!any_locked, |ui| {
+                committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit)
+            })
+            .inner
+        {
             edit = Some((pcbcraft_engine::SET_VIA_SIZE, serde_json::json!({"vias":ids,"via_diameter_nm":first.diameter_nm,"via_drill_nm":drill})));
         }
         ui.end_row();
