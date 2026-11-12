@@ -26,6 +26,7 @@ pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
+pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
@@ -137,6 +138,7 @@ enum ParamKind {
     AlignMode,
     BoardSide,
     RuleLength,
+    BoardRules,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -204,6 +206,7 @@ impl ParamKind {
             }
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
+            Self::BoardRules => board::rules::schema(),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
             Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
@@ -420,6 +423,8 @@ impl ParamKind {
             Self::ViaDrill if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM..board::track::MAX_VIA_DIAMETER_NM).contains(&n)) => {
                 Ok(())
             }
+            Self::BoardRules if value.is_null() || serde_json::from_value::<board::rules::Values>(value.clone()).is_ok() => Ok(()),
+            Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
@@ -1583,7 +1588,12 @@ const CATALOG: &[Command] = &[
             BOARD,
             EXPECTED_REVISION,
             Param { name: "layer", required: true, summary: "Copper layer UUID from board inspection", kind: ParamKind::DrawingId },
-            Param { name: "width_nm", required: true, summary: "Track width in integer nanometers", kind: ParamKind::TrackWidth },
+            Param {
+                name: "width_nm",
+                required: false,
+                summary: "Track width in integer nanometers; omitted uses the board preference",
+                kind: ParamKind::TrackWidth,
+            },
             Param {
                 name: "points",
                 required: true,
@@ -1599,13 +1609,13 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "via_diameter_nm",
                 required: false,
-                summary: "Via pad diameter in integer nanometers; required with layer changes",
+                summary: "Via pad diameter in integer nanometers; omitted uses the board preference",
                 kind: ParamKind::ViaDiameter,
             },
             Param {
                 name: "via_drill_nm",
                 required: false,
-                summary: "Via drill diameter in integer nanometers, smaller than the pad; required with layer changes",
+                summary: "Via drill diameter in integer nanometers, smaller than the pad; omitted uses the board preference",
                 kind: ParamKind::ViaDrill,
             },
         ],
@@ -1618,10 +1628,10 @@ const CATALOG: &[Command] = &[
             BOARD,
             EXPECTED_REVISION,
             Param { name: "at", required: true, summary: "Via center in integer nanometers", kind: ParamKind::Point },
-            Param { name: "via_diameter_nm", required: true, summary: "Via pad diameter in integer nanometers", kind: ParamKind::ViaDiameter },
+            Param { name: "via_diameter_nm", required: false, summary: "Via pad diameter in integer nanometers", kind: ParamKind::ViaDiameter },
             Param {
                 name: "via_drill_nm",
-                required: true,
+                required: false,
                 summary: "Via drill diameter in integer nanometers, smaller than the pad",
                 kind: ParamKind::ViaDrill,
             },
@@ -1690,6 +1700,21 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_RULES,
+        title: "Set Board Rules",
+        summary: "Replace board defaults in one undo step; null restores built-in defaults. Preferences must satisfy hard limits.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param {
+                name: "rules",
+                required: true,
+                summary: "Complete board default values, or null to remove authored defaults",
+                kind: ParamKind::BoardRules,
+            },
+        ],
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -1698,25 +1723,49 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "clearance_nm",
                 required: false,
-                summary: "Copper clearance between different nets; default 200000 (0.2 mm)",
+                summary: "Request-local clearance; defaults to saved board rules or 200000 nm",
                 kind: ParamKind::RuleLength,
             },
             Param {
                 name: "min_track_width_nm",
                 required: false,
-                summary: "Narrowest allowed track; default 150000 (0.15 mm)",
+                summary: "Request-local minimum track width; defaults to saved board rules or 150000 nm",
                 kind: ParamKind::RuleLength,
             },
             Param {
                 name: "edge_clearance_nm",
                 required: false,
-                summary: "Copper to board edge clearance; default 300000 (0.3 mm)",
+                summary: "Request-local edge clearance; defaults to saved board rules or 300000 nm",
                 kind: ParamKind::RuleLength,
             },
             Param {
                 name: "min_annular_ring_nm",
                 required: false,
-                summary: "Smallest via annular ring; default 100000 (0.1 mm)",
+                summary: "Request-local minimum annular ring; defaults to saved board rules or 100000 nm",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "min_via_diameter_nm",
+                required: false,
+                summary: "Request-local via limit; cannot weaken saved hard limits",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "max_via_diameter_nm",
+                required: false,
+                summary: "Request-local via limit; cannot weaken saved hard limits",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "min_via_drill_nm",
+                required: false,
+                summary: "Request-local via limit; cannot weaken saved hard limits",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "max_via_drill_nm",
+                required: false,
+                summary: "Request-local via limit; cannot weaken saved hard limits",
                 kind: ParamKind::RuleLength,
             },
         ],
@@ -2239,6 +2288,7 @@ impl Session {
             | SET_FOOTPRINT_REFERENCE_OFFSET
             | SET_FOOTPRINT_REFERENCE_TEXT
             | DELETE_FOOTPRINTS
+            | SET_RULES
             | SET_SILKSCREEN
             | ADD_DRAWING
             | SET_DRAWING
@@ -2305,7 +2355,7 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2432,6 +2482,7 @@ impl Session {
                 | DELETE_FOOTPRINTS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
+                | SET_RULES
                 | SET_SILKSCREEN
                 | ADD_DRAWING
                 | SET_DRAWING
@@ -2482,6 +2533,7 @@ impl Session {
                 | SET_FOOTPRINT_REFERENCE_OFFSET
                 | SET_FOOTPRINT_REFERENCE_TEXT
                 | DELETE_FOOTPRINTS
+                | SET_RULES
                 | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
@@ -2640,6 +2692,7 @@ impl Session {
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
+            SET_RULES => self.set_rules(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,

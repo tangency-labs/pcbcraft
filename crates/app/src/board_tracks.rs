@@ -13,10 +13,9 @@ use pcbcraft_chrome::{
 };
 use pcbcraft_engine::{
     board::{
-        drc::DEFAULT_CLEARANCE_NM,
         setup::{LayerPurpose, Side},
         track::{DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM, DEFAULT_WIDTH_NM, MAX_PATH_POINTS, Track, Via},
-        view::{BoardView, CopperLayers},
+        view::{BoardTarget, BoardView, CopperLayers},
     },
     schematic::Point,
 };
@@ -95,6 +94,7 @@ struct SegmentDrag {
 /// Independent route tool, sizes and track/via selection for one board view, never saved in files.
 #[derive(Debug)]
 pub(super) struct State {
+    rules_source: Option<(BoardTarget, Option<pcbcraft_engine::board::rules::Settings>)>,
     pub(super) tool: bool,
     /// Place › Via: each click places one standalone via until Esc or right-click.
     pub(super) via_tool: bool,
@@ -131,6 +131,7 @@ pub(super) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            rules_source: None,
             tool: false,
             via_tool: false,
             width_nm: DEFAULT_WIDTH_NM,
@@ -167,6 +168,21 @@ pub(super) struct Interaction {
 }
 
 impl State {
+    /// Refresh preferred sizes when switching boards or changing saved rules. Explicit local
+    /// size choices survive ordinary edits; a rule change resets them and invalidates drafts.
+    pub(super) fn sync_rules(&mut self, board: BoardView<'_>) {
+        let key = (board.target, board.authored_rules().cloned());
+        if self.rules_source.as_ref() == Some(&key) {
+            return;
+        }
+        if key.1.is_some() || self.rules_source.as_ref().is_some_and(|(_, rules)| rules.is_some()) {
+            let values = board.effective_rules().values;
+            self.width_nm = values.preferred_track_width_nm;
+            self.via_diameter_nm = values.preferred_via_diameter_nm;
+            self.via_drill_nm = values.preferred_via_drill_nm;
+        }
+        self.rules_source = Some(key);
+    }
     /// Arm the route tool with no authored changes; the first click captures revision and layer.
     pub(super) fn start(&mut self) {
         self.cancel();
@@ -545,6 +561,7 @@ pub(super) fn interact(
     over_footprint: bool,
     kinds: Kinds,
 ) -> Interaction {
+    state.sync_rules(view);
     let mut out = Interaction::default();
     state.committed = None;
     let rect = response.rect;
@@ -954,7 +971,7 @@ pub(super) fn paint_draft(
         let layers = segment_layers(&draft.start, &draft.changes, path.len());
         let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
         let width = width_px(camera, rect, state.width_nm);
-        let clearance = width_px(camera, rect, DEFAULT_CLEARANCE_NM);
+        let clearance = width_px(camera, rect, view.effective_rules().values.clearance_nm);
         let via_width = width_px(camera, rect, state.via_diameter_nm);
         for pair in path.windows(2) {
             pcbcraft_chrome::board::routing_clearance(painter, [pair[0], pair[1]], width, clearance);

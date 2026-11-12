@@ -19,6 +19,7 @@ pub struct Authority {
     opening: u64,
     revision: u64,
     clearance_nm: i64,
+    rules: super::rules::Effective,
 }
 
 impl Authority {
@@ -33,6 +34,10 @@ impl Authority {
     /// Effective clearance for this result, including a request-local rule override.
     pub fn clearance_nm(&self) -> i64 {
         self.clearance_nm
+    }
+    /// Shared resolved values and provenance captured with the immutable board.
+    pub fn rules(&self) -> &super::rules::Effective {
+        &self.rules
     }
     /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
     /// Rule overrides are immutable inputs: a different override requires a new query.
@@ -90,11 +95,16 @@ impl Session {
     /// Capture a board and effective rule without changing revision, history or project bytes.
     /// Unknown targets, absent projects and out-of-range clearances fail before preparation.
     pub fn clearance_query(&self, target: BoardTarget, clearance_nm: i64) -> Result<ClearanceQuery, CommandError> {
-        if !(0..=crate::schematic::MAX_CENTER_NM).contains(&clearance_nm) {
-            return Err(CommandError::InvalidParams("clearance must be within the board coordinate range".into()));
-        }
+        self.clearance_query_with_rules(target, &serde_json::json!({"clearance_nm":clearance_nm}))
+    }
+
+    /// Capture saved board defaults, or diagnostic overrides that cannot weaken authored limits.
+    /// Rule changes invalidate the returned authority just like copper or connectivity changes.
+    pub fn clearance_query_with_rules(&self, target: BoardTarget, overrides: &serde_json::Value) -> Result<ClearanceQuery, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
+        let rules = view.resolve_rules(overrides)?;
+        let clearance_nm = rules.values.clearance_nm;
         let geometry = BoardGeometry::new(view);
         Ok(ClearanceQuery {
             authority: Authority {
@@ -104,6 +114,7 @@ impl Session {
                 opening: self.history_root_revision(),
                 revision: self.revision(),
                 clearance_nm,
+                rules,
             },
             geometry,
         })

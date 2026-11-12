@@ -21,6 +21,7 @@ mod board_outputs;
 mod board_panels;
 mod board_presets;
 mod board_reference;
+mod board_rules;
 mod board_setup;
 mod board_tracks;
 mod board_update;
@@ -187,6 +188,7 @@ enum Dialog {
     RoutingSize(board_presets::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
+    BoardRules(Box<board_rules::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -2065,6 +2067,7 @@ impl PcbApp {
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
+            Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),

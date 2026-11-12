@@ -484,6 +484,11 @@ track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.
 Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
 
+Use **Analyze → Rules** to save board limits and preferred routing dimensions.
+Clear **Use built-in defaults** to author values, then Apply; checking it restores
+the built-in values. New routes use those preferences, while existing copper
+keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
+
 Run **Analyze → DRC** to check the board. Pad clearance is measured against the
 resolved circular, oval, rounded-rectangle or rectangular copper contour, including
 rotation and board side. A gap exactly equal to the selected clearance passes;

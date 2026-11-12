@@ -23,6 +23,32 @@ fn body(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// The catalog exposes saved defaults and provenance through real MCP dispatch. Bad bounds
+/// and attempts to weaken saved limits preserve the project and history.
+#[test]
+fn board_rules_mcp_discovery_authorship_and_diagnostics_agree() {
+    let mut s = server();
+    let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let board = created["project"]["boards"][0]["id"].clone();
+    let values = pcbcraft_engine::board::rules::Values { clearance_nm: 400_000, ..Default::default() };
+    let changed = call(
+        &mut s,
+        "execute",
+        json!({"command":pcbcraft_engine::SET_RULES,"params":{"board":board,"expected_revision":created["revision"],"rules":values}}),
+    );
+    assert_ne!(changed["isError"], true, "{changed}");
+    let changed = body(&changed);
+    assert_eq!(changed["project"]["boards"][0]["rules"]["effective"]["values"]["clearance_nm"], 400_000);
+    let report = body(&call(&mut s, "execute", json!({"command":pcbcraft_engine::CHECK_DESIGN,"params":{"board":board}})));
+    assert_eq!(report["design_check"]["rules"]["clearance_nm"], 400_000);
+    assert_eq!(report["design_check"]["sources"]["clearance_nm"]["kind"], "board");
+    let invalid = call(&mut s, "execute", json!({"command":pcbcraft_engine::CHECK_DESIGN,"params":{"board":board,"clearance_nm":0}}));
+    assert_eq!(invalid["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), changed);
+    let description = call(&mut s, "describe_command", json!({"command":pcbcraft_engine::SET_RULES}));
+    assert_ne!(description["isError"], true, "{description}");
+}
+
 /// MCP uses the native record resolver and exact quantity normalizer without an open project.
 #[test]
 fn native_part_resolution_and_units_are_available_through_mcp() {

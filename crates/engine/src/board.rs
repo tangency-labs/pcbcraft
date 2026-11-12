@@ -20,6 +20,7 @@ pub mod materials;
 pub mod outline;
 pub mod ratsnest;
 pub mod reference;
+pub mod rules;
 pub mod setup;
 #[cfg(test)]
 mod side_tests;
@@ -287,6 +288,7 @@ pub(crate) struct Board {
     pub(crate) drawings: Option<drawing::Drawings>,
     pub(crate) setup: Option<setup::BoardSetup>,
     pub(crate) silkscreen: Option<silkscreen::Settings>,
+    pub(crate) rules: Option<rules::Settings>,
     /// Copper segments in stable ID order; empty boards keep their earlier saved format.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.

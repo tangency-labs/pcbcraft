@@ -314,7 +314,6 @@ fn invalid_layer_changes_and_deletes_change_nothing() {
     }
     let base =
         json!({"layer":front,"width_nm":DEFAULT_WIDTH_NM,"points":points,"layer_changes":[{"at":1,"layer":back}],"expected_revision":revision});
-    assert!(s.apply(ADD_TRACKS, &base).is_err(), "via sizes are required with layer changes");
     let mut wide_drill = base.clone();
     wide_drill["via_diameter_nm"] = json!(400_000);
     wide_drill["via_drill_nm"] = json!(400_000);

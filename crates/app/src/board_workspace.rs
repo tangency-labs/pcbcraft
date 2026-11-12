@@ -331,26 +331,30 @@ impl PcbApp {
     /// Analysis opens existing DRC, measurement and counterpart tools without editing the board.
     fn board_analyze_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
-        let checks = [RibbonTool {
-            icon: ToolIcon::Drc,
-            label: "DRC",
-            description: "Run design rules check",
-            shortcut: "",
-            enabled,
-            active: self.views.active.board.drc.open,
-            menu_check: None,
-        }];
-        let planned = [RibbonTool {
-            icon: ToolIcon::Rules,
-            label: "Rules",
-            description: "Edit design rules (planned)",
-            shortcut: "",
-            enabled: false,
-            active: false,
-            menu_check: None,
-        }];
-        if workspace::ribbon_group_with_menu(ui, "Checks", &checks, &planned) == Some(0) {
-            self.run_drc();
+        let checks = [
+            RibbonTool {
+                icon: ToolIcon::Drc,
+                label: "DRC",
+                description: "Run design rules check",
+                shortcut: "",
+                enabled,
+                active: self.views.active.board.drc.open,
+                menu_check: None,
+            },
+            RibbonTool {
+                icon: ToolIcon::Rules,
+                label: "Rules",
+                description: "Edit board defaults and routing preferences",
+                shortcut: "",
+                enabled,
+                active: false,
+                menu_check: None,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Checks", &checks) {
+            Some(0) => self.run_drc(),
+            Some(1) => self.begin_board_rules(),
+            _ => {}
         }
         workspace::ribbon_separator(ui);
         let measure = [RibbonTool {
