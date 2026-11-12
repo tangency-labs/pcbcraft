@@ -606,16 +606,18 @@ impl Session {
     /// change places one via at a vertex after the first, in strictly increasing order, and later
     /// segments continue on its layer; a change at the last vertex ends the route on a via. The whole candidate is validated first: unknown layers or IDs,
     /// invalid geometry or via sizes, and copper that would join two different nets leave the
-    /// board, revision and undo history unchanged.
+    /// board, revision and undo history unchanged. Omitted creation dimensions use the shared
+    /// board preferences; explicit dimensions remain authored geometry checked by DRC.
     pub(crate) fn edit_tracks(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
+        let effective = project.board.rules.as_ref().map_or_else(super::rules::Values::default, |rules| rules.values);
         let mut tracks = project.board.tracks.clone();
         let mut vias = project.board.vias.clone();
         let mut added = BTreeSet::new();
         if command == ADD_TRACKS {
             let mut layer: Uuid = param(params, "layer")?;
-            let width_nm: i64 = param(params, "width_nm")?;
+            let width_nm: i64 = if params.get("width_nm").is_none() { effective.preferred_track_width_nm } else { param(params, "width_nm")? };
             let points: Vec<Point> = param(params, "points")?;
             if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
                 return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
@@ -639,8 +641,16 @@ impl Session {
                 }
                 previous = change.at;
             }
-            let size =
-                |name| -> Result<i64, CommandError> { if changes.is_empty() && params.get(name).is_none() { Ok(0) } else { param(params, name) } };
+            let size = |name| -> Result<i64, CommandError> {
+                if params.get(name).is_none() {
+                    Ok(match name {
+                        "via_diameter_nm" => effective.preferred_via_diameter_nm,
+                        _ => effective.preferred_via_drill_nm,
+                    })
+                } else {
+                    param(params, name)
+                }
+            };
             let (diameter_nm, drill_nm) = (size("via_diameter_nm")?, size("via_drill_nm")?);
             let mut changes = changes.iter().peekable();
             for (index, pair) in points.windows(2).enumerate() {
@@ -676,7 +686,17 @@ impl Session {
             }
             let id = crate::fresh_id()?;
             added.insert(id);
-            vias.push(Via { id, locked: false, at, diameter_nm: param(params, "via_diameter_nm")?, drill_nm: param(params, "via_drill_nm")? });
+            vias.push(Via {
+                id,
+                locked: false,
+                at,
+                diameter_nm: params
+                    .get("via_diameter_nm")
+                    .map(|_| param(params, "via_diameter_nm"))
+                    .transpose()?
+                    .unwrap_or(effective.preferred_via_diameter_nm),
+                drill_nm: params.get("via_drill_nm").map(|_| param(params, "via_drill_nm")).transpose()?.unwrap_or(effective.preferred_via_drill_nm),
+            });
         } else if command == MOVE_TRACKS {
             let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
             let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;

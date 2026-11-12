@@ -172,18 +172,20 @@ without a manufacturing or clearance claim.
 
 `pcb.add_tracks` and `pcb.delete_tracks` use the same transactions as the PCB
 route tool. Each takes `board` and `expected_revision`. Routing also takes a copper
-`layer` UUID from `project.boards[].layers`, `width_nm` (10,000 to 10,000,000) and
+`layer` UUID from `project.boards[].layers`, optional `width_nm` (10,000 to 10,000,000) and
 2–256 ordered `points`; each neighboring pair becomes one straight segment, all in
 one undo step. Optional `layer_changes`, a list of `{at, layer}` in increasing
 vertex order after the first, places a through via at `points[at]` and continues on
-that copper layer; a change at the last vertex ends the route on a via. Layer changes
-require `via_diameter_nm` and `via_drill_nm`, with the drill smaller than the pad.
+that copper layer; a change at the last vertex ends the route on a via. Omitted
+width, via diameter and drill use the board routing preferences, including layer
+changes; explicit drills must be smaller than their pads.
 `pcb.check_design` checks the addressed board without editing it; `execute` returns
 `design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
 representative `at` point and `items`), `counts` per kind and the `total`, listing at
-most 1000 findings. Optional `clearance_nm` (default 200000), `min_track_width_nm`
-(150000), `edge_clearance_nm` (300000) and `min_annular_ring_nm` (100000) override the
-defaults. Kinds are `clearance`, `track_width`, `annular_ring`, `unconnected`,
+most 1000 findings. Saved board defaults apply unless a request supplies a
+supported hard-limit override; authored minimums can only tighten upward and
+maximums downward. The report includes per-property `sources`. Kinds are `short`,
+`clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,
 `no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
 
 `pcb.export_fabrication` generates the addressed board's fabrication files without
@@ -204,7 +206,7 @@ commands refuse the whole edit when they would modify existing locked copper,
 including indirect footprint/segment transforms. No-op operations remain no-ops.
 Copy/paste preserve locks on new identities; Cut of protected copper is refused.
 
-`pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
+`pcb.add_via` places one standalone through via from `at`, with optional `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
 that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and
 `dy_nm`, keeping sizes and layers. `pcb.reshape_tracks` sets new `start` and `end` points for each listed `track` at once,
@@ -311,3 +313,14 @@ Schematic inspection reports `available_units` and `display_reference`; the
 base `reference` stays shared by the part. The library authoring transaction
 accepts `select_unit` and `add_unit` actions. See the
 [multi-unit contract](symbol-schema.md#multiple-schematic-units).
+
+## Saved board defaults
+
+`pcb.set_rules` requires an explicit `board`, `expected_revision` and complete
+`rules` values, or `rules: null` to restore built-in defaults. Board inspection
+reports authored records and effective values with stable rule IDs and per-field
+provenance. DRC resolves saved limits; request overrides can tighten authored
+minimums/maximums but cannot weaken them or persist a change. It also reports via
+diameter and drill bounds. Omitted dimensions on track/via creation use the same
+preferred sizes as the GUI. See [board-rules.md](board-rules.md) for the full
+property, precedence, compatibility and undo contract.

@@ -4,7 +4,7 @@ use egui::{Rect, Ui};
 use pcbcraft_chrome::{properties, shell, units, workspace};
 use pcbcraft_engine::{
     board::{
-        drc::{Kind, Report, Rules},
+        drc::{Kind, Report},
         view::{BoardTarget, BoardView},
     },
     schematic::Point,
@@ -49,6 +49,8 @@ fn label(kind: Kind) -> &'static str {
         Kind::Short => "Short",
         Kind::Clearance => "Clearance",
         Kind::TrackWidth => "Track width",
+        Kind::ViaDiameter => "Via diameter",
+        Kind::ViaDrill => "Via drill",
         Kind::AnnularRing => "Annular ring",
         Kind::Unconnected => "Unconnected",
         Kind::NoOutline => "No outline",
@@ -61,7 +63,7 @@ fn label(kind: Kind) -> &'static str {
 impl Drc {
     /// Check `view` with the default rules and open the card on the result. Nothing is edited.
     pub(super) fn run(&mut self, view: BoardView<'_>, revision: u64) {
-        self.result = Some(Ran { revision, board: view.target, report: view.check_design(Rules::default()) });
+        self.result = Some(Ran { revision, board: view.target, report: view.check_design(view.effective_rules().values) });
         self.focus = None;
         self.open = true;
         self.collapsed = false;

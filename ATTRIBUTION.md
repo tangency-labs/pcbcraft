@@ -1092,3 +1092,12 @@ Chrome retains display formatting and its existing qualified unit button, with
 re-exports preserving current callers. The extraction reuses the existing serde
 dependency and parser regressions; no external implementation, library data,
 artwork or dependency version was introduced.
+
+## Saved board rules
+
+The versioned board-default records, shared effective-rule resolver, GUI/MCP
+transactions, DRC/query integration and original regression fixtures are original
+MIT OR Apache-2.0 PCBcraft work following #242 and this repository's rule/storage
+contracts. The form reuses the pinned Craft toolkit through the existing chrome
+settings, field and control adapters. No external EDA implementation, library data,
+artwork or new dependency was introduced.

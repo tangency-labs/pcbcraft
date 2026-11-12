@@ -200,6 +200,11 @@ fn picker(ui: &mut egui::Ui, title: &str, current: Size, presets: &Presets, unit
 impl PcbApp {
     /// Dropdowns select upcoming geometry only. Their presets remain separate from board setup.
     pub(super) fn board_size_controls(&mut self, ui: &mut egui::Ui, enabled: bool, compact: bool) {
+        if let Some(project) = self.views.active.snapshot(&self.session)
+            && let Some(board) = self.views.active.board.target.and_then(|target| project.board_view(target))
+        {
+            self.views.active.board.tracks.sync_rules(board);
+        }
         let unit = self.preferences.units;
         let width = Size::Width(self.views.active.board.tracks.width_nm);
         let via = Size::Via([self.views.active.board.tracks.via_diameter_nm, self.views.active.board.tracks.via_drill_nm]);

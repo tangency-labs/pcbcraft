@@ -89,42 +89,26 @@ way D segment drags show them now.
 
 ### 2. Board design rules and net classes
 
-Part of #77 and #58.
+The board-default half is implemented by #242; see [board-rules.md](board-rules.md)
+for the fields, precedence, provenance and format. **Analyze → Rules** edits hard
+clearance, track/via/drill, annular-ring and board-edge limits separately from
+preferred routing dimensions. DRC and captured clearance queries use the shared
+resolver. Omitted command dimensions and GUI routing sizes use those preferences;
+explicit local tool sizes remain a per-view choice. Changing rules invalidates
+previous checks and unfinished route authority without resizing existing copper.
 
-**Problem.** DRC defaults are not stored, and the route and via tools keep their
-own sizes per view. The [rules section](pcb-representation.md#rules-and-net-classes)
-already describes the full resolver. This slice is the smallest part of it that
-the layout tools can use.
+`pcb.set_rules` requires the board ID and revision and creates one undo step.
+Authored defaults have a stable rule UUID and use board format 19; removing the
+record restores built-in resolution and the format required by the remaining
+board data. A board without rules retains its current bytes. Request-local DRC
+limits may tighten authored constraints without modifying the saved record.
 
-**Behavior.** **Inspect › Rules** (now planned) opens board rules:
-- Minimum clearance, track width, annular ring, via drill and edge clearance.
-- Preferred track width and via size, which the route and via tools start from.
-
-DRC reads these rules, and a `pcb.check_design` override still applies only to
-that one request. Net classes come in the second half of the slice, after the
-net registry. A class sets a preferred width and clearance for its nets. Routing
-a classified net starts at that width, and DRC resolves clearance between two
-classes by taking the larger.
-
-**Model and commands.**
-- **First half:** board-scoped rule records in `board.json` under the next
-  board format. A board without rules keeps its current encoding. `pcb.set_rules`
-  is revision-checked, and inspection reports the effective values with the
-  contributing rule IDs.
-- **Second half:** classes bind to persistent net IDs from the registry (see
-  [net identity](net-identity.md)). They never bind to net names.
-
-**Decision needed.** Should the first half also add "minimum" and "preferred"
-fields for each class? That would let the class slice need no further format
-change. The proposal is to wait: one board-default record per property is
-enough for the layout tools today.
-
-**Acceptance.**
-- Rules round-trip through save and reopen.
-- A rule change marks the DRC result out of date.
-- New routes start at the preferred width.
-- A track narrower than the minimum is a DRC finding.
-- A class conflict reports the resolution it chose.
+The class portion remains planned under #77 after the net registry. Classes bind
+to persistent net IDs rather than names, and extend the same effective-rule
+resolver. Preferred values remain distinct from minimum/maximum constraints;
+clearance between classes takes the larger supported requirement. Class-specific
+inheritance and conflicts follow the net-identity contract and are not implemented
+by the board-default slice.
 
 ### 3. Clearance while routing
 

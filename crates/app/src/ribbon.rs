@@ -160,7 +160,7 @@ const ANALYZE: &[Group] = &[
         title: "Electrical",
         tools: &[
             tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
-            tool(Action::Rules, "Rules", Icon::Rules, "Electrical rules are not available yet.", ""),
+            tool(Action::Rules, "Rules", Icon::Rules, "Edit board defaults and routing preferences.", ""),
             tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
         ],
         extras: &[],
@@ -201,7 +201,8 @@ impl Action {
     fn implemented(self) -> bool {
         matches!(
             self,
-            Self::Ground
+            Self::Rules
+                | Self::Ground
                 | Self::Label
                 | Self::Symbol
                 | Self::Sources
@@ -242,6 +243,7 @@ impl Action {
             }
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
+            Self::Rules => app.session.available(pcbcraft_engine::SET_RULES) && app.views.active.input(&app.session).is_some(),
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
             Self::ResumeLibraryEditors => app.library_editors.has_documents(),
@@ -348,6 +350,7 @@ impl PcbApp {
             Action::Paste | Action::PasteOptions => self.request_clipboard(ctx, action == Action::PasteOptions),
             Action::Duplicate => self.duplicate_schematic_clipboard(),
             Action::Sources => self.dialog = Dialog::LibrarySources,
+            Action::Rules => self.begin_board_rules(),
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),
             Action::ResumeLibraryEditors => self.resume_library_workspace(ctx),

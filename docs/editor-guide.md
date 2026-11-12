@@ -800,3 +800,13 @@ Value names the global rail; the definition declares which terminal names it.
 The catalog's Value input is available for every symbol, in both presentations.
 The former power-marker annotation styles are unsupported; there is no automatic
 migration of those old records.
+
+## Board rules
+
+**Analyze → Rules** edits the board's dimensional limits and preferred routing
+sizes through the same revision-checked command as MCP. Preferences must fit the
+hard bounds. Apply creates one undo step; Cancel leaves the board untouched, and
+**Use built-in defaults** removes the saved record. DRC reports the effective rules
+and any violations in existing copper. Rule edits make previous checks and route
+drafts out of date. See [board-rules.md](board-rules.md) for units, local size
+choices, provenance and file compatibility.

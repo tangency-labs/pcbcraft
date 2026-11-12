@@ -4,8 +4,7 @@
 //! nets, conflicting intended nets within a copper island, minimum track width, via annular ring,
 //! unrouted connections, the board outline (missing, copper outside it, copper too close to its
 //! edge) and overlapping footprint courtyards. Rule
-//! values are explicit parameters with documented defaults until net classes and board rules
-//! exist (#77). Results are deterministic, so the same board and rules give the same report.
+//! values resolve saved board defaults and bounded request-local overrides through the shared resolver. Results are deterministic, so the same board and rules give the same report.
 //! This is not a manufacturing sign-off: arcs, zones, hole-to-hole spacing, silkscreen and
 //! solder mask checks are not implemented.
 use super::{
@@ -37,25 +36,8 @@ pub const DEFAULT_MIN_ANNULAR_RING_NM: i64 = 100_000;
 /// Violations listed per report; the counts still cover every finding.
 const MAX_LISTED: usize = 1000;
 
-/// The rule values one check used.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct Rules {
-    pub clearance_nm: i64,
-    pub min_track_width_nm: i64,
-    pub edge_clearance_nm: i64,
-    pub min_annular_ring_nm: i64,
-}
-
-impl Default for Rules {
-    fn default() -> Self {
-        Self {
-            clearance_nm: DEFAULT_CLEARANCE_NM,
-            min_track_width_nm: DEFAULT_MIN_TRACK_WIDTH_NM,
-            edge_clearance_nm: DEFAULT_EDGE_CLEARANCE_NM,
-            min_annular_ring_nm: DEFAULT_MIN_ANNULAR_RING_NM,
-        }
-    }
-}
+/// The shared effective board defaults; hard limits and preferences have distinct fields.
+pub use super::rules::Values as Rules;
 
 /// What a violation is about. The serialized names are stable for MCP clients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -66,6 +48,8 @@ pub enum Kind {
     Short,
     Clearance,
     TrackWidth,
+    ViaDiameter,
+    ViaDrill,
     AnnularRing,
     Unconnected,
     NoOutline,
@@ -105,6 +89,8 @@ pub struct Violation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Report {
     pub rules: Rules,
+    /// Per-property built-in, saved board-rule or request-local provenance.
+    pub sources: BTreeMap<String, super::rules::Source>,
     pub violations: Vec<Violation>,
     pub counts: BTreeMap<Kind, usize>,
     pub total: usize,
@@ -152,6 +138,20 @@ impl BoardView<'_> {
             }
         }
         for via in self.vias() {
+            for (kind, value, min, max, name) in [
+                (Kind::ViaDiameter, via.diameter_nm, rules.min_via_diameter_nm, rules.max_via_diameter_nm, "Via diameter"),
+                (Kind::ViaDrill, via.drill_nm, rules.min_via_drill_nm, rules.max_via_drill_nm, "Via drill"),
+            ] {
+                if !(min..=max).contains(&value) {
+                    found.push(Violation {
+                        kind,
+                        message: format!("{name} is {}, outside {} to {}", mm(value as f64), mm(min as f64), mm(max as f64)),
+                        at: via.at,
+                        items: vec![via.id.to_string()],
+                        nets: Vec::new(),
+                    });
+                }
+            }
             let ring = (via.diameter_nm - via.drill_nm) / 2;
             if ring < rules.min_annular_ring_nm {
                 found.push(Violation {
@@ -215,7 +215,15 @@ impl BoardView<'_> {
         }
         let total = found.len();
         found.truncate(MAX_LISTED);
-        Report { rules, violations: found, counts, total }
+        let mut effective = self.effective_rules();
+        let supplied = json!(rules);
+        let base = json!(effective.values);
+        for name in super::rules::LIMIT_FIELDS.iter().chain(super::rules::PREFERENCE_FIELDS) {
+            if supplied[*name] != base[*name] {
+                effective.sources.insert((*name).into(), super::rules::Source::Request);
+            }
+        }
+        Report { rules, sources: effective.sources, violations: found, counts, total }
     }
 
     /// Report one short per physical island containing pads from distinct intended nets.
@@ -376,30 +384,13 @@ impl BoardView<'_> {
     }
 }
 
-/// Read optional rule overrides; each must be a positive length within the coordinate range.
-pub(crate) fn rules(params: &Value) -> Result<Rules, CommandError> {
-    let mut rules = Rules::default();
-    for (name, value) in [
-        ("clearance_nm", &mut rules.clearance_nm),
-        ("min_track_width_nm", &mut rules.min_track_width_nm),
-        ("edge_clearance_nm", &mut rules.edge_clearance_nm),
-        ("min_annular_ring_nm", &mut rules.min_annular_ring_nm),
-    ] {
-        if let Some(given) = params.get(name) {
-            *value = given
-                .as_i64()
-                .filter(|n| (0..=crate::schematic::MAX_CENTER_NM).contains(n))
-                .ok_or_else(|| CommandError::InvalidParams(format!("{name} must be a length from 0 to the board coordinate range")))?;
-        }
-    }
-    Ok(rules)
-}
-
 impl Session {
     /// Validate the board address and rules, then report findings without editing anything.
     pub fn check_design(&self, params: &Value) -> Result<Value, CommandError> {
-        let (view, rules) = self.design_check_inputs(params)?;
-        Ok(json!(view.check_design(rules)))
+        let (view, effective) = self.design_check_inputs(params)?;
+        let mut report = view.check_design(effective.values);
+        report.sources = effective.sources;
+        Ok(json!(report))
     }
 
     /// Refuse a design check's bad board address or rules without running the check, so the
@@ -409,11 +400,18 @@ impl Session {
     }
 
     /// The board view and rule overrides a design check reads, with the check's errors.
-    fn design_check_inputs(&self, params: &Value) -> Result<(BoardView<'_>, Rules), CommandError> {
+    fn design_check_inputs(&self, params: &Value) -> Result<(BoardView<'_>, super::rules::Effective), CommandError> {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        Ok((view, rules(params)?))
+        let mut overrides = params.clone();
+        if overrides.is_null() {
+            overrides = json!({});
+        }
+        if let Some(fields) = overrides.as_object_mut() {
+            fields.remove("board");
+        }
+        Ok((view, view.resolve_rules(&overrides)?))
     }
 }
 

@@ -229,7 +229,7 @@ fn pcb_tasks_are_grouped_on_separate_tabs() {
     h.get_by_label("Measure distance");
     h.get_by_label("Reveal highlighted counterpart");
     click(&mut h, "Checks menu");
-    assert!(h.get_by_label("Rules").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Rules").accesskit_node().is_disabled());
     h.key_press(Key::Escape);
     h.run();
     click(&mut h, "Manufacture");
