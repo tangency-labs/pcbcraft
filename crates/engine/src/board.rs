@@ -346,20 +346,24 @@ impl Board {
     }
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    pub(crate) fn remove_component(&mut self, component: u64, display: Option<(&str, &str)>) {
+    /// Format-3 history also retains the last visible typed quantity; older history
+    /// stays text-only until a real board update accepts the newer vocabulary.
+    pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
-        let changed_display = display.filter(|(reference, value)| {
-            self.baseline
-                .as_ref()
-                .and_then(|baseline| baseline.components.get(&component))
-                .is_some_and(|historical| historical.reference != *reference || historical.value != *value)
+        let changed_display = display.and_then(|part| {
+            let baseline = self.baseline.as_ref()?;
+            let historical = baseline.components.get(&component)?;
+            let quantity = if baseline.format == update::QUANTITY_FORMAT { update::PartInstanceState::quantity_for(part) } else { None };
+            (historical.reference != part.reference() || historical.value != part.value() || historical.primary_quantity != quantity)
+                .then_some((part, quantity))
         });
-        if let Some((reference, value)) = changed_display
+        if let Some((part, quantity)) = changed_display
             && let Some(baseline) = self.baseline.as_mut()
             && let Some(historical) = Arc::make_mut(baseline).components.get_mut(&component)
         {
-            historical.reference = reference.to_owned();
-            historical.value = value.to_owned();
+            historical.reference = part.reference().into();
+            historical.value = part.value().into();
+            historical.primary_quantity = quantity;
         }
         if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
             let used = self.used_package_keys();

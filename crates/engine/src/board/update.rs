@@ -1,10 +1,11 @@
 //! Immutable schematic-to-board inputs and deterministic reviewed update planning.
 //!
-//! Baselines retain historical component and terminal data independently of live
+//! Baselines retain historical part and terminal data independently of live
 //! schematic placements. Session commands own revision authority and publication;
 //! these helpers validate and construct candidates without mutating a session.
 
 use super::{Board, Footprint};
+use crate::library::parts::Value;
 use crate::{MAX_OBJECT_ID, MAX_SYMBOLS, Project, schematic::PinNumber};
 use serde::{
     Deserialize, Deserializer, Serialize,
@@ -23,6 +24,8 @@ pub use commands::{APPLY_UPDATE, BoardUpdatePreview, CANCEL_UPDATE, PREVIEW_UPDA
 /// Persisted accepted-input vocabulary; future shapes require an explicit migration.
 pub const FORMAT: &str = "pcbcraft-board-baseline/1";
 const MULTIPAD_FORMAT: &str = "pcbcraft-board-baseline/2";
+/// Historical typed quantities require this vocabulary; older baselines remain text-only.
+pub(crate) const QUANTITY_FORMAT: &str = "pcbcraft-board-baseline/3";
 /// Bound decoded history independently of the live component count.
 pub const MAX_BASELINE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -189,17 +192,38 @@ impl Package {
 }
 
 /// Enough historical logical information to inspect a retained footprint without
-/// a live component, a schematic placement or an installed symbol source.
+/// a live part instance, a schematic placement or an installed symbol source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ComponentState {
+pub struct PartInstanceState {
     pub library: String,
     pub definition: String,
     pub revision: u32,
     pub reference: String,
     pub value: String,
+    /// Exact primary quantity captured from a typed part; absent for legacy or untyped history.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "primary_quantity_record")]
+    pub primary_quantity: Option<Value>,
     pub terminals: Vec<String>,
     pub package: Option<Package>,
+}
+
+impl PartInstanceState {
+    /// Format captured typed data without inferring units from historical free text.
+    pub fn display_value(&self) -> std::borrow::Cow<'_, str> {
+        self.primary_quantity.as_ref().map_or_else(|| self.value.as_str().into(), |value| value.display().into())
+    }
+
+    /// Copy only the exact primary quantity resolved by the part's pinned category.
+    pub(crate) fn quantity_for(part: &crate::PartInstance) -> Option<Value> {
+        let (value, unit) = part.part.as_ref()?.primary_quantity()?;
+        Some(Value::Quantity { value: value.into(), unit: unit.into() })
+    }
+}
+
+/// A present quantity must be a record, never null; absence retains legacy encoding.
+fn primary_quantity_record<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 /// Historical terminal membership, not a second editable connectivity graph or
@@ -221,7 +245,7 @@ pub struct Baseline {
     pub board: Uuid,
     pub source: SourceCapture,
     #[serde(deserialize_with = "component_records")]
-    pub components: BTreeMap<u64, ComponentState>,
+    pub components: BTreeMap<u64, PartInstanceState>,
     pub nets: Vec<NetState>,
 }
 
@@ -265,12 +289,13 @@ impl Baseline {
             }
             components.insert(
                 id,
-                ComponentState {
+                PartInstanceState {
                     library: component.definition.library.clone(),
                     definition: component.definition.id.clone(),
                     revision: component.definition.revision(),
                     reference: component.reference.clone(),
                     value: component.value.clone(),
+                    primary_quantity: PartInstanceState::quantity_for(component),
                     terminals,
                     package: desired.get(&id).cloned(),
                 },
@@ -303,8 +328,13 @@ impl Baseline {
             }
         }
         nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
-        let format =
-            if components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)) { MULTIPAD_FORMAT } else { FORMAT };
+        let format = if components.values().any(|part| part.primary_quantity.is_some()) {
+            QUANTITY_FORMAT
+        } else if components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)) {
+            MULTIPAD_FORMAT
+        } else {
+            FORMAT
+        };
         let baseline = Self { format: format.into(), project: target.project, board: target.board, source, components, nets };
         baseline.validate()?;
         baseline.validate_assets(project)?;
@@ -390,7 +420,7 @@ impl Baseline {
     /// historical component IDs against the current schematic.
     pub fn validate(&self) -> Result<(), String> {
         self.source.validate()?;
-        if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT)
+        if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT | QUANTITY_FORMAT)
             || (self.format == FORMAT && self.components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)))
             || self.project.is_nil()
             || self.board.is_nil()
@@ -412,6 +442,18 @@ impl Baseline {
             }
             crate::schematic::check_reference(&component.reference)?;
             crate::schematic::check_value(&component.value)?;
+            if let Some(quantity) = &component.primary_quantity {
+                if self.format != QUANTITY_FORMAT {
+                    return Err("historical primary quantities require board baseline format 3".into());
+                }
+                quantity.validate()?;
+                let Value::Quantity { value, unit } = quantity else {
+                    return Err("historical primary value must be a typed quantity".into());
+                };
+                if component.value != format!("{value} {unit}") {
+                    return Err("historical primary quantity disagrees with stored value text".into());
+                }
+            }
             if let Some(package) = &component.package {
                 package.validate(&component.terminals)?;
             }
@@ -745,10 +787,10 @@ fn mapping_records<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMa
 
 /// Reject duplicate and noncanonical numeric map keys rather than letting JSON
 /// silently overwrite one historical component with another spelling of its ID.
-fn component_records<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<u64, ComponentState>, D::Error> {
+fn component_records<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<u64, PartInstanceState>, D::Error> {
     struct Records;
     impl<'de> Visitor<'de> for Records {
-        type Value = BTreeMap<u64, ComponentState>;
+        type Value = BTreeMap<u64, PartInstanceState>;
 
         /// Describe the bounded canonical object expected from the native codec.
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -758,7 +800,7 @@ fn component_records<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTree
         /// Enforce uniqueness while parsing, before a duplicate entry can overwrite history.
         fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
             let mut records = BTreeMap::new();
-            while let Some((key, value)) = map.next_entry::<String, ComponentState>()? {
+            while let Some((key, value)) = map.next_entry::<String, PartInstanceState>()? {
                 let id = key.parse::<u64>().map_err(serde::de::Error::custom)?;
                 if key != id.to_string() || records.len() >= MAX_SYMBOLS || records.insert(id, value).is_some() {
                     return Err(serde::de::Error::custom("duplicate, excessive or noncanonical baseline component ID"));

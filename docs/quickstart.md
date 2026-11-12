@@ -644,6 +644,11 @@ definition to a project is follow-up work; see the
 
 ## Inspect accepted board connections
 
+With typed quantities captured by a board update, deleting a part from the
+schematic keeps its SI-formatted value in PCB Properties and Browser while
+its footprint awaits reviewed removal. Older accepted snapshots retain their
+stored value text until a real board update captures typed history.
+
 When a board has an accepted update baseline, the PCB canvas shows thin airwires
 between its mapped physical pads. **Layers → Ratsnest** hides or shows them for
 that view, and the status bar reports airwires and missing endpoints. Schematic

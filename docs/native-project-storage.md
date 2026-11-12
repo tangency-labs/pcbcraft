@@ -151,6 +151,30 @@ version; projects without the new data preserve their earlier no-op encoding.
 These formats require the newer app and do not migrate board folders or lists.
 See [part-schema.md](part-schema.md) for record and transaction details.
 
+Accepted baseline format `pcbcraft-board-baseline/3` extends formats 1 and 2
+with an optional `primary_quantity` on each historical part instance. It uses
+the native typed value record, for example
+`{"type":"quantity","value":"0.0000001","unit":"F"}`. The decimal and base
+unit must be canonical, and their combined text must equal the record's existing
+`value`. Other value types, explicit nulls and this field under formats 1/2 are
+refused. The snapshot needs no live category or library source to validate it.
+
+Initialization or a real accepted board update captures exact primary quantities
+from typed parts and chooses format 3 when any are present; multi-pad/NC mappings
+remain supported. Opening, inspecting, saving and accepting a no-op update do not
+enrich or upgrade an older baseline. Formats 1/2 omit the new field and retain
+their previous bytes on no-op saves. Older apps reject format 3 instead of
+discarding its metadata; no enclosing board/project vocabulary changes.
+
+When a part is deleted, format-3 history retains its last visible reference,
+canonical value and matching typed quantity as display metadata in the same
+undoable deletion. Accepted package and connectivity state remain unchanged
+until reviewed removal. Board Properties and the project browser format that
+quantity through the live-value formatter. Untyped parts and older baselines
+show their stored text, including when the part was already deleted; no type is
+inferred or reconstructed from free text. Folder and archive saves carry the
+same historical records.
+
 Board format `pcbcraft-board/19` adds validated `pcbcraft-rules/1` board defaults
 with a stable UUID, hard limits and preferred routing dimensions. It supports the
 earlier physical fields, including format 18's track/via locks, and requires a

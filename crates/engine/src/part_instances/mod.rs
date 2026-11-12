@@ -85,7 +85,7 @@ impl Selection {
         values
     }
     /// Exact primary quantity as `(canonical decimal, base unit)`; a fixed parameter wins over a requirement.
-    fn primary_quantity(&self) -> Option<(&str, &str)> {
+    pub(crate) fn primary_quantity(&self) -> Option<(&str, &str)> {
         let field = self.resolved.definition.category.as_ref()?.primary_value.as_ref()?;
         let value = match self.resolved.definition.fixed_parameters.get(field) {
             Some(fixed) => fixed,

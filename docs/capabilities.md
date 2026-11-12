@@ -100,3 +100,8 @@ strokes through saves and clipboard operations. Silkscreen, mask and paste
 artwork is included in the matching fabrication layer; documentation-layer
 graphics remain native board content. Persistent layer/width/via controls stay
 visible across PCB tabs, with routing in Layout and alignment in its Modify menu.
+
+Typed primary quantities captured in accepted board history remain SI-formatted
+in PCB Properties and Browser after schematic deletion, until reviewed footprint
+removal. Older and untyped history retains its stored text; see the
+[native storage contract](native-project-storage.md).

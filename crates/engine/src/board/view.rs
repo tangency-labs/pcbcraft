@@ -218,8 +218,7 @@ impl<'a> BoardView<'a> {
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
-            let value =
-                component.map(|component| component.display_value()).or_else(|| historical.map(|component| component.value.as_str().into()))?;
+            let value = component.map(|component| component.display_value()).or_else(|| historical.map(|part| part.display_value()))?;
             Some(FootprintView {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),
