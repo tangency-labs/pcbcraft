@@ -36,7 +36,7 @@ pub struct SchematicSheet {
     pub(crate) net_labels: Arc<Vec<crate::net_labels::Label>>,
     pub(crate) subsheets: Arc<Vec<crate::hierarchy::SheetSymbol>>,
     pub(crate) connectivity: Arc<OnceLock<Connectivity>>,
-    /// Transient provenance for legs drawn by retained named-contact poses, never persisted.
+    /// Provenance for legs drawn by retained named-contact poses; live records persist in sheet/7.
     pub(crate) generated_legs: Arc<Vec<crate::wire::GeneratedLeg>>,
 }
 
