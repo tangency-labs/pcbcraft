@@ -1,5 +1,6 @@
 //! Canonical typed field values validated against category field meanings.
-use super::{Field, FieldType, decimal, display_quantity};
+use super::{Field, FieldType, display_quantity};
+use pcbcraft_units::quantity::{CanonicalQuantity, validate_quantity};
 use serde::{Deserialize, Serialize};
 /// Known fixed requirements of a generic part. Unknown/missing specifications are not fixed values.
 /// Decimal strings are canonical base-unit values, preserving precision across JSON consumers.
@@ -17,9 +18,7 @@ impl Value {
     pub(crate) fn validate(&self) -> Result<(), String> {
         match self {
             Self::Quantity { value, unit } => {
-                if !decimal(value) || !["Ohm", "F", "H", "V", "A", "W", "Hz", "s", "m", "K", "1"].contains(&unit.as_str()) {
-                    return Err("Quantity requires a canonical decimal and base-unit identifier.".into());
-                }
+                validate_quantity(value, unit)?;
             }
             Self::Choice { value } => crate::library::check_text("choice value", value, 64)?,
             Self::Integer { value } if value.unsigned_abs() > 9_007_199_254_740_991 => {
@@ -50,5 +49,14 @@ impl Value {
             _ => false,
         };
         if valid { Ok(()) } else { Err("Value type, unit or choice does not match its category field.".into()) }
+    }
+}
+
+/// Adapt a shared canonical quantity to the existing native typed value vocabulary.
+impl From<CanonicalQuantity> for Value {
+    /// Preserve exact strings and the existing quantity tag at the host boundary.
+    fn from(quantity: CanonicalQuantity) -> Self {
+        let (value, unit) = quantity.into_parts();
+        Self::Quantity { value, unit }
     }
 }

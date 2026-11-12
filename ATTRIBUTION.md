@@ -1121,6 +1121,15 @@ from original repository library records and shared commands, using production
 folder/archive codecs. No external source, artwork, dependency or library data
 was introduced.
 
+## Shared quantity and unit model
+
+The shared quantity parser/formatter and standard registry extract original
+MIT OR Apache-2.0 PCBcraft code from PR 291's `4b8d82c` quantity implementation.
+The immutable metadata registry, validated canonical value, native typed-value
+adapter and registry/schema regressions are original PCBcraft work. Existing
+serde and shared units dependencies are reused; no external implementation,
+asset, dependency version or native saved-format change is introduced.
+
 ## Performance fixtures and CPU replay
 
 The opt-in #240 harness, fixed-pattern workload recipes, input traces and evidence

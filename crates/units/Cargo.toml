@@ -1,6 +1,6 @@
 [package]
 name = "pcbcraft-units"
-description = "PCBCraft's UI-independent length parsing and exact edit formatting"
+description = "PCBCraft's shared quantity/unit model, exact decimal formatting and geometry length input"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

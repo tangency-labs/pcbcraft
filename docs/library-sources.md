@@ -215,6 +215,10 @@ values.
 
 ### Unit-aware input and stored values
 
+The [shared quantity/unit model](quantity-units.md) owns standard unit meanings,
+aliases and exact normalization. Category fields reference its quantity identities;
+the part model adapts canonical results to its existing typed value records.
+
 A categorized part declares which field its ordinary Value control edits, such
 as resistance for a resistor. That field's schema defines its physical quantity
 and canonical unit. A symbol may declare an explicit default category and

@@ -139,7 +139,7 @@ impl Selection {
         let crate::library::parts::FieldType::Quantity { quantity, .. } = &field.value_type else {
             return Err("Primary value must be a quantity.".into());
         };
-        let value = quantity.parse(input)?;
+        let value = quantity.parse(input).map(Value::from)?;
         if let Some(fixed) = self.resolved.definition.fixed_parameters.get(&id) {
             if fixed != &value {
                 return Err(format!("{id} is fixed by the reusable part."));
