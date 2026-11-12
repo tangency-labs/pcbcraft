@@ -115,7 +115,8 @@ the same `VCC` net name, which can be changed before placement.
    to the preserved wire ends.
 2. Press **A** to open the **Parts Catalog** and focus search. The bundled
    **Default** and **Power** libraries load through the same native source path
-   as added libraries. Select a library,
+   as added libraries. Sources marks them **Built-in** and keeps their registrations
+   read-only; external sources remain removable. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose
    **Place**, then click the canvas to place it. **R** rotates the placement
    preview and **Esc** cancels it. **Repeat placement** keeps placing copies with

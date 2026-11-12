@@ -351,7 +351,7 @@ impl PcbApp {
                                 footprints: data.and_then(|s| s["footprints"].as_u64()).unwrap_or_default(),
                                 parts: data.and_then(|s| s["parts"].as_u64()).unwrap_or_default(),
                                 categories: data.and_then(|s| s["categories"].as_u64()).unwrap_or_default(),
-                                builtin: false,
+                                builtin: data.is_some_and(|source| source["builtin"] == true),
                                 available: data.is_some_and(|s| s["available"] != false),
                                 loading: self.library_sources.job.as_ref().is_some_and(|job| job.source == *id),
                             };

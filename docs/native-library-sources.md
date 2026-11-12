@@ -12,7 +12,7 @@ library containing `library.json` and optional flat `symbols/`, `footprints/`,
 `categories/`, `parts/` and `manufacturer-parts/` directories. Registrations are saved in personal
 application settings, including
 their machine-specific folder paths. They are read in the background on startup.
-Each source card's **⋯** menu contains **Refresh**, **Relocate…** and **Remove**
+Each external source card's **⋯** menu contains **Refresh**, **Relocate…** and **Remove**
 (uploaded sources offer only Remove). **Refresh** reloads a source; **Relocate…**
 points its registration at a moved folder. Library and item identities come from their documents, so moving a folder
 does not change them. A missing or unreadable source remains listed with its
@@ -41,7 +41,9 @@ on wide windows and as **Sources** / **Catalog** tabs on compact windows, with
 independent scrolling and a fixed Close action. A bad item reports its filename
 and validation error without hiding other valid items; an invalid manifest prevents the source
 from loading. Default (`starter`) and Power are bundled native sources loaded
-through the same parser and catalog. Their identities can also be loaded from
+through the same parser and catalog. Their registrations are marked **Built-in**
+and have no removal, refresh or relocation actions. Shared commands also refuse
+removing or replacing these registrations. Their identities can also be loaded from
 equivalent folders/bundles; conflicting content at one revision is quarantined.
 
 The source loader accepts at most 18 registrations including the bundled libraries, 256 files per
@@ -75,9 +77,9 @@ engine to read a path.
 | Command | Parameters and result |
 | --- | --- |
 | `library.load_source` | `source` is a personal portable ID; `documents` maps supported relative paths to file text. Returns source inspection. |
-| `library.list_sources` | No parameters. Returns source identities, licenses, counts and file/conflict diagnostics. |
+| `library.list_sources` | No parameters. Returns source identities, trusted `builtin` status, licenses, counts and file/conflict diagnostics. |
 | `library.search` | Optional `query` and `kind` (`symbol`, `footprint`, `category` or `part`). Returns current unambiguous items, their exact keys, formats, provenance and content digests. |
-| `library.remove_source` | `source`. Removes that session source without changing pinned definitions. Desktop personal folder registrations are managed in the Sources dialog. |
+| `library.remove_source` | `source`. Removes an external session source without changing pinned definitions; bundled registrations are read-only. Desktop personal folder registrations are managed in the Sources dialog. |
 
 Use `execute` with normal inspection enabled to receive these results;
 `inspect: false` intentionally returns only the unchanged project revision.
