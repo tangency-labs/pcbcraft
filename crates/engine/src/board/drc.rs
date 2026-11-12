@@ -58,6 +58,8 @@ impl Default for Rules {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    /// One physical copper island joins pads from distinct intended nets, independently of
+    /// the clearance rule, including when the required clearance is zero.
     Short,
     Clearance,
     TrackWidth,
@@ -74,8 +76,11 @@ pub enum Kind {
 /// Names are display text only; component-terminal keys identify the involved logical objects.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ShortNet {
+    /// Index in the checked snapshot's accepted baseline or logical graph, never a saved net ID.
     pub net: usize,
+    /// Display label for this membership; equal labels do not imply equal nets.
     pub name: String,
+    /// Involved logical terminals, sorted and deduplicated by component identity and pin text.
     pub terminals: Vec<TerminalKey>,
 }
 
