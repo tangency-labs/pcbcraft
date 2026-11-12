@@ -21,6 +21,34 @@ The application/session, electronics engine, document commands, saved project
 formats and window/view ownership stay in PCBcraft. The shared universal panel
 runtime in SolidCraft's application/engine is not part of this migration.
 
+### Navigation bar available for reuse
+
+The already pinned toolkit includes the bottom navigation bar shown in
+SolidCraft. `nav_bar::show` renders host-supplied slots and menus and returns
+`NavAction` values for the host to handle. `nav_bar_layout::measure` provides
+the canvas-relative bounds, dropping menu values and labels before moving
+overflow into More. `navigation_bar::Catalogue` describes PCBcraft's own command
+slots, while `NavigationBar` holds presentation settings. These APIs support
+compact/regular sizing, top/bottom placement, horizontal alignment, tooltips,
+accessibility and idle appearance without importing SolidCraft's application.
+
+At this pinned revision, `SlotView.enabled = false` fades a slot in the bar,
+while More does not apply that flag and shows the overflow row as enabled.
+Either surface can still emit `NavAction::Slot`, so the host must reject
+actions for disabled or unavailable slots before dispatching commands. A host
+adapter must also account for the overflow's misleading enabled appearance.
+
+The implementation is in the pinned toolkit's
+[`nav_bar.rs`](https://github.com/tangency-labs/solidcraft/blob/f56114219b2d7f6d16de8dd58700479646948f8a/crates/ui-kit/src/nav_bar.rs),
+[`nav_bar_layout.rs`](https://github.com/tangency-labs/solidcraft/blob/f56114219b2d7f6d16de8dd58700479646948f8a/crates/ui-kit/src/nav_bar_layout.rs)
+and [`navigation_bar.rs`](https://github.com/tangency-labs/solidcraft/blob/f56114219b2d7f6d16de8dd58700479646948f8a/crates/ui-kit/src/navigation_bar.rs).
+PCBcraft can adapt these components through `crates/chrome`; this inspection
+does not implement the bar or settle the proposed Search/Checks/Messages drawer.
+The bar returns actions, while the host owns results, drawer visibility and
+canvas input. Shared panel surfaces and resize sashes are available in
+`panel_host` for a later drawer composition. The existing toolkit licence and
+qualification recorded in `ATTRIBUTION.md` continue to apply.
+
 The current kit's blur support also reaches the shared viewport renderer and
 SolidCore's record/tessellation libraries, including the independent SolidCore
 kernel. Those are ordinary library dependencies; SolidCraft's executable,

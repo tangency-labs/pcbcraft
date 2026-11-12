@@ -34,9 +34,32 @@ The project is MIT OR Apache-2.0, so code can move freely between the Craft apps
 - No file surgery: agents never hand-edit project files to get things done.
 - Same controls as KiCad. New ideas go on top of that base, not in place of it. Don't copy KiCad's icons or artwork.
 - Project files stay friendly to Git: a save with no changes gives zero diff, and moving one part changes only that part's lines.
-- Keep the app's chrome easy to move onto the shared Craft UI crate: colours, sizes, menus and dialogs come from `crates/chrome`, not from styling in the app.
+- Use the shared Craft UI toolkit through `crates/chrome` for interface controls, icons, layout and styling whenever a suitable component exists. Follow the toolkit reuse workflow below before building custom chrome.
 - Copying from SolidCraft and the other MIT/Apache Craft apps is fine and encouraged. Record it in `ATTRIBUTION.md`.
 - Add or update Rust `///` doc comments for new or changed public APIs and for new or changed functions with branching logic, including private helpers. Describe behavior callers rely on, such as input constraints, errors, or state changes. Review the diff for missing or stale doc comments before opening a PR. CodeRabbit’s [Docstring Coverage check](https://docs.coderabbit.ai/pr-reviews/pre-merge-checks) targets 80% of eligible functions touched by the diff.
+
+## Shared UI toolkit reuse
+
+Before implementing or restyling an interface, inspect the existing
+`crates/chrome` adapters and the pinned `solidcraft-ui-kit`, `solidcraft-look`,
+`solidcraft-theme` and `solidcraft-ui-registry` APIs. Read
+[the shared UI migration notes](docs/shared-ui-migration.md) and search the
+pinned toolkit's documentation and components for the required behavior. A
+similar control in another Craft app is a reason to check for a shared component.
+
+Prefer an existing adapter or a thin adapter around the toolkit component.
+Reuse its controls, icon masters, surfaces, typography, tokens and interaction
+behavior, including focus, disabled states, accessibility and narrow layouts.
+Keep PCBcraft commands, electronics data and view ownership in the host. Standard
+buttons, menus, toolbars, tabs, tables and panel chrome should use those shared
+components when feasible instead of being drawn from scratch.
+
+When the toolkit lacks the required behavior, compose its existing primitives
+before introducing a custom control. Explain the specific gap in the change
+description, and keep reusable presentation code in `crates/chrome`. Original
+schematic/PCB geometry and domain-specific graphics remain appropriate custom
+drawing. This reuse preference does not authorize dependency upgrades or change
+the source, licence and attribution requirements.
 
 ## Extension and cross-application boundaries
 
