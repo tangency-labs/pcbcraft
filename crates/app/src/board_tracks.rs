@@ -175,7 +175,8 @@ impl State {
         if self.rules_source.as_ref() == Some(&key) {
             return;
         }
-        if key.1.is_some() || self.rules_source.as_ref().is_some_and(|(_, rules)| rules.is_some()) {
+        let target_changed = self.rules_source.as_ref().is_some_and(|(target, _)| *target != key.0);
+        if target_changed || key.1.is_some() || self.rules_source.as_ref().is_some_and(|(_, rules)| rules.is_some()) {
             let values = board.effective_rules().values;
             self.width_nm = values.preferred_track_width_nm;
             self.via_diameter_nm = values.preferred_via_diameter_nm;
@@ -995,6 +996,30 @@ pub(super) fn paint_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Board transitions reset local sizes without authored rules; initial synchronization and
+    /// ordinary edits on the same board preserve an explicitly selected upcoming size.
+    #[test]
+    fn board_target_changes_reset_sizes_and_same_board_edits_preserve_choices() {
+        let mut first = pcbcraft_engine::Session::default();
+        let mut second = pcbcraft_engine::Session::default();
+        for session in [&mut first, &mut second] {
+            session.apply("project.new", &json!({"create_board":true})).unwrap();
+        }
+        let mut state = State { width_nm: 750_000, via_diameter_nm: 800_000, via_drill_nm: 400_000, ..Default::default() };
+        let target = first.project().unwrap().board_target().unwrap();
+        state.sync_rules(first.project().unwrap().board_view(target).unwrap());
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (750_000, 800_000, 400_000));
+        first.apply("project.rename", &json!({"name":"Same board"})).unwrap();
+        state.sync_rules(first.project().unwrap().board_view(target).unwrap());
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (750_000, 800_000, 400_000));
+        let target = second.project().unwrap().board_target().unwrap();
+        state.sync_rules(second.project().unwrap().board_view(target).unwrap());
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (DEFAULT_WIDTH_NM, DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM));
+        state.width_nm = 500_000;
+        state.sync_rules(second.project().unwrap().board_view(target).unwrap());
+        assert_eq!(state.width_nm, 500_000);
+    }
 
     /// Legs are straight when aligned or exactly diagonal, and otherwise turn once at 45°.
     #[test]

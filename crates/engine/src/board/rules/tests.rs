@@ -126,6 +126,58 @@ fn drc_and_queries_resolve_saved_limits_and_invalidate_authority() {
     assert!(session.check_design(&json!({"board":board.board,"clearance_nm":0})).is_ok());
 }
 
+/// Legacy diagnostic thresholds remain accepted throughout the old coordinate range even when
+/// they describe impossible routing dimensions; saved/default routing intent stays feasible.
+#[test]
+fn legacy_diagnostic_thresholds_do_not_require_a_feasible_routing_configuration() {
+    let mut session = routed_fixture();
+    let target = session.project().unwrap().board_target().unwrap();
+    let before = session.snapshot().unwrap();
+    let report = session.check_design(&json!({"board":target.board,"min_annular_ring_nm":5_000_000,"min_track_width_nm":20_000_000})).unwrap();
+    assert_eq!(report["rules"]["min_annular_ring_nm"], 5_000_000);
+    assert_eq!(report["rules"]["min_track_width_nm"], 20_000_000);
+    assert_eq!(report["sources"]["min_annular_ring_nm"]["kind"], "request");
+    assert!(session.clearance_query_with_rules(target, &json!({"min_annular_ring_nm":5_000_000})).is_ok());
+    for n in [-1, crate::schematic::MAX_CENTER_NM + 1] {
+        assert!(session.check_design(&json!({"min_annular_ring_nm":n})).is_err());
+    }
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert!(set(&mut session, json!(Values { min_annular_ring_nm: 5_000_000, ..Default::default() })).is_err());
+    set(&mut session, json!(Values::default())).unwrap();
+    assert!(session.check_design(&json!({"min_annular_ring_nm":5_000_000})).is_err());
+    assert!(session.clearance_query_with_rules(target, &json!({"min_annular_ring_nm":5_000_000})).is_err());
+}
+
+/// Direct query callers receive strict validation rather than a silently substituted default
+/// for a misspelled key, preference field or non-object payload.
+#[test]
+fn direct_rule_queries_refuse_unknown_fields_and_invalid_payloads() {
+    let session = routed_fixture();
+    let target = session.project().unwrap().board_target().unwrap();
+    let before = session.inspect();
+    for params in [json!({"clearence_nm":500_000}), json!({"preferred_track_width_nm":400_000}), Value::Null, json!([]), json!("clearance_nm")] {
+        assert!(session.clearance_query_with_rules(target, &params).is_err(), "{params}");
+        assert_eq!(session.inspect(), before);
+    }
+    assert!(session.check_design(&json!({"board":target.board,"clearence_nm":500_000})).is_err());
+    assert!(session.check_design(&Value::Null).is_ok(), "legacy empty check parameters remain supported");
+}
+
+/// Invalid bounds and dimensions identify the field and relationship the author can correct.
+#[test]
+fn rule_validation_errors_identify_the_invalid_field() {
+    for (values, field) in [
+        (Values { min_track_width_nm: track::MAX_WIDTH_NM + 1, ..Default::default() }, "Minimum track width"),
+        (Values { min_via_drill_nm: 500_000, max_via_drill_nm: 300_000, ..Default::default() }, "Maximum via drill"),
+        (Values { min_via_diameter_nm: 800_000, max_via_diameter_nm: 600_000, ..Default::default() }, "Maximum via diameter"),
+        (Values { max_via_diameter_nm: 200_000, ..Default::default() }, "annular ring"),
+        (Values { preferred_track_width_nm: 50_000, ..Default::default() }, "Preferred track width"),
+        (Values { preferred_via_drill_nm: 700_000, ..Default::default() }, "Preferred via drill"),
+    ] {
+        assert!(values.validate().unwrap_err().contains(field), "{field}");
+    }
+}
+
 /// GUI and MCP can omit upcoming dimensions; explicit copper remains authored and DRC checks
 /// it against the saved limits rather than silently resizing it when the limits change.
 #[test]

@@ -404,7 +404,14 @@ impl Session {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        Ok((view, view.resolve_rules(params)?))
+        let mut overrides = params.clone();
+        if overrides.is_null() {
+            overrides = json!({});
+        }
+        if let Some(fields) = overrides.as_object_mut() {
+            fields.remove("board");
+        }
+        Ok((view, view.resolve_rules(&overrides)?))
     }
 }
 

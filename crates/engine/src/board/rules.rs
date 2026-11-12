@@ -69,24 +69,41 @@ impl Default for Values {
     }
 }
 
+/// Identify the exact field and supported nanometre range before checking relationships.
+fn length_in_range(field: &str, value: i64, min: i64, max: i64) -> Result<(), String> {
+    if !(min..=max).contains(&value) {
+        return Err(format!("{field} must be from {min} to {max} nm."));
+    }
+    Ok(())
+}
+
 impl Values {
     /// Reject unsupported, reversed or impossible hard bounds before publishing a rule change.
     fn validate_limits(&self) -> Result<(), String> {
-        for (name, value) in
-            [("clearance", self.clearance_nm), ("edge clearance", self.edge_clearance_nm), ("annular ring", self.min_annular_ring_nm)]
-        {
-            if !(0..=crate::schematic::MAX_CENTER_NM).contains(&value) {
-                return Err(format!("{name} must be within the board coordinate range"));
-            }
+        for (name, value) in [
+            ("Copper clearance", self.clearance_nm),
+            ("Board edge clearance", self.edge_clearance_nm),
+            ("Minimum annular ring", self.min_annular_ring_nm),
+        ] {
+            length_in_range(name, value, 0, crate::schematic::MAX_CENTER_NM)?;
         }
-        if !(0..=track::MAX_WIDTH_NM).contains(&self.min_track_width_nm)
-            || !(track::MIN_VIA_DRILL_NM + 1..=track::MAX_VIA_DIAMETER_NM).contains(&self.min_via_diameter_nm)
-            || !(self.min_via_diameter_nm..=track::MAX_VIA_DIAMETER_NM).contains(&self.max_via_diameter_nm)
-            || !(track::MIN_VIA_DRILL_NM..track::MAX_VIA_DIAMETER_NM).contains(&self.min_via_drill_nm)
-            || !(self.min_via_drill_nm..track::MAX_VIA_DIAMETER_NM).contains(&self.max_via_drill_nm)
-            || self.min_via_drill_nm + (2 * self.min_annular_ring_nm).max(1) > self.max_via_diameter_nm
-        {
-            return Err("Rule bounds are unsupported, reversed or leave no legal via size.".into());
+        for (field, value, min, max) in [
+            ("Minimum track width", self.min_track_width_nm, 0, track::MAX_WIDTH_NM),
+            ("Minimum via diameter", self.min_via_diameter_nm, track::MIN_VIA_DRILL_NM + 1, track::MAX_VIA_DIAMETER_NM),
+            ("Maximum via diameter", self.max_via_diameter_nm, track::MIN_VIA_DRILL_NM + 1, track::MAX_VIA_DIAMETER_NM),
+            ("Minimum via drill", self.min_via_drill_nm, track::MIN_VIA_DRILL_NM, track::MAX_VIA_DIAMETER_NM - 1),
+            ("Maximum via drill", self.max_via_drill_nm, track::MIN_VIA_DRILL_NM, track::MAX_VIA_DIAMETER_NM - 1),
+        ] {
+            length_in_range(field, value, min, max)?;
+        }
+        if self.max_via_diameter_nm < self.min_via_diameter_nm {
+            return Err("Maximum via diameter must be at least the minimum via diameter.".into());
+        }
+        if self.max_via_drill_nm < self.min_via_drill_nm {
+            return Err("Maximum via drill must be at least the minimum via drill.".into());
+        }
+        if self.min_via_drill_nm + (2 * self.min_annular_ring_nm).max(1) > self.max_via_diameter_nm {
+            return Err("Maximum via diameter must accommodate the minimum via drill plus twice the minimum annular ring.".into());
         }
         Ok(())
     }
@@ -100,12 +117,17 @@ impl Values {
     /// Validate upcoming route sizes against supported geometry and the effective hard limits.
     pub fn validate_sizes(&self, width: i64, diameter: i64, drill: i64) -> Result<(), String> {
         self.validate_limits()?;
-        if !(track::MIN_WIDTH_NM.max(self.min_track_width_nm)..=track::MAX_WIDTH_NM).contains(&width)
-            || !(self.min_via_diameter_nm..=self.max_via_diameter_nm).contains(&diameter)
-            || !(self.min_via_drill_nm..=self.max_via_drill_nm).contains(&drill)
-            || diameter - drill < (2 * self.min_annular_ring_nm).max(1)
-        {
-            return Err("Routing dimensions must satisfy the board's width, via, drill and annular-ring limits.".into());
+        length_in_range("Preferred track width", width, track::MIN_WIDTH_NM.max(self.min_track_width_nm), track::MAX_WIDTH_NM)?;
+        length_in_range("Preferred via diameter", diameter, self.min_via_diameter_nm, self.max_via_diameter_nm)?;
+        length_in_range("Preferred via drill", drill, self.min_via_drill_nm, self.max_via_drill_nm)?;
+        if diameter <= drill {
+            return Err("Preferred via drill must be smaller than the preferred via diameter.".into());
+        }
+        if diameter - drill < 2 * self.min_annular_ring_nm {
+            return Err(format!(
+                "Preferred via diameter must leave at least {} nm annular ring around the preferred via drill.",
+                self.min_annular_ring_nm
+            ));
         }
         Ok(())
     }
@@ -166,13 +188,23 @@ impl<'a> BoardView<'a> {
     }
 
     /// Diagnostic overrides replace built-ins on legacy boards; authored hard limits may only
-    /// tighten. They never change saved intent or upcoming preferred routing dimensions.
+    /// tighten. Legacy diagnostic thresholds retain coordinate-range validation without
+    /// requiring a feasible routing configuration. Only an object of recognized limit fields
+    /// is accepted; saved intent and upcoming preferred dimensions never change.
     pub fn resolve_rules(self, params: &Value) -> Result<Effective, CommandError> {
+        let overrides =
+            params.as_object().ok_or_else(|| CommandError::InvalidParams("Rule overrides must be an object of hard-limit fields.".into()))?;
+        if let Some(name) = overrides.keys().find(|name| !LIMIT_FIELDS.contains(&name.as_str())) {
+            return Err(CommandError::InvalidParams(format!("Unknown rule override field: {name}")));
+        }
         let mut effective = self.effective_rules();
         let mut value = json!(effective.values);
         for name in LIMIT_FIELDS {
             if let Some(given) = params.get(*name) {
-                let n = given.as_i64().ok_or_else(|| CommandError::InvalidParams(format!("{name} must be integer nanometres")))?;
+                let n = given
+                    .as_i64()
+                    .filter(|n| (0..=crate::schematic::MAX_CENTER_NM).contains(n))
+                    .ok_or_else(|| CommandError::InvalidParams(format!("{name} must be integer nanometres from 0 to the board coordinate range")))?;
                 let bound = value[*name].as_i64().ok_or_else(|| CommandError::InvalidParams("Invalid rule value".into()))?;
                 if self.authored_rules().is_some() && if name.starts_with("max_") { n > bound } else { n < bound } {
                     return Err(CommandError::InvalidParams(format!("{name} cannot weaken an authored board limit")));
@@ -182,7 +214,9 @@ impl<'a> BoardView<'a> {
             }
         }
         effective.values = serde_json::from_value(value).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
-        effective.values.validate_limits().map_err(CommandError::InvalidParams)?;
+        if self.authored_rules().is_some() {
+            effective.values.validate_limits().map_err(CommandError::InvalidParams)?;
+        }
         Ok(effective)
     }
 }

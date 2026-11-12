@@ -2351,6 +2351,8 @@ impl Session {
     /// `sheet_instances` reports the shared circuit use and every sheet's occurrence/parent slot;
     /// inspecting a legacy snapshot derives compatibility IDs without adopting save metadata.
     /// A nonempty `net_registry` reports current IDs and decisions separately, without promotion.
+    /// Each board's `rules` contains nullable saved `authored` intent and `effective` values
+    /// with per-property provenance; inspecting these fields never authors defaults.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({

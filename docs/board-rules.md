@@ -45,7 +45,10 @@ do not create history steps. Changes are atomic and undoable.
 hard-limit overrides. On a board with authored defaults, minimums may only
 increase and maximums may only decrease; contradictions are refused. Such an
 override does not change the saved values or routing preferences. Without authored
-defaults, request overrides retain the previous replace-built-ins behavior.
+defaults, diagnostic thresholds retain the earlier coordinate-range validation,
+even when no legal routing dimensions could satisfy them. Saved defaults still
+require feasible dimensions. Direct query overrides must be an object containing
+recognized hard-limit fields; unknown keys are refused.
 The older explicit-clearance query API follows the same resolver.
 
 Omitting dimensions from `pcb.add_tracks` or `pcb.add_via` uses the corresponding

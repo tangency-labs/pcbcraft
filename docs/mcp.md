@@ -172,7 +172,7 @@ without a manufacturing or clearance claim.
 
 `pcb.add_tracks` and `pcb.delete_tracks` use the same transactions as the PCB
 route tool. Each takes `board` and `expected_revision`. Routing also takes a copper
-`layer` UUID from `project.boards[].layers`, `width_nm` (10,000 to 10,000,000) and
+`layer` UUID from `project.boards[].layers`, optional `width_nm` (10,000 to 10,000,000) and
 2–256 ordered `points`; each neighboring pair becomes one straight segment, all in
 one undo step. Optional `layer_changes`, a list of `{at, layer}` in increasing
 vertex order after the first, places a through via at `points[at]` and continues on
@@ -206,7 +206,7 @@ commands refuse the whole edit when they would modify existing locked copper,
 including indirect footprint/segment transforms. No-op operations remain no-ops.
 Copy/paste preserve locks on new identities; Cut of protected copper is refused.
 
-`pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
+`pcb.add_via` places one standalone through via from `at`, with optional `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
 that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and
 `dy_nm`, keeping sizes and layers. `pcb.reshape_tracks` sets new `start` and `end` points for each listed `track` at once,

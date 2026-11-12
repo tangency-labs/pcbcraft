@@ -35,7 +35,7 @@ impl Edit {
         let values = json!(Values::default());
         for field in &mut self.fields {
             field.original = values[field.key].as_i64().unwrap_or_default();
-            field.initial = units::label(field.original, self.unit);
+            field.initial = units::edit_label(field.original, self.unit);
             field.text = field.initial.clone();
         }
         self.error = None;
@@ -83,7 +83,7 @@ impl PcbApp {
             .zip(labels)
             .map(|(key, label)| {
                 let original = values[*key].as_i64().unwrap_or_default();
-                let text = units::label(original, unit);
+                let text = units::edit_label(original, unit);
                 Field { key, label, original, initial: text.clone(), text }
             })
             .collect();
@@ -254,6 +254,29 @@ mod tests {
         assert!(h.get_by_role_and_label(egui::Role::Button, "Apply").accesskit_node().is_disabled());
         click(&mut h, "Cancel");
         assert!(h.state().session.project().unwrap().boards().next().unwrap().authored_rules().is_none());
+    }
+
+    /// Incidental whitespace edits must retain nanometres even at via/drill bounds, both when
+    /// opening saved values and after resetting/re-enabling the exact built-in draft.
+    #[test]
+    fn board_rules_spacing_edits_round_trip_exact_mil_values() {
+        let mut h = harness(1000.);
+        h.state_mut().preferences.units = units::Unit::Mil;
+        for reset in [false, true] {
+            h.state_mut().begin_board_rules();
+            h.run();
+            if reset {
+                click(&mut h, "Use built-in defaults");
+            }
+            click(&mut h, "Use built-in defaults");
+            for label in ["Minimum via diameter", "Maximum via drill"] {
+                let value = h.get_by_role_and_label(egui::Role::TextInput, label).value().unwrap();
+                replace(&mut h, label, &format!(" {value} "));
+            }
+            click(&mut h, "Apply");
+            assert!(matches!(h.state().dialog, Dialog::None));
+            assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().authored_rules().unwrap().values, Values::default());
+        }
     }
 
     /// Live MCP uses the actual editor refusal policy and the shared revision/history path;

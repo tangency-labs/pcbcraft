@@ -328,7 +328,7 @@ impl PcbApp {
         self.board_size_controls(ui, enabled, compact);
     }
 
-    /// Analysis opens existing DRC, measurement and counterpart tools without editing the board.
+    /// Analysis opens DRC, measurement and counterpart tools, plus Rules for editing saved board defaults.
     fn board_analyze_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let checks = [
