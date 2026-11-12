@@ -5,12 +5,12 @@ Design recorded November 8, 2026; related work:
 [#42](https://github.com/tangency-labs/pcbcraft/issues/42) and
 [#122](https://github.com/tangency-labs/pcbcraft/issues/122).
 This policy applies to schematic-only, single-board and multiboard projects.
-It does not claim that persistent net identity is already implemented.
-The proposed [path to the net registry](net-registry-path.md) orders the
-storage slices that reach it from today's single-board format.
+The [implemented single-board/schematic-only registry](net-registry-storage.md)
+covers sparse IDs, anchors, reconciliation and explicit ambiguity resolution.
+The broader multiboard, system, class and authored-rule contracts below remain
+design work; the [path to the net registry](net-registry-path.md) orders those slices.
 
-The current electrical graph is derived and does not have persistent net IDs.
-The registry design gives reviewed board updates and authored rules stable
+The electrical graph remains derived. The registry gives future reviewed board updates and authored rules stable
 targets without making a second source of electrical connectivity. Wiring,
 ports, labels and explicit system connections still determine the graph.
 

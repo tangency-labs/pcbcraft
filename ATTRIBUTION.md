@@ -1072,3 +1072,13 @@ their statuses through the production Node runner. Exit propagation follows the
 published [Node WASI API contract](https://r2.nodejs.org/dist/v22.13.0/docs/api/wasi.html),
 consulted November 11, 2026; no Node implementation source or third-party test
 fixture was incorporated.
+
+## Sparse persistent net identities
+
+The sparse net registry, canonical anchor-key codec, continuation/split/merge
+reconciliation, shared promotion/resolution commands and format-17/instances-2
+storage are original MIT OR Apache-2.0 PCBcraft work following this repository's
+net-identity and storage contracts. Regression circuits are generated with native
+commands and original repository fixtures. The existing qualified UUID, hashing,
+serialization and publication dependencies are reused; no external EDA source,
+library data, artwork or dependency was added.

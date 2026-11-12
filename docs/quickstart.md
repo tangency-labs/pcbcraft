@@ -42,6 +42,9 @@ The current format also retains one stable occurrence ID per sheet, stored besid
 the board in `instances.json` or in `project.json` for a schematic-only project.
 First Save adds these [occurrence records](sheet-occurrence-storage.md) to older
 board-folder projects while preserving their existing board paths.
+Named nets and explicitly promoted nets use a [sparse persistent registry](net-registry-storage.md)
+in those same instance homes. Its first record selects project/17, with
+instances/2 for a board; opening or inspecting an older project does not promote nets.
 
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.

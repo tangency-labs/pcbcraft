@@ -65,4 +65,13 @@ existing hierarchy. Board projects store these records in `instances.json` besid
 older project leaves it unchanged, and first Save persists deterministic
 compatibility IDs without changing component references, values, package choices
 or accepted board state. Creating the first board moves the same records in one
-undoable action. Repeated sheet instances and persistent net IDs remain future work.
+undoable action. Repeated sheet instances remain future work.
+
+Named and explicitly promoted nets now have independent persistent UUIDs in a
+sparse registry. Ordinary continuations retain their IDs, splits and merges
+record lineage, and unresolved splits can be resolved through the shared
+revision-checked `nets.promote` and `nets.resolve_ambiguity` commands in headless
+or live MCP. Undo, reopen and first-board creation preserve the decisions. The
+first record selects project/17 and board instances/2 in the existing folder/ZIP
+layout; reading an older project does not promote its nets. There is no new UI,
+and net classes and zones remain separate work.

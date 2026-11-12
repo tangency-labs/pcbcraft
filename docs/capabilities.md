@@ -28,6 +28,13 @@ board, snapshot, revision and effective-clearance authority, with conservative
 candidates and an exhaustive reference. Routing clearance enforcement, spatial
 indexing and native circular arcs remain separate work.
 
+The engine [sparse net registry](net-registry-storage.md) preserves independent
+UUIDs for named or explicitly promoted nets, with bounded anchors, split/merge
+lineage and explicit ambiguity resolution through shared headless/live MCP
+commands. It survives undo, save/reopen and first-board creation without storing
+a second connectivity graph. Net classes, zones, repeated instances and system
+registries remain separate work; this slice adds no UI controls.
+
 The engine [single-board update workflow](single-board-update.md) previews and
 atomically accepts footprint/package and connectivity changes through shared
 commands and headless/live MCP. Desired assignments and accepted geometry remain

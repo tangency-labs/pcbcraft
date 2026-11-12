@@ -125,4 +125,6 @@ fn names(path: &Path) -> Result<BTreeSet<String>, String> {
 mod tests;
 
 #[cfg(test)]
+mod net_registry_tests;
+#[cfg(test)]
 mod occurrence_tests;

@@ -976,6 +976,7 @@ fn validate_with_hierarchy(
         upgraded_from,
         layout: None,
         circuit_use: None,
+        net_registry: Arc::default(),
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;
@@ -1012,6 +1013,7 @@ pub(crate) fn test_board_path(documents: &Documents) -> String {
 #[cfg(test)]
 pub(crate) fn diagnostic_snapshot(project: Arc<Project>) -> Arc<Project> {
     let mut diagnostic = Project::clone(&project);
+    diagnostic.net_registry = Arc::default();
     diagnostic.circuit_use = None;
     for sheet in Arc::make_mut(&mut diagnostic.sheets) {
         sheet.occurrence_id = None;

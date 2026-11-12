@@ -134,10 +134,12 @@ impl Fragment {
 
     /// Keep only captured sheets, their live components and exact package intent. This shared
     /// boundary excludes board placements and unrelated project assets for flat/tree captures.
+    /// Persistent net IDs stay with the source; pasted named networks receive destination IDs.
     fn captured(project: &Project, sheets: Vec<crate::sheets::SchematicSheet>, cursor: u64, cut_sheets: bool) -> Result<Self, CommandError> {
         let components: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.component)).collect();
         let symbols: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.ordinal)).collect();
         let mut fragment = project.clone();
+        fragment.net_registry = Arc::default();
         fragment.sheets = Arc::new(sheets);
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
@@ -511,9 +513,12 @@ impl Session {
     }
 }
 
-/// Reuse production validation, including pinned definitions, field text and cross-document links.
+/// Validate candidate geometry/assets before canonical net reconciliation. The previous registry
+/// can still name removed anchors here; the transaction validates its reconciled successor.
 pub(crate) fn validate_candidate(project: &Project) -> Result<(), CommandError> {
-    let documents = crate::persistence::encode_documents(Arc::new(project.clone())).map_err(invalid)?;
+    let mut geometry = project.clone();
+    geometry.net_registry = Arc::default();
+    let documents = crate::persistence::encode_documents(Arc::new(geometry)).map_err(invalid)?;
     crate::persistence::decode_documents(&documents).map_err(invalid)?;
     Ok(())
 }

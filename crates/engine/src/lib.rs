@@ -16,6 +16,7 @@ pub mod instances;
 pub mod library;
 pub mod library_graphics;
 pub mod net_labels;
+pub mod nets;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -64,6 +65,10 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    /// A terminal, named label or hierarchical port, excluding junction/geometry anchors.
+    NetTarget,
+    /// A persistent registry UUID, distinct from a revision-scoped graph row.
+    NetId,
     ExternalText,
     ClipboardUnits,
     BoardSelection,
@@ -216,7 +221,10 @@ impl ParamKind {
                 "stroke_width_nm":{"type":"integer","minimum":1,"maximum":5_000_000},
                 "pad_clearance_nm":{"type":"integer","minimum":0,"maximum":10_000_000}
             },"required":["text_height_nm","stroke_width_nm","pad_clearance_nm"],"additionalProperties":false}),
-            Self::BoardId | Self::SheetId => json!({"type":"string", "format":"uuid"}),
+            Self::BoardId | Self::SheetId | Self::NetId => json!({"type":"string", "format":"uuid"}),
+            Self::NetTarget => {
+                json!({"oneOf":[Self::Terminal.schema(),hierarchy_endpoint_schema("net_label"),hierarchy_endpoint_schema("label"),hierarchy_endpoint_schema("sheet_pin"),nets::anchor_schema()]})
+            }
             Self::CopperLayers => json!({"type":"integer", "minimum":2,"maximum":64,"multipleOf":2}),
             Self::AutoHeal => json!({"type":"boolean","default":true}),
             Self::Disconnect | Self::KeepConnected => json!({"type":"boolean","default":false}),
@@ -451,7 +459,13 @@ impl ParamKind {
             }
             Self::SheetExtent if value.as_i64().is_some_and(|n| (1..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
-            Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
+            Self::BoardId | Self::SheetId | Self::NetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
+            Self::NetTarget
+                if WireEndpoint::parse(value).is_some_and(|end| !matches!(end, WireEndpoint::Junction(_)))
+                    || serde_json::from_value::<nets::Anchor>(value.clone()).is_ok_and(|anchor| anchor.validate_form().is_ok()) =>
+            {
+                Ok(())
+            }
             Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
             Self::CopperLayers if value.as_u64().is_some_and(|n| (2..=64).contains(&n) && n.is_multiple_of(2)) => Ok(()),
             Self::AutoHeal | Self::Disconnect | Self::KeepConnected if value.is_boolean() => Ok(()),
@@ -506,6 +520,8 @@ impl ParamKind {
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
+            Self::NetId => Err("must identify a persistent net by UUID"),
+            Self::NetTarget => Err("must identify a terminal, net label or hierarchical port"),
             Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
             Self::CopperLayers => Err("must select an even copper-layer count from 2 through 64"),
             Self::AutoHeal | Self::Disconnect | Self::KeepConnected => Err("must be a boolean"),
@@ -1734,6 +1750,34 @@ const CATALOG: &[Command] = &[
             Param { name: "vias", required: false, summary: "Unique via UUIDs from board inspection", kind: ParamKind::TrackIds },
         ],
     },
+    Command {
+        id: nets::PROMOTE,
+        title: "Promote Net",
+        summary: "Give a meaningful derived network a persistent UUID without changing connectivity. Existing identities are retained.",
+        params: &[
+            EXPECTED_REVISION,
+            BOARD,
+            Param { required: false, ..sheets::SHEET },
+            Param {
+                name: "anchor",
+                kind: ParamKind::NetTarget,
+                required: true,
+                summary: "Current terminal, net label or hierarchical port in the addressed sheet",
+            },
+        ],
+    },
+    Command {
+        id: nets::RESOLVE_AMBIGUITY,
+        title: "Resolve Net Identity",
+        summary: "Assign an ambiguous source UUID to one explicitly addressed candidate branch, retiring that branch's provisional ID in one undo step.",
+        params: &[
+            EXPECTED_REVISION,
+            BOARD,
+            Param { required: false, ..sheets::SHEET },
+            Param { name: "net", kind: ParamKind::NetId, required: true, summary: "Ambiguous source net UUID from inspection" },
+            Param { name: "anchor", kind: ParamKind::NetTarget, required: true, summary: "A terminal, label or port on the selected current branch" },
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -1803,6 +1847,8 @@ pub struct Project {
     layout: Option<persistence::layout::Layout>,
     /// Shared single-use identity; absent until legacy storage metadata is adopted.
     circuit_use: Option<uuid::Uuid>,
+    /// Sparse identity authority; current connectivity remains derived from the schematic.
+    net_registry: Arc<nets::Registry>,
 }
 
 impl Project {
@@ -2009,6 +2055,8 @@ pub struct Session {
     history_root_revision: u64,
     /// One runtime-only review capability; never serialized or counted as an authored edit.
     update_plan: Option<board::update::CachedPlan>,
+    /// Isolated sheet transactions reconcile only after returning to the canonical project.
+    defer_net_reconciliation: bool,
 }
 
 impl Default for Session {
@@ -2023,6 +2071,7 @@ impl Default for Session {
             revision: 0,
             history_root_revision: 0,
             update_plan: None,
+            defer_net_reconciliation: false,
         }
     }
 }
@@ -2166,6 +2215,8 @@ impl Session {
             | hierarchy::DELETE_LABEL
             | sheets::RENAME_SHEET
             | "project.rename"
+            | nets::PROMOTE
+            | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
             | PLACE_SYMBOL
             | PLACE_UNIT
@@ -2249,6 +2300,7 @@ impl Session {
     /// any selected layout-root prefix; flat historical snapshots retain `board.json` until Save.
     /// `sheet_instances` reports the shared circuit use and every sheet's occurrence/parent slot;
     /// inspecting a legacy snapshot derives compatibility IDs without adopting save metadata.
+    /// A nonempty `net_registry` reports current IDs and decisions separately, without promotion.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
@@ -2257,10 +2309,16 @@ impl Session {
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
-                "sheet_instances": p.sheet_instances(),
+                "sheet_instances": p.occurrence_instances(),
                 "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
+            if !p.net_registry.records.is_empty() {
+                inspected["net_registry"]=match p.inspect_net_registry() {
+                    Ok(registry)=>registry,
+                    Err(error)=>json!({"error":error}),
+                };
+            }
             if p.board.baseline.is_some() || !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().map(|target|target.board), "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
@@ -2400,6 +2458,8 @@ impl Session {
                 | sheets::RENAME_SHEET
                 | sheets::DELETE_SHEET
                 | "project.rename"
+                | nets::PROMOTE
+                | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
                 | PLACE_SYMBOL
                 | PLACE_UNIT
@@ -2467,6 +2527,7 @@ impl Session {
                 upgraded_from: None,
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
+                net_registry: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -2477,6 +2538,8 @@ impl Session {
                 }
             }
             board::identity::CREATE_BOARD => self.create_board(params)?,
+            nets::PROMOTE => self.promote_net(params)?,
+            nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
@@ -2961,11 +3024,11 @@ impl Session {
     /// Refuse changes to existing locked copper before publishing any state, then bound undo history. Preserve adopted allocation metadata across
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
+    /// Net allocation and reconciliation validate before any session/history state is changed.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }
-        self.update_plan = None;
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
         let physical_changed = self
@@ -3000,7 +3063,11 @@ impl Session {
         {
             project.numeric_id_high_water = Some(project.numeric_id_high_water.unwrap_or(0).max(highest).max(previous_highest));
         }
+        if !self.defer_net_reconciliation {
+            project.reconcile_nets(self.project.as_deref())?;
+        }
         let project = self.retain_allocation_watermark(Arc::new(project));
+        self.update_plan = None;
         self.undo.push(self.project.replace(project));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
