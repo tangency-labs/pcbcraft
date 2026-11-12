@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+pcbcraft-units = { workspace = true }
 solidcraft-ui-kit = { workspace = true }
 solidcraft-ui-registry = { workspace = true }
 solidcraft-theme = { workspace = true }

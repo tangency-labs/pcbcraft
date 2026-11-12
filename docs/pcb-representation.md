@@ -434,12 +434,14 @@ stored unit of a layer, object or rule. Preserve 1 mil = 25,400 nm and
 100 mil = 2.54 mm exactly; changing display preferences does not resnap geometry,
 change connectivity, dirty the project or add a document undo step.
 
-The existing unit-aware parser lives in chrome. Before exposing new setup/rule
-numeric fields to both GUI and MCP, move or extract that parser into an
-appropriate shared, UI-independent module. Do not copy its implementation into
-the engine or make the engine depend on chrome. A typed suffix overrides the
-display unit; a bare user-entered number needs an explicit default unit. Keep
-rounding, representable precision and overflow errors identical across callers.
+The existing unit-aware parser, exact conversion factors and editable formatter
+are shared by the UI-independent `pcbcraft-units` crate (#280). Chrome re-exports
+these types and functions for existing callers, while keeping display-only
+labels, readouts and the unit button. New human-readable callers can depend on
+`pcbcraft-units` directly without chrome or a view's display preference. A typed
+suffix overrides the explicitly supplied default unit; bare human-entered values
+require that default. The extraction preserves syntax, rounding, representable
+precision and overflow errors. Migration of remaining PCB fields is #281.
 Canonical command payloads and persisted records can continue to use `_nm`
 integers, which do not require a display preference.
 

@@ -16,6 +16,7 @@ pcbcraft-chrome = { path = "crates/chrome" }
 pcbcraft-engine = { path = "crates/engine" }
 pcbcraft-mcp = { path = "crates/mcp" }
 pcbcraft-storage = { path = "crates/storage" }
+pcbcraft-units = { path = "crates/units" }
 solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
 solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
 solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }

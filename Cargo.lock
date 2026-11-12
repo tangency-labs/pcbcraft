@@ -2720,6 +2720,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "egui_extras",
+ "pcbcraft-units",
  "serde",
  "solidcraft-look",
  "solidcraft-theme",
@@ -2768,6 +2769,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "pcbcraft-units"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
