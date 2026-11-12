@@ -54,6 +54,8 @@ pub(crate) struct Camera {
     wheel_zoom: Option<WheelZoom>,
     navigation_frame: Option<(egui::ViewportId, u64)>,
     schematic_rect: Option<Rect>,
+    #[cfg(feature = "performance-harness")]
+    pub(super) performance_rect: Option<Rect>,
     offset: Vec2,
     fit_requested: bool,
     /// A Browser destination waits for its own panel geometry before centering.
@@ -75,6 +77,8 @@ impl Default for Camera {
             wheel_zoom: None,
             navigation_frame: None,
             schematic_rect: None,
+            #[cfg(feature = "performance-harness")]
+            performance_rect: None,
             offset: Vec2::ZERO,
             fit_requested: false,
             center_requested: None,
@@ -338,6 +342,10 @@ impl Camera {
         enabled: bool,
         navigation: Navigation,
     ) {
+        #[cfg(feature = "performance-harness")]
+        {
+            self.performance_rect = Some(rect);
+        }
         if std::mem::take(&mut self.fit_requested) {
             *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
             let copper = project.tracks().iter().flat_map(|track| [track.start, track.end]).chain(project.vias().iter().map(|via| via.at));

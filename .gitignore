@@ -5,3 +5,7 @@
 .pcbcraft-save/
 .pcbcraft-stage-*/
 .*.pcbcraft-lock
+
+# Opt-in CPU performance diagnostic bundles and local evidence.
+/tools/performance/pkg/
+/tools/performance/*.json

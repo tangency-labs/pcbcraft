@@ -48,6 +48,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - name: Check opt-in performance harness
+        run: |
+          cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
+          cargo test --locked -p pcbcraft-app --features performance-harness performance::
+          python3 -B -m unittest discover -s scripts -p test_compare_performance.py
 
   web:
     runs-on: ubuntu-latest
@@ -60,6 +65,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Check browser performance diagnostics
+        run: cargo check --locked -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
       - name: Install trunk
         run: |
           mkdir -p "$HOME/.local/bin"

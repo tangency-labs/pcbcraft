@@ -119,3 +119,12 @@ For changes that introduce or alter blocking I/O, concurrency, or shared state, 
 - Walk through a stalled or disconnected peer, a full queue, or two overlapping operations where applicable. Add a focused regression test when existing tests miss a concrete failure path.
 
 In the PR description, name the failure paths reviewed and distinguish the ones exercised by tests from the ones checked by reading the code.
+
+## Performance evidence
+
+Before implementing or optimizing the ERC/routing work under #237, read
+[the performance-testing guide](docs/performance-testing.md). Use its saved
+command-generated fixtures and replay traces for matched before/after runs,
+retain raw samples and environment metadata, and report unmeasured budgets
+explicitly. CPU replay timings do not establish input-to-visible latency or
+resolve the workspace's recorded Wayland endurance failure.

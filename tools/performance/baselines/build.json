@@ -1,0 +1,19 @@
+{
+  "collected_utc": "2026-11-12T05:32:38.966423+00:00",
+  "build_commands": [
+    "cargo build --locked --release -p pcbcraft-app --features performance-harness --example board_perf",
+    "cargo build --locked --release -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown",
+    "wasm-bindgen --target web --out-dir tools/performance/pkg board_perf_web.wasm",
+    "wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int board_perf_web_bg.wasm -o optimized.wasm"
+  ],
+  "file_sha256": {
+    "/home/travisl/projects/PCBcraft/main/target/release/examples/board_perf": "5c3cb02831c19ff9321c7ccb516d7619fe10595c2b240645ddb5454d19957b88",
+    "tools/performance/pkg/board_perf_web_bg.wasm": "d5c18d0e9c1c75f6f623cc9cd71e3f604309018e2b2be51da0ba699fafc48500",
+    "tools/performance/pkg/board_perf_web.js": "880ea196db19340d1472a8f2d2fc73b85f20f619b90b6bb7d94ab3a224a041fa"
+  },
+  "wasm_bindgen": "wasm-bindgen 0.2.130",
+  "wasm_opt": "wasm-opt version 123 (version_123)",
+  "rustflags_overrides": "RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS and CARGO_PROFILE_RELEASE_OPT_LEVEL unset",
+  "browser_launcher": "Playwright-core 1.60.0",
+  "comparison": "Initial observations; no before/after implementation change claimed. Background load and power/thermal conditions incompletely controlled."
+}

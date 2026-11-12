@@ -1,3 +1,8 @@
 # Working project documents are text. Portable archives are binary exports.
 *.json text eol=lf
 *.pc binary
+
+# Original command-generated performance fixtures and raw timing evidence.
+tools/performance/fixtures/*.json linguist-generated=true
+tools/performance/baselines/native-*.json linguist-generated=true
+tools/performance/baselines/browser-*.json linguist-generated=true
