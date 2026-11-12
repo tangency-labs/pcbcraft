@@ -15,7 +15,8 @@ working-tree harness over main `627982ca7a186f2b5eeb28db0ba860302c4010ea`, and t
 [build record](../tools/performance/baselines/build.json) retains executable/module
 hashes, tool versions and commands. No optimization was made between these runs.
 Native and browser columns are separate baselines, not a matched before/after
-comparison.
+comparison. These measurements predate the net-registry and shared-length merges
+in main `a022438`; rebasing the harness does not refresh the saved timing evidence.
 
 ## Observed p95 CPU costs
 

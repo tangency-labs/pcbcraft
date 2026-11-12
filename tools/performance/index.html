@@ -3,9 +3,9 @@
 <title>PCBcraft CPU performance diagnostics</title>
 <pre id="report">Running CPU diagnostics…</pre>
 <script type="module">
-import init, { run_performance } from './pkg/board_perf_web.js';
 const params = new URLSearchParams(location.search);
 try {
+  const { default: init, run_performance } = await import('./pkg/board_perf_web.js');
   await init();
   const read = async name => {
     const url = params.get(name);

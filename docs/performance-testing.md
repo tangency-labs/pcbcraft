@@ -214,6 +214,7 @@ cargo test --locked -p pcbcraft-app --features performance-harness performance::
 cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
 cargo check --locked -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
 python3 -m unittest discover -s scripts -p test_compare_performance.py
+node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs
 ```
 
 Run the repository's ordinary required checks as well. CI smoke tests establish
