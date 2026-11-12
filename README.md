@@ -35,8 +35,9 @@ and rotation. Routing, full ERC/DRC and fabrication output are still planned.
   desktop windows with independent cameras and a shared project session.
 - **Library editors:** author native symbol and footprint definitions in independent
   workspaces, with primitive properties, undo/redo and save-copy/open/export.
-- **Projects:** save a Git-friendly project folder or share a `.pc.zip` archive.
-  Pinned symbol and footprint definitions travel with the project.
+- **Projects:** save a Git-friendly project folder or share a `.pc` archive.
+  Pinned symbol and footprint definitions travel with the project. The CLI can
+  explicitly convert the previous split layout into a new copy.
 - **AI tools:** use the desktop Assistant with an installed agent or model
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
@@ -72,7 +73,7 @@ trunk serve --locked
 ```
 
 Open [localhost:8781](http://127.0.0.1:8781). The browser uploads projects and
-downloads `.pc.zip` archives; the Assistant and live MCP connection are desktop features.
+downloads `.pc` archives; the Assistant and live MCP connection are desktop features.
 Build prerequisites and troubleshooting are in [CONTRIBUTING.md](CONTRIBUTING.md#build-and-find-your-way-around).
 
 </details>

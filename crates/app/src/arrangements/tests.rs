@@ -121,7 +121,7 @@ fn saved_project_restores_arrangement_windows_and_panels_without_electrical_chan
     let storage = h.state().arrangements.storage_text().unwrap();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let mut fresh = PcbApp { arrangements: Arrangements::from_storage(Some(storage)), ..PcbApp::default() };
-    fresh.files.open_path_for_test(&path.join("project.pc"), fresh.session.revision());
+    fresh.files.open_path_for_test(&path.join("project.json"), fresh.session.revision());
     let mut reopened =
         Harness::builder().with_size(egui::vec2(1400., 900.)).with_max_steps(30).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), fresh);
     reopened.run();
@@ -212,7 +212,7 @@ fn invalid_newer_and_duplicate_placements_do_not_replace_saved_state() {
         }
         let text = json!({"version":1,"projects":{key.clone():bad.clone()}}).to_string();
         let mut app = PcbApp { arrangements: Arrangements::from_storage(Some(text)), ..PcbApp::default() };
-        app.files.open_path_for_test(&dir.path().join("project/project.pc"), 0);
+        app.files.open_path_for_test(&dir.path().join("project/project.json"), 0);
         let mut fresh = Harness::builder().with_size(egui::vec2(1000., 700.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         fresh.run();
         assert!(fresh.state().session.project().is_some());
@@ -692,7 +692,7 @@ fn project_open_with_library_panes_does_not_defer_layout_restoration() {
     let view = h.state().views.active.id();
     let document = h.state().views.active.definition;
     let revision = h.state().session.revision();
-    h.state_mut().files.open_path_for_test(&path.join("project.pc"), revision);
+    h.state_mut().files.open_path_for_test(&path.join("project.json"), revision);
     h.run();
     assert_eq!(h.state().views.view(view).unwrap().definition, document);
     assert_eq!(h.state().arrangements.opening, h.state().session.history_root_revision());

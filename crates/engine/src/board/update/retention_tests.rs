@@ -18,12 +18,12 @@ fn initialized() -> Session {
 fn initialization_is_explicit_versioned_atomic_and_a_repeat_is_noop() {
     let mut session = super::tests::fixture();
     let before = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(!std::str::from_utf8(&before["board.json"]).unwrap().contains("baseline"));
+    assert!(!std::str::from_utf8(&before[&crate::persistence::test_board_path(&before)]).unwrap().contains("baseline"));
     let revision = session.revision();
     session.apply(INITIALIZE_BASELINE, &json!({"expected_revision":revision})).unwrap();
     assert_eq!(session.revision(), revision + 1);
     let docs = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&docs["board.json"]).unwrap().contains("pcbcraft-board/10"));
+    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains("pcbcraft-board/10"));
     let source = session.project().unwrap().board.baseline.as_ref().unwrap().source.clone();
     source.validate().unwrap();
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
@@ -297,24 +297,24 @@ fn baseline_validation_and_unsupported_assignment_failures_are_atomic() {
 
     let mut session = initialized();
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
-    let mut board: serde_json::Value = serde_json::from_slice(&documents["board.json"]).unwrap();
+    let mut board: serde_json::Value = serde_json::from_slice(&documents[&crate::persistence::test_board_path(&documents)]).unwrap();
     let mut incomplete = board.clone();
     for component in incomplete["baseline"]["components"].as_object_mut().unwrap().values_mut() {
         component["package"] = serde_json::Value::Null;
     }
     let mut invalid_documents = documents.clone();
-    invalid_documents.insert("board.json".into(), serde_json::to_vec(&incomplete).unwrap());
+    invalid_documents.insert(crate::persistence::test_board_path(&invalid_documents), serde_json::to_vec(&incomplete).unwrap());
     assert!(decode_documents(&invalid_documents).unwrap_err().contains("unassigned package"));
     for (field, value) in [("format", json!("pcbcraft-board/9")), ("baseline", json!(null))] {
         let mut invalid = board.clone();
         invalid[field] = value;
         let mut docs = documents.clone();
-        docs.insert("board.json".into(), serde_json::to_vec(&invalid).unwrap());
+        docs.insert(crate::persistence::test_board_path(&docs), serde_json::to_vec(&invalid).unwrap());
         assert!(decode_documents(&docs).is_err());
     }
     board["baseline"]["board"] = json!(Uuid::from_u128(987));
     let mut invalid = documents.clone();
-    invalid.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+    invalid.insert(crate::persistence::test_board_path(&invalid), serde_json::to_vec(&board).unwrap());
     assert!(decode_documents(&invalid).is_err());
     session.apply(crate::PLACE_RESISTOR, &json!({"x_nm":20_000_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let id = session.project().unwrap().symbols.last().unwrap().component;
@@ -340,8 +340,8 @@ fn nested_accepted_package_mappings_reject_duplicate_json_keys() {
     let mut documents = encode_documents(session.snapshot().unwrap()).unwrap();
     let package =
         session.project().unwrap().board.baseline.as_ref().unwrap().components.values().find_map(|component| component.package.as_ref()).unwrap();
-    let corrupted = super::tests::duplicate_mapping(&documents["board.json"], &package.mapping);
-    documents.insert("board.json".into(), corrupted);
+    let corrupted = super::tests::duplicate_mapping(&documents[&crate::persistence::test_board_path(&documents)], &package.mapping);
+    documents.insert(crate::persistence::test_board_path(&documents), corrupted);
     assert!(decode_documents(&documents).is_err());
 }
 
@@ -354,7 +354,7 @@ fn accepted_terminals_must_match_a_live_identical_symbol_revision() {
     let id = session.project().unwrap().symbols[0].component;
     let symbol = session.project().unwrap().symbols[0].id();
     let corrupt = |mut documents: crate::persistence::Documents, different_revision: bool| {
-        let mut board: serde_json::Value = serde_json::from_slice(&documents["board.json"]).unwrap();
+        let mut board: serde_json::Value = serde_json::from_slice(&documents[&crate::persistence::test_board_path(&documents)]).unwrap();
         let historical = &mut board["baseline"]["components"][id.to_string()];
         historical["terminals"] = json!(["X", "Y"]);
         historical["package"]["mapping"] = json!({"X":"1","Y":"2"});
@@ -369,7 +369,7 @@ fn accepted_terminals_must_match_a_live_identical_symbol_revision() {
         // The independent assignment list is optional; accepted placements alone
         // must not bypass the same-identity logical terminal invariant.
         board.as_object_mut().unwrap().remove("assignments");
-        documents.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+        documents.insert(crate::persistence::test_board_path(&documents), serde_json::to_vec(&board).unwrap());
         documents
     };
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();

@@ -106,7 +106,7 @@ fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
     let bytes = encode_documents(snapshot.clone()).unwrap();
     assert!(bytes.contains_key("library/footprints/starter/resistor-0402.r4.json"));
     assert!(bytes.contains_key("library/footprints/starter/sot23.r4.json"));
-    assert!(std::str::from_utf8(&bytes["board.json"]).unwrap().contains("pcbcraft-board/5"));
+    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/5"));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(encode_documents(decode_packed(&encode_packed(snapshot.clone()).unwrap()).unwrap().project).unwrap(), bytes);
     let schematic = s.inspect()["project"]["schematic"].clone();
@@ -134,10 +134,10 @@ fn pinned_custom_footprints_reopen_without_a_catalog_source() {
     definition["id"] = json!("custom-resistor");
     definition["pads"][0]["width_nm"] = json!(900_000);
     docs.insert("library/footprints/offline-fixture/custom-resistor.r4.json".into(), serde_json::to_vec_pretty(&definition).unwrap());
-    let mut board: Value = serde_json::from_slice(&docs["board.json"]).unwrap();
+    let mut board: Value = serde_json::from_slice(&docs[&crate::persistence::test_board_path(&docs)]).unwrap();
     board["footprints"][0]["library"] = json!("offline-fixture");
     board["footprints"][0]["definition"] = json!("custom-resistor");
-    docs.insert("board.json".into(), serde_json::to_vec_pretty(&board).unwrap());
+    docs.insert(crate::persistence::test_board_path(&docs), serde_json::to_vec_pretty(&board).unwrap());
     let reopened = decode_documents(&docs).unwrap();
     let footprint = reopened.board_view(reopened.board_target().unwrap()).unwrap().footprints().next().unwrap();
     let copper = footprint.pads[0].copper.unwrap();
@@ -187,9 +187,9 @@ fn invalid_physical_footprints_and_mappings_are_atomic() {
     missing.remove(path);
     assert!(decode_documents(&missing).is_err());
     let mut old = docs.clone();
-    let mut b: Value = serde_json::from_slice(&old["board.json"]).unwrap();
+    let mut b: Value = serde_json::from_slice(&old[&crate::persistence::test_board_path(&old)]).unwrap();
     b["format"] = json!("pcbcraft-board/4");
-    old.insert("board.json".into(), serde_json::to_vec(&b).unwrap());
+    old.insert(crate::persistence::test_board_path(&old), serde_json::to_vec(&b).unwrap());
     assert!(decode_documents(&old).unwrap_err().contains("format 5"));
     assert!(crate::persistence::encode(s.snapshot().unwrap()).is_err());
 }

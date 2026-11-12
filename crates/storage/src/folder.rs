@@ -57,7 +57,7 @@ pub fn load(root: &Path) -> Result<Documents, String> {
     } else {
         require_no_journal(root)?;
     }
-    let documents = read_documents(root, false)?;
+    let documents = readable_documents(read_documents(root, false)?)?;
     if !lock.can_recover {
         require_no_journal(root)?;
     }
@@ -73,12 +73,42 @@ pub(super) fn preview(root: &Path) -> Result<Documents, String> {
     let path = lock_path(root)?;
     let had_lock = probe_preview_lock(&path)?;
     require_no_journal(root)?;
-    let documents = read_documents(root, false)?;
+    let documents = readable_documents(read_documents(root, false)?)?;
     require_no_journal(root)?;
     if probe_preview_lock(&path)? && !had_lock {
         return Err("Project changed while reading its preview.".to_owned());
     }
     Ok(documents)
+}
+
+/// Read an old split folder for conversion without creating locks or replaying its journal.
+/// An existing lock stays shared across both reads; an introduced lock, pending recovery, mixed
+/// layout or detected source change refuses conversion without modifying the source.
+pub(super) fn load_legacy(root: &Path) -> Result<Documents, String> {
+    regular_directory(root)?;
+    let lock_path = lock_path(root)?;
+    let file = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) if metadata.is_file() => {
+            let file = File::open(&lock_path).map_err(error)?;
+            file.try_lock_shared().map_err(|e| format!("Could not lock conversion source: {e}"))?;
+            Some(file)
+        }
+        Ok(_) => return Err("Save lock is not a regular file.".to_owned()),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(error(e)),
+    };
+    let lock = FolderLock { file, can_recover: false };
+    require_no_journal(root)?;
+    if root.join(ENTRY_POINT).try_exists().map_err(error)? {
+        return Err("Conversion requires the previous project.pc layout, without project.json.".to_owned());
+    }
+    let documents = read_documents_at(root, false, "project.pc")?;
+    require_no_journal(root)?;
+    if documents != read_documents_at(root, false, "project.pc")? || (lock.file.is_none() && probe_preview_lock(&lock_path)?) {
+        return Err("Project changed while reading conversion source.".to_owned());
+    }
+    require_no_journal(root)?;
+    pcbcraft_engine::persistence::convert_legacy_documents(documents)
 }
 
 /// Check an existing lock nonblockingly and immediately release it, creating no file. Keeping
@@ -97,15 +127,9 @@ fn probe_preview_lock(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// Stage and flush every changed payload and its backup before atomically publishing a
-/// recovery journal. Once published, recovery completes the transaction before any open.
-/// A checkpoint failure simulates interruption; committed journals remain available for recovery.
-pub fn save(
-    root: &Path,
-    expected: Option<&Documents>,
-    documents: &Documents,
-    checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
-) -> Result<(), String> {
+/// Validate document schemas and platform filenames before creating any destination or lock.
+/// Folder saves and explicit conversion share this preflight; portable ZIPs retain ZIP rules.
+pub(super) fn preflight(documents: &Documents) -> Result<(), String> {
     decode_documents(documents)?;
     // The app saves through canonical `\\?\` paths, where Windows writes these names as ordinary
     // files, but Git for Windows then can't add them and programs that open them by their usual
@@ -115,6 +139,19 @@ pub fn save(
     if cfg!(windows) {
         refuse_windows_device_names(documents)?;
     }
+    Ok(())
+}
+
+/// Stage and flush every changed payload and its backup before atomically publishing a
+/// recovery journal. Once published, recovery completes the transaction before any open.
+/// A checkpoint failure simulates interruption; committed journals remain available for recovery.
+pub fn save(
+    root: &Path,
+    expected: Option<&Documents>,
+    documents: &Documents,
+    checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    preflight(documents)?;
     let _lock = lock(root, false)?;
     if !root.exists() {
         fs::create_dir(root).map_err(error)?;
@@ -125,7 +162,7 @@ pub fn save(
     let baseline = read_documents(root, false)?;
     match expected {
         None if !baseline.is_empty() => return Err("That folder already contains a project. Choose a new or empty folder.".to_owned()),
-        Some(expected) if expected != &baseline => {
+        Some(expected) if expected != &readable_documents(baseline.clone())? => {
             return Err("Project folder changed on disk. Use Save As to keep your edits in a separate folder.".to_owned());
         }
         _ => {}
@@ -133,6 +170,7 @@ pub fn save(
     if &baseline == documents {
         return Ok(());
     }
+    crate::layout::preflight_ownership(root, &readable_documents(baseline.clone())?, documents)?;
     let stage = tempfile::Builder::new().prefix(".pcbcraft-stage-").tempdir_in(root).map_err(error)?;
     let mut changes = Vec::new();
     let paths: BTreeSet<_> = baseline.keys().chain(documents.keys()).collect();
@@ -164,6 +202,7 @@ pub fn save(
     if read_documents(root, false)? != baseline {
         return Err("Project folder changed while saving.".to_owned());
     }
+    crate::layout::preflight_ownership(root, &readable_documents(baseline.clone())?, documents)?;
     fs::rename(stage.path(), root.join(TRANSACTION)).map_err(error)?;
     sync_dir(root)?;
     checkpoint("journal")?;
@@ -180,7 +219,9 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         Ok(metadata) if !metadata.is_dir() => return Err("Recovery journal path is not a directory.".to_owned()),
         Ok(_) => {}
     }
-    let journal_bytes = read_regular(&transaction.join("journal.json"), JOURNAL_LIMIT)?;
+    let root_directory = crate::bound::Directory::open(root).map_err(error)?;
+    let recovery = root_directory.child(TRANSACTION, false).map_err(error)?.ok_or("Missing recovery directory")?;
+    let journal_bytes = recovery.read("journal.json", JOURNAL_LIMIT).map_err(error)?.ok_or("Missing recovery journal")?;
     let journal: Journal = serde_json::from_slice(&journal_bytes).map_err(|e| format!("Invalid save journal: {e}"))?;
     if journal.version != 1 || journal.changes.is_empty() || journal.changes.len() > MAX_DOCUMENTS * 2 {
         return Err("Unsupported or oversized save journal.".to_owned());
@@ -189,10 +230,11 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
     let mut replacements = Vec::new();
     let mut total = 0;
     for (index, change) in journal.changes.iter().enumerate() {
-        if !is_document_path(&change.path) || !seen.insert(&change.path) || (change.before.is_none() && change.after.is_none()) {
+        let legacy_removal = change.path == "project.pc" && change.before.is_some() && change.after.is_none();
+        if !(is_document_path(&change.path) || legacy_removal) || !seen.insert(&change.path) || (change.before.is_none() && change.after.is_none()) {
             return Err(format!("Invalid save journal path: {}", change.path));
         }
-        let path = safe_path(root, &change.path, false)?;
+
         let mut payload = |claimed: &Option<Payload>, suffix: &str| -> Result<Option<Vec<u8>>, String> {
             claimed
                 .as_ref()
@@ -200,7 +242,7 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
                     if claimed.size > MAX_DOCUMENT_BYTES {
                         return Err("Recovery payload exceeds its size limit.".to_owned());
                     }
-                    let bytes = read_regular(&transaction.join(format!("{index}.{suffix}")), claimed.size)?;
+                    let bytes = recovery.read(&format!("{index}.{suffix}"), claimed.size).map_err(error)?.ok_or("Missing recovery payload")?;
                     total += bytes.len();
                     if total > MAX_DOCUMENTS_BYTES * 2 || bytes.len() != claimed.size || digest(&bytes) != claimed.sha256 {
                         return Err("Recovery payload size or digest mismatch.".to_owned());
@@ -211,15 +253,15 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         };
         let before = payload(&change.before, "old")?;
         let after = payload(&change.after, "new")?;
-        let current = existing(&path)?;
+        let current = bound_existing(&root_directory, &change.path)?;
         if current != before && current != after {
             return Err(format!("{} changed outside the interrupted save; recovery stopped.", change.path));
         }
-        replacements.push((change.path.clone(), after));
+        replacements.push((change.path.clone(), before, after));
     }
     // Validate the complete proposed project before completing an interrupted transaction.
     let mut result = read_documents(root, true)?;
-    for (path, after) in &replacements {
+    for (path, _, after) in &replacements {
         if let Some(bytes) = after {
             result.insert(path.clone(), bytes.clone());
         } else {
@@ -227,43 +269,62 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         }
     }
     decode_documents(&result)?;
-    for (relative, after) in replacements {
-        let path = safe_path(root, &relative, true)?;
-        if existing(&path)? != after {
+    for (index, (relative, before, after)) in replacements.into_iter().enumerate() {
+        let bound = bind_document(&root_directory, &relative, true)?.ok_or("Missing publication parent")?;
+        // This checkpoint exercises a directory being replaced after resolution. Publication
+        // remains bound to the captured parent, and the final consistency check refuses adoption.
+        checkpoint(&format!("resolved:{relative}"))?;
+        let current = bound.parent.read(&bound.name, MAX_DOCUMENT_BYTES).map_err(error)?;
+        if current != before && current != after {
+            return Err(format!("{relative} changed during recovery; publication stopped."));
+        }
+        let removed_board = after.is_none() && relative.ends_with("/board.json");
+        if current != after {
             if let Some(bytes) = after {
-                let parent = path.parent().ok_or("missing document parent")?;
-                let mut file = tempfile::NamedTempFile::new_in(&transaction).map_err(error)?;
+                let temporary = format!("publication-{index}.tmp");
+                recovery.remove_file(&temporary).map_err(error)?;
+                let mut file = recovery.create(&temporary).map_err(error)?;
                 #[cfg(unix)]
-                if let Ok(metadata) = fs::symlink_metadata(&path) {
-                    file.as_file().set_permissions(metadata.permissions()).map_err(error)?;
+                if let Some(previous) = bound.parent.open_file(&bound.name).map_err(error)? {
+                    file.set_permissions(previous.metadata().map_err(error)?.permissions()).map_err(error)?;
                 }
-                file.write_all(&bytes).and_then(|()| file.as_file().sync_all()).map_err(error)?;
-                file.persist(&path).map_err(error)?;
-                sync_dir(parent)?;
+                file.write_all(&bytes).and_then(|()| file.sync_all()).map_err(error)?;
+                drop(file);
+                recovery.rename(&temporary, &bound.parent, &bound.name).map_err(error)?;
             } else {
-                fs::remove_file(&path).map_err(error)?;
-                sync_dir(path.parent().ok_or("missing document parent")?)?;
+                bound.parent.remove_file(&bound.name).map_err(error)?;
             }
+            bound.parent.sync().map_err(error)?;
+        }
+        if removed_board {
+            bound.remove_empty_parent()?;
         }
         checkpoint(&format!("published:{relative}"))?;
     }
-    // Rename the completed transaction out of the recovery path before deleting it. A crash
-    // during cleanup must not leave a journal referring to already deleted staging files.
+    // A moved/replaced parent must not turn a successful write to the captured directory into
+    // a successful save of a different visible tree. Keep the journal for an explicit recovery.
+    if read_documents(root, true)? != result {
+        return Err("Project directory changed during publication; recovery stopped.".into());
+    }
+    // Close the recovery directory before renaming it on Windows, whose captured directory
+    // handles intentionally deny deletion/renaming. The source and cleanup parents stay bound.
+    drop(recovery);
     let cleanup = tempfile::Builder::new().prefix(".pcbcraft-stage-").tempdir_in(root).map_err(error)?;
-    let retired = cleanup.path().join("completed");
-    fs::rename(&transaction, retired).map_err(error)?;
-    sync_dir(root)?;
+    let cleanup_directory = crate::bound::Directory::open(cleanup.path()).map_err(error)?;
+    root_directory.rename(TRANSACTION, &cleanup_directory, "completed").map_err(error)?;
+    root_directory.sync().map_err(error)?;
+    cleanup_directory.sync().map_err(error)?;
     checkpoint("completed")?;
     Ok(())
 }
 
 /// Fail with a message naming the first document whose path Windows reads as a device (#156),
-/// suggesting a `.pc.zip` archive, which stores documents as ZIP entries rather than files.
+/// suggesting a `.pc` archive, which stores documents as ZIP entries rather than files.
 fn refuse_windows_device_names(documents: &Documents) -> Result<(), String> {
     match documents.keys().find_map(|path| windows_device_name(path).map(|device| (path, device))) {
         Some((path, device)) => Err(format!(
             "{path}: Windows reserves the name \"{device}\" for a device, so this project can't be saved as a folder here. \
-             Save it as a .pc.zip archive, or change that library or item ID."
+             Save it as a .pc archive, or change that library or item ID."
         )),
         None => Ok(()),
     }
@@ -281,17 +342,60 @@ fn windows_device_name(relative: &str) -> Option<&str> {
 
 /// Read the managed files only. Root-level README/Git files are left alone; files under
 /// sheets, library and assets must belong to the supported schema, apart from regular OS metadata
-/// files. Links and special files are refused even when named like OS metadata.
+/// files. Links and special files are refused even when named like OS metadata. A folder
+/// containing an old `project.pc` retains its actual entry name for journaled migration.
 fn read_documents(root: &Path, recovering: bool) -> Result<Documents, String> {
+    let current = existing(&root.join(ENTRY_POINT))?;
+    let legacy = existing(&root.join("project.pc"))?;
+    if current.is_some() && legacy.is_some() && !recovering {
+        return Err("Project contains both project.json and project.pc; refusing an ambiguous layout.".into());
+    }
+    let mut documents = read_documents_at(
+        root,
+        recovering,
+        if current.is_some() {
+            ENTRY_POINT
+        } else if legacy.is_some() {
+            "project.pc"
+        } else {
+            ENTRY_POINT
+        },
+    )?;
+    if recovering && let Some(legacy) = legacy {
+        documents.insert("project.pc".into(), legacy);
+    }
+    Ok(documents)
+}
+
+/// Normalize the previous entry name and power markers in memory, retaining unaffected bytes.
+/// Callers validate the resulting split document set before adopting it.
+fn readable_documents(mut documents: Documents) -> Result<Documents, String> {
+    if let Some(entry) = documents.remove("project.pc")
+        && documents.insert(ENTRY_POINT.into(), entry).is_some()
+    {
+        return Err("Project contains both project.json and project.pc.".into());
+    }
+    pcbcraft_engine::persistence::migrate_power_markers(documents)
+}
+
+/// Read the selected split layout using the normal file/size limits and managed-path policy.
+fn read_documents_at(root: &Path, recovering: bool, entry_point: &str) -> Result<Documents, String> {
     // An interrupted save may temporarily contain both removed and added definitions.
     let multiplier = if recovering { 2 } else { 1 };
     let mut entries = 0;
     regular_directory(root)?;
     let mut documents = Documents::new();
-    for name in [ENTRY_POINT, "board.json"] {
+    for name in [entry_point, "board.json"] {
         if let Some(bytes) = existing(&root.join(name))? {
             documents.insert(name.to_owned(), bytes);
         }
+    }
+    if let Some(entry) = documents.get(entry_point)
+        && let Some(path) = pcbcraft_engine::persistence::project_board_path(entry)?
+        && path != "board.json"
+        && let Some(bytes) = bound_existing(&crate::bound::Directory::open(root).map_err(error)?, &path)?
+    {
+        documents.insert(path, bytes);
     }
     for name in ["sheets", "library", "assets"] {
         let path = root.join(name);
@@ -406,30 +510,53 @@ impl Drop for FolderLock {
     }
 }
 
-/// Resolve an already validated relative path without traversing symlinked directories.
-fn safe_path(root: &Path, relative: &str, create: bool) -> Result<PathBuf, String> {
-    if !is_document_path(relative) {
-        return Err("Unsafe project document path.".to_owned());
-    }
-    regular_directory(root)?;
-    let mut current = root.to_path_buf();
-    let pieces: Vec<_> = relative.split('/').collect();
-    for piece in &pieces[..pieces.len() - 1] {
-        let parent = current.clone();
-        current.push(piece);
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if !metadata.is_dir() => return Err(format!("{}: not a regular directory", current.display())),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if create {
-                    fs::create_dir(&current).map_err(error)?;
-                    sync_dir(&parent)?;
-                }
-            }
-            Err(e) => return Err(error(e)),
+/// A validated document leaf and its captured parent, with its containing directory for
+/// optional empty-board cleanup. Windows ancestor handles remain alive throughout publication.
+struct BoundDocument {
+    parent: crate::bound::Directory,
+    name: String,
+    containing: Option<(crate::bound::Directory, String)>,
+}
+
+impl BoundDocument {
+    /// Release the leaf-parent handle before Windows removal; a symlink or nonempty directory
+    /// is never removed. Repeating cleanup after an interrupted deletion remains harmless.
+    fn remove_empty_parent(self) -> Result<(), String> {
+        let Self { parent, containing, .. } = self;
+        drop(parent);
+        if let Some((directory, name)) = containing
+            && directory.remove_dir(&name).is_ok()
+        {
+            directory.sync().map_err(error)?;
         }
+        Ok(())
     }
-    Ok(root.join(relative))
+}
+
+/// Traverse one no-follow directory component at a time and retain its verified handle.
+/// Missing parents represent absent documents unless publication explicitly creates them.
+fn bind_document(root: &crate::bound::Directory, relative: &str, create: bool) -> Result<Option<BoundDocument>, String> {
+    if !is_document_path(relative) && relative != "project.pc" {
+        return Err("Unsafe project document path.".into());
+    }
+    let mut pieces = relative.split('/').peekable();
+    let mut parent = root.clone();
+    let mut containing = None;
+    while let Some(piece) = pieces.next() {
+        if pieces.peek().is_none() {
+            return Ok(Some(BoundDocument { parent, name: piece.into(), containing }));
+        }
+        let Some(child) = parent.child(piece, create).map_err(|error| format!("{relative}: {error}"))? else { return Ok(None) };
+        containing = Some((parent, piece.into()));
+        parent = child;
+    }
+    Err("Missing project document leaf".into())
+}
+
+/// Read through the same no-follow parent binding used for writes, preserving absence.
+fn bound_existing(root: &crate::bound::Directory, relative: &str) -> Result<Option<Vec<u8>>, String> {
+    let Some(bound) = bind_document(root, relative, false)? else { return Ok(None) };
+    bound.parent.read(&bound.name, MAX_DOCUMENT_BYTES).map_err(|error| format!("{relative}: {error}"))
 }
 
 /// Refuse symlinked or non-directory roots and owned subdirectories.
@@ -466,7 +593,7 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Sync directory entry changes where the platform exposes directory fsync.
-fn sync_dir(path: &Path) -> Result<(), String> {
+pub(super) fn sync_dir(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     File::open(path).and_then(|file| file.sync_all()).map_err(error)?;
     #[cfg(not(unix))]
@@ -567,6 +694,19 @@ mod tests {
         }
     }
 
+    /// Conversion runs the same Windows preflight before exclusively creating its destination.
+    #[cfg(windows)]
+    #[test]
+    fn windows_conversion_refuses_device_names_before_destination_creation() {
+        let parent = tempfile::tempdir().unwrap();
+        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
+            let root = parent.path().join("converted");
+            let error = crate::conversion::publish(&root, pinning(library, symbol), pcbcraft_engine::persistence::Encoding::Json).unwrap_err();
+            assert!(error.contains("Windows reserves the name"), "{error}");
+            assert!(tree(parent.path()).is_empty());
+        }
+    }
+
     /// On Windows, a folder save that needs a device-named file or folder fails with a message
     /// naming it before anything is written. A new destination isn't created, and an existing
     /// project keeps its files, lock and journal state, and still opens (#156).
@@ -581,7 +721,7 @@ mod tests {
             let root = base.join("board");
             for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
                 let error = save(&root, None, &pinning(library, symbol), &mut |_| Ok(())).unwrap_err();
-                assert!(error.contains("Windows reserves the name") && error.contains(".pc.zip"), "{error}");
+                assert!(error.contains("Windows reserves the name") && error.contains(".pc"), "{error}");
                 assert!(tree(parent.path()).is_empty(), "{library}/{symbol} wrote {:?}", tree(parent.path()));
             }
             let ordinary = pinning("workshop", "resistor");
@@ -618,7 +758,7 @@ mod tests {
         for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor"), ("con", "aux")] {
             let parent = tempfile::tempdir().unwrap();
             let project = pinned_project(library, symbol);
-            let archive = parent.path().join("board.pc.zip");
+            let archive = parent.path().join("board.pc");
             fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
             assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
         }

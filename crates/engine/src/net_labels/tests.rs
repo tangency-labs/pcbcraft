@@ -131,7 +131,7 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     apply(&mut s, ADD, json!({"sheet":main.id(),"name":"GND","style":"global","x_nm":0,"y_nm":0,"rotation":90}));
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let path = format!("sheets/{}.json", main.id());
-    assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["project.pc", &path]);
+    assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["project.json", &path]);
     assert!(String::from_utf8(docs[&path].clone()).unwrap().contains("pcbcraft-sheet/3"));
     let reopened = persistence::decode_documents(&docs).unwrap();
     assert_eq!(persistence::encode_documents(reopened.clone()).unwrap(), docs);

@@ -104,7 +104,7 @@ fn routing_a_connection_clears_its_airwire_saves_and_undoes() {
     assert_eq!((on_net(&ratsnest.lines), on_net(&routed.lines)), (2, 1), "only the routed net loses an airwire");
 
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let board = String::from_utf8(saved["board.json"].clone()).unwrap();
+    let board = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     assert!(board.contains("\"format\": \"pcbcraft-board/12\""), "{board}");
     assert_eq!(board.matches("\"width_nm\":250000").count(), 3, "one line per segment");
     let reopened = decode_documents(&saved).unwrap();
@@ -192,20 +192,20 @@ fn board_format_12_and_tracks_require_each_other() {
     let front = copper_layers(&s)[0];
     route(&mut s, front, &[Point { x_nm: 0, y_nm: 20_000_000 }, Point { x_nm: 5_000_000, y_nm: 20_000_000 }]).unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     let mut downgraded = saved.clone();
-    downgraded.insert("board.json".into(), text.replace("pcbcraft-board/12", "pcbcraft-board/10").into_bytes());
+    downgraded.insert(crate::persistence::test_board_path(&downgraded), text.replace("pcbcraft-board/12", "pcbcraft-board/10").into_bytes());
     assert!(decode_documents(&downgraded).is_err(), "older formats cannot carry tracks");
     let start = text.find("  \"tracks\": [").unwrap();
     let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
     let mut untracked = saved.clone();
-    untracked.insert("board.json".into(), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    untracked.insert(crate::persistence::test_board_path(&untracked), format!("{}{}", &text[..start], &text[end..]).into_bytes());
     assert!(decode_documents(&untracked).is_err(), "format 12 requires tracks");
     let mut bad_layer = saved;
     let front = front.to_string();
     let edge = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id.to_string();
     let track_line = text[start..end].lines().nth(1).unwrap();
-    bad_layer.insert("board.json".into(), text.replace(track_line, &track_line.replace(&front, &edge)).into_bytes());
+    bad_layer.insert(crate::persistence::test_board_path(&bad_layer), text.replace(track_line, &track_line.replace(&front, &edge)).into_bytes());
     assert!(decode_documents(&bad_layer).is_err(), "tracks must be on copper");
 }
 
@@ -263,7 +263,7 @@ fn vias_carry_a_route_between_layers_in_one_edit() {
     assert_eq!(on_net(&view(&s).ratsnest().unwrap().lines), 1, "the via route joins both pads");
 
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     assert!(text.contains("\"format\": \"pcbcraft-board/13\"") && text.contains("  \"vias\": [\n"), "{text}");
     assert_eq!(text.matches("\"drill_nm\":300000").count(), 2, "one line per via");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
@@ -375,11 +375,11 @@ fn an_existing_short_blocks_only_routes_into_it() {
 fn an_empty_tracks_field_is_rejected_before_format_12() {
     let s = routed_fixture();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     assert!(text.contains("\"format\": \"pcbcraft-board/10\""), "{text}");
     let list = if text.contains("  \"assignments\": [\n") { "  \"assignments\": [\n" } else { "  \"footprints\": [\n" };
     let mut with_empty = saved.clone();
-    with_empty.insert("board.json".into(), text.replacen(list, &format!("  \"tracks\": [],\n{list}"), 1).into_bytes());
+    with_empty.insert(crate::persistence::test_board_path(&with_empty), text.replacen(list, &format!("  \"tracks\": [],\n{list}"), 1).into_bytes());
     assert!(decode_documents(&with_empty).is_err());
     assert!(decode_documents(&saved).is_ok());
 }
@@ -476,29 +476,29 @@ fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
     let y = 20_000_000;
     route(&mut s, front, &[Point { x_nm: 0, y_nm: y }, Point { x_nm: 2_000_000, y_nm: y }]).unwrap();
     let tracks_only = encode_documents(s.snapshot().unwrap()).unwrap();
-    let text = String::from_utf8(tracks_only["board.json"].clone()).unwrap();
+    let text = String::from_utf8(tracks_only[&crate::persistence::test_board_path(&tracks_only)].clone()).unwrap();
     assert!(text.contains("\"format\": \"pcbcraft-board/12\"") && !text.contains("\"vias\""), "{text}");
 
     route_with_vias(&mut s, front, &[Point { x_nm: 4_000_000, y_nm: y }, Point { x_nm: 6_000_000, y_nm: y }], &[(1, back)]).unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     assert!(text.contains("\"format\": \"pcbcraft-board/13\""), "{text}");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let mut as_12 = saved.clone();
-    as_12.insert("board.json".into(), text.replace("pcbcraft-board/13", "pcbcraft-board/12").into_bytes());
+    as_12.insert(crate::persistence::test_board_path(&as_12), text.replace("pcbcraft-board/13", "pcbcraft-board/12").into_bytes());
     assert!(decode_documents(&as_12).is_err(), "format 12 rejects vias");
 
     // Format 13 may carry vias alone, and requires at least one.
     let tracks: Vec<_> = view(&s).tracks().iter().map(|track| track.id).collect();
     s.apply(DELETE_TRACKS, &json!({"tracks":tracks,"expected_revision":s.revision()})).unwrap();
     let vias_only = encode_documents(s.snapshot().unwrap()).unwrap();
-    let text = String::from_utf8(vias_only["board.json"].clone()).unwrap();
+    let text = String::from_utf8(vias_only[&crate::persistence::test_board_path(&vias_only)].clone()).unwrap();
     assert!(text.contains("\"format\": \"pcbcraft-board/13\"") && !text.contains("\"tracks\""), "{text}");
     assert_eq!(encode_documents(decode_documents(&vias_only).unwrap()).unwrap(), vias_only);
     let start = text.find("  \"vias\": [").unwrap();
     let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
     let mut no_vias = vias_only.clone();
-    no_vias.insert("board.json".into(), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    no_vias.insert(crate::persistence::test_board_path(&no_vias), format!("{}{}", &text[..start], &text[end..]).into_bytes());
     assert!(decode_documents(&no_vias).is_err(), "format 13 requires vias");
 }
 
@@ -520,7 +520,11 @@ fn standalone_vias_place_undo_and_refuse_shorts() {
     place_via(&mut s, at).unwrap();
     assert_eq!(s.revision(), revision + 1);
     assert_eq!(view(&s).vias().iter().map(|via| via.at).collect::<Vec<_>>(), vec![at]);
-    assert!(String::from_utf8(encode_documents(s.snapshot().unwrap()).unwrap()["board.json"].clone()).unwrap().contains("pcbcraft-board/13"));
+    assert!(
+        String::from_utf8(encode_documents(s.snapshot().unwrap()).unwrap()[&s.project().unwrap().board_document_path().unwrap()].clone())
+            .unwrap()
+            .contains("pcbcraft-board/13")
+    );
     let revision = s.revision();
     assert!(place_via(&mut s, at).is_err(), "one via per position");
     // A 0.6 mm pad between two 0402 lands 1.05 mm apart (0.45 mm gap) touches both.

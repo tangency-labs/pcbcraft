@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(path.parent().ok_or("document has no parent")?)?;
         fs::write(path, bytes)?;
     }
-    fs::write(destination.join("two-resistors.pc.zip"), encode_packed(project)?)?;
+    fs::write(destination.join("two-resistors.pc"), encode_packed(project)?)?;
     let mut hand_zip = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).last_modified_time(zip::DateTime::default());
     hand_zip.add_directory("two-resistors/", options)?;
@@ -26,6 +26,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hand_zip.start_file(format!("two-resistors/{path}"), options)?;
         hand_zip.write_all(&bytes)?;
     }
-    fs::write(destination.join("two-resistors-no-manifest.pc.zip"), hand_zip.finish()?.into_inner())?;
+    fs::write(destination.join("two-resistors-no-manifest.pc"), hand_zip.finish()?.into_inner())?;
     Ok(())
 }

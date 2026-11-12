@@ -71,11 +71,11 @@ fn transforms_are_atomic_revision_checked_and_persistent() {
     assert!(session.apply(SET_FOOTPRINT_TRANSFORM, &transform).is_err());
     assert_eq!(session.inspect(), changed);
     let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&bytes["board.json"]).unwrap().contains("pcbcraft-board/4"));
+    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/4"));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(
-        bytes.iter().filter(|(path, _)| *path != "board.json").collect::<Vec<_>>(),
-        original_bytes.iter().filter(|(path, _)| *path != "board.json").collect::<Vec<_>>()
+        bytes.iter().filter(|(path, _)| !path.ends_with("board.json")).collect::<Vec<_>>(),
+        original_bytes.iter().filter(|(path, _)| !path.ends_with("board.json")).collect::<Vec<_>>()
     );
     session.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original_bytes);
@@ -140,15 +140,15 @@ fn rotated_board_format_preserves_setup_and_rejects_invalid_orientation() {
         assert!(crate::persistence::encode(s.snapshot().unwrap()).is_err());
         for value in [json!(45.5), json!(-90), json!(360), json!(null), json!("90")] {
             let mut bad = bytes.clone();
-            let mut board: Value = serde_json::from_slice(&bad["board.json"]).unwrap();
+            let mut board: Value = serde_json::from_slice(&bad[&crate::persistence::test_board_path(&bad)]).unwrap();
             board["footprints"][0]["rotation"] = value;
-            bad.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+            bad.insert(crate::persistence::test_board_path(&bad), serde_json::to_vec(&board).unwrap());
             assert!(decode_documents(&bad).is_err());
         }
         let mut old = bytes.clone();
-        let mut board: Value = serde_json::from_slice(&old["board.json"]).unwrap();
+        let mut board: Value = serde_json::from_slice(&old[&crate::persistence::test_board_path(&old)]).unwrap();
         board["format"] = json!("pcbcraft-board/2");
-        old.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+        old.insert(crate::persistence::test_board_path(&old), serde_json::to_vec(&board).unwrap());
         assert!(decode_documents(&old).unwrap_err().contains("format 4"));
     }
 }

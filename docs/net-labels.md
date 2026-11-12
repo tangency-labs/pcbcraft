@@ -68,5 +68,11 @@ GND symbol on the same sheet; an explicit label text layout selects format 5.
 Power uses the normal component budget
 and project-pinned native definitions, including offline reopening and Home
 previews. The former `power`, `power_bar` and `ground` net-label styles and their
-separate editing tools have been removed. Such older records are rejected;
-there is no automatic migration or silent substitution.
+separate editing tools have been removed. Opening an existing split project
+migrates these records in memory to pinned revision-1 `power/vcc`, `power/vcc-bar`
+and `power/gnd` native symbols. Their net names, positions, quarter-turn rotations,
+authored junctions and wire routes survive; directly attached wire endpoints are
+redirected to the new native terminals. New component identities are allocated
+above the retained watermark through the shared placement command. First Save
+persists the upgrade; previews and Open do not rewrite the source. Unaffected
+documents retain their bytes. New editing commands still refuse retired styles.

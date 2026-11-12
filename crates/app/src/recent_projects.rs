@@ -148,10 +148,10 @@ mod tests {
         let mut recent = RecentProjects::default();
         let root = std::env::temp_dir();
         for index in 0..20 {
-            recent.remember(&format!("Project {index}"), root.join(format!("{index}.pc.zip")));
+            recent.remember(&format!("Project {index}"), root.join(format!("{index}.pc")));
         }
         assert_eq!(recent.entries().len(), MAX_RECENT);
-        recent.remember("Renamed", root.join("15.pc.zip"));
+        recent.remember("Renamed", root.join("15.pc"));
         assert_eq!(recent.entries()[0].name, "Renamed");
         assert_eq!(recent.entries().len(), MAX_RECENT);
         let restored = RecentProjects::parse(&recent.to_text());
@@ -159,7 +159,7 @@ mod tests {
         assert!(!RecentProjects::parse(&recent.to_text()).take_changed());
         assert!(recent.take_changed());
         assert!(!recent.take_changed());
-        recent.remove(&root.join("15.pc.zip"));
+        recent.remove(&root.join("15.pc"));
         assert!(recent.entries().iter().all(|entry| entry.name != "Renamed"));
         recent.clear();
         assert!(recent.entries().is_empty());
@@ -188,9 +188,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_history_from_older_builds_uses_plain_drive_paths() {
-        let plain = PathBuf::from(r"C:\Projects\board.pc.zip");
+        let plain = PathBuf::from(r"C:\Projects\board.pc");
         let text = serde_json::to_string(&vec![
-            RecentProject { name: "Older build".to_owned(), path: PathBuf::from(r"\\?\C:\Projects\board.pc.zip") },
+            RecentProject { name: "Older build".to_owned(), path: PathBuf::from(r"\\?\C:\Projects\board.pc") },
             RecentProject { name: "Current build".to_owned(), path: plain.clone() },
         ])
         .unwrap();
@@ -200,23 +200,23 @@ mod tests {
 
     /// A stored `\\?\` path stays as it is when the plain spelling would open something else.
     /// Guards the #155 review: every Windows version drops the trailing dot from
-    /// `C:\Projects\board.pc.zip.`, naming a different file.
+    /// `C:\Projects\board.pc.`, naming a different file.
     #[cfg(windows)]
     #[test]
     fn windows_history_keeps_verbatim_paths_whose_plain_form_names_another_file() {
-        let verbatim = PathBuf::from(r"\\?\C:\Projects\board.pc.zip.");
+        let verbatim = PathBuf::from(r"\\?\C:\Projects\board.pc.");
         let text = serde_json::to_string(&vec![RecentProject { name: "Trailing dot".to_owned(), path: verbatim.clone() }]).unwrap();
         assert_eq!(RecentProjects::parse(&text).entries()[0].path, verbatim);
     }
 
-    /// A stored device-named path such as `\\?\C:\Projects\CON.pc.zip` keeps `\\?\` exactly when
+    /// A stored device-named path such as `\\?\C:\Projects\CON.pc` keeps `\\?\` exactly when
     /// this Windows reads the plain spelling as the device: Windows 10 and earlier do, Windows 11
     /// reads it as an ordinary file and restores the plain form.
     #[cfg(windows)]
     #[test]
     fn windows_history_follows_how_windows_reads_device_names() {
-        let verbatim = PathBuf::from(r"\\?\C:\Projects\CON.pc.zip");
-        let plain = PathBuf::from(r"C:\Projects\CON.pc.zip");
+        let verbatim = PathBuf::from(r"\\?\C:\Projects\CON.pc");
+        let plain = PathBuf::from(r"C:\Projects\CON.pc");
         let expected = if std::path::absolute(&plain).unwrap() == plain { plain } else { verbatim.clone() };
         let text = serde_json::to_string(&vec![RecentProject { name: "Device name".to_owned(), path: verbatim }]).unwrap();
         assert_eq!(RecentProjects::parse(&text).entries()[0].path, expected);

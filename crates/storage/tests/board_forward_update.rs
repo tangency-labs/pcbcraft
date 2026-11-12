@@ -54,7 +54,7 @@ fn documents(session: &Session) -> Documents {
 /// Inspect exact persisted accepted membership through the production baseline type;
 /// neither array position nor net names establish the electrical group identity.
 fn accepted_groups(session: &Session) -> BTreeSet<BTreeSet<(String, String)>> {
-    let board: Value = serde_json::from_slice(&documents(session)["board.json"]).unwrap();
+    let board: Value = serde_json::from_slice(&documents(session)[&session.project().unwrap().board_document_path().unwrap()]).unwrap();
     let baseline: Baseline = serde_json::from_value(board["baseline"].clone()).unwrap();
     baseline
         .nets
@@ -176,7 +176,7 @@ fn round_trip(root: &Path, name: &str, session: &Session) -> Arc<Project> {
     let folder = root.join(name);
     pcbcraft_storage::save(&folder, None, &expected, &mut |_| Ok(())).unwrap();
     assert_eq!(pcbcraft_storage::load(&folder).unwrap(), expected);
-    let reopened = pcbcraft_storage::open(&folder.join("project.pc")).unwrap();
+    let reopened = pcbcraft_storage::open(&folder.join("project.json")).unwrap();
     assert_eq!(encode_documents(reopened.clone()).unwrap(), expected);
     let mut checkpoints = Vec::new();
     pcbcraft_storage::save(&folder, Some(&expected), &expected, &mut |phase| {
@@ -185,7 +185,7 @@ fn round_trip(root: &Path, name: &str, session: &Session) -> Arc<Project> {
     })
     .unwrap();
     assert!(checkpoints.is_empty(), "no-op save staged a write: {checkpoints:?}");
-    let archive = root.join(format!("{name}.pc.zip"));
+    let archive = root.join(format!("{name}.pc"));
     let bytes = encode_packed(session.snapshot().unwrap()).unwrap();
     fs::write(&archive, &bytes).unwrap();
     let packed = pcbcraft_storage::open(&archive).unwrap();

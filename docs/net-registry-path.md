@@ -20,9 +20,11 @@ The registry is therefore the next step for both #57 and #77.
 
 - **Project identity.** Every project has a saved project UUID.
 - **Board registry.** `pcbcraft-project/9` and its successors (12, 13) hold a
-  required `boards` array with zero or one registration: a board UUID, a name and
+  required `boards` array with zero or one registration: a board UUID and name.
+  Project/14 adds `layout_root` and its portable board-folder segment in place of
   the transitional root `board.json` (see [single-board-storage.md](single-board-storage.md)).
-  Legacy projects keep a deterministic compatibility board ID, derived from the
+  Supported split schemas with implicit board ownership keep a deterministic
+  compatibility board ID, derived from the
   project UUID with a domain-separated SHA-256 and UUID v8.
 - **Numeric watermark.** `numeric_id_high_water` keeps numeric design-object IDs
   from being reused within the saved lineage.
@@ -38,7 +40,6 @@ The registry is therefore the next step for both #57 and #77.
   Document paths that Windows reads as devices are already refused.
 
 Not built yet:
-- `layout_root` and per-board folders;
 - `instances.json` and `schematic_instances`;
 - circuit uses and sheet occurrence identities;
 - any persistent net ID.
@@ -59,7 +60,7 @@ Power symbols are ordinary components with declared power terminals, so a net
 named GND by power symbols is anchored by component terminals. It needs no
 separate kind, and a ground pour's net can be promoted as soon as slice 3 lands.
 
-Its storage home is a board's `instances.json`, or `project.pc` under
+Its storage home is a board's `instances.json`, or `project.json` under
 `schematic_instances` for schematic-only records. So the registry needs
 occurrence identities and those two homes.
 
@@ -68,11 +69,16 @@ occurrence identities and those two homes.
 Follow [multiboard-storage.md](multiboard-storage.md#migration-and-implementation-order),
 taking from each step only what the registry needs. Each slice is its own
 reviewed format change with its own migration tests, and each lands before the
-next starts.
+next starts. These migrations use a `project.json` folder or container-v3 `.pc`
+package, including the supported older split document schemas within that layout.
+PR #268 also reads immediately previous `project.pc` split folders and container-v2
+or manifest-less split archives in memory, then upgrades them on desktop Save or
+browser Download. Standalone JSON and container-v1 projects remain refused; see the
+[compatibility boundary](native-project-storage.md#compatibility-and-fixtures).
 
 ### Slice 1: board folders ([#228](https://github.com/tangency-labs/pcbcraft/issues/228))
 
-- **Layout.** `project.pc` gains `layout_root` and each board registration gains
+- **Layout.** `project.json` gains `layout_root` and each board registration gains
   its `folder`. The board's `board.json` moves to
   `join(layout_root, "boards", folder, "board.json")`.
 - **Folder names** follow the
@@ -80,23 +86,26 @@ next starts.
   a slug plus 12 hexadecimal characters of the board UUID. They are checked
   against Windows reserved names (with the existing document-path check),
   case-only collisions and non-ASCII names.
-- **Containers.** The packed `.pc.zip` (`pcbcraft-container/2`) stores the split
-  documents with their paths, so it carries the new layout. The single-document
-  encodings (`pcbcraft-container/1`, `pcbcraft-project/10`) have no folders and
-  are unaffected.
+- **Containers.** The packed `.pc` (`pcbcraft-container/3`) stores the split
+  documents with their paths, so it carries the new layout. Single-document
+  encodings (including `pcbcraft-container/1` and `pcbcraft-project/10`) have no
+  folders and remain diagnostic-only inputs; normal app/CLI opens refuse them.
 - **Where the code changes.** The split-document codec in the engine, the folder
   reader and recovery in `pcbcraft-storage`, and the app's native and web
   open/save paths. Board commands already resolve the board by its ID, so they
   don't change.
 - **Migration.**
-  - A legacy or `project/9`–`13` project keeps its encoding on an unchanged
-    open and save.
-  - The first operation needing the new format migrates the whole project in
-    one journaled save. It writes the board folder's `board.json` and removes
-    the root one together, and the second save produces no diff.
+  - Opening a supported flat `project.json`/container-v3 project leaves its files
+    untouched. Its first Save migrates the layout even without design edits.
+  - One journaled save writes the registered board folder's `board.json`, updates
+    the project entry point and removes the root board together. The second save
+    produces no diff. New and explicitly converted projects use board folders
+    from their first save, including single-board projects.
+  - Successful adoption persists across Undo/Redo without an electrical edit;
+    failed/cancelled saves do not adopt metadata.
   - Existing `boards/`, `builds/`, `documents/` or `outputs/` directories that
     the project doesn't own are never claimed. A
-    `pcbcraft-data-<project-id-prefix>/` root is chosen instead, previewed, and
+    `pcbcraft-data-<project-id-prefix>/` root is chosen instead and
     saved once.
 - **Out of scope:** relocating a board folder, retired-board areas, variants,
   builds, outputs and associated documents. None exists yet, and each keeps the
@@ -112,7 +121,7 @@ next starts.
     (domain-separated SHA-256/UUID v8 from the project UUID, plus the sheet UUID
     for occurrences). They are persisted on migration.
 - **Homes.** On a board project, these records go in `<board_root>/instances.json`
-  with its board-ID header. On a schematic-only project, they go in `project.pc`
+  with its board-ID header. On a schematic-only project, they go in `project.json`
   under `schematic_instances`. Creating the first board moves them in the same
   transaction.
 - **Components** keep their numeric IDs, which become the instance IDs. No
@@ -180,7 +189,7 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
    is needed for repeated circuits, not for the registry. It lands with
    repeated-instance editing.
 2. **Where components are stored after slice 2.** Proposed: they stay in
-   `project.pc` until the repeated-instance slice, which moves them into
+   `project.json` until the repeated-instance slice, which moves them into
    `instances.json` together with the definition/instance split. Moving them
    earlier would change their record shape twice. Their later arrival adds a
    section to `instances.json` without reshaping what slice 2 writes.
@@ -194,8 +203,9 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
 ## Acceptance
 
 **Slice 1**
-- A legacy project and one at each of `project/9`, 12 and 13 open and save
-  unchanged.
+- An implicit-board project in a supported split schema and one at each of
+  `project/9`, 12 and 13 open without rewriting in a `project.json` folder or
+  container-v3 `.pc` package; first Save migrates even without design edits.
 - The first migrating save moves `board.json` into its folder, keeps the board ID,
   name, placements, setup, outline, copper and baseline, and the second save has
   no diff.
@@ -205,8 +215,9 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
   untouched.
 - Folder names are checked for `con`, `aux`, case-only collisions and non-ASCII
   names.
-- A packed `.pc.zip` round-trips through the new layout. Single-document files
-  are unchanged.
+- A container-v3 `.pc` round-trips through the new layout. Historical
+  single-document fixtures stay unchanged in diagnostic codec tests and remain
+  refused by normal app/CLI opens.
 - A project folder opened by an older build after migration is refused with a
   format message, not partly read.
 
@@ -215,7 +226,7 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
   first migrated save, and are persisted by it.
 - A multi-unit component on two flat sheets is one instance.
 - References, values, package choices and terminal mappings are unchanged.
-- A schematic-only project stores its records in `project.pc`. Creating the first
+- A schematic-only project stores its records in `project.json`. Creating the first
   board moves them to `instances.json` in one transaction.
 
 **Slice 3:** the cases from

@@ -2,7 +2,7 @@
 
 use pcbcraft_engine::{
     Project,
-    persistence::{ENTRY_POINT, Encoding, decode_documents, decode_file, read_bytes},
+    persistence::{ENTRY_POINT, Encoding, decode_documents, decode_packed, read_bytes},
 };
 use std::{
     fs::{self, File, OpenOptions},
@@ -10,7 +10,10 @@ use std::{
     sync::Arc,
 };
 
+mod bound;
+pub mod conversion;
 mod folder;
+pub mod layout;
 pub mod library;
 pub use folder::{load, save};
 
@@ -18,12 +21,19 @@ pub use folder::{load, save};
 /// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
 /// `\\?\` form, which people don't recognise. It stays where the plain spelling would name
 /// something else: names ending in a dot or space, very long paths, and, on Windows 10 and
-/// earlier, device names such as `CON.pc.zip`. Paths on other platforms never carry the prefix
+/// earlier, device names such as `CON.pc`. Paths on other platforms never carry the prefix
 /// and pass through unchanged.
 pub fn plain_path_if_equivalent(path: PathBuf) -> PathBuf {
     let plain = dunce::simplified(&path);
+    // dunce conservatively retains device-name prefixes even on Windows versions where
+    // the OS treats them as ordinary filenames. Let the OS parser decide for drive paths.
+    let drive_path = path.to_str().and_then(|text| text.strip_prefix(r"\\?\")).filter(|text| {
+        let bytes = text.as_bytes();
+        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+    });
+    let plain = if plain == path { drive_path.map(Path::new).unwrap_or(plain) } else { plain };
     // dunce looks only at the text before a name's last dot when it checks device names, so
-    // `CON.pc.zip` passes it. Windows 10's parser (GetFullPathNameW, behind `std::path::absolute`)
+    // a multi-dot name such as `CON.board.pc` can pass it. Windows 10's parser (GetFullPathNameW, behind `std::path::absolute`)
     // reads that name as `\\.\CON`; Windows 11's reads it as a file. Asking the parser covers
     // both, so the plain form is used only if the parser returns it as is.
     if plain != path && std::path::absolute(plain).is_ok_and(|parsed| parsed == plain) {
@@ -52,7 +62,7 @@ pub fn open_lock_file(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
-/// Open a folder, its project.pc entry point, a packed archive or a legacy single-file project.
+/// Open a folder, its project.json entry point, or a packed archive.
 /// Interrupted folder saves recover under the writer lock before any documents are adopted.
 pub fn open(path: &Path) -> Result<Arc<Project>, String> {
     open_with(path, load)
@@ -72,7 +82,14 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     // same, so errors name the path people chose rather than its `\\?\` form (#154).
     let path = plain_path_if_equivalent(fs::canonicalize(parent).map_err(|e| e.to_string())?.join(name));
     let parent = path.parent().ok_or("Project path has no parent folder")?.to_path_buf();
-    if name == ENTRY_POINT && parent.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())? {
+    // Recent history may still point at the entry removed by a completed migration.
+    if name == "project.pc"
+        && matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+        && parent.join(ENTRY_POINT).try_exists().map_err(|e| e.to_string())?
+    {
+        return decode_documents(&folder(&parent)?);
+    }
+    if (name == ENTRY_POINT || name == "project.pc") && parent.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())? {
         return decode_documents(&folder(&parent)?);
     }
     let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
@@ -84,26 +101,12 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     }
     let bytes = read_bytes(File::open(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     if Encoding::detect(&bytes) == Encoding::Json {
-        let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if matches!(
-            header["format"].as_str(),
-            Some(
-                "pcbcraft-project/5"
-                    | "pcbcraft-project/6"
-                    | "pcbcraft-project/7"
-                    | "pcbcraft-project/9"
-                    | "pcbcraft-project/11"
-                    | "pcbcraft-project/12"
-                    | "pcbcraft-project/13"
-            )
-        ) {
-            if name != ENTRY_POINT {
-                return Err("A split project's entry point must be named project.pc.".to_owned());
-            }
+        if name == ENTRY_POINT || name == "project.pc" {
             return decode_documents(&folder(&parent)?);
         }
+        return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
-    decode_file(&bytes).map(|(project, _)| project)
+    decode_packed(&bytes).map(|packed| packed.project)
 }
 
 #[cfg(test)]
@@ -144,17 +147,23 @@ mod tests {
         let target = session.project().unwrap().board_target().unwrap();
         let created = encode_documents(session.snapshot().unwrap()).unwrap();
         save(&root, Some(&empty), &created, &mut |_| Ok(())).unwrap();
-        assert!(root.join("board.json").exists());
+        let board_path = session.project().unwrap().board_document_path().unwrap();
+        assert!(root.join(&board_path).exists());
         assert_eq!(open(&root).unwrap().board_target(), Some(target));
         assert_eq!(preview(&root.join(ENTRY_POINT)).unwrap().board_target(), Some(target));
         session.apply("edit.undo", &serde_json::json!({})).unwrap();
         let undone = encode_documents(session.snapshot().unwrap()).unwrap();
         save(&root, Some(&created), &undone, &mut |_| Ok(())).unwrap();
-        assert!(!root.join("board.json").exists());
+        assert!(!root.join(&board_path).exists());
         assert!(open(&root).unwrap().board_target().is_none());
         assert_eq!(fs::read(root.join("README.md")).unwrap(), b"User notes");
         session.apply("edit.redo", &serde_json::json!({})).unwrap();
         assert_eq!(session.project().unwrap().board_target(), Some(target));
+        let prepared = crate::layout::prepare(session.snapshot().unwrap(), Some(&root), Some(&undone)).unwrap();
+        assert_eq!(prepared.board_document_path().as_deref(), Some(board_path.as_str()));
+        let redone = encode_documents(prepared).unwrap();
+        save(&root, Some(&undone), &redone, &mut |_| Ok(())).unwrap();
+        assert_eq!(load(&root).unwrap(), created);
     }
 
     /// Capture every name and file byte so previews cannot silently create locks or recover data.
@@ -182,13 +191,49 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, bytes).unwrap();
         }
-        let archive = dir.path().join("project.pc.zip");
+        let archive = dir.path().join("project.pc");
         fs::write(&archive, encode_packed(project()).unwrap()).unwrap();
         let before = tree(dir.path());
         for path in [&root, &root.join(ENTRY_POINT), &archive] {
             assert_eq!(preview(path).unwrap().symbols().len(), 1);
         }
         assert_eq!(tree(dir.path()), before);
+    }
+
+    /// Schematic-only previous projects preview without writes, reject mixed entry points,
+    /// and detect external changes before a first-save migration can publish anything.
+    #[test]
+    fn previous_schematic_project_preview_and_migration_refusals() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("old");
+        fs::create_dir(&root).unwrap();
+        let before = encode_documents(project()).unwrap();
+        for (path, bytes) in &before {
+            let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let original = tree(dir.path());
+        assert_eq!(preview(&root).unwrap().symbols().len(), 1);
+        assert_eq!(tree(dir.path()), original);
+        let loaded = open(&root).unwrap();
+        let prepared = layout::prepare(loaded, Some(&root), Some(&before)).unwrap();
+        let after = encode_documents(prepared).unwrap();
+        fs::copy(root.join("project.pc"), root.join(ENTRY_POINT)).unwrap();
+        assert!(preview(&root).is_err());
+        assert!(open(&root).is_err());
+        fs::remove_file(root.join(ENTRY_POINT)).unwrap();
+        let mut changed = before[ENTRY_POINT].clone();
+        changed.push(b' ');
+        fs::write(root.join("project.pc"), changed).unwrap();
+        let external = tree(&root);
+        assert!(save(&root, Some(&before), &after, &mut |_| Ok(())).is_err());
+        assert_eq!(tree(&root), external);
+        fs::write(root.join("project.pc"), &before[ENTRY_POINT]).unwrap();
+        save(&root, Some(&before), &after, &mut |_| Ok(())).unwrap();
+        assert!(!root.join("project.pc").exists());
+        assert_eq!(preview(&root).unwrap().symbols().len(), 1);
+        assert_eq!(load(&root).unwrap(), after);
     }
 
     /// Contended projects return immediately; pending recovery stays untouched until an explicit

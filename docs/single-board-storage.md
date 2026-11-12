@@ -35,11 +35,14 @@ split a circuit use or represent mixed physical owners. Sheet hierarchy and
 browser presentation do not establish a different owner. Later occurrence and
 board-assignment migrations must preserve this whole-scope association explicitly.
 
-The root `board.json` path is an intentional transitional format boundary, not
-the per-board folder codec described in the multiboard design. A later folder
-migration must preserve the registered ID, move only managed documents atomically
-and handle user-owned paths under that design. This slice neither scans folders
-for boards nor accepts additional paths under version 9.
+Project/14 replaces the transitional `file` field with a portable `folder`
+segment and adds `layout_root`, while retaining zero-or-one ownership. New and
+converted projects use it from their first save. Supported flat layouts open
+without rewriting; their first Save moves the board even without design edits,
+then subsequent unchanged saves have no diff. The native storage contract's
+[board-folder migration](native-project-storage.md#board-folders-and-first-save-migration)
+defines collision handling, foreign namespaces and journaled publication.
+Neither layout discovers boards by scanning directories.
 
 ## Creation and legacy migration
 
@@ -50,18 +53,19 @@ its name and requiring the current revision. A second creation is refused.
 Opening the PCB workspace alone does not create physical state.
 
 Legacy formats retain their sole deterministic compatibility board identity and
-their old encoding on unchanged open/save. The first authored physical change
+their old encoding on Open and in the low-level codec until Save migrates it. The first authored physical change
 persists that same ID as a registration named `Board`, upgrading the entry point
 in the same transaction. Schematic-only edits do not independently register a
 legacy board. Undo restores the earlier ownership representation while allocation
-metadata continues to obey its monotonic contract.
+metadata continues to obey its monotonic contract. Once Save adopts project/14,
+Undo/Redo retain that storage layout and selected root across design history.
 
 An older project may legally have a sheet UUID equal to its deterministic board
 UUID, because those were separate typed addresses. That case keeps its legacy
-ownership encoding through physical edits and reopening instead of silently
-renaming either identity or publishing an invalid new registry. New explicit
-registries continue to reject collisions; a later format migration must resolve
-this compatibility case deliberately.
+ownership encoding through physical edits instead of renaming either identity.
+Project/14 migration preserves this exact deterministic compatibility ID and
+`Board` name even when a sheet shares its UUID; new arbitrary colliding board
+registrations remain invalid. The typed board and sheet addresses stay distinct.
 
 New board IDs use independent UUID allocation. Rename, save, reopen and view
 creation cannot derive another identity from a name or a path. GUI and MCP use

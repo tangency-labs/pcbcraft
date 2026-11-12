@@ -49,7 +49,7 @@ fn moved_reference_changes_only_its_gerber_silkscreen() {
         [after.iter().find(|output| output.name.ends_with("-Silkscreen_Top.gbr")).unwrap().name.as_str()]
     );
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(String::from_utf8_lossy(&documents["board.json"]).contains("pcbcraft-board/15"));
+    assert!(String::from_utf8_lossy(&documents[&crate::persistence::test_board_path(&documents)]).contains("pcbcraft-board/15"));
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
@@ -102,7 +102,7 @@ fn moved_reference_round_trips_with_bottom_tracks_and_vias() {
     assert!(!expected.is_empty());
     assert_eq!(actual, expected, "mirror local X before the quarter turn");
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
-    let board: serde_json::Value = serde_json::from_slice(&saved["board.json"]).unwrap();
+    let board: serde_json::Value = serde_json::from_slice(&saved[&crate::persistence::test_board_path(&saved)]).unwrap();
     assert_eq!(board["format"], "pcbcraft-board/15");
     assert!(!board["tracks"].as_array().unwrap().is_empty());
     assert!(!board["vias"].as_array().unwrap().is_empty());

@@ -230,8 +230,8 @@ fn native_power_roundtrips_with_schematic_only_package_choices() {
     )
     .unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let entry: Value = serde_json::from_slice(&saved["project.pc"]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/13");
+    let entry: Value = serde_json::from_slice(&saved["project.json"]).unwrap();
+    assert_eq!(entry["format"], "pcbcraft-project/14");
     assert!(!saved.contains_key("board.json"));
     let reopened = decode_documents(&saved).unwrap();
     assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
