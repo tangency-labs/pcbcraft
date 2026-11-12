@@ -185,6 +185,24 @@ pins connects it to the preserved wire ends.
 
 ## Drawing and editing wires
 
+### Intentionally unused pins
+
+Hover a pin endpoint and press **Q**, or choose **Capture → No connect** and
+click the pins to mark. An original cross follows each marked terminal through
+symbol movement and rotation. **Esc** or right-click cancels the placement tool;
+empty-space clicks do not create detached marks. Right-click a marked pin and
+choose **Remove no-connect marker** to clear its intent. These edits support
+Undo/Redo and travel with copied parts.
+
+**Analyze → Electrical menu → No-connect check** lists intentional no-connects,
+unmarked unconnected pins and connected, missing or type-changed marker targets.
+Use **Show** to navigate to a current pin. Connected or incompatible markers use
+error ink; marking a pin never removes its wires or changes connectivity. This
+focused check does not implement the remaining type-conflict and power-driver
+ERC rules. See the [identity and storage contract](no-connect-markers.md).
+
+### Wires
+
 Click an unconnected symbol pin or free wire end to start directly. Press **W** to
 start immediately at the pointer, including on a connected pin, junction, wire segment
 or empty grid point. **Capture → Wire** instead waits for the first canvas click.

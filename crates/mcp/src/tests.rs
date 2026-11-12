@@ -5,6 +5,31 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
 
+/// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
+#[test]
+fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let p = s.snapshot().unwrap();
+    let target = p.no_connect_target(p.symbols()[0].terminals()[0]).unwrap();
+    let revision = s.revision();
+    crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::no_connect::SET,"params":{"target":target,"marked":true,"expected_revision":revision},"inspect":false}),
+    )
+    .unwrap();
+    let revision = s.revision();
+    let before = s.snapshot().unwrap();
+    let report =
+        crate::backend::call_session(&mut s, "engine.execute", &json!({"command":pcbcraft_engine::no_connect::CHECK,"params":{},"inspect":false}))
+            .unwrap();
+    assert_eq!(report["revision"], revision);
+    assert_eq!(report["no_connect_check"]["markers"].as_array().unwrap().len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+}
+
 fn server() -> Server {
     Server::new(Box::new(Headless::default()))
 }

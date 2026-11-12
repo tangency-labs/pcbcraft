@@ -63,6 +63,8 @@ enum Action {
     NewSheet,
     Subsheet,
     Wire,
+    NoConnect,
+    NoConnectCheck,
     Bus,
     Label,
     Move,
@@ -123,6 +125,7 @@ const CAPTURE: &[Group] = &[
         title: "Connect",
         tools: &[
             tool(Action::Wire, "Wire", Icon::Wire, "Draw wire (W)", "W"),
+            tool(Action::NoConnect, "No connect", Icon::NoConnect, "Mark intentionally unused pins (Q)", "Q"),
             tool(Action::Bus, "Bus", Icon::Bus, "Buses are not available yet.", ""),
             tool(Action::Label, "Net label", Icon::NetLabel, "Place local label (L); set Scope to Global or press Ctrl+L", "L"),
         ],
@@ -165,7 +168,7 @@ const ANALYZE: &[Group] = &[
             tool(Action::Rules, "Rules", Icon::Rules, "Edit board defaults and routing preferences.", ""),
             tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
         ],
-        extras: &[],
+        extras: &[tool(Action::NoConnectCheck, "No-connect check", Icon::Erc, "Inspect unused pins and no-connect conflicts", "")],
     },
     Group {
         title: "Reports",
@@ -203,7 +206,9 @@ impl Action {
     fn implemented(self) -> bool {
         matches!(
             self,
-            Self::Rules
+            Self::NoConnect
+                | Self::NoConnectCheck
+                | Self::Rules
                 | Self::Ground
                 | Self::Label
                 | Self::Symbol
@@ -304,6 +309,7 @@ impl Action {
             Self::HierarchicalLabel => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })),
             Self::Subsheet => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Sheet, .. })),
             Self::Wire => matches!(app.views.active.schematic.tool, Some(Tool::Wire { .. })),
+            Self::NoConnect => matches!(app.views.active.schematic.tool, Some(Tool::NoConnect { .. })),
             Self::AutoHeal => app.preferences.auto_heal_wires,
             _ => false,
         }
@@ -380,6 +386,8 @@ impl PcbApp {
                 }
             }
             Action::Wire => self.begin_wire(),
+            Action::NoConnect => self.begin_no_connect(),
+            Action::NoConnectCheck => self.inspect_no_connects(),
             Action::Move | Action::Rotate => {
                 if let Some(label) = self
                     .views

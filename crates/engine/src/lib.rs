@@ -17,6 +17,7 @@ pub mod library;
 pub mod library_graphics;
 pub mod net_labels;
 pub mod nets;
+pub mod no_connect;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -66,6 +67,8 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    PartTerminal,
+    Flag,
     /// A terminal, named label or hierarchical port, excluding junction/geometry anchors.
     NetTarget,
     /// A persistent registry UUID, distinct from a revision-scoped graph row.
@@ -156,6 +159,10 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::Flag => json!({"type":"boolean"}),
+            Self::PartTerminal => {
+                json!({"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false})
+            }
             Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
@@ -291,6 +298,20 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::Flag => {
+                if value.is_boolean() {
+                    Ok(())
+                } else {
+                    Err("must be a boolean")
+                }
+            }
+            Self::PartTerminal => {
+                if no_connect::Target::parse(value).is_some() {
+                    Ok(())
+                } else {
+                    Err("must identify a part and its exact terminal token")
+                }
+            }
             Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
             Self::ClipboardUnits if serde_json::from_value::<clipboard_text::CoordinateUnits>(value.clone()).is_ok() => Ok(()),
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
@@ -728,6 +749,32 @@ const CLIPBOARD_OBJECTS: Param = Param {
     summary: "Selected root sheet symbols and hierarchical labels; sheet symbols include their complete child subtree",
 };
 const CATALOG: &[Command] = &[
+    Command {
+        id: no_connect::SET,
+        title: "Set No Connect",
+        summary: "Set/remove intentional disconnection on one logical part terminal. Marking connected pins retains a checkable conflict; wiring is unchanged. Undoable.",
+        params: &[
+            EXPECTED_REVISION,
+            Param {
+                name: "target",
+                kind: ParamKind::PartTerminal,
+                required: true,
+                summary: "Logical part/terminal address, independent of its placed unit",
+            },
+            Param {
+                name: "marked",
+                kind: ParamKind::Flag,
+                required: true,
+                summary: "True authors intent using the current pin type; false removes existing intent",
+            },
+        ],
+    },
+    Command {
+        id: no_connect::CHECK,
+        title: "Check No Connects",
+        summary: "Read-only focused check for unmarked unconnected pins and connected, missing or incompatible no-connect intent. Full power/type ERC remains separate.",
+        params: &[],
+    },
     Command {
         id: clipboard_text::LABELS,
         title: "Prepare net-name text paste",
@@ -2289,6 +2336,8 @@ impl Session {
             | hierarchy::DELETE_LABEL
             | sheets::RENAME_SHEET
             | "project.rename"
+            | no_connect::SET
+            | no_connect::CHECK
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2461,6 +2510,9 @@ impl Session {
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
         self.apply(id, params)?;
+        if id == no_connect::CHECK {
+            return self.no_connect_report();
+        }
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
         }
@@ -2537,6 +2589,8 @@ impl Session {
                 | sheets::RENAME_SHEET
                 | sheets::DELETE_SHEET
                 | "project.rename"
+                | no_connect::SET
+                | no_connect::CHECK
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -2619,6 +2673,10 @@ impl Session {
                 }
             }
             board::identity::CREATE_BOARD => self.create_board(params)?,
+            no_connect::SET => self.set_no_connect(params)?,
+            no_connect::CHECK => {
+                self.open_project()?;
+            }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
@@ -2812,6 +2870,7 @@ impl Session {
                 value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
                 metadata: defaults.metadata,
                 part: None,
+                no_connects: BTreeMap::new(),
             }
         };
         let component_id = component.ordinal;
@@ -3138,6 +3197,15 @@ impl Session {
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
+        project.validate_no_connects().map_err(CommandError::InvalidParams)?;
+        if project.components.values().any(|part| !part.no_connects.is_empty()) {
+            if project.layout.is_none() {
+                project = project.with_board_folders(".").map_err(CommandError::InvalidParams)?;
+            }
+            if !project.has_sheet_occurrences() {
+                project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
+            }
+        }
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }

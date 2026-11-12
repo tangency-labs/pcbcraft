@@ -2,6 +2,19 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Intentional no-connect markers
+
+Logical terminal intent, captured electrical-type evidence, shared commands,
+bounded diagnostic inspection and project/19 storage are original MIT OR
+Apache-2.0 PCBcraft work for #285. The pin-centered cross is original schematic
+geometry; the pinned Craft kit has no electronics no-connect command glyph, so
+the host draws that mark while reusing its existing ribbon, menu, modal and
+control adapters. Interaction follows the published
+[KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
+consulted November 12, 2026. Tests use shared commands, original starter/native
+example definitions and production codecs; no external EDA implementation,
+artwork, fixture, dependency or library data was incorporated.
+
 ## Schematic overlap visibility
 
 The drawing-bound warnings, view-owned candidate cache and stacked-symbol context

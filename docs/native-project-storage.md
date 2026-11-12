@@ -186,7 +186,7 @@ See [board-rules.md](board-rules.md) for validation, resolution and reset behavi
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15` or `/16` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, and version 16 adds required single-use occurrence identities |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17` or `/19` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds terminal no-connect intent |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1`, `/2` with a net registry | Matching board UUID header, one circuit use and one occurrence per sheet, optional sparse net registry; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/7` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/19` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults |
@@ -294,7 +294,26 @@ older readers reject sheet/7 rather than silently dropping the provenance. The
 diagnostic legacy single-file encoding refuses live generated legs because its
 wire vocabulary has no provenance field.
 
+### Intentional no-connect records
+
+Project/19 extends the existing occurrence and optional net-registry homes with
+sparse `no_connects` on affected component records. It adds no document paths.
+Each nonempty list is ordered by exact terminal token and captures that pin's
+`electrical_type` when authored. There are at most 128 records per part and
+4,096 per project; absent intent is omitted. Older project headers reject this
+field, as do unsupported diagnostic single-file encodings.
+
+The marker owns no coordinates or net membership. Every live unit appearance of
+the addressed part terminal resolves its current mark position. Missing or
+type-changed targets remain addressed unresolved intent and can be removed;
+they do not silently acquire another pin. Explicit null, empty lists, duplicate
+or malformed terminal tokens and unknown fields are rejected. Folder/archive
+round trips use the same codec, and unchanged projects without markers preserve
+their prior low-level bytes. This is separate from package `unconnected_pads`.
+See the [no-connect contract](no-connect-markers.md) for commands and checks.
+
 ### Named net records
+
 
 Sheet/3 extends sheet/2 with a required, non-null `net_labels` array, one record
 per line in stable object-ID order. Each record contains a project-unique `id`,

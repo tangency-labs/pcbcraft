@@ -882,6 +882,7 @@ mod live {
     /// Name the view's unfinished gesture, if any.
     fn tool_name(tool: &Tool) -> &'static str {
         match tool {
+            Tool::NoConnect { .. } => "no_connect",
             Tool::Field { .. } => "move_symbol_field",
             Tool::NetLabel { .. } => "net_label",
             Tool::SheetGesture { .. } => "sheet_geometry",

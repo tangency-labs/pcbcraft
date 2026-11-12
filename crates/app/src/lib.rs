@@ -47,6 +47,7 @@ mod native_part_properties;
 mod native_sources;
 mod net_inspector;
 mod net_labels;
+mod no_connect;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
@@ -167,6 +168,7 @@ enum Help {
 enum Dialog {
     #[default]
     None,
+    NoConnects(Box<no_connect::Inspection>),
     LibrarySources,
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
@@ -1265,6 +1267,7 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::NoConnect { .. } => dim("No connect · Click pins · Esc cancel"),
                         Tool::Field { .. } => dim("Move symbol field · Esc to cancel"),
                         Tool::SheetGesture { drag, .. } => {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
@@ -1493,6 +1496,9 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (None, Click::BeginNoConnect) => self.begin_no_connect(),
+            (None | Some(Tool::NoConnect { .. }), Click::NoConnect(target, marked)) => self.set_no_connect(source, target, marked),
+            (Some(Tool::NoConnect { .. }), Click::CancelNoConnect) => self.views.active.schematic.tool = None,
             (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
@@ -2040,6 +2046,7 @@ impl PcbApp {
     /// Draw the open dialog and retain it until the person finishes or dismisses it.
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
+            Dialog::NoConnects(inspection) => self.no_connect_dialog(ctx, inspection),
             Dialog::LibrarySources => self.library_sources_dialog(ctx),
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
             Dialog::None => {}
@@ -2458,6 +2465,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Place power/ground", key(&ADD_POWER)));
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
+    list.push(("Schematic", "Mark no connect on a pin", "Q".to_owned()));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Grab connected symbol or wire", "G".to_owned()));
     list.push(("Schematic", "Rotate symbol or hovered field", key(&ROTATE)));

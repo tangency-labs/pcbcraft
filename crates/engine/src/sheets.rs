@@ -179,9 +179,11 @@ impl Project {
 }
 
 /// Authored schematic geometry takes a sheet target; portable text preparation is independent
-/// of any project/sheet. Sheet lifecycle and board setup remain project operations.
+/// of any project/sheet. Logical no-connect intent, sheet lifecycle and board setup remain
+/// project operations; their targets do not depend on the current sheet projection.
 pub fn scoped_command(id: &str) -> bool {
-    (id.starts_with("schematic.") && id != crate::clipboard_text::LABELS) || id == PLACE_FOOTPRINT
+    (id.starts_with("schematic.") && !matches!(id, crate::clipboard_text::LABELS | crate::no_connect::SET | crate::no_connect::CHECK))
+        || id == PLACE_FOOTPRINT
 }
 
 impl Session {

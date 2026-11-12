@@ -1,5 +1,12 @@
 # Current capabilities and MVP scope
 
+[Intentional no-connect markers](no-connect-markers.md) attach to logical part
+terminals through Q, Capture and pin context actions. They follow placed units,
+survive duplication/clipboard and native save/reopen, and have a focused,
+read-only check with navigable missing, incompatible and connected-target
+findings. Full type-conflict/power-driver ERC and incremental scheduling remain
+with #47/#245/#243.
+
 Typed quantities accept and display engineering prefixes from atto (`a`) through
 exa (`E`), including femto (`f`) and peta (`P`), with exact canonical values and
 round-trip editing. See the [quantity contract](part-schema.md).

@@ -144,6 +144,22 @@ impl Fragment {
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
         Arc::make_mut(&mut fragment.units).retain(|_, id| symbols.contains(id));
+        // Whole-part captures retain unresolved intent too. Partial-unit copies carry only
+        // intent whose terminal appears in the captured units, excluding unrelated unit flags.
+        let terminals: BTreeSet<_> = fragment
+            .all_symbols()
+            .flat_map(|symbol| symbol.terminals().into_iter().map(move |pin| (symbol.component, pin.number().to_owned())))
+            .collect();
+        for (&id, part) in Arc::make_mut(&mut fragment.components) {
+            let complete =
+                project.units.range((id, String::new())..).take_while(|((owner, _), _)| *owner == id).all(|(_, symbol)| symbols.contains(symbol));
+            if !complete {
+                if part.no_connects.keys().any(|token| !part.definition.pins().iter().any(|pin| pin.number == *token)) {
+                    return Err(invalid("Resolve missing no-connect terminals or copy all placed units of this part."));
+                }
+                part.no_connects.retain(|token, _| terminals.contains(&(id, token.clone())));
+            }
+        }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
         let assignments = project
             .board

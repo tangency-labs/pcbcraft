@@ -156,6 +156,10 @@ the same `VCC` net name, which can be changed before placement.
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
    path when the old alternative has no intermediate pin or branch.
+   For an intentionally unused pin, hover its endpoint and press **Q**, or use
+   **Capture → No connect** and click several pins. Right-click a marked pin to
+   remove its marker. **Analyze → Electrical menu → No-connect check** inspects
+   this intent and any later wiring conflicts.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
