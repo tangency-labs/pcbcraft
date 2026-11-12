@@ -470,6 +470,11 @@ track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.
 Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
 
+Run **Analyze → DRC** to check the board. Pad clearance is measured against the
+resolved circular, oval, rounded-rectangle or rectangular copper contour, including
+rotation and board side. A gap exactly equal to the selected clearance passes;
+this does not add clearance enforcement while routing or a complete short check.
+
 After reviewed updates are initialized, removing the last
 schematic unit retains its footprint until an update accepts the removal. A
 legacy board retains its prior deletion behavior until explicit current-state

@@ -160,7 +160,7 @@ pub struct Copper {
     pub vias: BTreeMap<Uuid, usize>,
 }
 
-/// Resolved pad geometry and net membership used by connectivity and footprint edits.
+/// Resolved pad geometry and net membership used by connectivity, DRC and footprint edits.
 pub(super) struct Land {
     pub(super) key: (String, String),
     pub(super) corners: [Point; 4],
@@ -172,14 +172,14 @@ pub(super) struct Land {
 }
 
 /// The pad's inner rectangle, segment or point, expanded by a round radius.
-struct PadContour {
-    core: [Point; 4],
-    radius: f64,
+pub(super) struct PadContour {
+    pub(super) core: [Point; 4],
+    pub(super) radius: f64,
 }
 
 impl Land {
     /// Derive the copper contour from resolved corners and pad shape in board nanometers.
-    fn contour(&self) -> PadContour {
+    pub(super) fn contour(&self) -> PadContour {
         if self.shape == PadShape::Rectangle {
             return PadContour { core: self.corners, radius: 0. };
         }
@@ -212,12 +212,12 @@ impl Land {
 
 impl PadContour {
     /// The four core edges, including degenerate edges for circles and ovals.
-    fn edges(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
+    pub(super) fn edges(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
         self.core.iter().copied().zip(self.core.iter().copied().cycle().skip(1))
     }
 
     /// Check containment in a core with area. Line and point cores are handled by edge distance.
-    fn contains_core(&self, p: Point) -> bool {
+    pub(super) fn contains_core(&self, p: Point) -> bool {
         let [a, b, _, d] = self.core;
         let area = (b.x_nm - a.x_nm) as i128 * (d.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (d.x_nm - a.x_nm) as i128;
         area != 0 && inside(p, &self.core)
@@ -228,13 +228,51 @@ impl PadContour {
         self.contains_core(start) || self.contains_core(end) || self.edges().any(|(a, b)| segment_distance(start, end, a, b) <= self.radius + radius)
     }
 
+    /// Test whether an unexpanded board edge enters copper's interior. Exact tangency is
+    /// distinct from penetration, including point/line cores and a zero rounding radius.
+    pub(super) fn penetrates_segment(&self, start: Point, end: Point) -> bool {
+        if self.radius > 0. {
+            return self.contains_core(start)
+                || self.contains_core(end)
+                || self.edges().any(|(a, b)| segment_distance(start, end, a, b) < self.radius);
+        }
+        self.segment_enters_core(start, end)
+    }
+
+    /// Clip a segment to the open convex core. Boundary-only contact has no interior interval;
+    /// crossing through vertices still has one. Integer cross products retain the existing
+    /// orientation test, with floating parameters only for the intersection interval.
+    fn segment_enters_core(&self, start: Point, end: Point) -> bool {
+        let cross = |a: Point, b: Point, p: Point| {
+            (b.x_nm - a.x_nm) as i128 * (p.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (p.x_nm - a.x_nm) as i128
+        };
+        let orientation = cross(self.core[0], self.core[1], self.core[3]).signum();
+        if orientation == 0 {
+            return false;
+        }
+        let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
+        for (a, b) in self.edges() {
+            let from = orientation * cross(a, b, start);
+            let to = orientation * cross(a, b, end);
+            if from <= 0 && to <= 0 {
+                return false;
+            }
+            if from <= 0 {
+                enter = enter.max(from as f64 / (from - to) as f64);
+            } else if to <= 0 {
+                leave = leave.min(from as f64 / (from - to) as f64);
+            }
+        }
+        enter < leave
+    }
+
     /// Test copper contact between two pads, including containment and rounded edges.
     fn overlaps(&self, other: &Self) -> bool {
         other.contains_core(self.core[0]) || other.edges().any(|(a, b)| self.overlaps_segment(a, b, other.radius))
     }
 
-    /// Bounds for pruning pad contact candidates before testing their contours.
-    fn bounds(&self) -> [f64; 4] {
+    /// Bounds for pruning pad contact and clearance candidates before testing their contours.
+    pub(super) fn bounds(&self) -> [f64; 4] {
         let mut bounds = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
         for p in self.core {
             let (x, y) = (p.x_nm as f64, p.y_nm as f64);

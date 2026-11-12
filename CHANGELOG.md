@@ -2,6 +2,10 @@
 
 ## 0.1.0 (unreleased)
 
+DRC measures copper and board-edge clearance against the same rounded pad
+contours as connectivity, avoiding false findings at empty bounding corners.
+Exact clearance equality still passes, including half-nanometer radii.
+
 Projects now use a fixed `project.json` entry point inside their working folder,
 and packed projects use `<project-name>.pc`, a ZIP archive of the same documents.
 The archive retains `manifest.json` with document sizes and SHA-256 hashes, using
