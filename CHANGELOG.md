@@ -22,7 +22,7 @@ symbols, retaining names, positions, rotations and wire connections. Those sheet
 and project metadata are updated on Save; unrelated payloads retain their bytes.
 Standalone JSON/container-v1 projects remain unsupported.
 
-New and converted projects use project/14 with a registered board folder, including
+New and converted projects use project/16 with a registered board folder, including
 single-board projects. Supported flat `project.json` projects open unchanged and
 migrate on first Save without requiring design edits. The journal moves the board
 and updates its registry together, preserving board identity and physical bytes.
@@ -47,3 +47,11 @@ single-unit/native records keep their low-level encoding when unchanged; the
 ordinary first-save board-folder migration remains in effect. These additions
 remain within the unreleased 0.1.0 version. High-pin-count devices, KiCad import,
 vendor APIs and general pad stacks remain separate work.
+
+Each sheet now has a stable occurrence UUID, with one shared circuit use for the
+existing hierarchy. Board projects store these records in `instances.json` beside
+`board.json`; schematic-only projects keep them in `project.json`. Opening an
+older project leaves it unchanged, and first Save persists deterministic
+compatibility IDs without changing component references, values, package choices
+or accepted board state. Creating the first board moves the same records in one
+undoable action. Repeated sheet instances and persistent net IDs remain future work.

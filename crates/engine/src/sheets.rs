@@ -27,6 +27,8 @@ impl SheetTarget {
 pub struct SchematicSheet {
     pub(crate) sheet_id: uuid::Uuid,
     pub(crate) sheet_name: String,
+    /// Occurrence identity in the adopted single-use format; legacy IDs are derived on inspection.
+    pub(crate) occurrence_id: Option<uuid::Uuid>,
     pub(crate) symbols: Arc<Vec<SymbolPlacement>>,
     pub(crate) wires: Arc<Vec<Wire>>,
     pub(crate) junctions: Arc<BTreeMap<u64, Point>>,
@@ -38,10 +40,12 @@ pub struct SchematicSheet {
 
 impl SchematicSheet {
     /// Create an empty sheet after identity/name validation by the owning command or codec.
+    /// Occurrence adoption is separate; new authored sheets use `Project::new_sheet_record`.
     pub(crate) fn empty(sheet_id: uuid::Uuid, sheet_name: String) -> Self {
         Self {
             sheet_id,
             sheet_name,
+            occurrence_id: None,
             labels: Arc::default(),
             net_labels: Arc::default(),
             subsheets: Arc::default(),
@@ -223,7 +227,8 @@ impl Session {
                     return Err(CommandError::Unavailable(format!("project already has {MAX_SHEETS} sheets")));
                 }
                 let name = name.ok_or_else(|| CommandError::InvalidParams("missing sheet name".into()))?;
-                Arc::make_mut(&mut project.sheets).push(SchematicSheet::empty(fresh_id()?, name));
+                let sheet = project.new_sheet_record(fresh_id()?, name)?;
+                Arc::make_mut(&mut project.sheets).push(sheet);
             }
             (RENAME_SHEET, Some(index)) => {
                 let name = name.ok_or_else(|| CommandError::InvalidParams("missing sheet name".into()))?;

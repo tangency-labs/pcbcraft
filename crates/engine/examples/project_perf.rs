@@ -7,24 +7,27 @@ use std::{
 
 use pcbcraft_engine::{
     CONNECT_PINS, MOVE_SYMBOL, PLACE_FOOTPRINT, PLACE_SYMBOL, Session,
-    persistence::{ArchiveEncoder, Encoding, decode, decode_diagnostic_file, encode, encode_file},
+    persistence::{PackedEncoder, decode_documents, decode_packed, encode_documents, encode_packed_documents},
 };
 use serde_json::json;
 
 const SYMBOLS: usize = 2_048;
 const SAMPLES: usize = 40;
 
+/// Measure the current split-document and packed codecs; an optional path receives a `.pc` ZIP.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = fixture()?;
     let source = session.snapshot().ok_or("no project open")?;
-    let bytes = encode(source.clone())?;
+    let documents = encode_documents(source.clone())?;
+    let bytes = encode_packed_documents(documents.clone())?;
     if let Some(path) = std::env::args_os().nth(1) {
         std::fs::write(path, &bytes)?;
     }
     let pin = source.symbols()[0].terminals()[0];
-    println!("{SYMBOLS} symbols, {} wires, {} bytes", source.wires().len(), bytes.len());
+    let json_bytes: usize = documents.values().map(Vec::len).sum();
+    println!("{SYMBOLS} symbols, {} wires, {json_bytes} JSON bytes, {} packed bytes", source.wires().len(), bytes.len());
     measure("cold connectivity index", |_| {
-        let loaded = decode(&bytes)?;
+        let loaded = decode_documents(&documents)?;
         let start = Instant::now();
         black_box(loaded.connectivity().net_for(pin));
         Ok(start.elapsed())
@@ -53,14 +56,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(start.elapsed())
     })?;
     measure("full MCP inspection", |_| timed(|| Ok(black_box(session.inspect()))))?;
-    measure("encode snapshot", |_| timed(|| Ok(black_box(encode(source.clone())?))))?;
-    measure("decode and validate", |_| timed(|| Ok(black_box(decode(&bytes)?))))?;
-    let archive = encode_file(source.clone(), Encoding::Zip)?;
-    println!("{} bytes in ZIP", archive.len());
-    measure("package already encoded JSON", |_| {
-        let payload = bytes.clone();
+    measure("encode snapshot", |_| timed(|| Ok(black_box(encode_documents(source.clone())?))))?;
+    measure("decode and validate", |_| timed(|| Ok(black_box(decode_documents(&documents)?))))?;
+    measure("package encoded documents", |_| {
+        let payload = documents.clone();
         timed(|| {
-            let mut archive = ArchiveEncoder::new(payload)?;
+            let mut archive = PackedEncoder::new(payload)?;
             loop {
                 if let Some(bytes) = archive.step()? {
                     return Ok(black_box(bytes));
@@ -68,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     })?;
-    measure("unpack and validate project", |_| timed(|| Ok(black_box(decode_diagnostic_file(&archive)?))))?;
+    measure("unpack and validate project", |_| timed(|| Ok(black_box(decode_packed(&bytes)?))))?;
     Ok(())
 }
 

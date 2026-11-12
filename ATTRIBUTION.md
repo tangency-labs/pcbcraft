@@ -1040,3 +1040,10 @@ original MIT OR Apache-2.0 PCBcraft code. The manufacturer fixture under
 vendor product, supplier stock or pricing claim. It links the original example
 part and footprint, whose existing provenance remains attached. No KiCad import,
 implementation source or external vendor adapter is included.
+
+The single-use sheet occurrence codec, deterministic compatibility UUID roles,
+board/schematic ownership transfer and save-history adoption are original
+PCBcraft work based on this repository's circuit-instance and storage contracts.
+Regression projects use shared commands and original repository fixtures. The
+existing qualified `sha2`, `uuid` and native publication dependencies are reused;
+no external implementation, library data, artwork or dependency was added.

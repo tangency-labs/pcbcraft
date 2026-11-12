@@ -24,7 +24,7 @@ fn place(session: &mut Session, x_nm: i64) -> u64 {
 /// Reopen using each production persistence route, including retained single-document APIs.
 fn round_trips(project: Arc<Project>) -> Vec<Arc<Project>> {
     vec![
-        decode(&encode(project.clone()).unwrap()).unwrap(),
+        decode(&encode(persistence::diagnostic_snapshot(project.clone())).unwrap()).unwrap(),
         decode_documents(&encode_documents(project.clone()).unwrap()).unwrap(),
         decode_packed(&encode_packed(project).unwrap()).unwrap().project,
     ]
@@ -132,7 +132,7 @@ fn watermark_formats_are_strict_and_validate_every_retained_identity() {
         entry.as_object_mut().unwrap().remove("numeric_id_high_water");
     });
     assert!(decode_documents(&invalid).is_err());
-    let mut single: Value = serde_json::from_slice(&encode(s.snapshot().unwrap()).unwrap()).unwrap();
+    let mut single: Value = serde_json::from_slice(&encode(persistence::diagnostic_snapshot(s.snapshot().unwrap())).unwrap()).unwrap();
     single["format"] = json!("pcbcraft-project/4");
     assert!(decode(&serde_json::to_vec(&single).unwrap()).is_err());
 }

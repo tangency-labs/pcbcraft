@@ -8,7 +8,7 @@ use std::{
 };
 
 use egui::{Event, PointerButton, Pos2, Rect, ViewportCommand, ViewportId, pos2, vec2};
-use pcbcraft_engine::{persistence::encode, schematic::Point};
+use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
 
 use super::*;
 use crate::editor_layout::HostId;
@@ -599,7 +599,7 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
             let app = h.state();
             let before = app.session.snapshot().unwrap();
             let revision = app.session.revision();
-            let bytes = encode(before.clone()).unwrap();
+            let bytes = encode_documents(before.clone()).unwrap();
             let origin = Point { x_nm: 0, y_nm: 0 };
             let positions = [ViewId(0), ViewId(1)].map(|id| app.views.view(id).unwrap().camera.screen(origin, Rect::ZERO));
             let old = app.views.active.input(&app.session).unwrap();
@@ -643,7 +643,7 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
             }
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
             assert_eq!(h.state().session.revision(), revision);
-            assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
         }
     }
 }
@@ -773,7 +773,7 @@ fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
             let focused = h.state().views.hosts[&survivor].focused;
             let views = h.state().views.hosts[&survivor].layout.views();
             let camera = h.state().views.view(focused).unwrap().camera.saved_state();
-            let before = encode(h.state().session.snapshot().unwrap()).unwrap();
+            let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
             if close_original {
                 focus_host(&mut h, &peers, HostId::ROOT);
                 close_root(&mut h);
@@ -788,7 +788,7 @@ fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
             assert_eq!(h.state().views.hosts[&survivor].focused, focused);
             assert_eq!(h.state().views.view(focused).unwrap().camera.saved_state(), camera);
             assert!(matches!(h.state().dialog, Dialog::None));
-            assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), before);
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
             if close_original {
                 child_rect(&peer, if board { "PCB canvas" } else { "Schematic canvas" });
                 peer.borrow_mut().close = true;

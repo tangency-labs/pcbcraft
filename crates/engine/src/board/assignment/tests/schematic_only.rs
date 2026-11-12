@@ -25,7 +25,7 @@ fn choices_roundtrip_without_a_board_and_follow_explicit_creation() {
     assert!(!assigned.contains_key("board.json"));
     assert!(assigned.keys().any(|path| path.starts_with("library/footprints/")));
     let entry: Value = serde_json::from_slice(&assigned["project.json"]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/14");
+    assert_eq!(entry["format"], "pcbcraft-project/16");
     assert_eq!(entry["boards"], json!([]));
     assert_eq!(entry["footprint_choices"][0]["mapping"], params["mapping"]);
     assert!(crate::persistence::encode(s.snapshot().unwrap()).is_err(), "Legacy export must not lose the choices");
@@ -143,7 +143,7 @@ fn retiring_schematic_components_releases_only_unused_packages() {
     let empty = encode_documents(s.snapshot().unwrap()).unwrap();
     assert!(s.project().unwrap().footprint_assignments().is_empty());
     assert!(!empty.keys().any(|path| path.starts_with("library/footprints/")));
-    assert_eq!(serde_json::from_slice::<Value>(&empty["project.json"]).unwrap()["format"], "pcbcraft-project/14");
+    assert_eq!(serde_json::from_slice::<Value>(&empty["project.json"]).unwrap()["format"], "pcbcraft-project/16");
     s.apply("edit.undo", &json!({})).unwrap();
     crate::assert_same_content(&decode_documents(&one).unwrap(), &s.snapshot().unwrap());
 }

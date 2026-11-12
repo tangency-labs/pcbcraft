@@ -90,6 +90,7 @@ pub(crate) fn transformed(point: Point, anchor: Point, at: Point, turns: u8) -> 
 impl Fragment {
     /// Capture exactly the selected objects. Unselected endpoints become independent free endpoints;
     /// selected wire routes retain their full geometry and shared endpoint identities.
+    /// The captured root retains its occurrence identity; pasting objects does not create a sheet.
     pub fn capture(project: &Project, items: &Selection) -> Result<Self, CommandError> {
         let mut found = items.clone();
         found.retain(project);
@@ -97,6 +98,7 @@ impl Fragment {
             return Err(invalid("copy needs existing selected objects"));
         }
         let mut sheet = crate::sheets::SchematicSheet::empty(project.sheet_target().id(), "Clipboard".into());
+        sheet.occurrence_id = project.sheet_occurrence(project.sheet_target()).map(|record| record.id);
         sheet.symbols = Arc::new(project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).cloned().collect());
         sheet.net_labels = Arc::new(project.net_labels().iter().filter(|l| items.net_labels.contains(&l.object_id())).cloned().collect());
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.ordinal).collect();

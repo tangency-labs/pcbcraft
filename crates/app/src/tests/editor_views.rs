@@ -1,4 +1,4 @@
-use pcbcraft_engine::{SET_SYMBOL_FIELDS, persistence::encode, schematic::Point};
+use pcbcraft_engine::{SET_SYMBOL_FIELDS, persistence::encode_documents, schematic::Point};
 
 use super::*;
 
@@ -11,7 +11,7 @@ fn navigation_and_selection_belong_to_the_view() {
     let mut other = EditorView::new(ViewId(1));
     other.sync(&harness.state().session);
     let snapshot = harness.state().session.snapshot().unwrap();
-    let bytes = encode(snapshot.clone()).unwrap();
+    let bytes = encode_documents(snapshot.clone()).unwrap();
     let inspected = harness.state().session.inspect();
     let dirty = harness.state().files.dirty(&harness.state().session);
     click_canvas(&mut harness);
@@ -31,7 +31,7 @@ fn navigation_and_selection_belong_to_the_view() {
     assert_eq!(other.camera.zoom(), 1.0);
     assert_eq!(harness.state().session.inspect(), inspected);
     assert!(Arc::ptr_eq(&snapshot, &harness.state().session.snapshot().unwrap()));
-    assert_eq!(encode(harness.state().session.snapshot().unwrap()).unwrap(), bytes);
+    assert_eq!(encode_documents(harness.state().session.snapshot().unwrap()).unwrap(), bytes);
     assert_eq!(harness.state().files.dirty(&harness.state().session), dirty);
 }
 

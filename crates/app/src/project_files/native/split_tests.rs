@@ -15,7 +15,14 @@ use std::{
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs.
 fn session() -> Session {
     let mut s = Session::default();
-    s.open_snapshot(Arc::new(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap().with_board_folders(".").unwrap()));
+    s.open_snapshot(Arc::new(
+        decode(include_bytes!("../../../tests/fixtures/two-resistors.pc"))
+            .unwrap()
+            .with_board_folders(".")
+            .unwrap()
+            .with_sheet_occurrences()
+            .unwrap(),
+    ));
     s
 }
 
@@ -147,7 +154,7 @@ fn component_metadata_opens_and_saves_through_every_native_entry_path() {
         let snapshot = s.snapshot().unwrap();
         let documents = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/14");
+        assert_eq!(entry["format"], "pcbcraft-project/16");
         let root = dir.path().join("metadata");
         let archive = dir.path().join("metadata.pc");
         folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
@@ -312,9 +319,11 @@ fn version_five_first_save_migrates_and_sheet_edits_preserve_unaffected_bytes() 
     save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
     let after = folder::load(&root).unwrap();
     let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
-    assert_eq!(header["format"], "pcbcraft-project/14");
+    assert_eq!(header["format"], "pcbcraft-project/16");
     assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().sheets().len(), 2);
-    for (path, bytes) in migrated.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/")) {
+    for (path, bytes) in
+        migrated.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/") && !path.ends_with("/instances.json"))
+    {
         assert_eq!(&after[path], bytes);
     }
 }
@@ -969,6 +978,7 @@ fn first_save_adopts_layout_only_on_success_and_keeps_it_through_history() {
     complete(&mut files, &mut s, failed);
     assert!(Arc::ptr_eq(&current, &s.snapshot().unwrap()));
     assert!(s.project().unwrap().layout_root().is_none());
+    assert!(!s.project().unwrap().has_sheet_occurrences());
     assert_eq!(folder::load(&root).unwrap(), before);
     let old = files.saved.as_ref().unwrap();
     let saved = save_target(current, Some(&old.snapshot), old.target.clone(), &mut |_| Ok(()));
@@ -976,6 +986,8 @@ fn first_save_adopts_layout_only_on_success_and_keeps_it_through_history() {
     assert!(!files.dirty(&s));
     assert_eq!(s.revision(), revision);
     let adopted = s.project().unwrap().layout_root().unwrap().to_owned();
+    let occurrences = s.project().unwrap().sheet_instances();
+    assert!(s.project().unwrap().has_sheet_occurrences());
     let board_id = s.project().unwrap().board_target();
     assert!(adopted.starts_with("pcbcraft-data-"));
     assert!(!root.join("board.json").exists());
@@ -983,6 +995,7 @@ fn first_save_adopts_layout_only_on_success_and_keeps_it_through_history() {
         s.apply(command, &json!({})).unwrap();
         assert_eq!(s.project().unwrap().layout_root(), Some(adopted.as_str()));
         assert_eq!(s.project().unwrap().board_target(), board_id);
+        assert_eq!(s.project().unwrap().sheet_instances(), occurrences);
         let old = files.saved.as_ref().unwrap();
         let result = save_target(s.snapshot().unwrap(), Some(&old.snapshot), old.target.clone(), &mut |_| Ok(()));
         complete(&mut files, &mut s, result);
@@ -1012,4 +1025,40 @@ fn migration_adoption_preserves_edits_made_while_the_worker_runs() {
     s.apply("edit.undo", &json!({})).unwrap();
     assert!(!files.dirty(&s));
     assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &files.saved.as_ref().unwrap().snapshot));
+}
+
+/// A sheet created after capture retains its inspected identity when Save adopts metadata;
+/// undo reaches the saved snapshot and redo restores the same occurrence without a second use.
+#[test]
+fn occurrence_adoption_preserves_sheets_created_after_save_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let mut s = Session::default();
+    let old = decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap();
+    s.open_snapshot(Arc::new(old.with_board_folders(".").unwrap()));
+    let captured = s.snapshot().unwrap();
+    let initial = captured.sheet_instances();
+    let documents = encode_documents(captured.clone()).unwrap();
+    folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+    let loaded = load(&root).unwrap();
+    assert!(!loaded.snapshot.has_sheet_occurrences());
+    let result = save_target(captured.clone(), Some(&captured), loaded.target, &mut |_| Ok(()));
+    apply(&mut s, pcbcraft_engine::sheets::CREATE_SHEET, json!({"name":"Created during save"}));
+    let edited = s.project().unwrap().sheet_instances();
+    let mut files = ProjectFiles::default();
+    complete(&mut files, &mut s, result);
+    assert!(files.dirty(&s));
+    assert!(s.project().unwrap().has_sheet_occurrences());
+    assert_eq!(s.project().unwrap().sheet_instances(), edited);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(!files.dirty(&s));
+    assert_eq!(s.project().unwrap().sheet_instances(), initial);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert!(files.dirty(&s));
+    assert_eq!(s.project().unwrap().sheet_instances(), edited);
+    let saved = files.saved.as_ref().unwrap();
+    let result = save_target(s.snapshot().unwrap(), Some(&saved.snapshot), saved.target.clone(), &mut |_| Ok(()));
+    complete(&mut files, &mut s, result);
+    assert!(!files.dirty(&s));
+    assert_eq!(load(&root).unwrap().snapshot.sheet_instances(), edited);
 }

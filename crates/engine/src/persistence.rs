@@ -21,7 +21,8 @@ mod documents;
 pub mod layout;
 pub use documents::{
     Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_layout_root, project_registered_board_id,
+    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
+    project_registered_board_id,
 };
 mod packed;
 mod power_migration;
@@ -429,7 +430,8 @@ impl From<WireEndpoint> for Endpoint<'static> {
 
 /// Encode deterministic single-document JSON for migration fixtures and diagnostic tools.
 /// Legacy snapshots retain format 4; adopted allocation metadata requires format 8.
-/// Configured boards are refused. Normal saves use [`encode_documents`] or [`encode_packed`].
+/// Configured boards and adopted occurrence IDs are refused. Normal saves use
+/// [`encode_documents`] or [`encode_packed`].
 pub fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
     let mut encoder = Encoder::new(project)?;
     loop {
@@ -462,7 +464,7 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings and rotation require split documents or an archive; refuse lossy export.
+    /// drawings, rotation and occurrence IDs require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.components.values().any(|c| c.part.is_some()) {
             return Err("Native library part selections require split documents or a packed archive.".into());
@@ -495,6 +497,9 @@ impl Encoder {
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
+        if project.has_sheet_occurrences() {
+            return Err("legacy diagnostic encoding cannot represent sheet occurrence identities; use split documents or a packed archive".into());
+        }
         let mut bytes = Vec::new();
         let registrations = project.board.ownership.records();
         let format = if registrations.is_some() {
@@ -952,6 +957,7 @@ fn validate_with_hierarchy(
         sheets: Arc::new(vec![crate::sheets::SchematicSheet {
             sheet_id: sheet.id,
             sheet_name: "Main".to_owned(),
+            occurrence_id: None,
             labels: Arc::default(),
             net_labels: Arc::default(),
             subsheets: Arc::default(),
@@ -969,6 +975,7 @@ fn validate_with_hierarchy(
         named_graph: Arc::default(),
         upgraded_from,
         layout: None,
+        circuit_use: None,
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;
@@ -1000,11 +1007,30 @@ pub(crate) fn test_board_path(documents: &Documents) -> String {
     project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()
 }
 
+/// Construct an explicitly historical snapshot for retained diagnostic-codec regression tests.
+/// Current application exports never use this test-only removal of occurrence metadata.
+#[cfg(test)]
+pub(crate) fn diagnostic_snapshot(project: Arc<Project>) -> Arc<Project> {
+    let mut diagnostic = Project::clone(&project);
+    diagnostic.circuit_use = None;
+    for sheet in Arc::make_mut(&mut diagnostic.sheets) {
+        sheet.occurrence_id = None;
+    }
+    Arc::new(diagnostic)
+}
+
+/// Exercise historical standalone JSON/container-v1 output without weakening current exporters.
+#[cfg(test)]
+pub(crate) fn diagnostic_test_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>, String> {
+    encode_file(diagnostic_snapshot(project), encoding)
+}
+
 #[cfg(test)]
 mod tests {
     /// Diagnostic single-document files have no directory layout. Compare electrical inspection
     /// independently from board `file` paths, which are covered by the split-layout tests.
     fn without_storage_paths(mut project: serde_json::Value) -> serde_json::Value {
+        project.as_object_mut().unwrap().remove("sheet_instances");
         for board in project["boards"].as_array_mut().unwrap() {
             board.as_object_mut().unwrap().remove("file");
         }
@@ -1015,6 +1041,12 @@ mod tests {
 
     use super::*;
     use crate::{CONNECT_PINS, MOVE_SYMBOL, PLACE_SYMBOL, Session};
+
+    /// Exercise the retained diagnostic codec with an explicitly historical metadata snapshot.
+    /// Normal current-format encoding must refuse losing independently allocated occurrence IDs.
+    fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
+        super::encode(diagnostic_snapshot(project))
+    }
 
     fn fixture() -> Session {
         let mut session = Session::default();

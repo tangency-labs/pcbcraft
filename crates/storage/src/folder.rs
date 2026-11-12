@@ -278,7 +278,7 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         if current != before && current != after {
             return Err(format!("{relative} changed during recovery; publication stopped."));
         }
-        let removed_board = after.is_none() && relative.ends_with("/board.json");
+        let removed_owned_leaf = after.is_none() && (relative.ends_with("/board.json") || relative.ends_with("/instances.json"));
         if current != after {
             if let Some(bytes) = after {
                 let temporary = format!("publication-{index}.tmp");
@@ -296,7 +296,7 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
             }
             bound.parent.sync().map_err(error)?;
         }
-        if removed_board {
+        if removed_owned_leaf {
             bound.remove_empty_parent()?;
         }
         checkpoint(&format!("published:{relative}"))?;
@@ -393,6 +393,12 @@ fn read_documents_at(root: &Path, recovering: bool, entry_point: &str) -> Result
     if let Some(entry) = documents.get(entry_point)
         && let Some(path) = pcbcraft_engine::persistence::project_board_path(entry)?
         && path != "board.json"
+        && let Some(bytes) = bound_existing(&crate::bound::Directory::open(root).map_err(error)?, &path)?
+    {
+        documents.insert(path, bytes);
+    }
+    if let Some(entry) = documents.get(entry_point)
+        && let Some(path) = pcbcraft_engine::persistence::project_instances_path(entry)?
         && let Some(bytes) = bound_existing(&crate::bound::Directory::open(root).map_err(error)?, &path)?
     {
         documents.insert(path, bytes);

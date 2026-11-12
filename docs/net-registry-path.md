@@ -34,15 +34,16 @@ The registry is therefore the next step for both #57 and #77.
   by their pin text. Net labels and hierarchical labels have numeric IDs too.
   Sheets have UUIDs, and each has exactly one use: repeated sheet instances are
   refused today (see [hierarchical-sheets.md](hierarchical-sheets.md)).
+- **Single-use occurrences.** Project/16 stores one circuit use and one occurrence
+  per sheet in `instances.json` or `schematic_instances`. Slice 2's
+  [implemented codec](sheet-occurrence-storage.md) preserves the existing hierarchy
+  and component model; repeated instances remain unsupported.
 - **Atomic folder saves.** A save journals every changed and removed document and
   recovers to the complete old or new project after an interruption (see
   [folder publication and recovery](native-project-storage.md#folder-publication-and-recovery)).
   Document paths that Windows reads as devices are already refused.
 
-Not built yet:
-- `instances.json` and `schematic_instances`;
-- circuit uses and sheet occurrence identities;
-- any persistent net ID.
+Persistent net IDs are not built yet.
 
 ## What the registry needs
 
@@ -52,9 +53,9 @@ anchor kinds:
 | Anchor kind | Key fields | Missing today |
 | --- | --- | --- |
 | Component terminal | Project UUID, scope (board UUID, or the project UUID for schematic-only), zero occurrence, component ID, terminal text | Nothing |
-| Named label | Project UUID, scope, occurrence UUID, local object ID | The occurrence UUID |
-| Hierarchical port | Same as a label | The occurrence UUID |
-| Authored junction | Same as a label | The occurrence UUID |
+| Named label | Project UUID, scope, occurrence UUID, local object ID | Nothing after slice 2 |
+| Hierarchical port | Same as a label | Nothing after slice 2 |
+| Authored junction | Same as a label | Nothing after slice 2 |
 
 Power symbols are ordinary components with declared power terminals, so a net
 named GND by power symbols is anchored by component terminals. It needs no

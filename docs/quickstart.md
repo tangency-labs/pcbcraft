@@ -38,6 +38,10 @@ explains supported old inputs and failure behavior. Converted copies and new
 projects store each board under its registered `boards/<folder>/board.json` path.
 Supported flat `project.json` projects open unchanged and migrate on their first
 Save, even without design edits; later unchanged saves produce no diff.
+The current format also retains one stable occurrence ID per sheet, stored beside
+the board in `instances.json` or in `project.json` for a schematic-only project.
+First Save adds these [occurrence records](sheet-occurrence-storage.md) to older
+board-folder projects while preserving their existing board paths.
 
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.

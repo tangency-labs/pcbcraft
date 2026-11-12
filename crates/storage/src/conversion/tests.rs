@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 /// Production commands/encoding provide an old-layout fixture without invented project JSON.
 fn source(root: &Path) -> Documents {
     let mut session = Session::default();
-    session.apply("project.new", &serde_json::json!({"name":"Conversion fixture","create_board":true})).unwrap();
-    let flat = pcbcraft_engine::persistence::decode(&pcbcraft_engine::persistence::encode(session.snapshot().unwrap()).unwrap()).unwrap();
-    let expected = encode_documents(flat).unwrap();
+    session.open_snapshot(pcbcraft_engine::persistence::decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap());
+    session.apply("project.rename", &serde_json::json!({"name":"Conversion fixture"})).unwrap();
+    let expected = encode_documents(session.snapshot().unwrap()).unwrap();
     fs::create_dir(root).unwrap();
     for (path, bytes) in &expected {
         let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });

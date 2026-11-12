@@ -1,4 +1,4 @@
-use pcbcraft_engine::{MOVE_SYMBOL, PLACE_SYMBOL, persistence::encode, schematic::Point};
+use pcbcraft_engine::{MOVE_SYMBOL, PLACE_SYMBOL, persistence::encode_documents, schematic::Point};
 use serde_json::{Value, json};
 
 use super::*;
@@ -55,7 +55,7 @@ fn views_share_history_but_keep_local_interactions() {
 fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     let mut session = session();
     let snapshot = session.snapshot().unwrap();
-    let bytes = encode(snapshot.clone()).unwrap();
+    let bytes = encode_documents(snapshot.clone()).unwrap();
     let target = snapshot.sheet_target();
     let mut view = EditorView::new(ViewId(7));
     view.sync(&session);
@@ -72,7 +72,7 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     assert!(!view.accepts(source, &session));
     assert_ne!(view.widget_id(), widget);
     assert_eq!(session.project().unwrap().sheet_target(), target);
-    assert_eq!(encode(session.snapshot().unwrap()).unwrap(), bytes);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
     let root = session.history_root_revision();
     session.apply("project.rename", &json!({"name": "renamed"})).unwrap();
     assert_eq!(session.project().unwrap().sheet_target(), target);
@@ -104,7 +104,7 @@ fn replacement_keeps_an_explicit_foreign_board_unavailable() {
     view.camera.center_on(Point { x_nm: 15_000_000, y_nm: 4_000_000 });
     let camera = view.camera.saved_state();
     let old_input = view.input(&session).unwrap();
-    let bytes = encode(replacement.snapshot().unwrap()).unwrap();
+    let bytes = encode_documents(replacement.snapshot().unwrap()).unwrap();
     session.open_snapshot(replacement.snapshot().unwrap());
     assert!(view.sync(&session));
     assert!(view.unavailable());
@@ -121,7 +121,7 @@ fn replacement_keeps_an_explicit_foreign_board_unavailable() {
     assert!(!view.unavailable());
     assert_eq!(view.target(), Some(DocumentTarget::Board(session.project().unwrap().board_target().unwrap())));
     assert!(!view.accepts(old_input, &session));
-    assert_eq!(encode(session.snapshot().unwrap()).unwrap(), bytes);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
 }
 
 /// Only an omitted board address may use the legacy default; an unknown ID in this project

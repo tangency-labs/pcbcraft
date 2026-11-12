@@ -43,9 +43,9 @@ fn mixed_move_and_delete_are_atomic_and_round_trip() {
     let path = before.wire_path(&before.wires()[0]).into_iter().map(|p| translated(p, delta).unwrap()).collect::<Vec<_>>();
     assert_eq!(moved.wire_path(&moved.wires()[0]), path);
     assert_eq!(before.inspect_schematic()["netlist"], moved.inspect_schematic()["netlist"]);
-    let encoded = persistence::encode(moved.clone()).unwrap();
-    let reopened = persistence::decode(&encoded).unwrap();
-    assert_eq!(persistence::encode(reopened).unwrap(), encoded);
+    let encoded = persistence::encode_documents(moved.clone()).unwrap();
+    let reopened = persistence::decode_documents(&encoded).unwrap();
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), encoded);
     s.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     s.apply("edit.redo", &Value::Null).unwrap();
@@ -116,10 +116,10 @@ fn invalid_group_edits_and_noop_moves_leave_everything_unchanged() {
         assert!(s.apply(DELETE_ITEMS, &json!({"items":items,"expected_revision":s.revision()})).is_err());
         assert_eq!(s.inspect(), before);
     }
-    let saved = persistence::encode(s.snapshot().unwrap()).unwrap();
+    let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     s.apply(MOVE_ITEMS, &json!({"items":items,"dx_nm":0,"dy_nm":0,"expected_revision":s.revision()})).unwrap();
     assert_eq!(s.inspect(), before);
-    assert_eq!(persistence::encode(s.snapshot().unwrap()).unwrap(), saved);
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
     assert_eq!(crate::command(MOVE_ITEMS).unwrap().to_json()["params"]["properties"]["items"]["properties"]["symbols"]["uniqueItems"], true);
     // An implicit wire path can be moved by the same command.
     s.apply("edit.undo", &Value::Null).unwrap();
