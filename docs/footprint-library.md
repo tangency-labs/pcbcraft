@@ -15,8 +15,10 @@ project's components, including components not yet placed on the board. A
 schematic-only project can assign packages before creating a PCB. Search
 and choose a package, then review the editable pad choices for each logical terminal.
 The chooser shows the library, item, revision, license and dimensional source.
-**Assign** validates a complete bijection and pins the exact definition and map;
-it creates no copper, placement ID or board coordinates. The schematic wiring
+Each terminal may select several pads; **Unconnected pads** explicitly accounts
+for remaining pads. **Assign** validates complete coverage and exclusive pad
+ownership, then pins the exact definition and map. It creates no copper,
+placement ID or board coordinates. The schematic wiring
 and reference stay unchanged.
 
 Assignments survive folder/archive save and offline reopen without a board.
@@ -29,8 +31,10 @@ package and placing it are separate undo steps. A modified chooser must apply
 its assignment before it can place; a stale form closes without changing data.
 
 `pcb.assign_footprint` accepts an optional board UUID, a stable `component` ID,
-`library`, `definition`, `definition_revision`, explicit `mapping` and
-`expected_revision`. `pcb.place_assigned_footprint` takes the board/component,
+`library`, `definition`, `definition_revision`, explicit `mapping`, optional
+`unconnected_pads` and `expected_revision`. Mapping values are a pad ID or a
+nonempty pad-ID list. Native part instances open their package/requirements
+form so the selected package retains its definition-owned map. `pcb.place_assigned_footprint` takes the board/component,
 `x_nm`, `y_nm` and revision, resolving solely from the project. Both use the same
 engine command catalog in GUI, live and headless MCP. `inspect_project` reports
 `project.footprint_assignments` with `placed` status and a null `board` for

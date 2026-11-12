@@ -118,7 +118,7 @@ Ordinary copy allocates a new part; copying several units together, including in
 a hierarchy subtree, allocates that part only once.
 
 The symbol editor can add and select units through the shared authoring actions.
-It retains inactive drawings and globally unique primitive IDs in
+It retains source unit order, inactive drawings and globally unique primitive IDs in
 `pcbcraft-library-item/2`; single-unit items keep format 1. Shared terminal
 name/type edits propagate to the other appearances. Native export emits format 4
 when several units exist. This does not add pin/gate swapping, alternative symbol
