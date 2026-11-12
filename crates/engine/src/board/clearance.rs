@@ -307,6 +307,8 @@ impl BoardGeometry {
     }
     /// DRC needs only clearance decisions; skip its existing exemptions before narrow-phase
     /// work, while the general query continues to expose contact independently for shorts.
+    /// Across different islands, unresolved membership remains a clearance obstacle even when
+    /// display names match: only one equal, resolved intended net proves a same-net exemption.
     pub(super) fn clearance_pairs(&self, clearance_nm: i64) -> impl Iterator<Item = Decision> + '_ {
         self.candidate_pairs(clearance_nm)
             .filter(move |(i, j)| {

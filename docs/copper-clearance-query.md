@@ -29,6 +29,12 @@ unknown, equal display names never establish identity, and a conflicting island
 retains multiple net indices. These indices and object indices are meaningful
 only within their captured query and must never become saved bindings.
 
+On different physical islands, empty or unresolved intended membership does not
+establish a same-net exemption, even if the display labels match. Such copper
+remains a clearance obstacle and produces a finding when its represented gap is
+below the rule. Only one equal, resolved intended net proves that exemption;
+the existing same-physical-island clearance exemption remains separate.
+
 `pairs()` evaluates a conservative bounds sweep. `exhaustive_pairs()` bypasses
 that spatial pruning and provides a small-fixture reference for later indexes.
 Both evaluate actual contours on common copper layers. `candidates()` separately
@@ -71,6 +77,7 @@ To repeat WebAssembly execution from the repository root with Node 22 or later:
 
 ```sh
 rustup target add wasm32-wasip1
+node --test scripts/test-wasi-test-runner.cjs
 CARGO_TARGET_WASM32_WASIP1_RUNNER="node --no-warnings $PWD/scripts/wasi-test-runner.cjs" \
   cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1
 ```
@@ -78,3 +85,5 @@ CARGO_TARGET_WASM32_WASIP1_RUNNER="node --no-warnings $PWD/scripts/wasi-test-run
 CI runs this board suite in addition to the ordinary native suite and packaged
 browser build. WASI exercises the engine predicates and query behavior; it does
 not substitute for the browser host or WebGL/WebGPU verification.
+The runner regression compiles original programs that exit with zero and nonzero
+statuses and requires Node to preserve both statuses for Cargo.

@@ -81,6 +81,8 @@ jobs:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: node --version
+      - name: Check WASI runner exit status
+        run: node --test scripts/test-wasi-test-runner.cjs
       - name: Run board geometry and query tests as WebAssembly
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs

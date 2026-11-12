@@ -217,6 +217,24 @@ fn probes_validate_inputs_and_define_degenerate_boundaries() {
     assert!(q.probe(&c, &copper_layers(&s), Some(q.objects().len())).is_err());
 }
 
+/// Compatibility display labels cannot exempt unresolved copper on separate islands.
+/// Only derived presentation metadata is varied; the board and unknown electrical membership
+/// come from the original command-built fixture and remain unchanged.
+#[test]
+fn equal_display_names_do_not_exempt_unresolved_membership() {
+    let s = fixture(PadShape::Circle, 600_000, 600_000, p(0, 349_999), 60_000);
+    let mut q = query(&s, 20_000);
+    assert!(q.objects().iter().all(|item| item.intended_nets.is_empty()));
+    for item in &mut q.geometry.items {
+        item.net = Some("DISPLAY_ONLY".into());
+    }
+    let decisions: Vec<_> = q.geometry.clearance_pairs(20_000).collect();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].gap_nm, 19_999.);
+    assert!(decisions[0].clearance_violation);
+    assert!(!decisions[0].conflicting_nets);
+}
+
 /// An unnamed route must discover both contacted intended nets before deciding short safety;
 /// zero required clearance cannot turn a bridge into a legal preview. The analogous command
 /// rejects it atomically through the same represented-contour contact path.
