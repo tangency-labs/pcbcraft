@@ -281,6 +281,8 @@ pub fn is_document_path(path: &str) -> bool {
 
 /// Bound and validate every part before constructing a project. No partial state is returned.
 /// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
+/// Reject locked tracks or vias under older board headers; board format 18 requires
+/// at least one authored track or via lock.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
