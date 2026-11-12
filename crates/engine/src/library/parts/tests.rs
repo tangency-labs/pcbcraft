@@ -336,8 +336,11 @@ fn quantities_display_with_si_prefixes_and_round_trip() {
         (Quantity::Resistance, "1000000", "1 MΩ"),
         (Quantity::Current, "0.000001", "1 µA"),
         (Quantity::Capacitance, "0.000000000001", "1 pF"),
-        (Quantity::Capacitance, "0.000000000000001", "0.001 pF"),
-        (Quantity::Frequency, "1000000000000000", "1000 THz"),
+        (Quantity::Capacitance, "0.000000000000001", "1 fF"),
+        (Quantity::Capacitance, "0.000000000000000001", "1 aF"),
+        (Quantity::Frequency, "1000000000000000", "1 PHz"),
+        (Quantity::Frequency, "1000000000000000000", "1 EHz"),
+        (Quantity::Frequency, "1000000000000000000000", "1000 EHz"),
         (Quantity::Inductance, "0.0000047123456789", "4.7123456789 µH"),
         (Quantity::Length, "0.1", "100 mm"),
         (Quantity::Ratio, "0.05", "0.05"),
@@ -347,4 +350,46 @@ fn quantities_display_with_si_prefixes_and_round_trip() {
     }
     assert_eq!(Value::Text { value: "DNP".into() }.display(), "DNP");
     assert_eq!(display_quantity("01", "V"), "01 V");
+}
+
+/// New prefix boundaries round-trip exactly, including exa next to scientific notation
+/// and base-unit letters that must not be mistaken for case-sensitive prefix aliases.
+#[test]
+fn atto_through_exa_inputs_preserve_precision_and_scientific_notation() {
+    for (quantity, input, value, shown) in [
+        (Quantity::Capacitance, "1aF", "0.000000000000000001", "1 aF"),
+        (Quantity::Capacitance, "999aF", "0.000000000000000999", "999 aF"),
+        (Quantity::Capacitance, "1000aF", "0.000000000000001", "1 fF"),
+        (Quantity::Capacitance, "1.001fF", "0.000000000000001001", "1.001 fF"),
+        (Quantity::Capacitance, "999.999fF", "0.000000000000999999", "999.999 fF"),
+        (Quantity::Capacitance, "1000fF", "0.000000000001", "1 pF"),
+        (Quantity::Capacitance, "-1f", "-0.000000000000001", "-1 fF"),
+        (Quantity::Capacitance, "1F", "1", "1 F"),
+        (Quantity::Current, "1A", "1", "1 A"),
+        (Quantity::Current, "1aA", "0.000000000000000001", "1 aA"),
+        (Quantity::Frequency, "999.999THz", "999999000000000", "999.999 THz"),
+        (Quantity::Frequency, "1000THz", "1000000000000000", "1 PHz"),
+        (Quantity::Frequency, "999.999PHz", "999999000000000000", "999.999 PHz"),
+        (Quantity::Frequency, "1000PHz", "1000000000000000000", "1 EHz"),
+        (Quantity::Frequency, "1E", "1000000000000000000", "1 EHz"),
+        (Quantity::Frequency, "-1EHz", "-1000000000000000000", "-1 EHz"),
+        (Quantity::Frequency, "1E3 Hz", "1000", "1 kHz"),
+        (Quantity::Frequency, "1E+3Hz", "1000", "1 kHz"),
+        (Quantity::Frequency, "1E-3Hz", "0.001", "1 mHz"),
+        (Quantity::Frequency, "1e18Hz", "1000000000000000000", "1 EHz"),
+        (Quantity::Frequency, "1e-3EHz", "1000000000000000", "1 PHz"),
+        (Quantity::Resistance, "1ER", "1000000000000000000", "1 EΩ"),
+        (Quantity::Capacitance, "0fF", "0", "0 F"),
+    ] {
+        let expected = Value::Quantity { value: value.into(), unit: quantity.unit().into() };
+        assert_eq!(quantity.parse(input).unwrap(), expected, "{input}");
+        assert_eq!(expected.display(), shown, "{input}");
+        assert_eq!(quantity.parse(shown).unwrap(), expected, "{shown}");
+    }
+    for input in ["0.1aF", "1.0001fF", "1e-19F", "1AF", "1FF", "1zF", "1QF", "1EE", "1E+", "1e", "1eHz"] {
+        assert!(Quantity::Capacitance.parse(input).is_err(), "{input}");
+    }
+    let maximum = Value::Quantity { value: "999999999999999999999999999999999999".into(), unit: "Hz".into() };
+    assert_eq!(maximum.display(), "999999999999999999.999999999999999999 EHz");
+    assert_eq!(Quantity::Frequency.parse(&maximum.display()).unwrap(), maximum);
 }

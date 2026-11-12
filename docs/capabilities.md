@@ -1,5 +1,9 @@
 # Current capabilities and MVP scope
 
+Typed quantities accept and display engineering prefixes from atto (`a`) through
+exa (`E`), including femto (`f`) and peta (`P`), with exact canonical values and
+round-trip editing. See the [quantity contract](part-schema.md).
+
 This table starts from the baseline at `091adfd` (November 6, 2026), with the
 wiring and views rows updated for endpoint attachment, local healing, PCB inspection
 and saved arrangements. Update it alongside feature changes.

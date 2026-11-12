@@ -1,6 +1,10 @@
 //! Canonical base units and exact decimal input normalization.
 use super::Value;
 use serde::{Deserialize, Serialize};
+
+/// Ordered engineering prefixes shared by input and display; the empty entry is the base unit.
+const ENGINEERING_PREFIXES: [(&str, i32); 13] =
+    [("a", -18), ("f", -15), ("p", -12), ("n", -9), ("µ", -6), ("m", -3), ("", 0), ("k", 3), ("M", 6), ("G", 9), ("T", 12), ("P", 15), ("E", 18)];
 /// Physical quantities use one canonical unit each; display-unit parsing is a separate operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,8 +46,7 @@ impl Quantity {
             return Err("Quantity input exceeds 128 bytes.".into());
         }
         let text = text.trim();
-        let number_end = text.find(|c: char| !c.is_ascii_digit() && !matches!(c, '+' | '-' | '.' | 'e' | 'E')).unwrap_or(text.len());
-        let (number, suffix) = text.split_at(number_end);
+        let (number, suffix) = text.split_at(number_end(text));
         let suffix: String = suffix.chars().filter(|c| !c.is_whitespace()).collect();
         let aliases: &[&str] = match self {
             Self::Resistance => &["Ohm", "ohm", "ohms", "Ω", "R"],
@@ -54,16 +57,32 @@ impl Quantity {
         } else if self == Self::Ratio && suffix == "%" {
             -2
         } else {
-            let prefixes =
-                [("p", -12), ("n", -9), ("u", -6), ("µ", -6), ("μ", -6), ("m", -3), ("k", 3), ("M", 6), ("G", 9), ("T", 12), ("milli", -3)];
-            prefixes
-                .into_iter()
+            ENGINEERING_PREFIXES
+                .iter()
+                .copied()
+                .filter(|(prefix, _)| !prefix.is_empty())
+                .chain([("u", -6), ("μ", -6), ("milli", -3)])
                 .find_map(|(prefix, shift)| suffix.strip_prefix(prefix).filter(|rest| rest.is_empty() || aliases.contains(rest)).map(|_| shift))
                 .ok_or_else(|| format!("Expected {} or a compatible SI-prefixed unit.", self.unit()))?
         };
         let value = normalized_decimal(number, shift)?;
         Ok(Value::Quantity { value, unit: self.unit().into() })
     }
+}
+
+/// Consume an optional scientific exponent only when it has digits, leaving a bare
+/// uppercase E available as the exa prefix. Malformed numbers still fail normalization.
+fn number_end(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut end = bytes.iter().position(|byte| !byte.is_ascii_digit() && !matches!(byte, b'+' | b'-' | b'.')).unwrap_or(bytes.len());
+    if matches!(bytes.get(end), Some(b'e' | b'E')) {
+        let start = end + 1;
+        let digits = start + usize::from(matches!(bytes.get(start), Some(b'+' | b'-')));
+        if bytes.get(digits).is_some_and(u8::is_ascii_digit) {
+            end = digits + bytes[digits..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+        }
+    }
+    end
 }
 
 /// Canonical decimals have at most 36 digits and 18 fractional places; zero has exactly one spelling.
@@ -81,8 +100,8 @@ pub fn decimal(value: &str) -> bool {
 /// Readable text for a canonical base-unit quantity, such as `4700`/`Ohm` as `4.7 kΩ`.
 ///
 /// Precision: every significant digit is kept and nothing is rounded, so [`Quantity::parse`]
-/// returns the same canonical value for the text. Prefix: the engineering prefix from p to T that
-/// puts one to three digits before the decimal point, clamped at p and T; zero has no prefix.
+/// returns the same canonical value for the text. Prefix: the engineering prefix from a to E that
+/// puts one to three digits before the decimal point, clamped at a and E; zero has no prefix.
 /// Ratios (`1`) show the plain decimal; non-canonical input is shown unscaled with its unit.
 pub fn display_quantity(value: &str, unit: &str) -> String {
     if unit == "1" {
@@ -95,18 +114,8 @@ pub fn display_quantity(value: &str, unit: &str) -> String {
     let digits = value.trim_start_matches('-');
     let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
     let magnitude = if whole == "0" { -1 - (fraction.len() - fraction.trim_start_matches('0').len()) as i32 } else { whole.len() as i32 - 1 };
-    let exponent = (magnitude.div_euclid(3) * 3).clamp(-12, 12);
-    let prefix = match exponent {
-        -12 => "p",
-        -9 => "n",
-        -6 => "µ",
-        -3 => "m",
-        3 => "k",
-        6 => "M",
-        9 => "G",
-        12 => "T",
-        _ => "",
-    };
+    let (prefix, exponent) =
+        ENGINEERING_PREFIXES.iter().rev().copied().find(|(_, exponent)| magnitude >= *exponent).unwrap_or(ENGINEERING_PREFIXES[0]);
     let scaled = shift_decimal(value, -exponent).unwrap_or_else(|_| value.to_owned());
     format!("{scaled} {prefix}{symbol}")
 }

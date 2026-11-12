@@ -294,6 +294,9 @@ Wayland and X11; Windows and macOS still need platform qualification.
 
 ## Inspect and edit component properties
 
+Typed part values accept engineering prefixes from atto through exa, such as
+`1 fF` or `1 PHz`, within the [documented precision limits](part-schema.md).
+
 Select a symbol to use the compact **Properties** card. Edit reference, value,
 rotation or its **X/Y** position and choose **Apply changes**, or open **More properties** for the
 expanded form. **E** opens the same form. **OK** applies the supported properties
