@@ -19,6 +19,8 @@ reuses the existing junction reshape/departure path and shared move command;
 placement selection cleanup reuses view-owned selection/counterpart routing.
 Selected-wire and multi-item M pickup reuse the existing bounded group translation
 command, revision/filter guards and preview rather than adding another movement transaction.
+The explicit disconnected group candidate partitions only selection-boundary contacts
+through the existing wire allocator; G and held group dragging retain connected movement.
 Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
 consulted November 12, 2026. Tests use shared commands, original starter/native

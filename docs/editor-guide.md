@@ -183,10 +183,12 @@ movement and rotation commit together as one undo step, while cancellation chang
 The move and disconnection share one undo step; placing a replacement at the vacated
 pins connects it to the preserved wire ends.
 
-With multiple items selected, **M** picks up the whole selection using the same
-group movement as dragging it. Symbols, selected wire routes and named-net labels
-move together, and no-connect markers follow their selected owners. Click to place,
-or press **Esc** or right-click to cancel; placement is one undo step.
+With multiple items selected, **M** moves the selection while disconnecting contacts
+to unselected objects. Selected symbols, wire routes and named-net labels move
+together; connections within the selection remain intact, and no-connect markers
+follow their selected owners. Unselected wires stay in place. **G** grabs the group
+while keeping external wires connected, as ordinary group dragging does. Click to
+place, or press **Esc** or right-click to cancel; placement is one undo step.
 
 ## Drawing and editing wires
 
@@ -243,7 +245,8 @@ shared junction adjusts all its attached routes; terminal pins stay on their sym
 Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
 modifier selections continue to select whole wires. With one wire or segment selected,
 **M** picks up its whole route, including its bends and free-end no-connect markers;
-click to place, or press **Esc** or right-click to cancel. Attached pins stay fixed.
+click to place, or press **Esc** or right-click to cancel. Pins outside the selection
+stay fixed and disconnect from the moved wire.
 Crossings stay disconnected.
 Select a wire segment, then use Capture → **Modify** for **Slice**, **Heal**
 or **Delete** in the group caption menu.

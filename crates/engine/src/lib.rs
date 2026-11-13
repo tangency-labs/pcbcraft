@@ -1510,11 +1510,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_ITEMS,
         title: "Move Selected Items",
-        summary: "Move symbols, named-net anchors and wire routes together; retain attached pins, connect exact pin contacts and heal touched routes. One undoable edit.",
+        summary: "Translate symbols, named-net anchors and wire routes together. Retain connections by default; disconnect cuts contacts outside the selection and leaves unselected routes fixed. One undoable edit.",
         params: &[
             ITEMS,
             Param { required: true, name: "dx_nm", summary: "Horizontal displacement in nanometers", kind: ParamKind::Displacement },
             Param { required: true, name: "dy_nm", summary: "Vertical displacement in nanometers", kind: ParamKind::Displacement },
+            Param {
+                required: false,
+                name: "disconnect",
+                summary: "Disconnect from unselected objects before translating, preserving connections within the selection",
+                kind: ParamKind::Disconnect,
+            },
             EXPECTED_REVISION,
             AUTO_HEAL,
         ],

@@ -65,6 +65,52 @@ impl Edit {
 }
 
 impl Project {
+    /// Partition electrical contacts at a validated selection boundary without moving geometry.
+    /// Each cut creates one free junction shared by the wires on its detached side. Moving
+    /// junctions keep their IDs (and attached intent); stationary routes retain their exact paths.
+    /// The ordinary edit allocator bounds new IDs, and failure discards the entire candidate.
+    pub(crate) fn detached_selection(&self, items: &crate::selection::Selection, revision: u64) -> Result<Project, CommandError> {
+        let mut incident = BTreeMap::<WireEndpoint, (bool, bool)>::new();
+        for wire in self.wires.iter() {
+            let moving = items.wires.contains(&wire.id());
+            for end in wire.endpoints {
+                let sides = incident.entry(end).or_default();
+                if moving {
+                    sides.0 = true;
+                } else {
+                    sides.1 = true;
+                }
+            }
+        }
+        let mut edit = Edit::new(self, revision);
+        let mut cuts = BTreeMap::new();
+        for (end, (moving_wires, fixed_wires)) in incident {
+            let moving_owner = match end {
+                WireEndpoint::Terminal(pin) => items.symbols.contains(&format!("symbol-{}", pin.symbol)),
+                WireEndpoint::NetLabel(id) => items.net_labels.contains(&format!("net-label-{id}")),
+                WireEndpoint::Junction(_) => moving_wires,
+                WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => false,
+            };
+            if (moving_owner && fixed_wires) || (!moving_owner && moving_wires) {
+                let at = self.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("selection contact no longer exists".into()))?;
+                cuts.insert(end, (!moving_owner, edit.free(at)?));
+            }
+        }
+        for (index, wire) in self.wires.iter().enumerate() {
+            let moving = items.wires.contains(&wire.id());
+            let endpoints =
+                wire.endpoints.map(|end| cuts.get(&end).filter(|(cut_moving, _)| *cut_moving == moving).map_or(end, |(_, replacement)| *replacement));
+            if endpoints != wire.endpoints {
+                let path = self.wire_path(wire);
+                let next = &mut Arc::make_mut(&mut edit.project.sheet_mut().wires)[index];
+                next.bends = Some(super::super::interior(&path)?);
+                next.endpoints = endpoints;
+            }
+        }
+        edit.project.sheet_mut().connectivity = Arc::default();
+        Ok(edit.project)
+    }
+
     /// Move a symbol while leaving its old routes and pin branches in place. Every vacated
     /// connected pin becomes one junction shared by its old wires. Preview and commit use
     /// the same bounded allocator; invalid geometry fails without changing the snapshot.
@@ -84,25 +130,8 @@ impl Project {
         revision: u64,
         auto_heal: bool,
     ) -> Result<Project, CommandError> {
-        let mut edit = Edit::new(self, revision);
-        let mut replacements = BTreeMap::new();
-        for pin in self.symbols[index].terminals() {
-            let end = WireEndpoint::Terminal(pin);
-            if self.wires.iter().any(|wire| wire.endpoints.contains(&end)) {
-                let point = self.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("pin no longer exists".into()))?;
-                replacements.insert(end, edit.free(point)?);
-            }
-        }
-        for (i, wire) in self.wires.iter().enumerate() {
-            if wire.endpoints.iter().any(|end| replacements.contains_key(end)) {
-                let path = self.wire_path(wire);
-                let next = &mut Arc::make_mut(&mut edit.project.sheet_mut().wires)[i];
-                next.bends = Some(super::super::interior(&path)?);
-                next.endpoints = wire.endpoints.map(|end| replacements.get(&end).copied().unwrap_or(end));
-            }
-        }
-        edit.project.sheet_mut().connectivity = Arc::default();
-        let detached = edit.project;
+        let items = crate::selection::Selection::one_symbol(self.symbols[index].id());
+        let detached = self.detached_selection(&items, revision)?;
         let mut moved = detached.clone();
         let symbol = &mut Arc::make_mut(&mut moved.sheet_mut().symbols)[index];
         symbol.position = to;

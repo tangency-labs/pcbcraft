@@ -342,3 +342,68 @@ fn ctrl_click_toggles_wire_and_symbol_in_mixed_selection() {
         assert_eq!(h.state().session.revision(), revision);
     }
 }
+
+/// Add a stationary branch after selecting the group, so it stays outside the captured items.
+/// The branch shares a selected pin with an internal selected route.
+fn add_unselected_branch(h: &mut Harness<'_, PcbApp>) -> String {
+    let p = h.state().session.project().unwrap();
+    let header = p.symbols()[0].clone();
+    let at = header.pins()[0];
+    let revision = h.state().session.revision();
+    h.state_mut().run(DRAW_WIRE, &json!({"from":{"symbol":header.id(),"terminal":"1"},"to":{"x_nm":at.x_nm-12*GRID_NM,"y_nm":at.y_nm},"bends":[],"auto_heal":false,"expected_revision":revision}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.run();
+    let p = h.state().session.project().unwrap();
+    let branch = p.wires().last().unwrap().id();
+    assert!(!h.state().views.active.schematic.selection.wires.contains(&branch));
+    branch
+}
+
+/// M disconnects at a mixed selection boundary and leaves external routes fixed. G uses
+/// the same group preview with retained pin contacts, stretching the unselected branch instead.
+#[test]
+fn group_move_and_grab_have_distinct_selection_boundary_behavior() {
+    for (width, dark, key) in [(1400., true, Key::M), (700., false, Key::G)] {
+        let mut h = editor(width, dark, true);
+        let items = select_group(&mut h, true);
+        let branch = add_unselected_branch(&mut h);
+        let before = h.state().session.snapshot().unwrap();
+        let old_branch = before.wires().iter().find(|wire| wire.id() == branch).unwrap();
+        let origin = screen(&h, point(0, 0));
+        h.hover_at(origin);
+        h.key_press(key);
+        h.run();
+        assert!(
+            matches!(&h.state().views.active.schematic.tool,Some(Tool::MoveItems{items:captured,pickup:true,disconnect,..}) if *captured==items && *disconnect==(key==Key::M))
+        );
+        let to = screen(&h, point(6, 7));
+        h.hover_at(to);
+        h.run();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        click_canvas_at(&mut h, to);
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        let after = h.state().session.snapshot().unwrap();
+        let new_branch = after.wires().iter().find(|wire| wire.id() == branch).unwrap();
+        if key == Key::M {
+            assert_eq!(after.wire_path(new_branch), before.wire_path(old_branch));
+            assert!(new_branch.terminals().is_empty());
+        } else {
+            assert_eq!(new_branch.endpoints(), old_branch.endpoints());
+            assert_ne!(after.wire_path(new_branch), before.wire_path(old_branch));
+        }
+        for old in before.wires().iter().filter(|wire| items.wires.contains(&wire.id())) {
+            let new = after.wires().iter().find(|wire| wire.id() == old.id()).unwrap();
+            assert_eq!(new.endpoints(), old.endpoints());
+            assert_eq!(
+                after.wire_path(new),
+                before.wire_path(old).into_iter().map(|at| Point { x_nm: at.x_nm + 6 * GRID_NM, y_nm: at.y_nm + 7 * GRID_NM }).collect::<Vec<_>>()
+            );
+        }
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_same_content(&before, &h.state().session.snapshot().unwrap());
+        h.state_mut().run("edit.redo", &json!({}));
+        h.run();
+        assert_same_content(&after, &h.state().session.snapshot().unwrap());
+    }
+}

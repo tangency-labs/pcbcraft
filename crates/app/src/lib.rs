@@ -1285,8 +1285,9 @@ impl PcbApp {
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · R rotate · Esc cancel"),
                         Tool::Move { pickup: true, .. } => dim("Grab symbol · R rotate · Click to place · Esc cancel"),
                         Tool::Move { .. } => dim("Move symbol · R rotate · Esc cancel"),
-                        Tool::MoveItems { pickup: true, .. } => dim("Move selection · Click to place · Esc cancel"),
-                        Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
+                        Tool::MoveItems { pickup: true, disconnect: true, .. } => dim("Move selection · Click to place · Esc cancel"),
+                        Tool::MoveItems { pickup: true, .. } => dim("Grab selection · Click to place · Esc cancel"),
+                        Tool::MoveItems { .. } => dim("Grab selection · Esc to cancel"),
                         Tool::Reshape { drag, .. } if drag.pickup => dim("Grab wire · Click to place · Esc cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
                         Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
@@ -1340,9 +1341,9 @@ impl PcbApp {
 
     /// Draw the schematic and send completed edits through the shared command catalog using each
     /// gesture's starting revision to reject stale actions. M picks up a multi-item selection or a
-    /// selected wire for group translation, or a sole selected/otherwise hovered symbol for
-    /// disconnected movement. G picks up the hovered symbol with its wires attached, or a wire
-    /// handle. Pickup stays view-only until a click commits it.
+    /// selected wire for disconnected translation, or a sole selected/otherwise hovered symbol
+    /// for disconnected movement. G grabs a multi-item selection, hovered symbol or wire handle
+    /// while retaining external attachments. Pickup stays view-only until a click commits it.
     /// Cancel clears only the local preview, and an unfinished tool cannot be replaced by a queued shortcut.
     /// R rotates an active symbol/field preview, otherwise targeting hovered text before its body.
     /// D opens a component's saved datasheet
@@ -1417,7 +1418,7 @@ impl PcbApp {
                             && let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point))
                         {
                             let origin = self.views.active.camera.snap(pointer, rect);
-                            self.view_click(source, Click::GrabItems(items, origin, true));
+                            self.view_click(source, Click::MoveItems { items, origin, pickup: true, disconnect: true });
                         }
                     }
                     if (moving || rotating || mirroring.is_some())
@@ -1659,16 +1660,19 @@ impl PcbApp {
                 self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
             (None, Click::SelectLeg(leg)) => self.select_leg(leg),
-            (None, Click::GrabItems(items, origin, pickup)) => {
+            (None, Click::MoveItems { items, origin, pickup, disconnect }) => {
                 let whole_wire_drag = (pickup || self.views.active.schematic.whole_wire_drag) && items.single_wire().is_some();
                 self.select(items.clone());
                 self.views.active.schematic.whole_wire_drag = whole_wire_drag;
-                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision(), pickup });
+                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision(), pickup, disconnect });
             }
-            (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
+            (Some(Tool::MoveItems { items, revision, disconnect, .. }), Click::FinishItems(delta)) => {
                 self.views.active.schematic.tool = None;
                 if let Some(delta) = delta {
-                    self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
+                    self.run(
+                        pcbcraft_engine::MOVE_ITEMS,
+                        &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"disconnect":disconnect,"expected_revision":revision}),
+                    );
                 }
             }
             (None | Some(Tool::Wire { start: None, .. }), Click::GrabReshape(drag)) => {

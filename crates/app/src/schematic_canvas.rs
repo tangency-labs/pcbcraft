@@ -87,6 +87,8 @@ pub(crate) enum Tool {
         revision: u64,
         /// Keyboard pickup follows hover and finishes on a click; held drags finish on release.
         pickup: bool,
+        /// Move cuts selection-boundary contacts; Grab retains and stretches them.
+        disconnect: bool,
     },
     Move {
         symbol: SymbolPlacement,
@@ -152,8 +154,13 @@ pub(crate) enum Click {
     SelectItems(Selection),
     /// Select one leg for direct deletion and reshaping.
     SelectLeg(LegTarget),
-    /// Translate a selection from this model point; true selects click-to-place keyboard pickup.
-    GrabItems(Selection, Point, bool),
+    /// Translate from this model point with explicit gesture and attachment behavior.
+    MoveItems {
+        items: Selection,
+        origin: Point,
+        pickup: bool,
+        disconnect: bool,
+    },
     FinishItems(Option<Point>),
     /// A drag started on a wire segment, corner or free end; the handler selects its target.
     GrabReshape(wires::ReshapeDrag),
@@ -254,6 +261,8 @@ pub(crate) enum SymbolAction {
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// M picks up a multi-item selection or an explicitly selected wire and commits on a valid
 /// primary click; Escape, right-click or focus loss cancels that preview.
+/// M cuts contacts to unselected objects; G grabs a group with its external contacts retained,
+/// matching held group dragging. Both preserve contacts within the selected group.
 /// Symbol move previews also include their pending quarter turns; painted wire contacts use
 /// that transformed snapshot, and cancellation discards both position and orientation.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
@@ -359,9 +368,7 @@ pub(crate) fn show(
                 )
                 .ok()
         }),
-        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => {
-            items.moved(project, delta).and_then(|next| next.healed(project, revision, auto_heal)).ok()
-        }
+        (Some(Tool::MoveItems { items, disconnect, .. }), Some(delta), _) => items.transformed(project, delta, *disconnect, revision, auto_heal).ok(),
         (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to, revision, auto_heal),
         _ => None,
     };
@@ -684,7 +691,7 @@ pub(crate) fn show(
             return Some(Click::SelectItems(selected.combine(&hit, false, false)));
         }
         if hit.is_subset(selected) && (selected.len() > 1 || whole_wire_drag) {
-            return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect), false));
+            return Some(Click::MoveItems { items: selected.clone(), origin: camera.snap(origin, rect), pickup: false, disconnect: false });
         }
         if let Some(wire) = hit.single_wire()
             && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
@@ -933,6 +940,9 @@ pub(crate) fn show(
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
         && let Some(pointer) = response.hover_pos()
     {
+        if selected.len() > 1 {
+            return Some(Click::MoveItems { items: selected.clone(), origin: camera.snap(pointer, rect), pickup: true, disconnect: false });
+        }
         if filters.symbols && fields::at(ui, project, camera, rect, pointer).is_some() {
             return None;
         }

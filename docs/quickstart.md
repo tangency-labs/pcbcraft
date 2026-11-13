@@ -187,6 +187,8 @@ the same `VCC` net name, which can be changed before placement.
    picks up the whole route; click to place, or press **Esc** or right-click to cancel.
    **M** also moves a selection of several symbols, wires or labels together,
    preserving their relative positions and attached no-connect markers.
+   M disconnects contacts to unselected objects and leaves their wiring in place;
+   **G** or dragging the group keeps those connections and stretches attached wires.
    Capture → **Modify** menu offers
    **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
    **Break** to release the selected leg's attachments, including pins and shared junctions,

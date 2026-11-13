@@ -2,6 +2,8 @@ use super::*;
 use crate::{CONNECT_PINS, DELETE_ITEMS, DRAW_WIRE, MOVE_ITEMS, PLACE_FOOTPRINT, PLACE_SYMBOL, persistence, schematic::GRID_NM};
 use serde_json::json;
 
+mod disconnected;
+
 /// Two components with an authored wire and a footprint exercise every dependent collection.
 fn fixture() -> Session {
     let mut s = Session::default();

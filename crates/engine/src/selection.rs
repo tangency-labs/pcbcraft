@@ -250,6 +250,21 @@ impl Selection {
         }
         Ok(next)
     }
+
+    /// Preview or commit one bounded translation with the chosen attachment behavior.
+    /// Disconnected moves cut contacts at the selection boundary before translating, keeping
+    /// unselected routes fixed and contacts within the selection intact. Connected grabs retain
+    /// the existing stretching behavior. Zero displacement never detaches or allocates IDs.
+    /// Validation, attachment checks and optional healing finish before a candidate is returned.
+    pub fn transformed(&self, project: &Project, delta: Point, disconnect: bool, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
+        self.validate(project)?;
+        self.validate_marker_owners(project)?;
+        if delta == (Point { x_nm: 0, y_nm: 0 }) {
+            return Ok(project.clone());
+        }
+        let base = if disconnect { project.detached_selection(self, revision)? } else { project.clone() };
+        self.moved(&base, delta)?.healed(&base, revision, auto_heal)
+    }
 }
 
 /// Translate with checked arithmetic and the same coordinate bounds as individual edits.
@@ -259,14 +274,15 @@ fn translated(point: Point, delta: Point) -> Result<Point, CommandError> {
 }
 
 impl Session {
-    /// Validate the revision and selection, attach exact pin contacts and heal affected routes
-    /// before committing one undoable group move.
+    /// Validate and publish one group translation. `disconnect` cuts only contacts outside
+    /// the selection; its default false preserves connected grabs for existing command clients.
     pub(crate) fn move_items(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".to_owned()))?;
         let project = self.open_project()?;
         let delta = Point { x_nm: params["dx_nm"].as_i64().unwrap_or_default(), y_nm: params["dy_nm"].as_i64().unwrap_or_default() };
-        let next = items.moved(project, delta)?.healed(project, self.revision(), crate::wire::auto_heal(params))?;
+        let next =
+            items.transformed(project, delta, params["disconnect"].as_bool().unwrap_or(false), self.revision(), crate::wire::auto_heal(params))?;
         if next.symbols != project.symbols
             || next.wires != project.wires
             || next.junctions != project.junctions
