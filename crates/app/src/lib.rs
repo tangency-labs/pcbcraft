@@ -371,7 +371,7 @@ impl PcbApp {
         pcbcraft_chrome::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         let mut views = EditorViews::default();
-        views.set_grid_everywhere(preferences.schematic_grid_nm);
+        views.set_grid_defaults(preferences.schematic_grid_nm, preferences.board_grid_nm);
         Self {
             library_sources: native_sources::Sources::restore(cc.storage.and_then(|s| s.get_string(native_sources::STORAGE_KEY))),
             home: true,
@@ -1197,6 +1197,7 @@ impl PcbApp {
         let message = self.message.clone();
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
+        let grid_workspace = self.views.active.workspace;
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
         let grid_style = if !self.preferences.grid_visible(self.views.active.workspace == Workspace::Board) {
             grid::Style::Off
@@ -1338,8 +1339,8 @@ impl PcbApp {
                     grid_changed = grid::spacing_menu(
                         ui,
                         &mut spacing,
-                        &grid::SCHEMATIC_SPACING_PRESETS_NM,
-                        grid::SCHEMATIC_SPACING_DEFAULT_NM,
+                        grid_workspace.grid_presets(),
+                        grid_workspace.grid_default_nm(),
                         every,
                         unit,
                         grid_style,

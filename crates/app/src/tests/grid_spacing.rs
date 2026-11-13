@@ -8,6 +8,7 @@ use pcbcraft_engine::{
     selection::Selection,
 };
 
+use super::board_views::board_harness;
 use super::*;
 
 const MIL: i64 = NM_PER_MIL;
@@ -127,6 +128,94 @@ fn custom_spacing_reads_units_and_explains_refusals() {
     h.get_by_label("Pins are on 1.27 mm; wire to them by clicking the pin.");
     assert_eq!(h.state().views.active.camera.snap_nm(), 500_000, "switching units keeps the spacing");
     assert_eq!(project_state(&h), before);
+}
+
+/// The PCB status-bar grid uses board presets and its own remembered spacing. Changing it
+/// leaves the schematic preference and the project untouched, and switching workspaces restores
+/// each editor's spacing.
+#[test]
+fn board_grid_has_its_own_presets_and_remembered_spacing() {
+    let mut h = board_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    assert_eq!(h.state().views.active.workspace, Workspace::Board);
+    assert_eq!(h.state().views.active.camera.snap_nm(), 50 * MIL);
+    let before = project_state(&h);
+
+    choose_grid(&mut h, "10 mil");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    assert_eq!(h.state().preferences.board_grid_nm, 10 * MIL);
+    assert_eq!(h.state().preferences.schematic_grid_nm, 50 * MIL, "a board choice keeps the schematic preference");
+    assert_eq!(project_state(&h), before);
+
+    click(&mut h, "Grid 10 mil");
+    type_custom(&mut h, "0");
+    h.get_by_label("Use 0.01 mm to 1000 mil");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    assert_eq!(h.state().preferences.board_grid_nm, 10 * MIL);
+    type_custom(&mut h, "0.5 mm");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 500_000);
+    assert_eq!(h.state().preferences.board_grid_nm, 500_000);
+    assert_eq!(h.state().preferences.schematic_grid_nm, 50 * MIL);
+    h.get_by_label("Grid 19.685 mil");
+
+    // N and Shift+N step the board presets, including away from a custom spacing.
+    h.key_press(Key::N);
+    h.run();
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    h.key_press(Key::N);
+    h.run();
+    assert_eq!(h.state().views.active.camera.snap_nm(), 5 * MIL);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::N);
+    h.run();
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    assert_eq!(h.state().preferences.board_grid_nm, 10 * MIL);
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Schematic");
+    assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+    assert_eq!(h.state().views.active.camera.snap_nm(), 50 * MIL, "the board choice did not replace the schematic spacing");
+    choose_grid(&mut h, "25 mil");
+    assert_eq!(h.state().preferences.schematic_grid_nm, 25 * MIL);
+    assert_eq!(h.state().preferences.board_grid_nm, 10 * MIL, "a schematic choice keeps the board preference");
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    assert_eq!(project_state(&h), before);
+}
+
+/// Changing the board grid never moves an existing off-grid footprint or its pads, and the
+/// project, revision, dirty state and saved bytes stay unchanged.
+#[test]
+fn board_grid_changes_leave_off_grid_footprints_and_pads_in_place() {
+    let mut h = board_harness();
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    let footprint = h.state().session.project().unwrap().board_view(target).unwrap().footprints().next().unwrap().id.clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+        &json!({"board":target.board,"footprint":footprint,"x_nm":7*MIL,"y_nm":3*MIL,"rotation":0,"expected_revision":revision}),
+    );
+    h.run();
+    let placement = |h: &Harness<'_, PcbApp>| {
+        let project = h.state().session.project().unwrap();
+        let board = project.board_view(target).unwrap();
+        let footprint = board.footprints().next().unwrap();
+        (footprint.position, footprint.pads.iter().map(|pad| pad.center).collect::<Vec<_>>())
+    };
+    let original = placement(&h);
+    assert_eq!(original.0, Point { x_nm: 7 * MIL, y_nm: 3 * MIL });
+    let before = project_state(&h);
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    for row in ["100 mil", "10 mil", "25 mil", "5 mil"] {
+        choose_grid(&mut h, row);
+        assert_eq!(placement(&h), original, "{row} moved authored geometry");
+        assert_eq!(project_state(&h), before, "{row} changed the document or its history");
+    }
+    h.get_by_label("Grid 5 mil");
 }
 
 /// N steps finer and Shift+N coarser through the presets, wrapping, like KiCad's grid keys.
@@ -259,6 +348,31 @@ fn the_grid_button_reports_thinned_dots() {
     h.get_by_label(&format!("Grid 10 mil · dots {}", grid::spacing_label(10 * MIL * i64::from(every), pcbcraft_chrome::units::Unit::Mil)));
 }
 
+/// The board button thins its dots like the schematic one: zooming out reports the drawn
+/// spacing while the board snap spacing stays exact, and zooming in shows every snap point.
+#[test]
+fn board_grid_button_reports_thinned_dots_without_changing_snap() {
+    let mut h = board_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    h.state_mut().preferences.board_grid_visible = true;
+    h.state_mut().preferences.board_grid_style = grid::Style::Dots;
+    choose_grid(&mut h, "10 mil");
+    let zoom = |h: &mut Harness<'_, PcbApp>, level: f32| {
+        h.state_mut().views.active.camera.set_zoom_with_limit(level, crate::canvas_camera::MAX_BOARD_ZOOM);
+        h.run();
+        assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+        grid::shown_every(h.state().views.active.camera.snap_step()).unwrap()
+    };
+    assert_eq!(zoom(&mut h, 16.0), 1);
+    h.get_by_label("Grid 10 mil");
+    assert_eq!(zoom(&mut h, 1.0), 5);
+    h.get_by_label("Grid 10 mil · dots 50 mil");
+    assert_eq!(zoom(&mut h, 0.25), 25);
+    h.get_by_label("Grid 10 mil · dots 250 mil");
+    assert_eq!(h.state().preferences.board_grid_nm, 10 * MIL);
+}
+
 /// Each pane keeps its own spacing through focus changes and reopening; opening a split seeds
 /// the new pane from the focused one, and the last spacing chosen is the remembered preference.
 #[test]
@@ -306,16 +420,45 @@ fn each_pane_keeps_its_own_grid() {
     assert_eq!((spacing(&h, 0), spacing(&h, 1)), (10, 10));
 }
 
-/// At startup both panes take the remembered spacing; a damaged value falls back to 50 mil.
+/// At startup each workspace takes its own remembered spacing; a board view does not inherit
+/// the schematic value, and a damaged preference falls back before it reaches the cameras.
 #[test]
-fn startup_seeds_both_panes_from_the_preference() {
+fn startup_seeds_each_workspace_from_its_preference() {
+    let preferences = Preferences::parse("{\"schematic_grid_nm\":635000,\"board_grid_nm\":254000}");
+    assert_eq!((preferences.schematic_grid_nm, preferences.board_grid_nm), (635_000, 254_000));
     let mut views = EditorViews::default();
-    views.set_grid_everywhere(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm);
-    assert_eq!((views.active.camera.snap_nm(), views.view(ViewId(1)).unwrap().camera.snap_nm()), (635_000, 635_000));
-    views.set_grid_everywhere(Preferences::parse("{\"schematic_grid_nm\":0}").schematic_grid_nm);
-    assert_eq!((views.active.camera.snap_nm(), views.view(ViewId(1)).unwrap().camera.snap_nm()), (GRID_NM, GRID_NM));
-    views.set_grid_everywhere(-5);
-    assert_eq!(views.active.camera.snap_nm(), GRID_NM);
+    views.set_grid_defaults(preferences.schematic_grid_nm, preferences.board_grid_nm);
+    assert_eq!(views.active.camera.snap_nm(), 635_000);
+    views.active.workspace = Workspace::Board;
+    views.set_grid_defaults(preferences.schematic_grid_nm, preferences.board_grid_nm);
+    assert_eq!(views.active.camera.snap_nm(), 254_000);
+
+    let damaged = Preferences::parse("{\"schematic_grid_nm\":0,\"board_grid_nm\":-5}");
+    assert_eq!((damaged.schematic_grid_nm, damaged.board_grid_nm), (GRID_NM, grid::BOARD_SPACING_DEFAULT_NM));
+    views.set_grid_defaults(damaged.schematic_grid_nm, damaged.board_grid_nm);
+    assert_eq!(views.active.camera.snap_nm(), grid::BOARD_SPACING_DEFAULT_NM);
+    // Invalid values passed directly do not replace what a camera already uses.
+    views.set_grid_defaults(-5, 0);
+    assert_eq!(views.active.camera.snap_nm(), grid::BOARD_SPACING_DEFAULT_NM);
+}
+
+/// Opening a project rebuilds its views. Both workspace spacings survive that rebuild, so a
+/// saved PCB choice is still there on the first switch to PCB layout without reseeding.
+#[test]
+fn saved_workspace_spacings_survive_opening_a_project() {
+    let mut h = harness();
+    h.state_mut().preferences.schematic_grid_nm = 25 * MIL;
+    h.state_mut().preferences.board_grid_nm = 10 * MIL;
+    h.state_mut().views.set_grid_defaults(25 * MIL, 10 * MIL);
+    resistor_with_board_at_origin(&mut h);
+    assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+    assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Schematic");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
 }
 
 /// The grid control lives in the bottom status bar, not in the sheet headers. Changing the

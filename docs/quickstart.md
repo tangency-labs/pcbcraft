@@ -230,7 +230,9 @@ visible across PCB tabs, with alignment actions in **Layout → Modify**.
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
 views and windows. Grid opacity affects visible grids in both workspaces; display
-changes leave snapping and each view's spacing unchanged.
+changes leave snapping and each view's spacing unchanged. Schematic and PCB views
+remember their snap spacing separately, so changing one editor's grid does not
+replace the other's startup choice.
 
 To compare views, choose **View → Split**, pan one pane, and select a symbol:
 the other pane highlights it while keeping its own selection. **View → Settings**

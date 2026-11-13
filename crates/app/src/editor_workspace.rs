@@ -437,10 +437,13 @@ impl EditorViews {
         }
     }
 
-    /// Set startup grid spacing for all views; invalid spacing leaves every camera unchanged.
-    pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {
+    /// Seed every live and cached view with the remembered schematic and PCB spacings. Each
+    /// view's active and parked workspace cameras take their own value, so switching workspaces
+    /// does not make one editor inherit the other's spacing. Invalid values leave a camera's
+    /// current spacing unchanged.
+    pub(super) fn set_grid_defaults(&mut self, schematic_nm: i64, board_nm: i64) {
         for view in self.all_mut() {
-            view.camera.set_snap_nm(spacing_nm);
+            view.set_grid_defaults(schematic_nm, board_nm);
         }
     }
 
@@ -827,22 +830,31 @@ impl PcbApp {
         }
     }
 
-    /// Change one view's snap spacing and remember it for the next start. This is presentation
+    /// Change one view's snap spacing and remember it for its workspace. This is presentation
     /// only: the project, its revision, its unsaved state and undo history stay as they are,
     /// nothing moves, and other views keep their own spacing. An in-progress gesture is left
     /// alone; its next snapped point follows the new spacing. Out-of-range values are ignored.
+    /// Schematic and PCB views update separate preferences, so changing one never replaces the
+    /// other workspace's startup spacing.
     pub(super) fn set_view_grid(&mut self, id: ViewId, spacing_nm: i64) {
+        let Some(workspace) = self.views.view(id).map(|view| view.workspace) else {
+            return;
+        };
         if let Some(view) = self.views.view_mut(id)
             && view.camera.set_snap_nm(spacing_nm)
         {
-            self.preferences.schematic_grid_nm = spacing_nm;
+            match workspace {
+                Workspace::Schematic => self.preferences.schematic_grid_nm = spacing_nm,
+                Workspace::Board => self.preferences.board_grid_nm = spacing_nm,
+            }
         }
     }
 
     /// Step the active view to the next finer (`finer`) or coarser grid preset, wrapping.
     pub(super) fn cycle_grid(&mut self, finer: bool) {
         let current = self.views.active.camera.snap_nm();
-        if let Some(next) = grid::cycle(current, &grid::SCHEMATIC_SPACING_PRESETS_NM, finer) {
+        let presets = self.views.active.workspace.grid_presets();
+        if let Some(next) = grid::cycle(current, presets, finer) {
             self.set_view_grid(self.views.active.id(), next);
         }
     }

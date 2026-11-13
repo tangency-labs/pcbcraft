@@ -94,10 +94,15 @@ pub struct Preferences {
     /// Display style for every PCB view. Off is the default, including for older saved settings.
     /// Schematic views retain their dot grid; snap spacing stays independent in each view.
     pub board_grid_style: grid::Style,
-    /// The schematic snap spacing last chosen in any view, in nanometres. Both views start from
-    /// it when the app starts; after that each view keeps its own spacing through focus changes,
-    /// splitting and reopening files. It is never saved in the project.
+    /// The schematic snap spacing last chosen in any schematic view, in nanometres. Every
+    /// schematic view starts from it when the app starts; after that each view keeps its own
+    /// spacing through focus changes, splitting and reopening files. It is never saved in the
+    /// project and is independent of [`Self::board_grid_nm`].
     pub schematic_grid_nm: i64,
+    /// The PCB snap spacing last chosen in any board view, in nanometres. Board views start from
+    /// it when the app starts and keep their own spacing afterward, independently of the
+    /// schematic preference. It is presentation only and never saved in the project.
+    pub board_grid_nm: i64,
     /// Clean up touched wire routes after editing. Explicit Heal is available in either mode.
     /// This is a user preference, never part of a project or its undo history.
     pub auto_heal_wires: bool,
@@ -119,6 +124,7 @@ impl Default for Preferences {
             board_grid_visible: true,
             board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
+            board_grid_nm: grid::BOARD_SPACING_DEFAULT_NM,
             auto_heal_wires: true,
             selection_follow: SelectionFollow::default(),
             units: Unit::default(),
@@ -176,6 +182,9 @@ impl Preferences {
         }
         if !grid::SPACING_RANGE_NM.contains(&preferences.schematic_grid_nm) {
             preferences.schematic_grid_nm = grid::SCHEMATIC_SPACING_DEFAULT_NM;
+        }
+        if !grid::SPACING_RANGE_NM.contains(&preferences.board_grid_nm) {
+            preferences.board_grid_nm = grid::BOARD_SPACING_DEFAULT_NM;
         }
         preferences
     }
@@ -543,6 +552,7 @@ mod tests {
             board_grid_visible: true,
             board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
+            board_grid_nm: 10 * grid::NM_PER_MIL,
             auto_heal_wires: false,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
             units: Unit::Mm,
@@ -576,16 +586,23 @@ mod tests {
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":101}").grid_opacity_percent, grid::OPACITY_DEFAULT);
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
         assert_eq!(older.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM);
+        assert_eq!(older.board_grid_nm, grid::BOARD_SPACING_DEFAULT_NM);
         assert_eq!(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm, 635_000);
+        assert_eq!(Preferences::parse("{\"board_grid_nm\":254000}").board_grid_nm, 254_000);
         // An out-of-range spacing resets only itself; a value of the wrong type is unreadable,
         // so everything falls back.
         for bad in ["0", "-1270000", "999999999999"] {
             let parsed = Preferences::parse(&format!("{{\"schematic_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
             assert_eq!(parsed.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM, "{bad}");
             assert_eq!(parsed.grid_opacity_percent, 40, "{bad}");
+            let parsed = Preferences::parse(&format!("{{\"board_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
+            assert_eq!(parsed.board_grid_nm, grid::BOARD_SPACING_DEFAULT_NM, "{bad}");
+            assert_eq!(parsed.grid_opacity_percent, 40, "{bad}");
         }
         for bad in ["1.5", "\"50 mil\""] {
             let parsed = Preferences::parse(&format!("{{\"schematic_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
+            assert_eq!(parsed, Preferences::default(), "{bad}");
+            let parsed = Preferences::parse(&format!("{{\"board_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
             assert_eq!(parsed, Preferences::default(), "{bad}");
         }
     }
@@ -610,6 +627,7 @@ mod tests {
             board_grid_visible: false,
             board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,
+            board_grid_nm: 25 * grid::NM_PER_MIL,
             auto_heal_wires: false,
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,
@@ -624,8 +642,19 @@ mod tests {
         assert_eq!(preferences.selection_follow, SelectionFollow::Off);
         assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));
         restore_page_defaults(&mut preferences, APPEARANCE);
-        assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, auto_heal_wires: false, ..Preferences::default() });
+        assert_eq!(
+            preferences,
+            Preferences {
+                schematic_grid_nm: 10 * grid::NM_PER_MIL,
+                board_grid_nm: 25 * grid::NM_PER_MIL,
+                auto_heal_wires: false,
+                ..Preferences::default()
+            }
+        );
         restore_page_defaults(&mut preferences, SCHEMATIC);
-        assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, ..Preferences::default() });
+        assert_eq!(
+            preferences,
+            Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, board_grid_nm: 25 * grid::NM_PER_MIL, ..Preferences::default() }
+        );
     }
 }
