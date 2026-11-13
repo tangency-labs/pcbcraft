@@ -138,14 +138,13 @@ pub(super) fn copper_properties(
         ui.label("Via pad");
         if let Some(pad) = ui
             .add_enabled_ui(!any_locked, |ui| {
-                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, MIN_VIA_DRILL_NM + 1..=MAX_VIA_DIAMETER_NM, unit)
+                // The pad must stay larger than the drill; a smaller pad is refused rather than
+                // silently shrinking the drill, matching the drill field's own limit.
+                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, first.drill_nm + 1..=MAX_VIA_DIAMETER_NM, unit)
             })
             .inner
         {
-            edit = Some((
-                pcbcraft_engine::SET_VIA_SIZE,
-                serde_json::json!({"vias":ids,"via_diameter_nm":pad,"via_drill_nm":first.drill_nm.min(pad - 1)}),
-            ));
+            edit = Some((pcbcraft_engine::SET_VIA_SIZE, serde_json::json!({"vias":ids,"via_diameter_nm":pad,"via_drill_nm":first.drill_nm})));
         }
         ui.end_row();
         ui.label("Via drill");

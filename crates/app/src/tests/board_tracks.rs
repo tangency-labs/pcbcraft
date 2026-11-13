@@ -1139,10 +1139,20 @@ fn properties_lengths_accept_either_unit_and_keep_untouched_nanometres() {
         h.key_press(Key::Enter);
         h.run();
     };
-    let center = at(&h, placed(&h).0);
+    let origin = placed(&h).0;
+    let center = at(&h, origin);
     click_canvas_at(&mut h, center);
     set(&mut h, "Footprint X", "100 mil");
     assert_eq!(placed(&h).0.x_nm, 2_540_000);
+    // The typed edit produces exactly the document the canonical integer-nanometre command does.
+    let encode = |h: &Harness<'_, PcbApp>| pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let typed = encode(&h);
+    h.state_mut().run("edit.undo", &json!({}));
+    let board = h.state().session.project().unwrap().boards().next().unwrap().target.board;
+    let canonical = json!({"board":board,"footprint":id,"x_nm":2_540_000,"y_nm":origin.y_nm,"rotation":0,"side":"front","expected_revision":h.state().session.revision()});
+    h.state_mut().session.apply(pcbcraft_engine::SET_FOOTPRINT_TRANSFORM, &canonical).unwrap();
+    h.run();
+    assert_eq!(encode(&h), typed);
     h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mil;
     h.run();
     assert_eq!(h.get_by_label("Footprint X").value().as_deref(), Some("100 mil"));
@@ -1170,13 +1180,63 @@ fn properties_lengths_accept_either_unit_and_keep_untouched_nanometres() {
     }
     assert_eq!((placed(&h).0, h.state().session.revision()), (exact, revision));
     assert_eq!(pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    for project in [
+        pcbcraft_engine::persistence::decode_documents(&saved).unwrap(),
+        pcbcraft_engine::persistence::decode_packed(&pcbcraft_engine::persistence::encode_packed(h.state().session.snapshot().unwrap()).unwrap())
+            .unwrap()
+            .project,
+    ] {
+        assert_eq!(project.boards().next().unwrap().footprints().find(|f| f.id == id).unwrap().position, exact);
+        assert_eq!(pcbcraft_engine::persistence::encode_documents(project).unwrap(), saved);
+    }
     set(&mut h, "Footprint rotation", "90");
     assert_eq!(placed(&h), (exact, 90));
     assert_eq!(h.state().session.revision(), revision + 1);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(placed(&h), (exact, 0));
+    h.state_mut().run("edit.redo", &json!({}));
+    h.run();
+    assert_eq!(placed(&h), (exact, 90));
+
+    // A compact Properties panel keeps the same field and parser.
+    h.set_size(egui::vec2(420., 900.));
+    h.run();
+    set(&mut h, "Footprint X", "50 mil");
+    assert_eq!(placed(&h).0, Point { x_nm: 1_270_000, y_nm: -7 });
     assert_eq!(h.state().message, None);
+}
+
+/// #281 review: a via pad no larger than its drill is refused with the pad range and leaves both
+/// dimensions and the revision unchanged; a valid pad keeps the drill exactly.
+#[test]
+fn properties_refuse_a_via_pad_smaller_than_its_drill() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":0,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let id = vias(&h)[0].id;
+    h.state_mut().views.active.board.tracks.selected = std::collections::BTreeSet::from([id]);
+    h.run();
+    let type_pad = |h: &mut Harness<'_, PcbApp>, text: &str| {
+        h.get_by_label("Selected via pad").click();
+        h.run();
+        h.get_by_label("Selected via pad").type_text(text);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+    };
+    let revision = h.state().session.revision();
+    type_pad(&mut h, "0.2 mm");
+    use pcbcraft_chrome::units::{Unit, label};
+    let range = format!("Enter {} to {}", label(300_001, Unit::Mm), label(pcbcraft_engine::board::track::MAX_VIA_DIAMETER_NM, Unit::Mm));
+    assert!(h.query_by_label(&range).is_some(), "{range}");
+    assert_eq!((vias(&h)[0].diameter_nm, vias(&h)[0].drill_nm, h.state().session.revision()), (600_000, 300_000, revision));
+    type_pad(&mut h, "32 mil");
+    assert_eq!((vias(&h)[0].diameter_nm, vias(&h)[0].drill_nm, h.state().session.revision()), (812_800, 300_000, revision + 1));
 }
 
 /// Mid-route, PgDn drops a via and continues on back copper and PgUp returns to the front; a key
