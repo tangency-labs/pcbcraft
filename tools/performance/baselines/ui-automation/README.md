@@ -54,3 +54,9 @@ held physical pointer admission and deterministic disconnect readiness on base
 867 tests (eight ignored); the strengthened socket fixture passed separately,
 along with final app Clippy, formatting and the WebAssembly check. These records
 add no performance or presentation qualification.
+
+The `review-release*` records cover button ownership across an unconsumed release
+on base `1bec10d`. The regression fails before the fix and verifies both repeated
+raw-hook completion and cancellation after release injection. All 14 focused
+automation tests, app Clippy, formatting and the WebAssembly check pass. These
+checks do not extend performance or presentation qualification.

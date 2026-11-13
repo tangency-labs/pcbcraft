@@ -270,6 +270,7 @@ impl PcbApp {
 
     /// Snapshot each native host separately after its accepted UI pass, including definition views.
     /// Logical coordinates belong to this window; another window can publish identical names.
+    /// Retire injected button ownership only after its release frame has been accepted.
     pub(super) fn automation_painted(&mut self, ctx: &egui::Context) {
         if !self.automation.observing || ctx.will_discard() {
             return;
@@ -313,7 +314,15 @@ impl PcbApp {
             && job.host == host
             && job.issued
         {
-            job.frames.pop_front();
+            if let Some(events) = job.frames.pop_front() {
+                for event in events {
+                    if let Event::PointerButton { button, pressed: false, .. } = event
+                        && job.held.is_some_and(|(held, _)| held == button)
+                    {
+                        job.held = None;
+                    }
+                }
+            }
             job.issued = false;
             job.authority = authority;
             if job.frames.is_empty() {
@@ -521,8 +530,9 @@ impl PcbApp {
             self.automation.injected = Some((input.viewport_id, input.events[start..].to_vec(), false));
             pcbcraft_chrome::automation::mark_synthetic_input(ctx, true);
             for event in events {
-                if let Event::PointerButton { pos, button, pressed, .. } = event {
-                    job.held = pressed.then_some((*button, *pos));
+                if let Event::PointerButton { pos, button, pressed: true, .. } = event {
+                    // Retain ownership across an unconsumed release; the accepted paint clears it.
+                    job.held = Some((*button, *pos));
                 }
             }
             job.issued = true;

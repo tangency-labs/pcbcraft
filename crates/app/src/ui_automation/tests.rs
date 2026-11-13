@@ -193,6 +193,37 @@ fn input_is_retained_until_an_accepted_paint_and_named_targets_cannot_move_under
     assert!(h.state().views.active.schematic.tool.is_none());
 }
 
+/// Logic-only callbacks can retain an unconsumed release. Keep ownership until egui accepts
+/// that frame, allowing either reinjection or cancellation cleanup to release the button.
+#[test]
+fn a_retained_release_stays_owned_until_the_accepted_paint() {
+    for cancel in [false, true] {
+        let mut h = ready();
+        let at = symbol(&h);
+        command(&mut h, "ui.drag", json!({"window":0,"from":{"x":at.x,"y":at.y},"to":{"x":at.x+40.0,"y":at.y},"steps":2})).unwrap();
+        for _ in 0..4 {
+            tick(&mut h);
+        }
+        assert!(h.ctx.input(|input| input.pointer.any_down()));
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().automation_input(&ctx, &mut raw);
+        let first = raw.events.clone();
+        if cancel {
+            command(&mut h, "ui.cancel", json!({})).unwrap();
+        }
+        h.state_mut().automation_input(&ctx, &mut raw);
+        assert_eq!(raw.events, first);
+        assert!(h.state().automation.job.is_some());
+        *h.input_mut() = raw;
+        h.step();
+        assert_eq!(finish(&mut h)["state"], if cancel { "cancelled" } else { "completed" });
+        assert!(!h.ctx.input(|input| input.pointer.any_down()));
+        command(&mut h, "ui.key", json!({"window":0,"key":"Escape"})).unwrap();
+        assert_eq!(finish(&mut h)["state"], "completed");
+    }
+}
+
 #[test]
 fn named_targets_are_window_scoped_and_covered_background_controls_are_unavailable() {
     let mut h = ready();
