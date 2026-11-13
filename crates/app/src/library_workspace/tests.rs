@@ -6,6 +6,7 @@ use egui_kittest::{
 };
 use pcbcraft_engine::library::sources;
 use std::sync::Arc;
+mod project;
 
 /// Real native records exercise browsing independently of starter identities.
 #[allow(clippy::unwrap_used)]
@@ -16,6 +17,10 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
     app.session.install_library_source("example-parts", Arc::new(source)).unwrap();
     app.place_library_workspace(&egui::Context::default(), Placement::Here).unwrap();
     let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(width, 950.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    // Keep external rows visible as the tree gains a separate Project branch.
+    click(&mut h, "Built-in");
+    h.key_press(egui::Key::ArrowLeft);
     h.run();
     h
 }

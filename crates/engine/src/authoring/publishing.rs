@@ -133,7 +133,7 @@ impl Item {
         copy.revision = 1;
         copy.allocation.revision = 1;
         copy.name = format!("{} copy", self.name).chars().take(64).collect();
-        copy.source = format!("Fork of {}/{} r{}; {}", self.library, self.id, self.revision, self.source).chars().take(1024).collect();
+        copy.source = super::bounded_text(format!("Fork of {}/{} r{}; {}", self.library, self.id, self.revision, self.source), 1024);
         copy.validate()?;
         Ok(copy)
     }

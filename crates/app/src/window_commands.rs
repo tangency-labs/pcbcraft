@@ -388,9 +388,21 @@ mod live {
         WindowCommand {
             id: "app.library_browse",
             title: "Browse Library",
-            summary: "Change a Library pane's source, Type, search or selected item without changing project revision/history. Inspect its selection through inspect_editor.",
+            summary: "Browse registered sources or exact project pins without changing project revision/history. Inspect its selection through inspect_editor.",
             params: &[
                 VIEW,
+                Param {
+                    name: "scope",
+                    summary: "Browse sources or the current project's pinned definitions",
+                    required: false,
+                    kind: Kind::Choice(&["sources", "project"]),
+                },
+                Param {
+                    name: "library",
+                    summary: "Project collection ID, project-only, or empty for all; requires project scope",
+                    required: false,
+                    kind: Kind::Query,
+                },
                 Param { name: "source", summary: "Registration ID", required: false, kind: Kind::Name },
                 Param { name: "query", summary: "Search text; empty clears it", required: false, kind: Kind::Query },
                 Param {
@@ -1032,7 +1044,7 @@ mod live {
                     "workspace": if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
                     "definition":view.definition,
                     "library_view":app.inspect_library_view(id),
-                    "library_workspace":view.library.as_ref().map(|state|state.inspect()),
+                    "library_workspace":view.library.as_ref().map(|state|app.inspect_library_workspace(state)),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),

@@ -664,7 +664,8 @@ To make a plated hole, set Layers to All copper and enter a positive drill small
 than the land. Corner radius is zero for rectangular/circular pads.
 
 On desktop, **Parts Library → New → Library** creates a writable native folder.
-Select a published symbol or footprint there and choose **Edit**, then change its
+Create a symbol or footprint and publish it to that collection first, or choose an
+existing populated writable collection. Select a published item and choose **Edit**, then change its
 geometry in the matching editor. **Library → Publish…** (Ctrl/Cmd+S) adds an
 immutable revision of the same item. New drafts inherit the selected writable collection and bind to it after their
 first successful publication. Publish shows the destination and offers **New

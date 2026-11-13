@@ -49,6 +49,7 @@ struct Request {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 enum Completion {
+    NotWritten(String),
     Published(Request, Result<Arc<sources::NativeSource>, String>),
     Unconfirmed(Request, String),
     Created { source: String, path: String, parsed: Arc<sources::NativeSource>, generation: u64, return_to: Option<Box<Draft>> },
@@ -248,6 +249,7 @@ impl PcbApp {
         let base = doc.and_then(|doc| doc.session.published()).map(|base| base.revision);
         let needs_confirmation = !copy && latest > 0 && base.is_none_or(|base| latest > base);
         let changed = doc.is_some_and(|doc| doc.session.publication_dirty());
+        let verifying = self.library_editors.publisher.unconfirmed() == Some(draft.document);
         let title = format!("Publish {}", item.as_ref().map(|item| item.name.as_str()).unwrap_or("library item"));
         let mut create = false;
         let action = pcbcraft_chrome::catalog::property_form_enabled(
@@ -255,8 +257,14 @@ impl PcbApp {
             "library_publish",
             &title,
             452.,
-            if copy { "Publish copy" } else { "Publish" },
-            !draft.source.is_empty() && (copy || changed) && (!needs_confirmation || draft.allow_older),
+            if verifying {
+                "Verify publication"
+            } else if copy {
+                "Publish copy"
+            } else {
+                "Publish"
+            },
+            verifying || (!draft.source.is_empty() && (copy || changed) && (!needs_confirmation || draft.allow_older)),
             |ui| {
                 let choices: Vec<_> = destinations.iter().map(|(id, name)| (id.as_str(), name.clone())).collect();
                 let before = draft.source.clone();
@@ -485,7 +493,7 @@ impl PcbApp {
                 send.send(Event::Prepared(request.clone())).map_err(|_| "Publisher owner disconnected before writing.")?;
                 match pcbcraft_storage::library::publishing::publish(std::path::Path::new(&request.path), &request.prepared) {
                     Ok(()) => Ok(refresh_publication(request)),
-                    Err(pcbcraft_storage::library::publishing::Failure::BeforeWrite(error)) => Err(error),
+                    Err(pcbcraft_storage::library::publishing::Failure::BeforeWrite(error)) => Ok(Completion::NotWritten(error)),
                     Err(pcbcraft_storage::library::publishing::Failure::Published(error)) => Ok(Completion::Unconfirmed(request, error)),
                 }
             });
@@ -582,10 +590,11 @@ impl PcbApp {
                     ctx.request_repaint();
                     return;
                 }
-                Err(error) => {
+                Ok(Completion::NotWritten(error)) => {
                     self.library_editors.publisher.recovery = None;
                     error
                 }
+                Err(error) => error,
                 Ok(Completion::Unconfirmed(request, error)) => {
                     self.library_editors.publisher.recovery = Some(request);
                     format!("{error}. Publish again to verify this same revision without writing another.")
@@ -672,20 +681,30 @@ impl PcbApp {
         let preferred = self.preferred_library_source();
         let state = self.views.active.library.as_ref().ok_or("Choose a Parts Library pane first.")?;
         let key = state.selected_key().ok_or("Select a symbol or footprint first.")?;
+        let project = state.project_id();
+        if project.is_some() && project != self.session.project().map(|project| project.id()) {
+            return Err("This project selection is no longer current.".into());
+        }
         if !copy && !state.source_id().is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source)) {
             return Err("This library is read-only; use Edit copy instead.".into());
         }
         let catalog = self.session.libraries();
-        if catalog.conflicting(key) {
+        if project.is_none() && catalog.conflicting(key) {
             return Err("Resolve this item's conflicting revision before editing.".into());
         }
+        let inventory = project.map(|_| self.project_library_inventory()).transpose()?;
+        let pinned = inventory.as_ref().and_then(|inventory| inventory.item(key));
         let item = match key.kind {
             sources::Kind::Symbol => {
-                let definition = catalog.symbol(&key.library, &key.id, key.revision).ok_or("Selected symbol is unavailable.")?;
+                let definition =
+                    if project.is_some() { pinned.and_then(|item| item.symbol()) } else { catalog.symbol(&key.library, &key.id, key.revision) }
+                        .ok_or("Selected symbol is unavailable.")?;
                 if copy { Item::from_symbol(&definition)? } else { Item::edit_symbol(&definition)? }
             }
             sources::Kind::Footprint => {
-                let definition = catalog.footprint(&key.library, &key.id, key.revision).ok_or("Selected footprint is unavailable.")?;
+                let definition =
+                    if project.is_some() { pinned.and_then(|item| item.footprint()) } else { catalog.footprint(&key.library, &key.id, key.revision) }
+                        .ok_or("Selected footprint is unavailable.")?;
                 if copy { Item::from_footprint(&definition)? } else { Item::edit_footprint(&definition)? }
             }
             _ => return Err("This editor supports symbols and footprints.".into()),
@@ -784,6 +803,6 @@ fn verify_publication(request: Request) -> Result<Completion, String> {
     match pcbcraft_storage::library::publishing::recover(std::path::Path::new(&request.path), &request.prepared) {
         Ok(()) => Ok(refresh_publication(request)),
         Err(pcbcraft_storage::library::publishing::Failure::Published(error)) => Ok(Completion::Unconfirmed(request, error)),
-        Err(pcbcraft_storage::library::publishing::Failure::BeforeWrite(error)) => Err(error),
+        Err(pcbcraft_storage::library::publishing::Failure::BeforeWrite(error)) => Ok(Completion::Unconfirmed(request, error)),
     }
 }

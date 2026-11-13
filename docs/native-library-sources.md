@@ -7,9 +7,16 @@ Native footprints are available in the assignment chooser, and manufacturer
 records can be selected with their exact generic part and package. Registering, refreshing or removing a source
 does not change the project, its revision, dirty state or undo history.
 
-Open the **Library** workspace from the workspace picker or **Libraries → Sources**.
-The Browser groups loaded sources under **Built-in** and **Libraries**, with
+Open **Parts Library** from the workspace picker or **Libraries → Sources**.
+The Browser separates **Project**, **Built-in** and **Sources**, with
 Symbols, Footprints, Generic parts and Orderable parts under each library.
+Project shows the exact definitions saved with the open project, grouped by their
+original library, with deliberate local variants under **Project-only**. Its list
+retains every pinned revision and shows usage and source status. Offline or
+conflicting sources do not replace the project preview. **Edit copy** opens the
+pinned symbol or footprint as an independent draft; reviewed application to
+existing instances remains separate work. Refresh, Relocate, Remove and Delete
+operate on source registrations, not Project rows.
 The central list has search and a **Type** choice. Generic parts expand to their
 orderable records; Orderable parts shows the same records as a flat table.
 Select an item to inspect its native drawing or summary, license, available
@@ -166,7 +173,7 @@ reader. Project commands and editing remain independent of the reader.
 
 Native part/category definitions and exact dependency resolution are described
 in [part-schema.md](part-schema.md). Native part selection pins its complete dependency closure into project
-instances. Project source tables, additional library authoring tools, Git/providers and
+instances. Reviewed project updates, additional library authoring tools, Git/providers and
 external-format imports remain separate work. The native source, assignment and
 offline handoff behavior is the bounded library MVP in #92.
 

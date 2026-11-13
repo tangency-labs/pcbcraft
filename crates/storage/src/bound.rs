@@ -91,16 +91,38 @@ impl Directory {
     /// Open a regular leaf through this parent and reject symlinks, reparse points and special files.
     /// Nonblocking Unix open prevents a raced-in FIFO from stalling the file worker.
     pub(super) fn open_file(&self, name: &str) -> io::Result<Option<File>> {
+        self.open_leaf(name, false)
+    }
+
+    /// Confirm the exact bytes and flush the same handle. Windows FlushFileBuffers requires
+    /// write access; ordinary reads remain read-only and this open never creates or truncates.
+    pub(super) fn confirm_file(&self, name: &str, expected: &[u8]) -> io::Result<()> {
+        let file = self.open_leaf(name, cfg!(windows))?.ok_or_else(|| io::Error::other("Published file disappeared"))?;
+        let mut bytes = Vec::new();
+        (&file).take(expected.len() as u64 + 1).read_to_end(&mut bytes)?;
+        if bytes != expected {
+            return Err(io::Error::other("Published revision bytes differ"));
+        }
+        file.sync_all()
+    }
+
+    /// Apply identical no-follow and regular-file checks to reading and durable confirmation.
+    fn open_leaf(&self, name: &str, writable: bool) -> io::Result<Option<File>> {
         component(name)?;
         #[cfg(unix)]
-        let opened =
-            rustix::fs::openat(self.file.as_ref(), name, OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())
-                .map(File::from)
-                .map_err(io::Error::from);
+        let opened = rustix::fs::openat(
+            self.file.as_ref(),
+            name,
+            (if writable { OFlags::RDWR } else { OFlags::RDONLY }) | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(io::Error::from);
         #[cfg(not(unix))]
         let opened = {
             let mut options = fs::OpenOptions::new();
             options.read(true);
+            options.write(writable);
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt;

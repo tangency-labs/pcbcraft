@@ -1,4 +1,5 @@
 //! Library browsing owns per-pane presentation; source changes never transact project data.
+pub(super) mod project;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 use crate::{Dialog, PcbApp, ViewId};
@@ -19,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
     source: Option<String>,
+    project: Option<uuid::Uuid>,
+    project_library: Option<String>,
     kind: usize,
     query: String,
     selected: Option<Key>,
@@ -54,7 +57,7 @@ impl State {
     /// Inspect stable source/item identities without granting project edit authority.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
+        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
     }
 }
 
@@ -227,13 +230,10 @@ impl PcbApp {
         let mut action = None;
         let mut acquisition = None;
         let mut authoring_action = None;
-        let selected = self
-            .views
-            .active
-            .library
-            .as_ref()
-            .and_then(|state| state.selected.as_ref())
-            .is_some_and(|key| matches!(key.kind, Kind::Symbol | Kind::Footprint) && !self.session.libraries().conflicting(key));
+        let selected = self.views.active.library.as_ref().and_then(|state| state.selected.as_ref()).is_some_and(|key| {
+            matches!(key.kind, Kind::Symbol | Kind::Footprint)
+                && (self.views.active.library.as_ref().is_some_and(|state| state.project.is_some()) || !self.session.libraries().conflicting(key))
+        });
         let editable = selected && source.is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source));
         let response = workspace::ribbon(
             ui,
@@ -464,56 +464,7 @@ impl PcbApp {
             self.bind_editor_host(self.views.main);
             return result;
         }
-        let source = params["source"].as_str().map(str::to_owned);
-        if let Some(source) = source.as_ref() {
-            let loaded = self.session.libraries().inspect();
-            if !loaded.as_array().into_iter().flatten().any(|s| s["source"] == *source)
-                && !self.library_sources.registered.iter().any(|r| r.source == *source)
-            {
-                return Err("Unknown library source".into());
-            }
-        }
-        let query = params["query"].as_str();
-        if query.is_some_and(|q| q.len() > 512) {
-            return Err("Library query exceeds 512 bytes".into());
-        }
-        let state = self.views.view(view).and_then(|v| v.library.as_ref()).ok_or("Library pane is unavailable")?;
-        let source = source.or_else(|| state.source.clone());
-        let kind = params["type"].as_u64().map(|n| n as usize).unwrap_or(state.kind);
-        if params.get("definition_revision").is_some() && params.get("item").is_none() {
-            return Err("An exact revision requires an item ID.".into());
-        }
-        let selected = if let Some(item) = params["item"].as_str() {
-            Some(
-                self.session
-                    .libraries()
-                    .source_items(source.as_deref().unwrap_or(""))
-                    .iter()
-                    .filter(|i| {
-                        i.key.id == item
-                            && (kind == 0 || kind_index(i.key.kind) == kind)
-                            && params["definition_revision"].as_u64().is_none_or(|revision| u64::from(i.key.revision) == revision)
-                    })
-                    .max_by_key(|i| i.key.revision)
-                    .ok_or("Item is unavailable for this source and Type")?
-                    .key
-                    .clone(),
-            )
-        } else {
-            None
-        };
-        let mut state = self.views.view(view).and_then(|v| v.library.clone()).ok_or("Library pane is unavailable")?;
-        if state.source != source || state.kind != kind {
-            state.selected = None;
-        }
-        state.source = source;
-        state.kind = kind;
-        if let Some(query) = query {
-            state.query = query.into();
-        }
-        if let Some(selected) = selected {
-            state.selected = Some(selected);
-        }
+        let mut state = self.library_navigation(view, params)?;
         state.sync_preview();
         let camera = match params["preview"].as_str() {
             Some("symbol") => Some(&mut state.symbol_camera),
@@ -544,11 +495,16 @@ impl PcbApp {
     pub(super) fn library_workspace_pane(&mut self, ui: &mut egui::Ui, view: ViewId) {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let Some(mut state) = self.views.view_mut(view).and_then(|v| v.library.take()) else { return };
+        if state.project.is_some() && state.project != self.session.project().map(|project| project.id()) {
+            state.project = self.session.project().map(|project| project.id());
+            state.project_library = None;
+            state.selected = None;
+        }
         let loaded = self.session.libraries().inspect();
         let mut ids: BTreeSet<String> = loaded.as_array().into_iter().flatten().filter_map(|s| s["source"].as_str().map(str::to_owned)).collect();
         ids.extend(self.library_sources.registered.iter().map(|r| r.source.clone()));
         ids.extend(self.library_sources.statuses.keys().cloned());
-        if state.source.as_ref().is_none_or(|id| !ids.contains(id)) {
+        if state.project.is_none() && state.source.as_ref().is_none_or(|id| !ids.contains(id)) {
             state.source = ids
                 .iter()
                 .min_by_key(|id| {
@@ -579,10 +535,11 @@ impl PcbApp {
             target.library = Some(state);
         }
     }
-    /// Two source groups share the pinned tree's fold, count and status presentation.
+    /// Project pins and the two source groups share the pinned toolkit tree presentation.
     fn library_tree(&self, ui: &mut egui::Ui, state: &mut State, ids: &BTreeSet<String>, loaded: &Value) {
         egui::ScrollArea::vertical().id_salt("library_source_tree").auto_shrink([false, false]).show(ui, |ui| {
-            for (builtin, title) in [(true, "Built-in"), (false, "Libraries")] {
+            self.project_library_tree(ui, state, loaded);
+            for (builtin, title) in [(true, "Built-in"), (false, "Sources")] {
                 let open = !state.closed.contains(title);
                 let (_, fold) = chrome::tree(
                     ui,
@@ -642,6 +599,8 @@ impl PcbApp {
                         toggle(&mut state.closed, id.clone());
                     }
                     if clicked {
+                        state.project = None;
+                        state.project_library = None;
                         state.source = Some(id.clone());
                         state.kind = 0;
                         state.selected = None;
@@ -677,6 +636,8 @@ impl PcbApp {
                             )
                             .0
                             {
+                                state.project = None;
+                                state.project_library = None;
                                 state.source = Some(id.clone());
                                 state.kind = kind;
                                 state.selected = None;
@@ -702,6 +663,10 @@ impl PcbApp {
     }
     /// Latest revisions form the list; an explicit preview revision can still address an older item.
     fn library_items(&self, ui: &mut egui::Ui, state: &mut State, loaded: &Value) {
+        if state.project.is_some() {
+            self.project_library_items(ui, state, loaded);
+            return;
+        }
         let Some(source) = state.source.as_deref() else {
             ui.label("No libraries");
             return;
@@ -858,7 +823,12 @@ impl PcbApp {
     /// Preview metadata and exact dependency references from the selected source revision.
     fn library_item_preview(&self, ui: &mut egui::Ui, state: &mut State) {
         state.sync_preview();
-        let all = self.session.libraries().source_items(state.source.as_deref().unwrap_or(""));
+        let inventory = state.project.and_then(|_| self.project_library_inventory().ok());
+        let all: Vec<_> = if let Some(inventory) = &inventory {
+            inventory.entries().map(|entry| &entry.item).collect()
+        } else {
+            self.session.libraries().source_items(state.source.as_deref().unwrap_or("")).iter().collect()
+        };
         let Some(item) = state.selected.as_ref().and_then(|key| all.iter().find(|i| i.key == *key)) else {
             ui.label("Select an item");
             return;
@@ -868,7 +838,15 @@ impl PcbApp {
             ui.label(
                 egui::RichText::new(format!("{} · {}/{} · r{}", kind_name(item.key.kind), item.key.library, item.key.id, item.key.revision)).small(),
             );
-            if self.session.libraries().conflicting(&item.key) {
+            if let Some(inventory) = &inventory {
+                chrome::detail(ui, "Source status", inventory.status(item, self.session.libraries()));
+                let usage = inventory
+                    .entries()
+                    .find(|entry| entry.item.key == item.key)
+                    .map(|entry| entry.used_by.iter().cloned().collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                chrome::detail(ui, "Used by", &usage);
+            } else if self.session.libraries().conflicting(&item.key) {
                 ui.label(egui::RichText::new("Quarantined: conflicting content at this revision").color(pcbcraft_chrome::Tokens::get().error));
             }
             if let Some(symbol) = item.symbol() {
@@ -892,14 +870,14 @@ impl PcbApp {
                     ui.hyperlink_to("Datasheet", url);
                 }
                 chrome::section(ui, "Specifications");
-                let category = self.session.libraries().resolve_part(&record.part).ok().and_then(|p| p.category.as_ref());
+                let category = self.library_preview_part(state, &record.part).ok().and_then(|p| p.category.clone());
                 for (name, value) in &record.specifications {
-                    let label = category.and_then(|c| c.fields.get(name)).map_or(name.as_str(), |f| f.name.as_str());
+                    let label = category.as_ref().and_then(|c| c.fields.get(name)).map_or(name.as_str(), |f| f.name.as_str());
                     chrome::detail(ui, label, &value.display());
                 }
                 chrome::detail(ui, "Source", &record.source.reference);
                 references.push(record.part.clone());
-                match self.session.libraries().resolve_part(&record.part) {
+                match self.library_preview_part(state, &record.part) {
                     Ok(part) => {
                         self.generic_preview(ui, &part.definition, Some(&record.package), &mut references, state);
                     }
@@ -914,7 +892,10 @@ impl PcbApp {
                 references.push(binding.definition.clone());
             }
             chrome::section(ui, "Revisions");
-            let mut revisions: Vec<_> = all.iter().filter(|other| other.key.kind == item.key.kind && other.key.id == item.key.id).collect();
+            let mut revisions: Vec<_> = all
+                .iter()
+                .filter(|other| other.key.library == item.key.library && other.key.kind == item.key.kind && other.key.id == item.key.id)
+                .collect();
             revisions.sort_by_key(|i| std::cmp::Reverse(i.key.revision));
             revisions.dedup_by_key(|i| i.key.revision);
             for revision in revisions {
@@ -942,12 +923,16 @@ impl PcbApp {
             chrome::detail(ui, "Category", &category.definition.id);
         }
         chrome::detail(ui, "Source", &part.source.reference);
-        match self.session.libraries().resolve_part(&part.reference()) {
+        match self.library_preview_part(state, &part.reference()) {
             Ok(resolved) => {
                 chrome::detail(ui, "Units", &resolved.symbol.units().len().to_string());
                 let selected = package.map_or_else(|| part.packages.values().next(), |id| part.packages.get(id));
                 if let Some(package) = selected {
-                    let footprint = self.session.libraries().footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision);
+                    let footprint = if state.project.is_some() {
+                        self.project_library_inventory().ok().and_then(|inventory| inventory.footprint(&package.footprint))
+                    } else {
+                        self.session.libraries().footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision)
+                    };
                     ui.columns(2, |columns| {
                         chrome::detail(&mut columns[0], "Symbol", &resolved.symbol.name);
                         crate::library_preview::workspace_symbol(&mut columns[0], &resolved.symbol, &mut state.symbol_camera);
@@ -984,8 +969,29 @@ impl PcbApp {
             });
         }
         chrome::section(ui, "Orderable parts");
-        for record in self.session.libraries().manufacturers_for(&part.reference()) {
+        let records = if state.project.is_some() {
+            self.project_library_inventory()
+                .map(|inventory| {
+                    inventory
+                        .entries()
+                        .filter_map(|entry| entry.item.manufacturer_part())
+                        .filter(|record| record.part == part.reference())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            self.session.libraries().manufacturers_for(&part.reference())
+        };
+        for record in records {
             ui.label(format!("{} · {}", record.manufacturer, record.mpn));
+        }
+    }
+    /// Project previews resolve their pinned closure; source previews resolve the current catalog.
+    fn library_preview_part(&self, state: &State, reference: &Reference) -> Result<pcbcraft_engine::library::sources::ResolvedPart, String> {
+        if state.project.is_some() {
+            self.project_library_inventory()?.resolve_part(reference).cloned()
+        } else {
+            self.session.libraries().resolve_part(reference).cloned()
         }
     }
 }

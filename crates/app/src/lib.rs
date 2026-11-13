@@ -237,6 +237,7 @@ pub struct PcbApp {
     automation: ui_automation::Automation,
     clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
+    library_inventory: std::cell::RefCell<library_workspace::project::Cache>,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,

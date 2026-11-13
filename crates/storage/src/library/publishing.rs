@@ -55,10 +55,9 @@ pub fn confirm(root: &Path, prepared: &Prepared) -> Result<(), String> {
     for (path, text) in prepared.documents() {
         let (parent, name) = path.split_once('/').ok_or("Invalid prepared document path.")?;
         let target = directory.child(parent, false).map_err(|e| e.to_string())?.ok_or("Published record directory is missing.")?;
-        if target.read(name, MAX_FILE_BYTES).map_err(|e| e.to_string())?.as_deref() != Some(text.as_bytes()) {
-            return Err("Published revision is missing or its bytes differ; inspect the destination before retrying.".into());
-        }
-        target.open_file(name).map_err(|e| e.to_string())?.ok_or("Published file disappeared.")?.sync_all().map_err(|e| e.to_string())?;
+        target
+            .confirm_file(name, text.as_bytes())
+            .map_err(|error| format!("Published revision could not be confirmed: {error}; inspect the destination before retrying."))?;
         target.sync().map_err(|e| e.to_string())?;
     }
     directory.sync().map_err(|e| e.to_string())

@@ -329,6 +329,74 @@ fn disconnected_worker_recovery_does_not_create_a_second_revision() {
     assert_eq!(pcbcraft_storage::library::load(std::path::Path::new(&path)).unwrap().items().len(), 3);
 }
 
+/// Verification failures and unrelated creation failures cannot erase an uncertain Save As record.
+/// Reopening its dialog offers Verify even though the original editor has no unpublished changes.
+#[test]
+fn uncertain_clean_copy_retains_recovery_until_verified_and_has_a_gui_retry() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, temp) = fixture();
+    let ctx = Context::default();
+    app.run_window_command(
+        &ctx,
+        "app.library_browse",
+        &json!({"view":app.views.active.id().0,"source":"workshop-source","type":1,"item":"connector"}),
+    )
+    .unwrap();
+    app.edit_catalog_selection(&ctx, false).unwrap();
+    let id = app.library_editors.active.unwrap();
+    assert!(!app.library_editors.documents[&id].session.publication_dirty());
+    let path = app.library_sources.registered[0].path.clone();
+    let manifest = pcbcraft_storage::library::publishing::read_manifest(std::path::Path::new(&path)).unwrap();
+    let prepared = engine::prepare_copy(app.library_editors.documents[&id].session.snapshot(), &manifest).unwrap();
+    pcbcraft_storage::library::publishing::publish(std::path::Path::new(&path), &prepared).unwrap();
+    let copy_id = prepared.item().id.clone();
+    app.library_editors.publisher.recovery = Some(Request {
+        document: id,
+        source: "workshop-source".into(),
+        path: path.clone(),
+        generation: app.session.libraries().generation(),
+        prepared,
+    });
+    std::fs::rename(&path, temp.path().join("temporarily-offline")).unwrap();
+    app.publish_library_item(&ctx, id, 0, "workshop-source", false).unwrap();
+    finish(&mut app, &ctx);
+    assert_eq!(app.library_editors.publisher.unconfirmed(), Some(id));
+    let (send, receive) = mpsc::sync_channel(1);
+    app.library_editors.publisher.pending = Some(receive);
+    send.send(Event::Finished(Err("Unrelated creation failed".into()))).unwrap();
+    app.poll_library_publication(&ctx);
+    assert_eq!(app.library_editors.publisher.unconfirmed(), Some(id));
+    std::fs::rename(temp.path().join("temporarily-offline"), &path).unwrap();
+    app.begin_library_publish(id).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1500., 900.)).with_max_steps(64).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    h.get_by_label("Verify publication");
+    crate::tests::click(&mut h, "Verify publication");
+    let ctx = h.ctx.clone();
+    finish(h.state_mut(), &ctx);
+    assert!(h.state().library_editors.publisher.recovery.is_none());
+    assert_eq!(h.state().library_editors.documents[&id].session.snapshot().id, copy_id);
+    assert_eq!(pcbcraft_storage::library::load(std::path::Path::new(&path)).unwrap().items().len(), 3);
+}
+
+/// The canvas and properties remain interactive while a publication worker owns its captured draft.
+#[test]
+fn gui_definition_selection_remains_enabled_during_publication() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _temp) = fixture();
+    let ctx = Context::default();
+    app.new_library_item(Kind::Symbol);
+    let id = app.library_editors.active.unwrap();
+    app.place_library_document(&ctx, id, pcbcraft_chrome::workspace::Placement::Here).unwrap();
+    let (_send, receive) = mpsc::sync_channel(1);
+    app.library_editors.publisher.pending = Some(receive);
+    let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).with_max_steps(64).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    assert!(h.query_by_label("Length (mm)").is_some());
+    assert!(h.state().library_editors.publisher.busy());
+}
+
 /// The Parts Library ribbon opens real authoring actions through shared controls in both themes.
 #[test]
 fn library_ribbon_new_item_and_publish_dialog_use_existing_workspace_host() {

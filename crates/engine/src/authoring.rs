@@ -464,7 +464,9 @@ impl Item {
         item.objects.clear();
         item.name = format!("{} copy", definition.name).chars().take(64).collect();
         item.source = format!("Fork of {}/{} at revision {}", definition.library, definition.id, definition.revision());
-        let original = library::basic_components().symbol(&definition.id).cloned();
+        let original = if definition.library == "starter" { library::compatibility::starter() } else { library::basic_components() }
+            .symbol(&definition.id)
+            .cloned();
         let known_original = original.as_ref().is_some_and(|original| {
             serde_json::to_value(library::saved_copy(definition))
                 .ok()
@@ -533,11 +535,20 @@ impl Item {
 
     /// Fork physical data while retaining its license and source; the original receives no writes.
     pub fn from_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
+        let mut item = Self::read_footprint(definition)?;
+        item.name = bounded_text(format!("{} copy", definition.name), 64);
+        item.source =
+            bounded_text(format!("Fork of {}/{} r{}; {}", definition.library, definition.id, definition.revision, definition.source.reference), 2048);
+        item.validate()?;
+        Ok(item)
+    }
+
+    /// Reconstruct geometry before choosing fork or published metadata. Intermediate copy labels
+    /// cannot invalidate an otherwise editable published definition at its source-text limit.
+    fn read_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
         let mut item = Self::new(Kind::Footprint)?;
         item.objects.clear();
-        item.name = format!("{} copy", definition.name).chars().take(64).collect();
         item.license = definition.license.clone();
-        item.source = format!("Fork of {}/{} r{}; {}", definition.library, definition.id, definition.revision, definition.source.reference);
         item.reference_font = definition.reference.clone();
         item.reference_offset = definition.reference_offset;
         item.original_source = Some(definition.source.clone());
@@ -553,13 +564,12 @@ impl Item {
             item.objects.insert(item.objects.len() as u64 + 1, primitive);
         }
         item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(0);
-        item.validate()?;
         Ok(item)
     }
 
     /// Reopen an exact footprint, numbering primitives deterministically and retaining pad IDs.
     pub fn edit_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
-        let mut item = Self::from_footprint(definition)?;
+        let mut item = Self::read_footprint(definition)?;
         item.library = definition.library.clone();
         item.id = definition.id.clone();
         item.name = definition.name.clone();
@@ -697,7 +707,7 @@ impl Item {
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
             || self.revision > self.allocation.revision
-            || self.source.len() > 1024
+            || self.source.len() > if self.kind == Kind::Footprint { 2048 } else { 1024 }
             || self.license.trim().is_empty()
             || self.license.len() > 128
             || self.original_source.as_ref().is_some_and(|source| serde_json::to_vec(source).map_or(true, |bytes| bytes.len() > 16_384))
@@ -990,6 +1000,16 @@ fn restored(item: &Arc<Item>, allocation: Allocation) -> Result<Arc<Item>, Strin
     item.allocation = allocation;
     item.validate()?;
     Ok(Arc::new(item))
+}
+
+/// Bound UTF-8 text by bytes while retaining complete code points.
+fn bounded_text(mut text: String, limit: usize) -> String {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
 }
 
 #[cfg(test)]

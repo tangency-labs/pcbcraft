@@ -1245,7 +1245,7 @@ mod tests {
 
     /// A project opens from its own saved copies: a copy that differs from the starter library,
     /// or comes from a library this build doesn't have, opens and saves back byte for byte.
-    /// Placing another part with the same library, ID and revision reuses the project's copy.
+    /// A new placement at the renamed address remains separate from the historical address.
     #[test]
     fn projects_open_from_their_saved_symbol_copies() {
         let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
@@ -1298,6 +1298,29 @@ mod tests {
         let weak = std::sync::Arc::downgrade(&session.project().unwrap().components().next().unwrap().definition);
         drop(session);
         assert!(weak.upgrade().is_none(), "the team-passives copy is freed with the last project using it");
+    }
+
+    /// Same-address placements reuse the project's saved definition, even when its display name
+    /// differs from the installed source. The rename must not weaken native pin reuse coverage.
+    #[test]
+    fn same_address_placements_reuse_the_saved_symbol_copy() {
+        let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
+        let revision = crate::library::basic_components().symbol("resistor").unwrap().revision();
+        document["symbol_definitions"][0]["library"] = json!("basic-components");
+        document["symbol_definitions"][0]["revision"] = json!(revision);
+        document["symbol_definitions"][0]["name"] = json!("Resistor, as saved");
+        for component in document["components"].as_array_mut().unwrap() {
+            component["library"] = json!("basic-components");
+            component["definition_revision"] = json!(revision);
+        }
+        let mut session = Session::default();
+        session.open_snapshot(decode(&serde_json::to_vec(&document).unwrap()).unwrap());
+        session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":50_800_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        let project = session.snapshot().unwrap();
+        assert_eq!(project.components().count(), 3);
+        assert!(project.components().all(|component| component.definition.name == "Resistor, as saved"));
+        let text = String::from_utf8(encode(project).unwrap()).unwrap();
+        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 1);
     }
 
     /// A saved copy spans lines like a library file, one per terminal, stroke and pin, so changing

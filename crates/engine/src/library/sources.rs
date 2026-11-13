@@ -1,4 +1,5 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
+pub mod inventory;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
@@ -210,7 +211,7 @@ pub struct Key {
     pub revision: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Definition {
     Symbol(Arc<SymbolDefinition>),
     Footprint(Arc<FootprintDefinition>),

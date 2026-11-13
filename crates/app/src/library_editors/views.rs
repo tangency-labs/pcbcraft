@@ -279,7 +279,7 @@ impl PcbApp {
         let Some(id) = self.bind_library_view(view) else { return };
         // Mixed hosts can be framed by a project or Library workspace rather than
         // library_frame, so enforce the source mutation boundary here as well.
-        if self.library_mutation_busy() || self.library_sources.installing() {
+        if self.library_sources.mutating() || self.library_sources.installing() {
             ui.disable();
         }
         if self.views.active.id() == view && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx()) {

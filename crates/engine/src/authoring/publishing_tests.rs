@@ -1,6 +1,46 @@
 use super::*;
 use publishing::{new_library, prepare};
 
+/// Native source limits remain editable without validating a temporary fork label first.
+#[test]
+fn footprint_reconstruction_preserves_maximum_native_source_text() {
+    let base = Item::new(Kind::Footprint).unwrap().footprint().unwrap();
+    for length in [1000, 1024, 2048] {
+        let mut definition = base.clone();
+        definition.source.reference = "a".repeat(length);
+        let item = Item::edit_footprint(&definition).unwrap();
+        assert_eq!(item.source, definition.source.reference);
+        assert_eq!(item.footprint().unwrap().source.reference, definition.source.reference);
+        assert!(Item::from_footprint(&definition).unwrap().source.len() <= 2048);
+    }
+}
+
+/// Copy attribution uses UTF-8 byte limits including its prefix, retaining valid code points.
+#[test]
+fn edit_copy_bounds_multibyte_source_and_preserves_the_original() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        let mut item = Item::new(kind).unwrap();
+        item.source = "é".repeat(500);
+        let before = item.encode().unwrap();
+        let copy = item.edit_copy().unwrap();
+        assert!(copy.source.len() <= 1024);
+        assert!(copy.source.starts_with("Fork of "));
+        copy.validate().unwrap();
+        assert_eq!(item.encode().unwrap(), before);
+    }
+}
+
+/// Legacy bundled definitions without embedded attribution retain the bundled license on copy.
+#[test]
+fn legacy_starter_copy_infers_recorded_license() {
+    let symbol = library::compatibility::starter().symbol("connector").unwrap();
+    assert!(symbol.provenance.is_none());
+    let copy = Item::from_symbol(symbol).unwrap();
+    assert_eq!(copy.license, "MIT OR Apache-2.0");
+    let manifest = new_library("workshop", "Workshop", &copy.license).unwrap();
+    prepare(Arc::new(copy), &manifest, 0, None, false).unwrap();
+}
+
 /// Preparation is a read-only validation boundary, shared with transported MCP documents.
 #[test]
 fn publication_preparation_does_not_save_or_touch_project_history() {
