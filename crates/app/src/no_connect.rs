@@ -44,6 +44,8 @@ fn cross(painter: &Painter, center: Pos2, step: f32, color: egui::Color32) {
 
 /// Paint only authored markers on this projection, resolving every coordinate from current
 /// terminal geometry. Connected flags stay visible in error ink instead of hiding the wire.
+/// The connectivity projection retains logical aliases wired on another sheet, so repeated
+/// appearances of the same pin share their conflict color.
 pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &Camera, rect: Rect) {
     for symbol in project.symbols() {
         let Some(part) = project.component(symbol).filter(|part| !part.no_connects.is_empty()) else { continue };
@@ -116,7 +118,8 @@ impl PcbApp {
     }
 
     /// Shared modal chrome contains bounded report rows and guards navigation/removal against
-    /// stale opening/revision authority. Merely inspecting or navigating is a read-only action.
+    /// stale opening/revision authority. Successful navigation focuses the target host;
+    /// inspecting or navigating never edits the document.
     pub(super) fn no_connect_dialog(&mut self, ctx: &egui::Context, inspection: Box<Inspection>) {
         let current = self.views.view(inspection.source.view()).is_some_and(|view| view.accepts(inspection.source, &self.session));
         let report = &inspection.report;
@@ -179,6 +182,9 @@ impl PcbApp {
             {
                 view.schematic.selection = Selection::one_symbol(at.symbol);
                 view.camera.center_on(at.at);
+                if let Some(host) = self.views.owner(id) {
+                    ctx.send_viewport_cmd_to(crate::editor_windows::viewport(host), egui::ViewportCommand::Focus);
+                }
             }
             return;
         }

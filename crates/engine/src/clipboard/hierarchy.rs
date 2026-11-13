@@ -120,7 +120,7 @@ impl Fragment {
         let cut_sheets = cut && !root.subsheets.is_empty();
         let mut sheets = vec![root];
         sheets.extend(project.sheets.iter().filter(|s| included.contains(&s.sheet_id)).cloned());
-        let fragment = Self::captured(project, sheets, cursor, cut_sheets)?;
+        let fragment = Self::captured(project, sheets, cursor, cut_sheets, IntentScope::SelectedUnits)?;
         fragment.validate_scope(true)?;
         Ok(fragment)
     }
@@ -254,7 +254,9 @@ impl Fragment {
             if items.is_empty() {
                 continue;
             }
-            let flat = Self::capture(&projection, &items)?;
+            // The enclosing fragment has already qualified intent against the complete subtree;
+            // filtering again per sheet would lose flags owned by later units of the same part.
+            let flat = Self::capture_sheet(&projection, &items, IntentScope::CapturedParts)?;
             let target = SheetTarget { project: next.id(), sheet: sheet_map[&source.sheet_id] };
             let destination = next.for_sheet(target).ok_or_else(|| invalid("destination sheet unavailable"))?;
             let before = destination.wires().len();

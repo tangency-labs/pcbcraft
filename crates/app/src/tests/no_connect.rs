@@ -180,3 +180,65 @@ fn no_connect_marks_follow_mirror_shortcuts_and_remain_pickable() {
         }
     }
 }
+
+/// A supply pin repeated on separate sheets has one logical conflict color. Bare repeated
+/// appearances stay normal; wiring either appearance colors both crosses as errors.
+#[test]
+fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
+    let mut h = editor(1400., true);
+    h.state_mut().run("project.new", &json!({}));
+    h.state_mut().run(
+        pcbcraft_engine::library::sources::LOAD,
+        &json!({"source":"units","documents":{
+            "library.json":include_str!("../../../../examples/native-parts/library.json"),
+            "symbols/dual.json":include_str!("../../../../examples/native-parts/symbols/dual-amplifier.json"),
+        }}),
+    );
+    let definition = h.state().session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().place_catalog_symbol(&definition, json!({"x_nm":0,"y_nm":0,"expected_revision":revision}));
+    let first = h.state().session.project().unwrap().symbols()[0].clone();
+    let root = h.state().session.project().unwrap().sheet_target();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Second","expected_revision":revision}));
+    let second = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_UNIT,
+        &json!({"sheet":second.id(),"component":first.component_id(),"unit":"b","x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(no_connect::SET, &json!({"target":{"part":first.component_id(),"terminal":"3"},"marked":true,"expected_revision":revision}));
+    for connected in [false, true] {
+        if connected {
+            let p = h.state().session.project().unwrap().for_sheet(second).unwrap();
+            let terminal = p.symbols()[0].terminals().into_iter().find(|pin| pin.number() == "3").unwrap();
+            let at = p.terminal_position(terminal).unwrap();
+            let revision = h.state().session.revision();
+            h.state_mut().run(
+                pcbcraft_engine::DRAW_WIRE,
+                &json!({"sheet":second.id(),"from":terminal.inspect(),"to":{"x_nm":at.x_nm+12_700_000,"y_nm":at.y_nm},"bends":[],"expected_revision":revision}),
+            );
+        }
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        for sheet in [root, second] {
+            let app = h.state_mut();
+            app.views.active.open_document(crate::editor_view::DocumentTarget::Sheet(sheet), &app.session);
+            h.run();
+            let center = h.get_by_label("No connect U1 pin 3").rect().center();
+            let expected = if connected { Tokens::get().error } else { Tokens::get().schematic_wire };
+            let crosses = h
+                .output()
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+                    if stroke.width == 1.5 && stroke.color == expected && points[0].lerp(points[1], 0.5).distance(center) < 0.1)
+                })
+                .count();
+            assert_eq!(crosses, 2, "connected={connected}, sheet={sheet:?}");
+            let report = h.state().session.project().unwrap().check_no_connects(h.state().session.revision());
+            assert_eq!(report.markers[0].issues.contains(&"no_connect_connected"), connected);
+        }
+    }
+}

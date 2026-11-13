@@ -48,6 +48,14 @@ pub struct Fragment {
     cut_sheets: bool,
 }
 
+/// Initial selection qualifies intent by captured units. Internal sheet remapping preserves
+/// the part intent already qualified by the enclosing hierarchy capture.
+#[derive(Clone, Copy)]
+enum IntentScope {
+    SelectedUnits,
+    CapturedParts,
+}
+
 /// Paste policy distinguishes independent duplication from explicit Cut relocation. Invalid
 /// references, names or ownership choices reject the whole batch.
 #[derive(Clone, Debug, Default)]
@@ -92,6 +100,12 @@ impl Fragment {
     /// selected wire routes retain their full geometry and shared endpoint identities.
     /// The captured root retains its occurrence identity; pasting objects does not create a sheet.
     pub fn capture(project: &Project, items: &Selection) -> Result<Self, CommandError> {
+        Self::capture_sheet(project, items, IntentScope::SelectedUnits)
+    }
+
+    /// Capture one sheet's geometry, either qualifying the user's initial selection or retaining
+    /// the enclosing fragment's part intent while a hierarchy is remapped sheet by sheet.
+    fn capture_sheet(project: &Project, items: &Selection, intent_scope: IntentScope) -> Result<Self, CommandError> {
         let mut found = items.clone();
         found.retain(project);
         if items.is_empty() || &found != items {
@@ -129,13 +143,20 @@ impl Fragment {
             }
             Arc::make_mut(&mut sheet.wires).push(wire);
         }
-        Self::captured(project, vec![sheet], cursor, false)
+        Self::captured(project, vec![sheet], cursor, false, intent_scope)
     }
 
     /// Keep only captured sheets, their live components and exact package intent. This shared
     /// boundary excludes board placements and unrelated project assets for flat/tree captures.
     /// Persistent net IDs stay with the source; pasted named networks receive destination IDs.
-    fn captured(project: &Project, sheets: Vec<crate::sheets::SchematicSheet>, cursor: u64, cut_sheets: bool) -> Result<Self, CommandError> {
+    /// Internal sheet remapping retains intent already qualified by the enclosing capture.
+    fn captured(
+        project: &Project,
+        sheets: Vec<crate::sheets::SchematicSheet>,
+        cursor: u64,
+        cut_sheets: bool,
+        intent_scope: IntentScope,
+    ) -> Result<Self, CommandError> {
         let components: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.component)).collect();
         let symbols: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.ordinal)).collect();
         let mut fragment = project.clone();
@@ -151,8 +172,8 @@ impl Fragment {
             .flat_map(|symbol| symbol.terminals().into_iter().map(move |pin| (symbol.component, pin.number().to_owned())))
             .collect();
         for (&id, part) in Arc::make_mut(&mut fragment.components) {
-            let complete =
-                project.units.range((id, String::new())..).take_while(|((owner, _), _)| *owner == id).all(|(_, symbol)| symbols.contains(symbol));
+            let complete = matches!(intent_scope, IntentScope::CapturedParts)
+                || project.units.range((id, String::new())..).take_while(|((owner, _), _)| *owner == id).all(|(_, symbol)| symbols.contains(symbol));
             if !complete {
                 if part.no_connects.keys().any(|token| !part.definition.pins().iter().any(|pin| pin.number == *token)) {
                     return Err(invalid("Resolve missing no-connect terminals or copy all placed units of this part."));

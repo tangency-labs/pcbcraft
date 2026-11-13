@@ -28,6 +28,9 @@ and reports the conflict; it does not alter the graph. Undo/redo restores intent
 with the owning part. Whole-part clipboard captures retain unresolved intent too;
 partial-unit captures retain only intent for terminals in those units. Duplication
 remaps the owning part through the existing component-ID mapping.
+Hierarchy capture qualifies that intent across the complete selected subtree;
+its internal sheet-by-sheet remapping preserves the resulting part records,
+including intent owned by later units and unresolved records in a whole-part copy.
 If a partial copy contains intent for an unknown terminal, resolve that intent or
 copy all placed units; the engine refuses to guess which unit owns it.
 

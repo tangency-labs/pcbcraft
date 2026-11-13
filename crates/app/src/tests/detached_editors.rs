@@ -1655,6 +1655,33 @@ fn schematic_move_hotkey_in_detached_window_uses_its_own_view() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
+/// A report hosted by the root brings the source window forward after navigating to its pin,
+/// without editing the document or changing which editor owns the target view.
+#[test]
+fn no_connect_show_focuses_the_detached_source_window() {
+    let (mut h, peer) = multi_window();
+    let p = h.state().session.project().unwrap();
+    let target = p.no_connect_target(p.symbols()[0].terminals()[0]).unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::no_connect::SET, &json!({"target":target,"marked":true,"expected_revision":revision}));
+    detach(&mut h);
+    focus(&mut h, &peer, true);
+    let source = h.state().views.hosts[&HostId(1)].focused;
+    h.state_mut().bind_editor_host(HostId(1));
+    h.state_mut().inspect_no_connects();
+    h.state_mut().bind_editor_host(HostId::ROOT);
+    h.run();
+    focus(&mut h, &peer, false);
+    let before = h.state().session.snapshot().unwrap();
+    h.get_by_label("Show R1 pin 1").click();
+    h.step();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(h.output().viewport_output[&editor_windows::viewport(HostId(1))].commands.contains(&ViewportCommand::Focus));
+    assert_eq!(h.state().views.owner(source), Some(HostId(1)));
+    assert_eq!(h.state().views.view(source).unwrap().schematic.selection.single_symbol(), Some(before.symbols()[0].id().as_str()));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Detached PCB tools use that host's input, cancel on focus loss, and commit through the shared
 /// session. Quarter-turn UI steps also preserve a pre-existing non-quarter-turn orientation.
 #[test]

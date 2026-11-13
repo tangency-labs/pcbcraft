@@ -324,3 +324,72 @@ fn hierarchical_clipboard_remaps_terminal_intent_with_its_owner() {
     s.apply("edit.redo", &json!({})).unwrap();
     assert_eq!(s.project().unwrap().check_no_connects(s.revision()).total_markers, 2);
 }
+
+/// A copied subtree owns all intent for a multi-unit part spread across descendant sheets,
+/// including unresolved records, regardless of which unit the remapper encounters first.
+#[test]
+fn hierarchical_clipboard_preserves_no_connects_from_every_unit() {
+    for unresolved in [false, true] {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        let root = s.project().unwrap().sheet_target();
+        s.apply(crate::hierarchy::CREATE_CHILD, &json!({"sheet":root.id(),"name":"Child","x_nm":0,"y_nm":0,"expected_revision":s.revision()}))
+            .unwrap();
+        let child = s.project().unwrap().sheets().find(|sheet| sheet.name == "Child").unwrap().target;
+        s.apply(crate::hierarchy::CREATE_CHILD, &json!({"sheet":child.id(),"name":"Grandchild","x_nm":0,"y_nm":0,"expected_revision":s.revision()}))
+            .unwrap();
+        let grandchild = s.project().unwrap().sheets().find(|sheet| sheet.name == "Grandchild").unwrap().target;
+        s.apply(
+            crate::library::sources::LOAD,
+            &json!({"source":"units","documents":{
+                "library.json":include_str!("../../../../examples/native-parts/library.json"),
+                "symbols/dual.json":include_str!("../../../../examples/native-parts/symbols/dual-amplifier.json"),
+            }}),
+        )
+        .unwrap();
+        let definition = s.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+        s.apply(PLACE_SYMBOL, &json!({"sheet":child.id(),"library":"parts-demo","definition":"dual-amplifier","definition_revision":1,
+            "definition_digest":crate::library::sources::symbol_digest(&definition).unwrap(),"unit":"a","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        let original = s.project().unwrap().for_sheet(child).unwrap().symbols()[0].clone();
+        s.apply(
+            crate::PLACE_UNIT,
+            &json!({"sheet":grandchild.id(),"component":original.component_id(),"unit":"b","x_nm":0,"y_nm":0,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        for terminal in ["1", "3", "5"] {
+            mark(&mut s, &Target { part: original.component_id(), terminal: terminal.into() }, true);
+        }
+        if unresolved {
+            let mut p = (*s.snapshot().unwrap()).clone();
+            Arc::make_mut(&mut p.components).get_mut(&original.component).unwrap().no_connects.insert("OLD".into(), ElectricalType::Input);
+            s.open_snapshot(Arc::new(p));
+        }
+        let before = s.snapshot().unwrap();
+        let expected = before.component(&original).unwrap().no_connects.clone();
+        let block = before.subsheets[0].id;
+        let copied = s
+            .execute(
+                crate::clipboard::COPY,
+                &json!({"sheet":root.id(),"items":crate::selection::Selection::default(),
+            "objects":[format!("sheet-symbol-{block}")],"expected_revision":s.revision()}),
+            )
+            .unwrap();
+        s.apply(
+            crate::clipboard::PASTE,
+            &json!({"sheet":root.id(),"text":copied["clipboard"],"x_nm":25_400_000,"y_nm":25_400_000,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        let after = s.snapshot().unwrap();
+        let copy = after.components.values().find(|part| part.ordinal != original.component).unwrap();
+        assert_eq!(copy.no_connects, expected);
+        assert_eq!(after.check_no_connects(s.revision()).total_markers, expected.len() * 2);
+        let docs = persistence::encode_documents(after.clone()).unwrap();
+        assert_eq!(persistence::encode_documents(persistence::decode_documents(&docs).unwrap()).unwrap(), docs);
+        let packed = persistence::encode_packed(after.clone()).unwrap();
+        assert_eq!(persistence::encode_documents(persistence::decode_packed(&packed).unwrap().project).unwrap(), docs);
+        s.apply("edit.undo", &json!({})).unwrap();
+        crate::assert_same_content(&before, &s.snapshot().unwrap());
+        s.apply("edit.redo", &json!({})).unwrap();
+        crate::assert_same_content(&after, &s.snapshot().unwrap());
+    }
+}
