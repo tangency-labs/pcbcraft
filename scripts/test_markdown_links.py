@@ -65,6 +65,51 @@ class MarkdownLinkChecks(unittest.TestCase):
             '`example\n[hidden](../missing.md)`\n[broken](../absent.md)\n'), [
             'docs/sub/check.md:3: missing local link target: ../absent.md'])
 
+    def test_unmatched_backticks_across_paragraphs_do_not_hide_broken_links(self):
+        self.assertEqual(self.check(
+            'An unmatched ` delimiter.\n\n[broken](../missing.md)\n\n'
+            'Another unmatched ` delimiter.\n'), [
+            'docs/sub/check.md:3: missing local link target: ../missing.md'])
+
+    def test_code_spans_do_not_cross_heading_or_list_boundaries(self):
+        self.assertEqual(self.check(
+            'Unmatched ` delimiter\n# A heading\n[broken](../missing.md)\n'), [
+            'docs/sub/check.md:3: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            'Unmatched ` delimiter\n- [broken](../missing.md)\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            'Unmatched ` delimiter\n> [broken](../missing.md)\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+
+    def test_code_spans_within_blockquotes_and_list_items(self):
+        self.assertEqual(self.check(
+            '> `example\n> [hidden](../missing.md)`\n'), [])
+        self.assertEqual(self.check(
+            '- `example\n  [hidden](../missing.md)`\n'), [])
+
+    def test_escaped_backticks_do_not_hide_broken_links(self):
+        self.assertEqual(self.check(
+            r'Escaped \` [broken](../missing.md) \`' + '\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_code_delimiter_runs_must_match_exactly(self):
+        self.assertEqual(self.check(
+            '`unmatched\n[broken](../missing.md)\n``also unmatched\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+
+    def test_fenced_code_remains_ignored_after_block_scoping(self):
+        self.assertEqual(self.check(
+            '```md\n[hidden](../missing.md)\n```\n'
+            '[visible](../missing.md)\n'), [
+            'docs/sub/check.md:4: missing local link target: ../missing.md'])
+
+    def test_paragraph_code_spans_can_still_contain_newlines(self):
+        self.assertEqual(self.check(
+            'Intro ``example\n[hidden](../missing.md)``\n'
+            '[visible](../missing.md)\n'), [
+            'docs/sub/check.md:3: missing local link target: ../missing.md'])
+
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
             '[web](https://example.org/x) [email](mailto:help@example.org)\n'

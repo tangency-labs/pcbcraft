@@ -18,35 +18,90 @@ INLINE_START = re.compile(r"!?\[[^]\n]*\]\(")
 REFERENCE_USAGE = re.compile(r"!?\[([^]\n]+)\]\[([^]\n]*)\]")
 SHORTCUT_USAGE = re.compile(r"!?\[([^]\n]+)\]")
 HTML_DEST = re.compile(r"\b(?:href|src)\s*=\s*([\"'])(.*?)\1", re.IGNORECASE)
+# These interrupt or delimit inline parsing even when no blank line precedes them.
+ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+THEMATIC_BREAK = re.compile(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$")
+BLOCKQUOTE = re.compile(r"^ {0,3}>")
+LIST_ITEM = re.compile(r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]+")
+
+
+def _escaped(text: str, index: int) -> bool:
+    """Whether a Markdown delimiter is preceded by an odd number of slashes."""
+    count = 0
+    while index > count and text[index - count - 1] == "\\":
+        count += 1
+    return count % 2 == 1
 
 
 def _masked(text: str) -> str:
-    """Mask comments and inline code while retaining positions and newlines."""
+    """Mask comments and exact-length inline code spans; keep newlines intact."""
     text = re.sub(r"<!--[\s\S]*?-->", lambda m: re.sub(r"[^\n]", " ", m.group()), text)
-    out: list[str] = []
+    out = list(text)
+    runs = list(re.finditer(r"`+", text))
     index = 0
-    while index < len(text):
-        if text[index] != "`":
-            out.append(text[index])
+    while index < len(runs):
+        opener = runs[index]
+        if _escaped(text, opener.start()):
             index += 1
             continue
-        end = index
-        while end < len(text) and text[end] == "`":
-            end += 1
-        marker = text[index:end]
-        closing = text.find(marker, end)
-        if closing == -1:
-            out.append(text[index:end])
-            index = end
+        closer_index = index + 1
+        while closer_index < len(runs):
+            candidate = runs[closer_index]
+            if (len(candidate.group()) == len(opener.group())
+                    and not _escaped(text, candidate.start())):
+                break
+            closer_index += 1
+        if closer_index == len(runs):
+            index += 1
             continue
-        segment = text[index : closing + len(marker)]
-        out.append(re.sub(r"[^\n]", " ", segment))
-        index = closing + len(marker)
+        for position in range(opener.start(), runs[closer_index].end()):
+            if text[position] != "\n":
+                out[position] = " "
+        index = closer_index + 1
     return "".join(out)
 
 
+def _mask_blocks(lines: list[str]) -> list[str]:
+    """Keep code spans inside Markdown blocks, never across separate blocks."""
+    output: list[str] = []
+    pending: list[str] = []
+    kind = "paragraph"
+
+    def flush() -> None:
+        if pending:
+            output.extend(_masked("\n".join(pending)).split("\n"))
+            pending.clear()
+
+    for line in lines:
+        if not line.strip():
+            flush()
+            output.append(line)
+            kind = "paragraph"
+        elif ATX_HEADING.match(line) or THEMATIC_BREAK.match(line):
+            flush()
+            output.append(_masked(line))
+            kind = "paragraph"
+        elif BLOCKQUOTE.match(line):
+            if kind != "blockquote":
+                flush()
+            pending.append(line)
+            kind = "blockquote"
+        elif LIST_ITEM.match(line):
+            flush()  # each list item is a separate inline block
+            pending.append(line)
+            kind = "list"
+        else:
+            if kind == "blockquote":
+                flush()
+            pending.append(line)
+            if kind != "list":
+                kind = "paragraph"
+    flush()
+    return output
+
+
 def _visible_lines(text: str) -> list[str]:
-    """Ignore fenced blocks (including their opening and closing markers)."""
+    """Ignore fenced blocks and comments, preserving diagnostic line numbers."""
     fence_char = ""
     fence_len = 0
     result: list[str] = []
@@ -63,9 +118,7 @@ def _visible_lines(text: str) -> list[str]:
             result.append("")
         else:
             result.append(line)
-    # Mask spans after joining the visible lines so backtick delimiters may
-    # enclose code across line breaks without changing diagnostic line numbers.
-    return _masked("\n".join(result)).split("\n")
+    return _mask_blocks(result)
 
 
 def _normalized(label: str) -> str:
