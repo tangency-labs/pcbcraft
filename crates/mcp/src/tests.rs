@@ -906,6 +906,7 @@ fn headless_sessions_say_window_commands_need_a_live_editor() {
     let before = body(&call(&mut server, "inspect_project", json!({})));
     for (tool, arguments) in [
         ("execute", json!({"command": "view.split", "params": {"view": 0, "split": true}})),
+        ("execute", json!({"command": "ui.click", "params": {"window":0,"target":{"handle":"toolbar:Connect:Wire"}}})),
         ("execute", json!({"command": "app.set_preferences", "params": {"theme": "light"}})),
         ("describe_command", json!({"command": "window.set_panel"})),
         ("inspect_editor", json!({})),

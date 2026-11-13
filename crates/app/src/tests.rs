@@ -1768,8 +1768,17 @@ mod live_mcp {
         let connection = (port, token);
         let commands = payload(tool(&mut harness, connection, "list_commands", json!({})));
         let ids: Vec<&str> = commands.as_array().unwrap().iter().filter_map(|command| command["id"].as_str()).collect();
-        assert_eq!(ids.len(), pcbcraft_engine::catalog().len() + window_commands::window_catalog().len());
-        for id in [MOVE_SYMBOL, pcbcraft_engine::DELETE_WIRE, "edit.undo", "view.split", "window.set_panel", "app.set_preferences"] {
+        assert_eq!(ids.len(), pcbcraft_engine::catalog().len() + window_commands::window_catalog().len() + crate::ui_automation::catalog().len());
+        for id in [
+            MOVE_SYMBOL,
+            pcbcraft_engine::DELETE_WIRE,
+            "edit.undo",
+            "view.split",
+            "window.set_panel",
+            "app.set_preferences",
+            "ui.handles",
+            "ui.click",
+        ] {
             assert!(ids.contains(&id), "{id}");
         }
         let before = payload(tool(&mut harness, connection, "inspect_project", json!({})));

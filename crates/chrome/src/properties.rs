@@ -33,8 +33,10 @@ pub fn input(value: &mut String) -> egui::TextEdit<'_> {
 pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     let t = Tokens::get();
     ui.horizontal(|ui| {
-        let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
-        crate::controls::text(ui, value).labelled_by(label.id)
+        let label_response = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
+        let response = crate::controls::text(ui, value).labelled_by(label_response.id);
+        crate::automation::publish(ui, &response, format!("field:{label}"));
+        response
     })
     .inner
 }

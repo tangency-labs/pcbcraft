@@ -4,10 +4,10 @@ use pcbcraft_engine::{Project, Session, board::Pad, catalog, schematic::Terminal
 use serde_json::{Value, json};
 
 /// Command namespaces that act on an open editor window instead of the project document.
-/// Only a live editor can run them, and they never change the project, its revision or its undo
-/// history; only `file.save` changes the unsaved state, by saving. The editor publishes their
-/// catalog during live discovery.
-pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "arrangement.", "app.", "file."];
+/// Only a live editor can run them. Presentation commands retain document history; `file.save`
+/// saves and `ui.` can invoke any ordinary UI action, including authored edits or file controls.
+/// The editor publishes their catalog during live discovery.
+pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "arrangement.", "app.", "file.", "ui."];
 
 /// Whether `id` names a window command, which only an open editor can run.
 pub fn is_window_command(id: &str) -> bool {

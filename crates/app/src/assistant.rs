@@ -538,6 +538,11 @@ impl Assistant {
         self.chat.generation()
     }
 
+    /// Retain endpoint revocation and reply ownership for queued ordinary UI input.
+    pub(super) fn automation_owner(&self, generation: u64) -> Option<crate::ui_automation::Owner> {
+        self.chat.automation_owner(generation)
+    }
+
     /// The approvals the person answered since the last frame, each once, for the editor to run
     /// or refuse. "Always allow" is remembered when the person answers.
     pub(super) fn take_answers(&mut self) -> Vec<(Approval, Answer)> {

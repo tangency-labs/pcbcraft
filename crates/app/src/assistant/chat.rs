@@ -131,6 +131,9 @@ pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl
     let Some(command) = command.filter(|_| method == "engine.execute") else {
         return Verdict::Run;
     };
+    if matches!(command, "ui.inspect" | "ui.handles" | "ui.at" | "ui.cancel") {
+        return Verdict::Run;
+    }
     if always(command) {
         return Verdict::Run;
     }
@@ -144,7 +147,7 @@ pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl
 
 /// Commands that touch files, replace the project or close a window: they ask even under Edits.
 fn asks_under_edits(command: &str) -> bool {
-    command.starts_with("file.") || matches!(command, "project.new" | "window.close" | "arrangement.delete")
+    command.starts_with("file.") || command.starts_with("ui.") || matches!(command, "project.new" | "window.close" | "arrangement.delete")
 }
 
 /// The chat: its backend, conversation, the agent's own options and pending approvals.
@@ -399,6 +402,11 @@ impl Chat {
     /// The endpoint's current request generation; only requests stamped with it may run.
     pub(super) fn generation(&self) -> Option<u64> {
         self.control.as_ref().map(LiveControl::current)
+    }
+
+    /// Bind queued input to this exact endpoint as well as its originating reply generation.
+    pub(super) fn automation_owner(&self, generation: u64) -> Option<crate::ui_automation::Owner> {
+        self.control.as_ref().map(|control| control.automation_owner(true, generation))
     }
 
     /// End the turn and revoke every request that arrived in it, wherever it is on its way.
@@ -866,11 +874,16 @@ mod tests {
             assert_eq!(run(Mode::Edits, command), Verdict::Run, "{command}");
             assert_eq!(run(Mode::Ask, command), Verdict::Ask, "{command}");
         }
-        for command in ["file.save", "project.new", "window.close", "arrangement.delete"] {
+        for command in
+            ["file.save", "project.new", "window.close", "arrangement.delete", "ui.click", "ui.key", "ui.text", "ui.drag", "ui.move", "ui.scroll"]
+        {
             assert_eq!(run(Mode::Edits, command), Verdict::Ask, "{command}");
             assert_eq!(run(Mode::All, command), Verdict::Run, "{command}");
         }
         assert_eq!(gate(Mode::Ask, "engine.execute", Some("file.save"), |command| command == "file.save"), Verdict::Run);
+        for command in ["ui.inspect", "ui.handles", "ui.at", "ui.cancel"] {
+            assert_eq!(run(Mode::Ask, command), Verdict::Run);
+        }
     }
 
     /// A reply's parsed Markdown is kept until more of it streams in, so drawing doesn't reparse it.

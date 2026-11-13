@@ -544,6 +544,11 @@ for mixed selections and indirect footprint/segment changes.
 
 ## Try the same project through MCP
 
+For repeatable UI demonstrations in the native app, the live connection can
+[locate controls and send ordinary input](ui-automation.md). Start with
+`ui.handles` for the intended window, send a named `ui.click`, and wait for its
+completion ticket through `ui.inspect` before continuing.
+
 Build the two desktop binaries from the repository root:
 
 ```sh

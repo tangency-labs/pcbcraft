@@ -33,6 +33,7 @@ fn top<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> egui::Inn
         add(ui)
     });
     ui.set_style(previous);
+    crate::automation::publish(ui, &response.response, format!("menu:{label}"));
     response
 }
 
@@ -222,6 +223,7 @@ impl<'a> MenuItem<'a> {
         item.checked = self.checked.map(|(_, checked)| checked);
         item.submenu = submenu;
         let response = item.show(ui);
+        crate::automation::publish_enabled(ui, &response, format!("menu:{}", self.label), self.enabled);
         response.widget_info(|| match self.checked {
             Some((CheckKind::Choice, selected)) => WidgetInfo::selected(Role::RadioButton, item.enabled, selected || response.clicked(), self.label),
             Some((CheckKind::Toggle, checked)) => WidgetInfo::selected(Role::CheckBox, item.enabled, checked ^ response.clicked(), self.label),

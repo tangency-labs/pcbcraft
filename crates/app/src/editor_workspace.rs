@@ -1027,6 +1027,7 @@ impl PcbApp {
                 }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
+                pcbcraft_chrome::automation::region(ui, format!("canvas:{}", id.0), uncovered, matches!(self.dialog, Dialog::None));
                 if self.views.view(id).is_some_and(|view| view.workspace == Workspace::Board) {
                     if let Some(view) = self.views.view_mut(id)
                         && view.camera.set_uncovered(canvas, uncovered)

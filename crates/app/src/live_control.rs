@@ -118,6 +118,11 @@ impl LiveControl {
         self.generation.load(Ordering::Acquire)
     }
 
+    /// Retain revocation identity for queued input even if a replacement listener reuses its port.
+    pub(super) fn automation_owner(&self, chat: bool, generation: u64) -> crate::ui_automation::Owner {
+        crate::ui_automation::Owner { port: self.port, generation, chat, stopped: self.stop.clone() }
+    }
+
     /// The endpoint's port, for a bridge the app configures itself.
     pub(super) fn port(&self) -> u16 {
         self.port
@@ -154,10 +159,10 @@ impl LiveControl {
             Err(mpsc::TryRecvError::Empty) => return Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => return Err("The local MCP connection stopped".to_owned()),
         };
-        if Instant::now() < request.deadline {
+        if !request.expired() {
             return Ok(Some(request));
         }
-        request.answer(Err("The editor did not receive the request in time".to_owned()));
+        request.answer(Err("The live request expired or disconnected before the editor received it".to_owned()));
         Ok(None)
     }
 }
@@ -403,6 +408,9 @@ impl PcbApp {
         }
         let revision = self.session.revision();
         let result = call_editor(&mut LiveEditor { app: self, ctx }, request.body());
+        if let Some(owner) = self.assistant.automation_owner(request.generation()) {
+            self.automation.authorize(owner);
+        }
         if self.session.revision() != revision {
             self.views.sync(&self.session);
             let title = request.body()["params"]["command"].as_str().and_then(pcbcraft_engine::command).map_or("Edit", |command| command.title);
@@ -422,6 +430,11 @@ pub(super) struct LiveEditor<'a> {
 }
 
 impl Editor for LiveEditor<'_> {
+    /// UI actions retain normal dialog and text-field interaction rather than bypassing them
+    /// through project commands. The queue validates native focus and endpoint ownership.
+    fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        self.app.automation_command(self.ctx, id, params)
+    }
     fn session(&mut self) -> &mut Session {
         &mut self.app.session
     }
@@ -433,6 +446,9 @@ impl Editor for LiveEditor<'_> {
     /// discarded in the editor, which is where the GUI asks.
     fn refusal(&self, command: &str) -> Option<String> {
         let app = &*self.app;
+        if app.automation.busy() {
+            return Some("Wait for the queued UI input to complete, or cancel it, before running another command".into());
+        }
         if (app.library_mutation_busy() || app.library_sources.installing())
             && (command.starts_with("library.") || command.starts_with("app.library_"))
         {
@@ -454,7 +470,9 @@ impl Editor for LiveEditor<'_> {
     }
 
     fn window_commands(&self) -> Vec<Value> {
-        window_commands::window_catalog()
+        let mut commands = window_commands::window_catalog();
+        commands.extend(crate::ui_automation::catalog());
+        commands
     }
 
     fn inspect(&self) -> Value {

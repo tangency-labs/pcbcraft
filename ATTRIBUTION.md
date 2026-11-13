@@ -1264,3 +1264,16 @@ as literals by the shared kit/look/theme from that revision's
 controls render, including text-edit context menus. Application/electronics copy
 remains host-owned. The extracted shared UI English data follows the same retained
 Brand and Interface notice; no new fonts or unrelated application assets were copied.
+## UI automation adapter
+
+The native UI automation adapter uses the existing pinned
+`solidcraft-ui-registry` target-publication API, originally qualified at SolidCraft
+revision `f56114219b2d7f6d16de8dd58700479646948f8a` and now using main's
+0.41.0 pin recorded above. It adds PCBcraft-owned enabled,
+clipping, window and input-lifecycle metadata around shared toolkit responses;
+it does not introduce a toolkit dependency upgrade. SolidCraft's public
+`examples/demo/record_ui.sh` and `enclosure_ui_mcp.py` were read as workflow
+references on November 13, 2026. Their source was not copied into this adapter.
+The existing shared toolkit licence and authorization records above continue
+to apply. The pinned registry does not track per-host enabled/covered state or
+queue native input; those concrete host responsibilities remain in PCBcraft.

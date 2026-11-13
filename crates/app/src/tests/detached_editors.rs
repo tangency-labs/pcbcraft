@@ -15,6 +15,34 @@ use crate::editor_layout::HostId;
 
 mod pane_drag;
 
+/// Named geometry remains window-local even though immediate hosts share the toolkit registry.
+/// The pinned framework lacks the input hook for these child windows, which must refuse input.
+#[test]
+fn ui_automation_lookup_keeps_detached_hosts_separate() {
+    let (mut h, peer) = multi_window();
+    let ctx = h.ctx.clone();
+    let root = h.state().views.active.id();
+    h.state_mut().run_window_command(&ctx, "view.open_window", &json!({"view":root.0})).unwrap();
+    h.state_mut().automation.observing = true;
+    peer.borrow_mut().focused = true;
+    h.run_steps(4);
+    let root_targets = h.state_mut().automation_command(&ctx, "ui.handles", &json!({"window":0})).unwrap();
+    let child_targets = h.state_mut().automation_command(&ctx, "ui.handles", &json!({"window":1})).unwrap();
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    assert_eq!(root_targets["window"], 0);
+    assert_eq!(child_targets["window"], 1);
+    for (targets, view) in [(&root_targets, root), (&child_targets, child)] {
+        assert!(targets["handles"].as_array().unwrap().iter().any(|target| target["name"] == format!("canvas:{}", view.0)), "{targets}");
+    }
+    assert!(!child_targets["handles"].as_array().unwrap().iter().any(|target| target["name"] == format!("canvas:{}", root.0)));
+    assert!(
+        h.state_mut()
+            .automation_command(&ctx, "ui.click", &json!({"window":1,"target":{"handle":"tab:View"}}))
+            .unwrap_err()
+            .contains("detached windows support named lookup only")
+    );
+}
+
 #[derive(Default)]
 struct Peer {
     origin: Option<Pos2>,

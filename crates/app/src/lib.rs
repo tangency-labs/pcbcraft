@@ -62,6 +62,8 @@ mod ribbon;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
+#[cfg(not(target_arch = "wasm32"))]
+mod ui_automation;
 mod unsaved;
 mod window_commands;
 mod workspace_panels;
@@ -229,6 +231,8 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    automation: ui_automation::Automation,
     clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
     arrangements: arrangements::Arrangements,
@@ -2340,6 +2344,9 @@ impl PcbApp {
         }
         let revision = self.session.revision();
         let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        if let Some(live) = &self.live_control {
+            self.automation.authorize(live.automation_owner(false, request.generation()));
+        }
         if self.session.revision() != revision {
             self.views.sync(&self.session);
             let title = request.body()["params"]["command"].as_str().and_then(command).map_or("Edit", |command| command.title);
@@ -2353,7 +2360,6 @@ impl PcbApp {
     /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
-        pcbcraft_chrome::begin_frame();
         let ctx = ui.ctx().clone();
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2426,6 +2432,18 @@ impl PcbApp {
     /// Blocked project actions disable editor controls, while native window interactions remain
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let observing = self.automation.observing;
+        #[cfg(target_arch = "wasm32")]
+        let observing = false;
+        pcbcraft_chrome::automation::begin(ui.ctx(), observing);
+        self.editor_host_contents(ui, integrated_titlebar);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.automation_painted(ui.ctx());
+    }
+
+    /// Draw a bound native host while the wrapper owns its named-target snapshot lifecycle.
+    fn editor_host_contents(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
         self.editor_host_contents(ui, integrated_titlebar);
         // Native host gestures belong above every workspace and its dialogs.
@@ -2603,6 +2621,11 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
 }
 
 impl eframe::App for PcbApp {
+    /// Deliver authenticated synthetic input before egui builds its pointer/keyboard state.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.automation_input(ctx, input);
+    }
     /// Run shared project logic and visible hosts, then release a dismissed native root and
     /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
