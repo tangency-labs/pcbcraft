@@ -849,8 +849,11 @@ pub(crate) fn show(
         if lost_focus || response.secondary_clicked() {
             return Some(Click::CancelNoConnect);
         }
-        let target = response
-            .hover_pos()
+        // Accessible marker labels may own hover without taking canvas editing input.
+        // Keep the tool cursor over those labels while respecting panels on higher layers.
+        let target = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|_| ui.rect_contains_pointer(rect))
             .and_then(|pointer| crate::no_connect::preview(&painter, project, camera, rect, pointer, selected))
             .and_then(|pin| project.no_connect_target(pin));
         return response.clicked().then_some(target).flatten().map(|target| Click::NoConnect(target, true));

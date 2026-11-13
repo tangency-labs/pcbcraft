@@ -91,20 +91,28 @@ fn no_connect_ribbon_tool_marks_clicked_pins_repeatedly() {
             assert!(h.state().message.is_none(), "{:?}", h.state().message);
             h.get_by_label(&format!("No connect J1 pin {}", index + 1));
             assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NoConnect { .. })));
+            h.hover_at(at);
+            h.run();
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
         }
         assert_eq!(h.state().session.project().unwrap().check_no_connects(h.state().session.revision()).total_markers, 3);
     }
 }
 
-/// Arming the tool gives a legible badge clear of a large system pointer, including near canvas
-/// edges. Moving it over empty canvas never creates a detached authored mark.
+/// The no-connect glyph replaces the system arrow with its cross centered on the click point,
+/// including exact pin snaps. Moving or canceling it leaves the authored document untouched.
 #[test]
 fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
     let mut h = editor(1400., true);
     let before = h.state().session.snapshot().unwrap();
     click(&mut h, "Mark intentionally unused pins (Q)");
     let canvas = h.get_by_label("Schematic canvas").rect();
-    for pointer in [canvas.center() + egui::vec2(100., 80.), canvas.right_bottom() - egui::vec2(10., 10.)] {
+    let terminal = pin(&h, 0);
+    for (pointer, target) in [
+        (canvas.center() + egui::vec2(100., 80.), canvas.center() + egui::vec2(100., 80.)),
+        (canvas.right_bottom() - egui::vec2(10., 10.), canvas.right_bottom() - egui::vec2(10., 10.)),
+        (terminal + egui::vec2(3., 2.), terminal),
+    ] {
         h.hover_at(pointer);
         h.run();
         let lines = h
@@ -122,11 +130,18 @@ fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
             .collect::<Vec<_>>();
         assert_eq!(lines.len(), 3, "the armed cursor needs a lead and two cross strokes");
         let bounds = lines.iter().fold(egui::Rect::NOTHING, |bounds, points| bounds.union(egui::Rect::from_two_pos(points[0], points[1])));
-        assert!(bounds.width() >= 30. && bounds.height() >= 18., "the badge must remain legible");
-        let system_pointer = egui::Rect::from_min_max(pointer - egui::vec2(4., 4.), pointer + egui::vec2(22., 42.));
-        assert!(!bounds.intersects(system_pointer), "the badge must clear the system pointer");
-        assert!(canvas.shrink(2.).contains_rect(bounds), "the complete badge stays on the canvas");
+        assert!(bounds.width() >= 30. && bounds.height() >= 18., "the cursor must remain legible");
+        let diagonals = lines.iter().filter(|points| (points[1].x - points[0].x).abs() > 1. && (points[1].y - points[0].y).abs() > 1.);
+        assert_eq!(diagonals.clone().count(), 2);
+        for points in diagonals {
+            assert!(points[0].lerp(points[1], 0.5).distance(target) < 0.1, "the cross must mark the click point");
+        }
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
     }
+    h.hover_at(canvas.center() + egui::vec2(100., 80.));
+    h.key_press(Key::Escape);
+    h.run();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     assert_eq!(h.state().session.project().unwrap().check_no_connects(h.state().session.revision()).total_markers, 0);
 }

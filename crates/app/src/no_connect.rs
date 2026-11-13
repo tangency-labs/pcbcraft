@@ -70,13 +70,14 @@ pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &
     }
 }
 
-/// Identify the armed tool everywhere over the canvas, then highlight an exact pin target
-/// when one is near the pointer. The cursor badge never authors a detached marker.
+/// Replace the system arrow with the no-connect cursor at the pointer or its exact pin target.
+/// The cross center is the click point; moving the cursor never authors a detached marker.
 pub(super) fn preview(painter: &Painter, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, selected: &Selection) -> Option<Terminal> {
-    pcbcraft_chrome::cursor::no_connect(painter, pointer);
-    let terminal = pin_at(project, camera, rect, pointer, selected)?;
-    cross(painter, camera.screen(project.terminal_position(terminal)?, rect), camera.unit_step(), Tokens::get().accent);
-    Some(terminal)
+    let terminal = pin_at(project, camera, rect, pointer, selected);
+    let center = terminal.and_then(|pin| project.terminal_position(pin)).map_or(pointer, |at| camera.screen(at, rect));
+    painter.ctx().set_cursor_icon(egui::CursorIcon::None);
+    pcbcraft_chrome::cursor::no_connect(painter, center);
+    terminal
 }
 
 /// Stable rule IDs are machine contracts; the report presents ordinary labels.

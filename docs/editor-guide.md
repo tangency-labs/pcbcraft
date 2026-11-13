@@ -188,8 +188,8 @@ pins connects it to the preserved wire ends.
 ### Intentionally unused pins
 
 Hover a pin endpoint and press **Q**, or choose **Capture → No connect** and
-click the pins to mark. A lead-and-cross cursor identifies the armed tool;
-an endpoint cross follows each marked terminal through
+click the pins to mark. The lead-and-cross cursor replaces the arrow and centers
+its cross on the target pin. Each placed mark follows its terminal through
 symbol movement and rotation. **Esc** or right-click cancels the placement tool;
 empty-space clicks do not create detached marks. Right-click a marked pin and
 choose **Remove no-connect marker** to clear its intent. These edits support
