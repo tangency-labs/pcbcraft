@@ -362,7 +362,7 @@ impl PcbApp {
             Action::Copy | Action::Cut => self.copy_schematic_clipboard(ctx, action == Action::Cut),
             Action::Paste | Action::PasteOptions => self.request_clipboard(ctx, action == Action::PasteOptions),
             Action::Duplicate => self.duplicate_schematic_clipboard(),
-            Action::Sources => self.dialog = Dialog::LibrarySources,
+            Action::Sources => self.open_library_workspace(ctx),
             Action::Rules => self.begin_board_rules(),
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),

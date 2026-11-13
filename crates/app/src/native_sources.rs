@@ -1,7 +1,7 @@
 //! Source registration and background loading are application services, separate from project files.
-use crate::{Dialog, PcbApp};
-use pcbcraft_chrome::library_sources as chrome;
-use pcbcraft_engine::library::sources::{self, Kind, NativeSource};
+use crate::PcbApp;
+pub(super) mod lifecycle;
+use pcbcraft_engine::library::sources::{self, NativeSource};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{
@@ -11,17 +11,22 @@ use std::sync::{
 
 pub(super) const STORAGE_KEY: &str = "pcbcraft.native-library-sources.v1";
 
-/// Personal locators never enter project documents. Uploaded sources last only for this session.
+/// Personal locators never enter project documents. Browser registrations retain names only.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Registration {
-    source: String,
-    path: String,
+pub(super) struct Registration {
+    pub(super) source: String,
+    pub(super) path: String,
+    #[serde(default)]
+    pub(super) name: String,
+    #[serde(skip)]
+    pub(super) writable: bool,
 }
 
 #[derive(Debug)]
 struct Job {
     generation: u64,
+    installing: bool,
     source: String,
     /// Restore this diagnostic if the picker is cancelled while this request is still current.
     previous_status: Option<String>,
@@ -29,22 +34,35 @@ struct Job {
 }
 
 /// None is a cancelled picker; a successful load carries parsed content and an optional personal locator.
-type LoadResult = Result<Option<(Arc<NativeSource>, Option<String>)>, String>;
+type LoadResult = Result<Option<(Arc<NativeSource>, Option<String>, bool)>, String>;
 
 /// Retain one worker slot until completion, including after removal, so a stalled filesystem
 /// cannot accumulate unbounded workers. Dropping the app never joins a blocking reader.
 #[derive(Debug, Default)]
 pub(super) struct Sources {
-    registered: Vec<Registration>,
+    pub(super) registered: Vec<Registration>,
     pending: Vec<Registration>,
     job: Option<Job>,
-    statuses: std::collections::BTreeMap<String, String>,
+    pub(super) statuses: std::collections::BTreeMap<String, String>,
     next: u64,
-    query: String,
-    kind: Option<Kind>,
+    #[cfg(target_arch = "wasm32")]
+    last_browser_text: Option<String>,
+    mutation: Option<lifecycle::Job>,
 }
 
 impl Sources {
+    /// Remember browser names immediately, including Remove, rather than depending on a later
+    /// periodic application save. Storage errors are reported once per changed registration list.
+    #[cfg(target_arch = "wasm32")]
+    fn persist_browser(&mut self) -> Result<(), String> {
+        let text = self.storage_text();
+        if self.last_browser_text.as_ref() == Some(&text) {
+            return Ok(());
+        }
+        self.last_browser_text = Some(text.clone());
+        web::remember_sources(STORAGE_KEY, &text).map_err(|e| format!("Could not remember library names in this browser: {e:?}"))
+    }
+
     /// Restore only a bounded, valid personal source list; disk reads start later on workers.
     pub(super) fn restore(text: Option<String>) -> Self {
         let registered = text
@@ -56,21 +74,27 @@ impl Sources {
                         !r.source.is_empty()
                             && r.source.len() <= 64
                             && r.source.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                            && !r.path.is_empty()
+                            && (cfg!(target_arch = "wasm32") || !r.path.is_empty())
                             && r.path.len() <= 4096
                     })
                     && entries.iter().map(|r| &r.source).collect::<std::collections::BTreeSet<_>>().len() == entries.len()
             })
             .unwrap_or_default();
-        Self { pending: registered.clone(), registered, ..Self::default() }
+        let pending = if cfg!(target_arch = "wasm32") { Vec::new() } else { registered.clone() };
+        let statuses = if cfg!(target_arch = "wasm32") {
+            registered.iter().map(|r| (r.source.clone(), "Needs reopening".into())).collect()
+        } else {
+            Default::default()
+        };
+        Self { pending, registered, statuses, ..Self::default() }
     }
-    /// Persist only desktop folder registrations, excluding cached definitions and status text.
+    /// Persist personal folder registrations on desktop and names/IDs on the browser; never cache definitions.
     pub(super) fn storage_text(&self) -> String {
         serde_json::to_string(&self.registered).unwrap_or_else(|_| "[]".into())
     }
 
     /// Allocate a session source ID that cannot collide with restored or MCP-loaded registrations.
-    fn next_source(&mut self, session: &pcbcraft_engine::Session) -> String {
+    pub(super) fn next_source(&mut self, session: &pcbcraft_engine::Session) -> String {
         loop {
             self.next += 1;
             let source = format!("native-{}", self.next);
@@ -85,18 +109,18 @@ impl Sources {
 
     /// Include unavailable and pending registrations in the limit, so repeated failed additions
     /// cannot grow personal settings or the manager list beyond the catalog's source bound.
-    fn can_add(&self, session: &pcbcraft_engine::Session) -> bool {
+    pub(super) fn can_add(&self, session: &pcbcraft_engine::Session) -> bool {
         let mut ids: std::collections::BTreeSet<String> =
             self.registered.iter().map(|r| r.source.clone()).chain(self.statuses.keys().cloned()).collect();
         ids.extend(session.libraries().inspect().as_array().into_iter().flatten().filter_map(|s| s["source"].as_str()).map(str::to_owned));
-        self.job.is_none() && ids.len() < sources::MAX_SOURCES
+        self.job.is_none() && self.mutation.is_none() && ids.len() < sources::MAX_SOURCES
     }
 
     /// Start exactly one folder read. The same parsed snapshot is installed by the source command
     /// transaction; errors and disconnects are reported to the registration that owns the request.
     #[cfg(not(target_arch = "wasm32"))]
-    fn load_path(&mut self, source: String, path: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
-        if self.job.is_some() {
+    pub(super) fn load_path(&mut self, source: String, path: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
+        if self.job.is_some() || self.mutation.is_some() {
             return Err("A library read is already running".into());
         }
         let (send, receive) = mpsc::channel();
@@ -104,20 +128,22 @@ impl Sources {
         std::thread::Builder::new()
             .name("pcbcraft-native-library".into())
             .spawn(move || {
-                let result = pcbcraft_storage::library::load(std::path::Path::new(&path)).map(|source| Some((Arc::new(source), Some(path))));
+                let root = std::path::Path::new(&path);
+                let writable = pcbcraft_storage::library::writable(root);
+                let result = pcbcraft_storage::library::load(root).map(|source| Some((Arc::new(source), Some(path), writable)));
                 let _ = send.send(result);
                 ctx.request_repaint();
             })
             .map_err(|e| e.to_string())?;
         let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
-        self.job = Some(Job { source, previous_status, receive, generation });
+        self.job = Some(Job { source, previous_status, receive, generation, installing: false });
         Ok(())
     }
 
     /// Open a desktop picker inside the worker. Cancel preserves registration, catalog and prior status.
     #[cfg(not(target_arch = "wasm32"))]
-    fn pick_folder(&mut self, source: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
-        if self.job.is_some() {
+    pub(super) fn pick_folder(&mut self, source: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
+        if self.job.is_some() || self.mutation.is_some() {
             return Err("A library read is already running".into());
         }
         let (send, receive) = mpsc::channel();
@@ -130,7 +156,8 @@ impl Sources {
                     .pick_folder()
                     .map(|path| {
                         let locator = path.to_str().ok_or("Library folder path is not valid UTF-8")?.to_owned();
-                        pcbcraft_storage::library::load(&path).map(|source| (Arc::new(source), Some(locator)))
+                        let writable = pcbcraft_storage::library::writable(&path);
+                        pcbcraft_storage::library::load(&path).map(|source| (Arc::new(source), Some(locator), writable))
                     })
                     .transpose();
                 let _ = send.send(result);
@@ -138,17 +165,23 @@ impl Sources {
             })
             .map_err(|e| e.to_string())?;
         let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
-        self.job = Some(Job { source, previous_status, receive, generation });
+        self.job = Some(Job { source, previous_status, receive, generation, installing: false });
         Ok(())
     }
 
-    /// Upload uses the same bundle decoder on desktop and browser; browser selection is initiated
+    /// Bundle input uses the same decoder on desktop and browser; browser selection is initiated
     /// synchronously during the click to retain its user-activation permission. Cancellation
     /// restores the source's previous status without changing its catalog or registration.
-    fn upload(&mut self, source: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
-        if self.job.is_some() {
+    pub(super) fn add_bundle(
+        &mut self,
+        source: String,
+        ctx: &egui::Context,
+        catalog: pcbcraft_engine::library::sources::Catalog,
+    ) -> Result<(), String> {
+        if self.job.is_some() || self.mutation.is_some() {
             return Err("A library read is already running".into());
         }
+        let generation = catalog.generation();
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
         #[cfg(not(target_arch = "wasm32"))]
@@ -163,10 +196,20 @@ impl Sources {
                         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
                         let mut bytes = Vec::new();
                         file.take((sources::MAX_SOURCE_BYTES * 2 + 1) as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                        NativeSource::from_bundle(&bytes).map(|source| (Arc::new(source), None))
+                        let parsed = NativeSource::from_bundle(&bytes)?;
+                        if catalog.contains_source(&parsed) {
+                            return Err("Every included revision is already installed with identical content".into());
+                        }
+                        let Some(destination) =
+                            rfd::FileDialog::new().set_title("Install library into a new folder").set_file_name("library").save_file()
+                        else {
+                            return Ok(None);
+                        };
+                        let locator = destination.to_str().ok_or("Library folder path is not valid UTF-8")?.to_owned();
+                        pcbcraft_storage::library::install_bundle(&bytes, &destination).map(|source| Some((Arc::new(source), Some(locator), true)))
                     })
                     .transpose();
-                let _ = send.send(result);
+                let _ = send.send(result.map(Option::flatten));
                 ctx.request_repaint();
             })
             .map_err(|e| e.to_string())?;
@@ -180,12 +223,40 @@ impl Sources {
             });
         }
         let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
-        self.job = Some(Job { source, previous_status, receive, generation });
+        self.job = Some(Job { source, previous_status, receive, generation, installing: cfg!(not(target_arch = "wasm32")) });
         Ok(())
     }
 
+    /// A request slot spans browser selection and reads; removing it invalidates completion.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn pick_folder(&mut self, source: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
+        if self.job.is_some() || self.mutation.is_some() {
+            return Err("A library read is already running".into());
+        }
+        let (send, receive) = mpsc::channel();
+        let promise = web::pick_folder();
+        let context = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = send.send(web::read_folder(promise).await);
+            context.request_repaint();
+        });
+        let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
+        self.job = Some(Job { source, previous_status, receive, generation, installing: false });
+        Ok(())
+    }
+
+    /// Source reads are bounded to one worker across add, reload and relocation.
+    /// Installing holds source mutation authority until validation/publication completes.
+    pub(super) fn installing(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| job.installing)
+    }
+
+    pub(super) fn busy(&self) -> bool {
+        self.job.is_some()
+    }
+
     /// Remove registration immediately but retain an in-flight slot; late results cannot restore it.
-    fn remove(&mut self, source: &str, session: &mut pcbcraft_engine::Session) {
+    pub(super) fn remove(&mut self, source: &str, session: &mut pcbcraft_engine::Session) {
         self.registered.retain(|r| r.source != source);
         self.pending.retain(|r| r.source != source);
         self.statuses.remove(source);
@@ -209,12 +280,26 @@ impl Sources {
                             return;
                         }
                         match result {
-                            Ok(Some((source, path))) => match session.install_library_source(&job.source, source) {
+                            Ok(Some((source, path, writable))) => match session.install_library_source(&job.source, source) {
                                 Ok(()) => {
                                     self.statuses.insert(job.source.clone(), "Available".into());
+                                    let data = session.libraries().inspect();
+                                    let name = data
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .find(|s| s["source"] == job.source)
+                                        .and_then(|s| s["name"].as_str())
+                                        .unwrap_or(&job.source)
+                                        .to_owned();
                                     if let Some(path) = path {
                                         self.registered.retain(|r| r.source != job.source);
-                                        self.registered.push(Registration { source: job.source, path });
+                                        self.registered.push(Registration { source: job.source.clone(), path, name: name.clone(), writable });
+                                    }
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        self.registered.retain(|r| r.source != job.source);
+                                        self.registered.push(Registration { source: job.source, path: String::new(), name, writable: false });
                                     }
                                 }
                                 Err(error) => {
@@ -254,7 +339,7 @@ impl Sources {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.job.is_none() && !self.pending.is_empty() {
+        if self.job.is_none() && self.mutation.is_none() && !self.pending.is_empty() {
             let registration = self.pending.remove(0);
             if let Err(error) = self.load_path(registration.source.clone(), registration.path, ctx, session.libraries().generation()) {
                 self.statuses.insert(registration.source, error);
@@ -299,156 +384,15 @@ impl PcbApp {
 
     /// Poll the shared catalog service once per root frame, independently of project replacement.
     pub(super) fn poll_library_sources(&mut self, ctx: &egui::Context) {
+        self.poll_library_mutation(ctx);
         let generation = self.session.libraries().generation();
         self.library_sources.poll(&mut self.session, ctx);
+        #[cfg(target_arch = "wasm32")]
+        if let Err(error) = self.library_sources.persist_browser() {
+            self.message = Some(error);
+        }
         if self.session.libraries().generation() != generation {
             self.repaint_editors(ctx);
-        }
-    }
-
-    /// Manage personal sources and inspect footprints without coupling to assignment or Properties.
-    /// Closing the dialog keeps registrations; removing one never edits pinned project data.
-    pub(super) fn library_sources_dialog(&mut self, ctx: &egui::Context) {
-        let mut remove: Option<String> = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut refresh: Option<Registration> = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut relocate: Option<String> = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut add = false;
-        let mut upload = false;
-        let loaded = self.session.libraries().inspect();
-        let can_add = self.library_sources.can_add(&self.session);
-        let mut ids: std::collections::BTreeSet<String> =
-            loaded.as_array().into_iter().flatten().filter_map(|s| s["source"].as_str().map(str::to_owned)).collect();
-        ids.extend(self.library_sources.statuses.keys().cloned());
-        ids.extend(self.library_sources.registered.iter().map(|r| r.source.clone()));
-        let closing = chrome::dialog(ctx, |ui| {
-            chrome::panes(ui, |ui, pane| {
-                if pane == 0 {
-                    chrome::heading(ui, "Sources", ids.len());
-                    let imports = chrome::imports(ui, can_add, cfg!(not(target_arch = "wasm32")));
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        add = imports.0;
-                    }
-                    upload = imports.1;
-                    chrome::list(ui, "source_registrations", |ui| {
-                        for id in &ids {
-                            let data = loaded.as_array().into_iter().flatten().find(|s| s["source"] == *id);
-                            let title = data.and_then(|s| s["name"].as_str()).unwrap_or(id);
-                            let registration = self.library_sources.registered.iter().find(|r| r.source == *id);
-                            let problems: Vec<&str> =
-                                data.into_iter().flat_map(|s| s["problems"].as_array()).flatten().filter_map(|p| p.as_str()).collect();
-                            let source = chrome::Source {
-                                name: title,
-                                library: data.and_then(|s| s["library"].as_str()).unwrap_or_default(),
-                                license: data.and_then(|s| s["license"].as_str()).unwrap_or_default(),
-                                location: registration.map(|r| r.path.as_str()),
-                                status: self.library_sources.statuses.get(id).map(String::as_str),
-                                problems: &problems,
-                                symbols: data.and_then(|s| s["symbols"].as_u64()).unwrap_or_default(),
-                                footprints: data.and_then(|s| s["footprints"].as_u64()).unwrap_or_default(),
-                                parts: data.and_then(|s| s["parts"].as_u64()).unwrap_or_default(),
-                                categories: data.and_then(|s| s["categories"].as_u64()).unwrap_or_default(),
-                                builtin: data.is_some_and(|source| source["builtin"] == true),
-                                available: data.is_some_and(|s| s["available"] != false),
-                                loading: self.library_sources.job.as_ref().is_some_and(|job| job.source == *id),
-                            };
-                            let action = ui.push_id(id, |ui| chrome::source(ui, source, self.library_sources.job.is_none())).inner;
-                            match action {
-                                chrome::SourceAction::Remove => remove = Some(id.clone()),
-                                #[cfg(not(target_arch = "wasm32"))]
-                                chrome::SourceAction::Refresh => refresh = registration.cloned(),
-                                #[cfg(not(target_arch = "wasm32"))]
-                                chrome::SourceAction::Relocate => relocate = Some(id.clone()),
-                                _ => {}
-                            }
-                        }
-                    });
-                } else {
-                    // Search/filter changes are view state and never transact project data.
-                    let mut kind = match self.library_sources.kind {
-                        None => chrome::Filter::All,
-                        Some(Kind::Symbol) => chrome::Filter::Symbols,
-                        Some(Kind::Footprint) => chrome::Filter::Footprints,
-                        Some(Kind::Part) => chrome::Filter::Parts,
-                        Some(Kind::Category) => chrome::Filter::Categories,
-                        Some(Kind::ManufacturerPart) => chrome::Filter::ManufacturerParts,
-                    };
-                    chrome::search(ui, &mut self.library_sources.query);
-                    chrome::filters(ui, &mut kind);
-                    self.library_sources.kind = match kind {
-                        chrome::Filter::All => None,
-                        chrome::Filter::Symbols => Some(Kind::Symbol),
-                        chrome::Filter::Footprints => Some(Kind::Footprint),
-                        chrome::Filter::Parts => Some(Kind::Part),
-                        chrome::Filter::Categories => Some(Kind::Category),
-                        chrome::Filter::ManufacturerParts => Some(Kind::ManufacturerPart),
-                    };
-                    let mut params = json!({"query":self.library_sources.query});
-                    if let Some(kind) = self.library_sources.kind {
-                        params["kind"] = json!(kind);
-                    }
-                    if let Ok(items) = self.session.execute(sources::SEARCH, &params) {
-                        let items: Vec<chrome::Item<'_>> = items
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .map(|item| chrome::Item {
-                                name: item["name"].as_str().unwrap_or_default(),
-                                library: item["key"]["library"].as_str().unwrap_or_default(),
-                                id: item["key"]["id"].as_str().unwrap_or_default(),
-                                revision: item["key"]["revision"].as_u64().unwrap_or_default(),
-                                footprint: item["key"]["kind"] == "footprint",
-                                kind: match item["key"]["kind"].as_str() {
-                                    Some("part") => "Part definition",
-                                    Some("category") => "Category",
-                                    Some("manufacturer_part") => "Manufacturer part",
-                                    Some("footprint") => "Footprint",
-                                    _ => "Symbol",
-                                },
-                                problem: item["resolution"]["reason"].as_str(),
-                                license: item["license"].as_str().unwrap_or_default(),
-                            })
-                            .collect();
-                        chrome::heading(ui, "Catalog", items.len());
-                        chrome::results(ui, &items);
-                    }
-                }
-            });
-        });
-        if let Some(source) = remove {
-            self.library_sources.remove(&source, &mut self.session);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if add {
-                let source = self.library_sources.next_source(&self.session);
-                if let Err(error) = self.library_sources.pick_folder(source.clone(), ctx, self.session.libraries().generation()) {
-                    self.library_sources.statuses.insert(source, error);
-                }
-            }
-            if let Some(registration) = refresh
-                && let Err(error) =
-                    self.library_sources.load_path(registration.source.clone(), registration.path, ctx, self.session.libraries().generation())
-            {
-                self.library_sources.statuses.insert(registration.source, error);
-            }
-            if let Some(source) = relocate
-                && let Err(error) = self.library_sources.pick_folder(source.clone(), ctx, self.session.libraries().generation())
-            {
-                self.library_sources.statuses.insert(source, error);
-            }
-        }
-        if upload {
-            let source = self.library_sources.next_source(&self.session);
-            if let Err(error) = self.library_sources.upload(source.clone(), ctx, self.session.libraries().generation()) {
-                self.library_sources.statuses.insert(source, error);
-            }
-        }
-        if !closing {
-            self.dialog = Dialog::LibrarySources;
         }
     }
 }
@@ -457,20 +401,68 @@ impl PcbApp {
 mod web {
     use super::*;
     use wasm_bindgen::prelude::*;
-    #[wasm_bindgen(
-        inline_js = "export function pickLibraryBundle(limit) { return new Promise((resolve,reject)=>{ const input=document.createElement('input'); input.type='file'; input.accept='.json'; input.oncancel=()=>resolve(null); input.onchange=async()=>{ const file=input.files[0]; if(!file)return resolve(null); if(file.size>limit)return reject(new Error('Library bundle exceeds 16 MiB')); try{resolve(await file.arrayBuffer())}catch(e){reject(e)} }; input.click(); }); }"
-    )]
-    extern "C" {
-        #[wasm_bindgen(js_name=pickLibraryBundle)]
-        fn pick_bundle(limit: u32) -> js_sys::Promise;
+    #[wasm_bindgen(inline_js = r#"
+    function chooseLibrary(folder) {
+      return new Promise((resolve,reject)=>{
+        const input=document.createElement('input'); input.type='file';
+        if(folder){input.webkitdirectory=true;input.multiple=true;}else{input.accept='.json';}
+        input.oncancel=()=>resolve(null);
+        input.onchange=async()=>{try{
+          const files=input.files||[];if(!files.length)return resolve(null);
+          if(!folder){if(files[0].size>16777216)throw Error('Library bundle exceeds 16 MiB');return resolve(await files[0].arrayBuffer());}
+          const documents={};const problems=[];let total=0,count=0;
+          for(const file of files){
+            const pieces=file.webkitRelativePath.split('/');pieces.shift();const path=pieces.join('/');
+            // Root notices are not native documents; preserve the native folder adapter's scope.
+            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts)\//.test(path))continue;
+            if(++count>256)throw Error('Library source exceeds 256 files');
+            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts)\/[^/]+\.json$/.test(path)){problems.push(path+': unsupported native item path');continue;}
+            if(file.size>1048576){if(path==='library.json')throw Error('Manifest exceeds 1 MiB');problems.push(path+': file exceeds 1 MiB');continue;}
+            if((total+=file.size)>8388608)throw Error('Library source exceeds 8 MiB');
+            if(Object.hasOwn(documents,path))throw Error('Duplicate library path');
+            try{documents[path]=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());}catch(error){if(path==='library.json')throw error;problems.push(path+': could not read UTF-8 document');}
+          }
+          resolve({documents,problems});
+        }catch(error){reject(error)}};input.click();
+      });
     }
-    /// Begin browser selection during the triggering click, before yielding the event loop.
+    export function rememberLibrarySources(key,text){localStorage.setItem(key,text)}
+    export function pickLibraryBundle(){return chooseLibrary(false)}
+    export function pickLibraryFolder(){return chooseLibrary(true)}
+    "#)]
+    extern "C" {
+        #[wasm_bindgen(catch,js_name=rememberLibrarySources)]
+        pub(super) fn remember_sources(key: &str, text: &str) -> Result<(), JsValue>;
+        #[wasm_bindgen(js_name=pickLibraryBundle)]
+        fn pick_bundle() -> js_sys::Promise;
+        #[wasm_bindgen(js_name=pickLibraryFolder)]
+        pub(super) fn pick_folder() -> js_sys::Promise;
+    }
+    /// Start selection synchronously in the triggering click's browser activation.
     pub(super) fn pick() -> js_sys::Promise {
-        pick_bundle((sources::MAX_SOURCE_BYTES * 2) as u32)
+        pick_bundle()
+    }
+    /// Validate transported folder text with exactly the engine's native document limits.
+    pub(super) async fn read_folder(promise: js_sys::Promise) -> LoadResult {
+        let value = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|e| format!("Could not open library: {e:?}"))?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let text =
+            js_sys::JSON::stringify(&value).map_err(|e| format!("Could not read library: {e:?}"))?.as_string().ok_or("Invalid library documents")?;
+        #[derive(Deserialize)]
+        struct Folder {
+            documents: sources::Documents,
+            problems: Vec<String>,
+        }
+        let folder: Folder = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let mut source = NativeSource::load(&folder.documents)?;
+        source.add_adapter_problems(folder.problems);
+        Ok(Some((Arc::new(source), None, false)))
     }
     /// Bound picked bytes before copying into Wasm memory and use the native snapshot validator.
     pub(super) async fn read(promise: js_sys::Promise) -> LoadResult {
-        let value = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|e| format!("Could not upload library: {e:?}"))?;
+        let value = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|e| format!("Could not open library: {e:?}"))?;
         if value.is_null() {
             return Ok(None);
         }
@@ -478,7 +470,7 @@ mod web {
         if bytes.length() as usize > sources::MAX_SOURCE_BYTES * 2 {
             return Err("Library bundle exceeds 16 MiB".into());
         }
-        NativeSource::from_bundle(&bytes.to_vec()).map(|source| Some((Arc::new(source), None)))
+        NativeSource::from_bundle(&bytes.to_vec()).map(|source| Some((Arc::new(source), None, false)))
     }
 }
 

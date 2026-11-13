@@ -1203,3 +1203,13 @@ reuses the pinned Craft toolkit through `crates/chrome`, under its existing reta
 licence and notices. Checker diagnostics extend the original #240 fixtures and
 runner; no new dependency, external implementation, artwork, library data or saved
 project format was introduced.
+
+## Library workspace
+
+The per-pane library browser, nested/flat record views, host source lifecycle and
+regressions are original MIT OR Apache-2.0 PCBcraft work for #315. The composition
+follows @travle1's original rendered mockups; interface presentation reuses the
+already qualified pinned Craft tree, tables, surfaces, controls and icon set,
+including its `library` books master. Electronics previews reuse existing original
+PCBcraft painters. No new dependency, third-party EDA source, artwork, library data
+or native project/library format was introduced.

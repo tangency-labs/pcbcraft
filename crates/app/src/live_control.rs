@@ -433,6 +433,11 @@ impl Editor for LiveEditor<'_> {
     /// discarded in the editor, which is where the GUI asks.
     fn refusal(&self, command: &str) -> Option<String> {
         let app = &*self.app;
+        if (app.library_mutation_busy() || app.library_sources.installing())
+            && (command.starts_with("library.") || command.starts_with("app.library_"))
+        {
+            return Some("Finish the current library folder operation before changing its sources or editors".into());
+        }
         if app.views.editing_text() {
             return Some(format!("Finish the current text edit before running `{command}`"));
         }

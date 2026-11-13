@@ -185,3 +185,27 @@ fn external_symbol_placement_names_missing_revision_and_digest_parameters() {
     session.apply(crate::PLACE_SYMBOL, &params).unwrap();
     assert_eq!(session.project().unwrap().symbols().len(), 1);
 }
+
+/// Source browsing retains old/quarantined revisions without weakening placement search.
+#[test]
+fn browse_retains_revisions_and_quarantine_and_redundancy_is_content_exact() {
+    let documents = super::super::bundled_documents().next().unwrap().1;
+    let source = Arc::new(NativeSource::load(&documents).unwrap());
+    let mut catalog = Catalog::default();
+    catalog.install("first", source.clone()).unwrap();
+    assert!(catalog.contains_source(&source));
+    assert_eq!(catalog.source_items("first").len(), source.items().len());
+    catalog.mark_unavailable("first");
+    assert!(catalog.source_items("first").is_empty());
+    assert!(!catalog.contains_source(&source));
+    catalog.install("first", source.clone()).unwrap();
+    let mut different = documents.clone();
+    let path = different.keys().find(|p| p.starts_with("symbols/")).unwrap().clone();
+    let mut symbol: Value = serde_json::from_str(&different[&path]).unwrap();
+    symbol["name"] = json!("Conflicting original test name");
+    different.insert(path, symbol.to_string());
+    let conflicting = Arc::new(NativeSource::load(&different).unwrap());
+    catalog.install("other", conflicting).unwrap();
+    assert!(catalog.source_items("first").iter().any(|item| catalog.conflicting(&item.key)));
+    assert!(!catalog.contains_source(&source));
+}

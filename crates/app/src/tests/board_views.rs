@@ -411,6 +411,12 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.key_press(Key::Enter);
     h.run();
     assert!(h.state().library_editors.active.is_none());
+    assert_eq!(h.state().workspace_key(), "library");
+    click(&mut h, "Choose workspace");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     click(&mut h, "Choose workspace");
     let card = h.get_by_label("PCB layout").rect();

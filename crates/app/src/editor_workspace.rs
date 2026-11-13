@@ -731,6 +731,13 @@ impl EditorViews {
             } else {
                 let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
                 if let Some(id) = parked {
+                    let library = self.active.library.clone();
+                    if let Some(view) = self.view_mut(id) {
+                        view.library = library;
+                        if view.library.is_some() {
+                            view.definition = None;
+                        }
+                    }
                     if let Some(document) = self.active.definition
                         && let Some(view) = self.view_mut(id)
                     {
@@ -776,6 +783,9 @@ impl PcbApp {
             for (id, pane) in host.rects.iter().filter(|(_, pane)| (pane.top() - top).abs() < 0.5) {
                 let Some(view) = self.views.view(*id) else { continue };
                 if view.unavailable() {
+                    continue;
+                }
+                if view.library.is_some() {
                     continue;
                 }
                 let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
@@ -839,7 +849,7 @@ impl PcbApp {
 
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
-        if (self.session.project().is_none() && self.views.active.definition.is_none()) || !matches!(self.dialog, Dialog::None) {
+        if (self.session.project().is_none() && !self.views.active.auxiliary()) || !matches!(self.dialog, Dialog::None) {
             return;
         }
         self.views.set_split(split);
@@ -877,7 +887,7 @@ impl PcbApp {
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
         if let Some(pointer) = pressed
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
-            && (self.views.view(*id).is_some_and(|view| view.definition.is_some())
+            && (self.views.view(*id).is_some_and(|view| view.auxiliary())
                 || !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
         {
             self.activate_editor(ctx, *id);
@@ -893,12 +903,12 @@ impl PcbApp {
             .views
             .hosts
             .get(&self.views.host)
-            .is_some_and(|host| host.layout.views().iter().any(|id| self.views.view(*id).is_some_and(|view| view.definition.is_some())));
+            .is_some_and(|host| host.layout.views().iter().any(|id| self.views.view(*id).is_some_and(|view| view.auxiliary())));
         if self.session.project().is_none() && !has_library {
             self.canvas(ui);
             return;
         }
-        let project_focus = self.views.active.definition.is_none();
+        let project_focus = !self.views.active.auxiliary();
         let board = project_focus && self.views.active.workspace == Workspace::Board;
         let area = ui.available_rect_before_wrap();
         let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
@@ -995,6 +1005,10 @@ impl PcbApp {
                             self.queue_view_action(ui.ctx(), id, action);
                         }
                     }
+                }
+                if self.views.view(id).is_some_and(|view| view.library.is_some()) {
+                    self.library_workspace_pane(ui, id);
+                    return;
                 }
                 if self.views.view(id).is_some_and(|view| view.definition.is_some()) {
                     self.library_pane(ui, id);
@@ -1153,7 +1167,7 @@ impl PcbApp {
                         turns: 0,
                     });
                 }
-                crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,
+                crate::parts_browser::Pick::Libraries => self.open_library_workspace(ui.ctx()),
                 crate::parts_browser::Pick::Stale => self.message = Some("View or project changed; reopen the Parts Catalog to continue.".into()),
             }
         }

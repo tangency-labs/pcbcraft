@@ -643,8 +643,10 @@ fn library_property_actions_keep_pinned_geometry_and_pending_edits_safe() {
     h.run();
     click(&mut h, "Library");
     click(&mut h, "Manage libraries…");
-    assert!(matches!(h.state().dialog, Dialog::LibrarySources));
-    click(&mut h, "Close Library sources");
+    assert_eq!(h.state().workspace_key(), "library");
+    let ctx = h.ctx.clone();
+    h.state_mut().enter_workspace(&ctx, "schematic", pcbcraft_chrome::workspace::Placement::Here).unwrap();
+    h.run();
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     h.key_press(Key::E);
     h.run();

@@ -28,9 +28,23 @@ const RIBBON_SEPARATOR_WIDTH: f32 = 12.0;
 const RIBBON_CAPTION_GAP: f32 = 5.0;
 const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 
+/// Host source operations share one folder silhouette instead of borrowing electronics glyphs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryFolderAction {
+    Add,
+    Relocate,
+    Remove,
+}
+
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
+    /// Source management composes the shared folder master with an original action badge.
+    LibraryFolder(LibraryFolderAction),
+    /// Pure source refresh has no matching standalone master in the pinned toolkit.
+    LibraryRefresh,
+    /// Generic interface masters come directly from the pinned Craft icon set.
+    Shared(&'static str),
     /// Original lead-and-cross intentional-disconnection glyph.
     NoConnect,
     Select,
@@ -151,6 +165,7 @@ fn floating_frame(ctx: &egui::Context) -> Frame {
 /// The drawing on a workspace's tile in the picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspaceIcon {
+    Library,
     Schematic,
     Layout,
     Render,
@@ -1320,6 +1335,9 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
     let stroke = |width: f32, color| Stroke::new(width * scale, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        WorkspaceIcon::Library => {
+            solidcraft_ui_kit::icons::paint_icon(p, Rect::from_center_size(center, vec2(size, size)), "library", if available { 1.0 } else { 0.35 });
+        }
         WorkspaceIcon::Schematic => {
             let outline = stroke(2.55, ink);
             let accent = stroke(3.0, active_2);
@@ -1377,7 +1395,7 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
 /// Draw a ribbon glyph in the theme's icon roles: line art in `icon_line` and accents in the
 /// strongest icon blue, both faded when the action is unavailable. Registered SVG masters use
 /// the embedded loader; other chrome glyphs retain their native painter and menu artwork.
-fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
+pub(crate) fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
     if crate::ribbon_icons::paint(p, icon, center, size, t, enabled) {
         return;
     }
@@ -1387,6 +1405,37 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        ToolIcon::LibraryFolder(action) => {
+            solidcraft_ui_kit::icons::paint_icon(p, Rect::from_center_size(center, vec2(size, size)), "folder", if enabled { 1.0 } else { 0.35 });
+            let center = at(47.0, 47.0);
+            let radius = size * 0.16;
+            p.circle_filled(center, radius * 1.3, t.panel);
+            let mark = Stroke::new(size * 0.065, accent);
+            p.line_segment([center - vec2(radius, 0.0), center + vec2(radius, 0.0)], mark);
+            match action {
+                LibraryFolderAction::Add => {
+                    p.line_segment([center - vec2(0.0, radius), center + vec2(0.0, radius)], mark);
+                }
+                LibraryFolderAction::Relocate => {
+                    p.line_segment([center + vec2(radius * 0.3, -radius * 0.7), center + vec2(radius, 0.0)], mark);
+                    p.line_segment([center + vec2(radius * 0.3, radius * 0.7), center + vec2(radius, 0.0)], mark);
+                }
+                LibraryFolderAction::Remove => {}
+            }
+        }
+        ToolIcon::LibraryRefresh => {
+            let points: Vec<_> = (0..=24)
+                .map(|i| {
+                    let angle = (45.0 + i as f32 * 270.0 / 24.0).to_radians();
+                    at(32.0 + 21.0 * angle.cos(), 32.0 + 21.0 * angle.sin())
+                })
+                .collect();
+            p.add(Shape::line(points, stroke(4.25, ink)));
+            line(&[(39.0, 14.0), (47.0, 17.0), (48.0, 8.0)], stroke(4.25, ink));
+        }
+        ToolIcon::Shared(name) => {
+            solidcraft_ui_kit::icons::paint_icon(p, Rect::from_center_size(center, vec2(size, size)), name, if enabled { 1.0 } else { 0.35 })
+        }
         ToolIcon::NoConnect => {
             line(&[(10., 32.), (42., 32.)], stroke(4., ink));
             line(&[(30., 20.), (54., 44.)], stroke(4., ink));

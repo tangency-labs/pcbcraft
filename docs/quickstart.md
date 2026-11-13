@@ -699,3 +699,13 @@ With a configured board and a closed Board Outline, **Manufacture → Fabricatio
 saves a fabrication ZIP without editing the design. Output names remain unique
 when layer names collide after sanitization; the [editor guide](editor-guide.md)
 describes the generated files and desktop save behavior.
+
+### Browse libraries
+
+Choose **Library** in the workspace picker, or **Libraries → Sources**. Select a
+library and Type in Browser, search its items, and select a row for Preview.
+**Add library** opens a folder or bundle; desktop bundles install into a new
+folder. Remove leaves files intact, while Delete moves an eligible folder to
+system trash after confirmation. In the browser, added libraries need reopening
+after a reload. Projects keep their pinned copies. See the
+[native source guide](native-library-sources.md) for limits and source diagnostics.

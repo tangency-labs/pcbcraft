@@ -145,6 +145,9 @@ impl PcbApp {
     }
     /// Native titles and pane headers resolve the actual document instead of its parked project target.
     pub(crate) fn view_title(&self, view: ViewId) -> String {
+        if self.views.view(view).is_some_and(|view| view.library.is_some()) {
+            return "Library".into();
+        }
         self.views
             .view(view)
             .and_then(|view| view.definition)
@@ -257,6 +260,7 @@ impl PcbApp {
         if let Some(target) = self.views.view_mut(view) {
             target.release_input();
             target.definition = Some(document);
+            target.library = None;
         }
         self.home = false;
         if host == self.views.host {

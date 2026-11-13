@@ -54,6 +54,10 @@ struct Document {
     error: Option<String>,
 }
 impl Editors {
+    /// Unpublished geometry and unapplied fields both prevent deleting their origin library.
+    pub(crate) fn unpublished_in(&self, library: &str) -> bool {
+        self.documents.values().any(|doc| doc.session.snapshot().library == library && doc.unsaved())
+    }
     /// A bounded change stamp wakes all views when a definition edit or dirty-state transition occurs.
     pub(super) fn stamp(&self) -> Vec<(u64, u64, bool)> {
         self.documents.iter().map(|(id, doc)| (*id, doc.session.revision(), doc.unsaved())).collect()

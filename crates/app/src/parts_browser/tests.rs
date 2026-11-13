@@ -190,8 +190,8 @@ fn catalog_reaches_existing_library_manager() {
     assert!(h.get_by_label("Place").accesskit_node().is_disabled());
     click(&mut h, "Manage libraries…");
     assert!(!h.state().parts.open);
-    assert!(matches!(h.state().dialog, crate::Dialog::LibrarySources));
-    h.get_by_label("Close Library sources");
+    assert_eq!(h.state().workspace_key(), "library");
+    h.get_by_label("Built-in");
 }
 
 /// Catalog selection does not use display text as identity, and source filters use library IDs.

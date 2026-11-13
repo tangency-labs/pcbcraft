@@ -134,3 +134,8 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
     }
     board::footprint(painter, &pads, &graphics, "", rect.center() + pan, board::copper_color(Some(true)), false, false, false, egui::Vec2::ZERO);
 }
+
+/// Paint a read-only workspace preview using the ordinary physical footprint painter.
+pub(super) fn static_footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
+    pcbcraft_chrome::properties::preview(ui, |painter, rect| paint_footprint(painter, rect, definition, 1.0, egui::Vec2::ZERO));
+}

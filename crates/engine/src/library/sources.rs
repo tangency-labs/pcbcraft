@@ -297,6 +297,11 @@ impl NativeSource {
 
     /// Read a browser-uploadable bundle using the same bounded document loader as desktop folders.
     pub fn from_bundle(bytes: &[u8]) -> Result<Self, String> {
+        Self::load(&Self::bundle_documents(bytes)?)
+    }
+
+    /// Validate the transport and path/size limits while retaining original native text for installation.
+    pub fn bundle_documents(bytes: &[u8]) -> Result<Documents, String> {
         // JSON string escaping can expand source text; bound the transport separately too.
         if bytes.len() > MAX_SOURCE_BYTES * 2 {
             return Err("Library bundle exceeds 16 MiB".into());
@@ -312,7 +317,9 @@ impl NativeSource {
         if bundle.format != "pcbcraft-library-bundle/1" {
             return Err("Unsupported library bundle format".into());
         }
-        Self::load(&bundle.documents)
+        check_documents(&bundle.documents)?;
+        Self::load(&bundle.documents)?;
+        Ok(bundle.documents)
     }
 
     /// Parse an individual native item and bind its identity to the manifest, never its filename.
@@ -714,6 +721,34 @@ impl Catalog {
             })
             .and_then(Item::symbol)
     }
+    /// Inspect every revision from one available registration, including quarantined items.
+    /// Browsing does not select placement candidates or silently substitute another source.
+    pub fn source_items(&self, source: &str) -> &[Item] {
+        if self.unavailable.contains(source) {
+            return &[];
+        }
+        self.sources.get(source).map_or(&[], |source| source.items.as_slice())
+    }
+
+    /// Explain whether an exact item is quarantined; previews may show it but cannot place it.
+    pub fn conflicting(&self, key: &Key) -> bool {
+        self.conflicts.contains(key)
+    }
+
+    /// Refuse a redundant installation only when every revision already has identical content
+    /// in available registrations. Conflicting or empty collections are never called redundant.
+    pub fn contains_source(&self, source: &NativeSource) -> bool {
+        !source.items.is_empty()
+            && source.items.iter().all(|item| {
+                !self.conflicts.contains(&item.key)
+                    && self
+                        .sources
+                        .iter()
+                        .filter(|(id, _)| !self.unavailable.contains(*id))
+                        .any(|(_, existing)| existing.items.iter().any(|other| other.key == item.key && other.canonical == item.canonical))
+            })
+    }
+
     /// List sources with trusted built-in status and validation/conflict messages by filename.
     pub fn inspect(&self) -> Value {
         let conflicts = &self.conflicts;

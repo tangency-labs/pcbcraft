@@ -24,7 +24,7 @@ impl PcbApp {
     /// the Parts Catalog focuses search, like Capture › Symbol; an open chooser is left alone.
     /// Selection filters require a project view; definition-view requests fail without changing state.
     pub(super) fn set_panel(&mut self, ctx: &Context, panel: Panel, open: bool) -> Result<(), String> {
-        if panel == Panel::Filters && self.views.active.definition.is_some() {
+        if panel == Panel::Filters && self.views.active.auxiliary() {
             return Err("Selection filters require a project view".into());
         }
         match panel {
@@ -59,7 +59,7 @@ impl PcbApp {
             Panel::Parts => self.parts.open,
             Panel::Nets => self.net_inspector.open,
             Panel::Properties => self.properties_open,
-            Panel::Filters => self.views.active.definition.is_none() && self.views.active.filters_open,
+            Panel::Filters => !self.views.active.auxiliary() && self.views.active.filters_open,
         }
     }
 
@@ -145,6 +145,8 @@ mod live {
         Arrangement,
         /// An arrangement name: 1 to 80 characters on one line.
         Name,
+        /// Library search text may be empty to clear a filter.
+        Query,
         Bool,
         /// Opaque sRGB #RRGGBB, or null to restore a physical-role default.
         Color,
@@ -178,6 +180,7 @@ mod live {
                     json!({"type": "integer", "minimum": 0})
                 }
                 Self::Object => json!({"type":"string","format":"uuid"}),
+                Self::Query => json!({"type":"string","maxLength":512}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
                 Self::Color => json!({"oneOf":[{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},{"type":"null"}]}),
@@ -210,6 +213,7 @@ mod live {
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
                     value.as_u64().is_some()
                 }
+                Self::Query => value.as_str().is_some_and(|s| s.len() <= 512),
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
                 Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
@@ -233,6 +237,7 @@ mod live {
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
+                Self::Query => "must be library search text of at most 512 bytes".into(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
                 Self::Color => "must be #RRGGBB or null to restore the default".to_owned(),
@@ -359,10 +364,42 @@ mod live {
                     name: "workspace",
                     summary: "Workspace to enter",
                     required: true,
-                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor"]),
+                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor", "library"]),
                 },
                 Param { name: "view", summary: "Source pane; defaults to focused main pane", required: false, kind: Kind::View },
                 Param { name: "placement", summary: "Where to open it", required: false, kind: Kind::Choice(PLACEMENTS) },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_source",
+            title: "Manage Library Source",
+            summary: "Run Library workspace source management. Add/relocate use native pickers; Delete requires the same folder/count confirmation as the GUI. No project edits.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "action",
+                    summary: "Source operation",
+                    required: true,
+                    kind: Kind::Choice(&["add", "refresh", "relocate", "remove", "delete"]),
+                },
+                Param { name: "source", summary: "Registration ID, defaults to selected source", required: false, kind: Kind::Name },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_browse",
+            title: "Browse Library",
+            summary: "Change a Library pane's source, Type, search or selected item without changing project revision/history. Inspect its selection through inspect_editor.",
+            params: &[
+                VIEW,
+                Param { name: "source", summary: "Registration ID", required: false, kind: Kind::Name },
+                Param { name: "query", summary: "Search text; empty clears it", required: false, kind: Kind::Query },
+                Param {
+                    name: "type",
+                    summary: "0 all, 1 symbols, 2 footprints, 3 generic parts, 4 orderable parts",
+                    required: false,
+                    kind: Kind::Integer { min: 0, max: 4, step: 1 },
+                },
+                Param { name: "item", summary: "Item ID within selected source and Type", required: false, kind: Kind::Name },
             ],
         },
         WindowCommand {
@@ -914,7 +951,7 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties,
-                        "selection_filters": app.views.view(host.focused).is_some_and(|view| view.definition.is_none() && view.filters_open)},
+                        "selection_filters": app.views.view(host.focused).is_some_and(|view| !view.auxiliary() && view.filters_open)},
                     "catalog_mode": panels.catalog_mode,
                     "repeat_placement": panels.repeat_placement,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
@@ -937,15 +974,16 @@ mod live {
                     "window": window.0,
                     "focused": focused,
                     "primary": id == app.views.primary(),
-                    "workspace": view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"}),
+                    "workspace": if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
                     "definition":view.definition,
                     "library_view":app.inspect_library_view(id),
+                    "library_workspace":view.library.as_ref().map(|state|state.inspect()),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
                     "selection_filters": view.filters.inspect(view.workspace),
                     "selection_filters_collapsed": view.filters_collapsed,
-                    "selection_filters_open": view.definition.is_none() && view.filters_open,
+                    "selection_filters_open": !view.auxiliary() && view.filters_open,
                     "panel_positions": crate::workspace_panels::inspect(&view.panels),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
@@ -1075,6 +1113,9 @@ mod live {
                 self.bind_editor_host(self.views.main);
                 return result;
             }
+            if matches!(id, "app.library_source" | "app.library_browse") {
+                return self.library_workspace_command(ctx, id, params);
+            }
             if id.starts_with("app.library_") {
                 return self.library_command(ctx, id, params);
             }
@@ -1113,11 +1154,10 @@ mod live {
                 None => None,
             };
             if let Some((view, _)) = view {
-                let definition = self.views.view(view).and_then(|view| view.definition);
-                if definition.is_none() && self.session.project().is_none() {
+                if !self.views.view(view).is_some_and(|v| v.auxiliary()) && self.session.project().is_none() {
                     return Err("No project is open.".into());
                 }
-                if definition.is_some()
+                if self.views.view(view).is_some_and(|v| v.auxiliary())
                     && !matches!(
                         id,
                         "view.focus"

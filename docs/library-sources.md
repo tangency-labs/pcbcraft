@@ -31,7 +31,7 @@ manager's implementation details each get their own design (see
 - **Explicit package assignment.** A shared schematic/PCB chooser assigns an
   exact footprint and a validated terminal-to-pad mapping to a part instance, then
   places it on the board as a separate step.
-- **Personal native sources.** Folder registration and uploaded bundles are
+- **Personal native sources.** The Library workspace, folder registration and bundle installation are
   described in [native-library-sources.md](native-library-sources.md). Conflicting
   content claiming the same identity and revision is reported, not chosen.
 - **Parts Catalog.** Search over bundled symbols and loaded native parts/symbols, in an

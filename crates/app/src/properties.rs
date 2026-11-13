@@ -457,7 +457,7 @@ impl PcbApp {
                             self.dialog = Dialog::EditFields(Box::new(edit));
                         }
                     }
-                    LibraryAction::Sources => self.dialog = Dialog::LibrarySources,
+                    LibraryAction::Sources => self.open_library_workspace(ctx),
                 }
             }
         } else if action.close {

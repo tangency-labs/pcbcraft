@@ -49,6 +49,7 @@ impl PcbApp {
         if placement == Placement::Here {
             if let Some(view) = self.views.view_mut(source) {
                 view.definition = None;
+                view.library = None;
                 view.release_input();
             }
             if let Some(project) = self.session.project() {

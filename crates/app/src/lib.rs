@@ -41,6 +41,7 @@ mod home;
 mod inline_text;
 mod library_editors;
 mod library_preview;
+mod library_workspace;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
 mod native_part_properties;
@@ -169,7 +170,8 @@ enum Dialog {
     #[default]
     None,
     NoConnects(Box<no_connect::Inspection>),
-    LibrarySources,
+    AddLibrary(Option<String>),
+    DeleteLibrary(native_sources::lifecycle::DeleteDraft),
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
@@ -321,6 +323,15 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             description: "Author footprint definitions and pads",
             tabs: Some("Draw · Library · View"),
             icon: workspace::WorkspaceIcon::Layout,
+            multiple_views: true,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "library",
+            title: "Library",
+            description: "Browse and manage native libraries",
+            tabs: Some("Manage · View"),
+            icon: workspace::WorkspaceIcon::Library,
             multiple_views: true,
             current: false,
         },
@@ -2104,8 +2115,9 @@ impl PcbApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::NoConnects(inspection) => self.no_connect_dialog(ctx, inspection),
-            Dialog::LibrarySources => self.library_sources_dialog(ctx),
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
+            Dialog::AddLibrary(source) => self.add_library_dialog(ctx, source),
+            Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
@@ -2423,6 +2435,11 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        if self.views.active.library.is_some() && !(main && self.home) {
+            self.library_workspace_frame(ui, integrated_titlebar);
+            self.editor_drag_cursor(&ctx);
+            return;
+        }
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
             self.editor_drag_cursor(&ctx);
