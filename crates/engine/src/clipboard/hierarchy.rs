@@ -300,7 +300,7 @@ impl Fragment {
             sheet.connectivity = Arc::default();
         }
         next.validate_hierarchy().map_err(invalid)?;
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         Ok((next, selected))
     }
 }
@@ -390,7 +390,7 @@ impl Session {
         next.sheet_index = root;
         next.named_graph = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }

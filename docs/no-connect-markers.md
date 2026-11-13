@@ -7,6 +7,20 @@ and physical board state. The electrical graph continues to come from wiring,
 named anchors and hierarchy; a marker never disconnects a wire or suppresses
 other checks.
 
+## Accepted interaction scope
+
+The [owner-requested acceptance requirements for #298](https://github.com/tangency-labs/pcbcraft/pull/298#issuecomment-6843727753)
+extend #285 to physical wire-end intent, ordinary selection/Delete, and blocking
+new wire attachments at placed marks. Dragging a wire-end X reuses the existing
+endpoint reshape gesture; broader junction-editor work remains with #82.
+
+The same native verification exposed missing selected-wire/group keyboard movement
+and conflated Move/Grab behavior. M moves selected owners and routes, disconnecting
+only contacts outside the selection; G retains external attachments. Internal
+selected contacts and marker ownership survive both operations. Group selection
+continues to represent whole wire routes. These are the required integration
+behaviors for this PR, with ordinary shared commands, cancellation and Undo/Redo.
+
 ## Identity and edits
 
 Each part instance owns sparse intent keyed by its exact logical terminal token,

@@ -1660,7 +1660,7 @@ impl PcbApp {
                 self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
             (None, Click::SelectLeg(leg)) => self.select_leg(leg),
-            (None, Click::MoveItems { items, origin, pickup, disconnect }) => {
+            (None | Some(Tool::Wire { start: None, .. }), Click::MoveItems { items, origin, pickup, disconnect }) => {
                 let whole_wire_drag = (pickup || self.views.active.schematic.whole_wire_drag) && items.single_wire().is_some();
                 self.select(items.clone());
                 self.views.active.schematic.whole_wire_drag = whole_wire_drag;

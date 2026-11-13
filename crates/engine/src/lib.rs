@@ -3214,15 +3214,7 @@ impl Session {
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
-        project.validate_no_connects().map_err(CommandError::InvalidParams)?;
-        if project.no_connect_count() != 0 {
-            if project.layout.is_none() {
-                project = project.with_board_folders(".").map_err(CommandError::InvalidParams)?;
-            }
-            if !project.has_sheet_occurrences() {
-                project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
-            }
-        }
+        project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }

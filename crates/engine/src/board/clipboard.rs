@@ -872,7 +872,7 @@ impl Session {
             transaction.apply(crate::DELETE_DRAWING, &json!({"board":target.board,"drawing":drawing,"expected_revision":transaction.revision()}))?;
         }
         let next = transaction.open_project()?.clone();
-        crate::clipboard::validate_candidate(&next)?;
+        let next = crate::clipboard::validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }
@@ -901,7 +901,7 @@ impl Session {
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(project, at, self.next_object_id()?, &options)?;
-        crate::clipboard::validate_candidate(&next)?;
+        let next = crate::clipboard::validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }

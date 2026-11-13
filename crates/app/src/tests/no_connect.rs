@@ -866,3 +866,29 @@ fn no_connect_activation_clears_previous_selection_and_peer_highlights() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), marked);
 }
+
+/// Native focus loss cancels an armed marker even though that frame disables canvas input;
+/// returning to the window cannot turn an ordinary click into a delayed marker placement.
+#[test]
+fn no_connect_focus_loss_cancels_before_disabled_input() {
+    let mut h = editor(1400., true);
+    h.state_mut().browser.open = false;
+    h.run();
+    let empty = h.get_by_label("Schematic canvas").rect().right_bottom() - egui::vec2(70., 70.);
+    h.hover_at(empty);
+    h.key_press(Key::Q);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NoConnect { .. })));
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    h.event(egui::Event::WindowFocused(false));
+    h.run();
+    assert!(h.state().views.active.schematic.tool.is_none());
+    h.event(egui::Event::WindowFocused(true));
+    h.run();
+    let at = pin(&h, 0);
+    click_canvas_at(&mut h, at);
+    assert_eq!(h.state().session.project().unwrap().check_no_connects(revision).total_markers, 0);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+}

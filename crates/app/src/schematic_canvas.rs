@@ -893,6 +893,9 @@ pub(crate) fn show(
         ));
     }
 
+    if matches!(tool, Some(Tool::NoConnect { .. })) && lost_focus {
+        return Some(Click::CancelNoConnect);
+    }
     if !input_enabled || (response.dragged() && !matches!(tool, Some(Tool::PlaceSymbol { .. }))) {
         return None;
     }
@@ -907,7 +910,7 @@ pub(crate) fn show(
         return Some(target.map_or(Click::BeginNoConnect, |target| Click::NoConnect(target, true)));
     }
     if matches!(tool, Some(Tool::NoConnect { .. })) {
-        if lost_focus || response.secondary_clicked() {
+        if response.secondary_clicked() {
             return Some(Click::CancelNoConnect);
         }
         // Accessible marker labels may own hover without taking canvas editing input.

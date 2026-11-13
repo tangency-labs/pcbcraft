@@ -407,3 +407,45 @@ fn group_move_and_grab_have_distinct_selection_boundary_behavior() {
         assert_same_content(&after, &h.state().session.snapshot().unwrap());
     }
 }
+
+/// G may replace a ready Wire tool with group Grab, but cannot steal a wire gesture after
+/// its source has been captured. Neither arming nor the blocked shortcut changes the model.
+#[test]
+fn group_grab_replaces_only_a_ready_wire_tool() {
+    for started in [false, true] {
+        let mut h = editor(1400., true, true);
+        let items = select_group(&mut h, true);
+        let before = h.state().session.snapshot().unwrap();
+        let at = screen(&h, point(-12, 14));
+        h.event(egui::Event::PointerGone);
+        h.key_press(Key::W);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        if started {
+            click_canvas_at(&mut h, at);
+        }
+        h.hover_at(at);
+        h.key_press(Key::G);
+        h.run();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        if started {
+            assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: Some(_), .. })));
+            h.key_press(Key::Escape);
+            h.run();
+        } else {
+            assert!(
+                matches!(&h.state().views.active.schematic.tool,Some(Tool::MoveItems{items:captured,pickup:true,disconnect:false,..}) if *captured==items)
+            );
+            let to = screen(&h, point(-6, 21));
+            h.hover_at(to);
+            h.run();
+            click_canvas_at(&mut h, to);
+            assert!(h.state().views.active.schematic.tool.is_none());
+            assert!(h.state().message.is_none(), "{:?}", h.state().message);
+            assert_eq!(h.state().session.project().unwrap().symbols()[0].position, point(6, 7));
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_same_content(&before, &h.state().session.snapshot().unwrap());
+    }
+}

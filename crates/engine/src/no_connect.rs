@@ -132,6 +132,24 @@ impl Report {
 }
 
 impl Project {
+    /// Validate marker ownership and adopt the metadata required to encode authored intent.
+    /// Marker-free legacy projects retain their representation. Call this on a disposable
+    /// candidate before codec validation or publication; errors leave the source snapshot intact.
+    pub(crate) fn prepare_no_connect_metadata(&mut self) -> Result<(), String> {
+        self.validate_no_connects()?;
+        if self.no_connect_count() == 0 {
+            return Ok(());
+        }
+        if self.layout.is_none() {
+            *self = self.with_board_folders(".")?;
+        }
+        if !self.has_sheet_occurrences() {
+            *self = self.with_sheet_occurrences()?;
+        }
+        self.numeric_id_high_water = Some(self.allocation_high_water());
+        Ok(())
+    }
+
     /// Enforce intent budgets at every publication/encoding boundary, including compound pastes.
     pub(crate) fn validate_no_connects(&self) -> Result<(), String> {
         if self.components.values().any(|part| part.no_connects.len() > 128 || part.no_connects.keys().any(|token| PinNumber::new(token).is_none()))

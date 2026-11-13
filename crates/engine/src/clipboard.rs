@@ -530,7 +530,7 @@ impl Session {
         }
         next.prune_junctions();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }
@@ -548,20 +548,22 @@ impl Session {
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }
 }
 
-/// Validate candidate geometry/assets before canonical net reconciliation. The previous registry
-/// can still name removed anchors here; the transaction validates its reconciled successor.
-pub(crate) fn validate_candidate(project: &Project) -> Result<(), CommandError> {
+/// Adopt required marker metadata and validate disposable geometry/assets before publication.
+/// Return the adopted candidate so the codec and transaction inspect the same occurrence IDs.
+/// The previous net registry can still name removed anchors; publication reconciles its successor.
+pub(crate) fn validate_candidate(mut project: Project) -> Result<Project, CommandError> {
+    project.prepare_no_connect_metadata().map_err(invalid)?;
     let mut geometry = project.clone();
     geometry.net_registry = Arc::default();
     let documents = crate::persistence::encode_documents(Arc::new(geometry)).map_err(invalid)?;
     crate::persistence::decode_documents(&documents).map_err(invalid)?;
-    Ok(())
+    Ok(project)
 }
 
 #[cfg(test)]
