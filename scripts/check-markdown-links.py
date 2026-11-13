@@ -14,9 +14,9 @@ from urllib.parse import unquote, urlsplit
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 REFERENCE_DEF = re.compile(r"^ {0,3}\[([^]\n]+)\]:\s*(<[^>\n]+>|\S+)")
-INLINE_START = re.compile(r"!?\[[^]\n]+\]\(")
+INLINE_START = re.compile(r"!?\[[^]\n]*\]\(")
 REFERENCE_USAGE = re.compile(r"!?\[([^]\n]+)\]\[([^]\n]*)\]")
-SHORTCUT_USAGE = re.compile(r"(?<!!)\[([^]\n]+)\]")
+SHORTCUT_USAGE = re.compile(r"!?\[([^]\n]+)\]")
 HTML_DEST = re.compile(r"\b(?:href|src)\s*=\s*([\"'])(.*?)\1", re.IGNORECASE)
 
 
@@ -62,8 +62,10 @@ def _visible_lines(text: str) -> list[str]:
             fence_char, fence_len = match.group(1)[0], len(match.group(1))
             result.append("")
         else:
-            result.append(_masked(line))
-    return result
+            result.append(line)
+    # Mask spans after joining the visible lines so backtick delimiters may
+    # enclose code across line breaks without changing diagnostic line numbers.
+    return _masked("\n".join(result)).split("\n")
 
 
 def _normalized(label: str) -> str:

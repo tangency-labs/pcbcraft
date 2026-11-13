@@ -43,6 +43,28 @@ class MarkdownLinkChecks(unittest.TestCase):
         self.assertEqual(self.check('[bad][ref]\n[ref]: ../missing.md\n'), [
             'docs/sub/check.md:1: missing local link target: ../missing.md'])
 
+    def test_empty_inline_link_and_image_labels_are_checked(self):
+        self.assertEqual(self.check('[](../missing.md)\n![](../missing.png)\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md',
+            'docs/sub/check.md:2: missing local link target: ../missing.png'])
+        self.assertEqual(self.check('[](../a.md) ![](../image%20with%20space.png)'), [])
+
+    def test_shortcut_image_reference_checks_target(self):
+        self.assertEqual(self.check('![diagram]\n[diagram]: ../missing.png\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.png'])
+        self.assertEqual(self.check('![diagram]\n[diagram]: <../image with space.png>\n'), [])
+
+    def test_multiline_inline_code_does_not_report_links(self):
+        self.assertEqual(self.check(
+            'This is `example\n[hidden](../missing.md)`\n[real](../a.md)\n'), [])
+        self.assertEqual(self.check(
+            'Start ``example\n![hidden](../missing.png)``\n'), [])
+
+    def test_multiline_inline_code_preserves_error_line_numbers(self):
+        self.assertEqual(self.check(
+            '`example\n[hidden](../missing.md)`\n[broken](../absent.md)\n'), [
+            'docs/sub/check.md:3: missing local link target: ../absent.md'])
+
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
             '[web](https://example.org/x) [email](mailto:help@example.org)\n'
