@@ -425,6 +425,7 @@ impl PcbApp {
     /// Inject one bounded frame before egui processes input. Keep it across logic-only callbacks;
     /// only an accepted host paint advances the queue. Physical input always takes precedence.
     pub(super) fn automation_input(&mut self, ctx: &egui::Context, input: &mut RawInput) {
+        pcbcraft_chrome::automation::mark_synthetic_input(ctx, false);
         if let Some((id, events, _)) = &self.automation.injected
             && *id == input.viewport_id
         {
@@ -485,6 +486,7 @@ impl PcbApp {
                 release.extend([Event::PointerMoved(pos), Event::PointerButton { pos, button, pressed: false, modifiers }, Event::PointerGone]);
             }
             self.automation.injected = Some((input.viewport_id, release.clone(), true));
+            pcbcraft_chrome::automation::mark_synthetic_input(ctx, true);
             release.append(&mut input.events);
             input.events = release;
             ctx.request_repaint_of(viewport(host));
@@ -497,6 +499,7 @@ impl PcbApp {
             input.events.push(Event::ModifiersChanged(job.modifiers));
             input.events.extend_from_slice(events);
             self.automation.injected = Some((input.viewport_id, input.events[start..].to_vec(), false));
+            pcbcraft_chrome::automation::mark_synthetic_input(ctx, true);
             for event in events {
                 if let Event::PointerButton { pos, button, pressed, .. } = event {
                     job.held = pressed.then_some((*button, *pos));

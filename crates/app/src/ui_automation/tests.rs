@@ -272,3 +272,14 @@ fn a_client_disconnected_before_acceptance_cannot_leave_queued_ui_input() {
     assert!(h.state().automation.last.is_null());
     assert!(h.state().views.active.schematic.tool.is_none());
 }
+
+/// Provenance covers every synthetic pass and cleanup, then clears for ordinary human input.
+#[test]
+fn synthetic_input_provenance_is_set_by_the_raw_adapter_and_cleared_afterward() {
+    let mut h = ready();
+    command(&mut h, "ui.key", json!({"window":0,"key":"W"})).unwrap();
+    tick(&mut h);
+    assert!(!pcbcraft_chrome::automation::human_input(&h.ctx));
+    tick(&mut h);
+    assert!(pcbcraft_chrome::automation::human_input(&h.ctx));
+}

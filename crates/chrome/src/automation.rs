@@ -13,11 +13,32 @@ pub struct Target {
     layer: LayerId,
 }
 
-/// Enable collection for an observed editor; ordinary drawing retains no target snapshots.
+/// Context storage is shared by native viewports; collection ownership must include the host.
+fn collection_key(ctx: &Context) -> egui::Id {
+    egui::Id::unique(("pcbcraft.named_targets", ctx.viewport_id()))
+}
+
+/// Mark the provenance of this viewport's current raw-input pass, including retained or cleanup
+/// batches. Only the host's raw-input adapter sets this flag; it is not client-controlled.
+pub fn mark_synthetic_input(ctx: &Context, synthetic: bool) {
+    let key = egui::Id::unique(("pcbcraft.synthetic_input", ctx.viewport_id()));
+    ctx.data_mut(|data| data.insert_temp(key, synthetic));
+}
+
+/// Whether UI handlers may treat this pass as human consent. Coordinate input and keyboard
+/// activation obey the same rule as named clicks; another viewport has independent provenance.
+pub fn human_input(ctx: &Context) -> bool {
+    let key = egui::Id::unique(("pcbcraft.synthetic_input", ctx.viewport_id()));
+    !ctx.data(|data| data.get_temp::<bool>(key)).unwrap_or(false)
+}
+
+/// Enable this viewport's collection; nested viewports must opt in independently. Ordinary
+/// drawing retains no target snapshots, and shared background layers never establish ownership.
 pub fn begin(ctx: &Context, enabled: bool) {
     solidcraft_ui_registry::clear_handles();
+    let key = collection_key(ctx);
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::unique("pcbcraft.named_targets"), enabled.then(Vec::<Target>::new));
+        data.insert_temp(key, enabled.then(Vec::<Target>::new));
     });
 }
 
@@ -35,8 +56,9 @@ pub fn publish_enabled(ui: &Ui, response: &Response, name: impl Into<String>, en
         return;
     }
     let name = name.into();
+    let key = collection_key(ui.ctx());
     ui.ctx().data_mut(|data| {
-        if let Some(targets) = data.get_temp_mut_or_default::<Option<Vec<Target>>>(egui::Id::unique("pcbcraft.named_targets")) {
+        if let Some(targets) = data.get_temp_mut_or_default::<Option<Vec<Target>>>(key) {
             solidcraft_ui_registry::publish_target(&name, rect);
             targets.push(Target { name, rect, enabled: enabled && response.enabled(), layer: response.layer_id });
         }
@@ -50,8 +72,9 @@ pub fn region(ui: &Ui, name: impl Into<String>, rect: Rect, enabled: bool) {
         return;
     }
     let name = name.into();
+    let key = collection_key(ui.ctx());
     ui.ctx().data_mut(|data| {
-        if let Some(targets) = data.get_temp_mut_or_default::<Option<Vec<Target>>>(egui::Id::unique("pcbcraft.named_targets")) {
+        if let Some(targets) = data.get_temp_mut_or_default::<Option<Vec<Target>>>(key) {
             solidcraft_ui_registry::publish_target(&name, rect);
             targets.push(Target { name, rect, enabled: enabled && ui.is_enabled(), layer: ui.layer_id() });
         }
@@ -61,7 +84,8 @@ pub fn region(ui: &Ui, name: impl Into<String>, rect: Rect, enabled: bool) {
 /// Snapshot this host after drawing. Exclude controls covered by a popup or modal at their
 /// click point, so a named click cannot accidentally hit the overlying control instead.
 pub fn targets(ctx: &Context) -> Vec<Target> {
-    ctx.data(|data| data.get_temp::<Option<Vec<Target>>>(egui::Id::unique("pcbcraft.named_targets")))
+    let key = collection_key(ctx);
+    ctx.data(|data| data.get_temp::<Option<Vec<Target>>>(key))
         .flatten()
         .unwrap_or_default()
         .into_iter()

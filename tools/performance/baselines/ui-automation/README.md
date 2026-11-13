@@ -31,3 +31,12 @@ input-to-photon, Wayland endurance, Windows or macOS claim is made. Input is
 limited to the original native window and split panes; detached windows expose
 lookup only, and specialized widgets may lack names. The user-facing contract is
 in [UI automation](../../../../docs/ui-automation.md).
+
+PR #325 review fixes add viewport-scoped collection and a human-consent boundary
+for Assistant controls. The `review-*` records identify this follow-up by source
+hashes on base `41c2509`; they do not replace the original baseline measurements.
+The affected app/chrome suites passed 890 tests with eight ignored, including
+regressions for detached Assistant lookup, synthetic approval clicks/Enter, global
+permission settings and a pre-opened agent permission popup. Clippy with warnings
+denied, formatting and the WebAssembly check passed. No performance or presentation
+measurements were repeated.

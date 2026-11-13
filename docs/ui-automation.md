@@ -102,3 +102,10 @@ UI input can reach save/close controls as well as undoable edits. In the
 Assistant's **Auto-allow project edits** mode, input commands therefore ask for
 approval; UI inspection and cancellation remain available in every mode. This
 uses the existing permission policy, not a separate automation permission switch.
+
+Synthetic passes disable the Assistant conversation controls and AI settings.
+Approval answers, permission changes and agent configuration require human input,
+including when a permission popup was already open. The host tracks input
+provenance per viewport, so coordinate clicks and keyboard activation follow the
+same consent rule as named clicks. Detached Assistant controls are not collected
+into an editor window's lookup.

@@ -15,6 +15,23 @@ use crate::editor_layout::HostId;
 
 mod pane_drag;
 
+/// A nested Assistant viewport does not begin editor collection and must not publish its
+/// window-local controls into the original editor's background layer.
+#[test]
+fn ui_automation_ignores_detached_assistant_targets() {
+    let (mut h, peers) = many_windows();
+    h.state_mut().automation.observing = true;
+    click(&mut h, "Assistant");
+    click(&mut h, "Pop out Assistant");
+    h.run_steps(3);
+    let child = peers.borrow().get(&ViewportId::from_hash_of("pcbcraft_assistant")).unwrap().clone();
+    child_rect(&child, "Dock Assistant");
+    let ctx = h.ctx.clone();
+    let root = h.state_mut().automation_command(&ctx, "ui.handles", &json!({"window":0})).unwrap();
+    assert!(!root["handles"].as_array().unwrap().iter().any(|target| target["name"] == "button:Dock Assistant"), "{root}");
+    assert!(h.state_mut().automation_command(&ctx, "ui.at", &json!({"window":0,"handle":"button:Dock Assistant"})).is_err());
+}
+
 /// Named geometry remains window-local even though immediate hosts share the toolkit registry.
 /// The pinned framework lacks the input hook for these child windows, which must refuse input.
 #[test]
