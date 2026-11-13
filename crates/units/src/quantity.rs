@@ -14,7 +14,7 @@ impl Quantity {
         }
         let text = text.trim();
         let (number, suffix) = text.split_at(number_end(text));
-        let suffix: String = suffix.chars().filter(|c| !c.is_whitespace()).collect();
+        let suffix: String = suffix.chars().filter(|c| !c.is_whitespace()).map(canonical_symbol).collect();
         let definition = self.definition();
         let shift = if suffix.is_empty() || definition.accepts(&suffix) {
             0
@@ -31,6 +31,17 @@ impl Quantity {
         };
         let value = normalized_decimal(number, shift)?;
         CanonicalQuantity::new(value, self.unit())
+    }
+}
+
+/// Replace the Ohm sign (U+2126) and Kelvin sign (U+212A) with Ω and K, the letters Unicode
+/// treats as their canonical equivalents. Pasted datasheet text and character pickers use the
+/// signs, which look identical to the letters this parser accepts; other characters pass through.
+fn canonical_symbol(c: char) -> char {
+    match c {
+        '\u{2126}' => 'Ω',
+        '\u{212a}' => 'K',
+        other => other,
     }
 }
 
