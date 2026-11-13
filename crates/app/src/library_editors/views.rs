@@ -96,7 +96,7 @@ impl PcbApp {
     /// Review selects a live pane with pending fields, or recovers a closed pane's retained
     /// fields into the current host. It never silently discards a second view's draft.
     pub(crate) fn review_library_edits(&mut self, ctx: &Context, requested: Option<u64>) {
-        let id = requested.or_else(|| self.library_editors.documents.iter().find(|(_, doc)| doc.unsaved()).map(|(id, _)| *id));
+        let id = requested.or_else(|| self.library_editors.documents.keys().find(|id| self.library_editors.document_unsaved(**id)).copied());
         let Some(id) = id else { return };
         let pending =
             self.library_editors.documents.get(&id).and_then(|doc| {

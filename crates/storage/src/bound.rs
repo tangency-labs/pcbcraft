@@ -164,6 +164,52 @@ impl Directory {
         return fs::rename(self.path.join(name), destination.path.join(new_name));
     }
 
+    /// Publish a complete staged file under an unused name. Hard-link creation is atomic and
+    /// refuses collisions on all supported hosts, without replacing an immutable revision.
+    pub(super) fn publish_new(&self, staged: &str, destination: &Self, name: &str) -> io::Result<()> {
+        component(staged)?;
+        component(name)?;
+        #[cfg(unix)]
+        rustix::fs::linkat(self.file.as_ref(), staged, destination.file.as_ref(), name, AtFlags::empty())?;
+        #[cfg(not(unix))]
+        fs::hard_link(self.path.join(staged), destination.path.join(name))?;
+        Ok(())
+    }
+
+    /// Open a reusable writable lock through its captured parent, refusing links and devices.
+    pub(super) fn lock_file(&self, name: &str) -> io::Result<File> {
+        component(name)?;
+        #[cfg(unix)]
+        let file = File::from(rustix::fs::openat(
+            self.file.as_ref(),
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )?);
+        #[cfg(not(unix))]
+        let file = {
+            let mut options = fs::OpenOptions::new();
+            options.read(true).write(true).create(true).truncate(false);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.custom_flags(0x00200000);
+            }
+            options.open(self.path.join(name))?
+        };
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("Lock is not a regular file"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if file.metadata()?.file_attributes() & 0x400 != 0 {
+                return Err(io::Error::other("Reparse-point lock refused"));
+            }
+        }
+        Ok(file)
+    }
+
     /// Remove a leaf entry rather than following it. Missing entries are already removed.
     pub(super) fn remove_file(&self, name: &str) -> io::Result<()> {
         component(name)?;

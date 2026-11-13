@@ -33,6 +33,14 @@ pub(super) struct State {
     footprint_camera: crate::library_preview::Camera,
 }
 impl State {
+    /// Authoring actions retain the exact selected revision rather than choosing the latest item.
+    pub(crate) fn selected_key(&self) -> Option<&Key> {
+        self.selected.as_ref()
+    }
+    /// Source capability belongs to the selected registration, independently of its display name.
+    pub(crate) fn source_id(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
     /// Selection changes reset both independent cameras exactly once, including when
     /// a command selects an item and configures its camera in the same request.
     fn sync_preview(&mut self) {
@@ -53,6 +61,7 @@ impl State {
 /// All source actions are shared by ribbon and future host command clients.
 #[derive(Clone, Copy, Debug)]
 enum Action {
+    NewLibrary,
     Add,
     Refresh,
     Relocate,
@@ -151,6 +160,8 @@ impl PcbApp {
             );
             if let Some(message) = self.message.as_ref() {
                 ui.label(egui::RichText::new(message).color(pcbcraft_chrome::Tokens::get().error));
+            } else if let Some(notice) = self.library_editors.notice() {
+                ui.label(notice);
             }
             let area = ui.available_rect_before_wrap();
             self.editor_workspace(ui, area);
@@ -215,6 +226,15 @@ impl PcbApp {
         ];
         let mut action = None;
         let mut acquisition = None;
+        let mut authoring_action = None;
+        let selected = self
+            .views
+            .active
+            .library
+            .as_ref()
+            .and_then(|state| state.selected.as_ref())
+            .is_some_and(|key| matches!(key.kind, Kind::Symbol | Kind::Footprint) && !self.session.libraries().conflicting(key));
+        let editable = selected && source.is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source));
         let response = workspace::ribbon(
             ui,
             "Parts Library",
@@ -257,40 +277,44 @@ impl PcbApp {
                     }
                 }
                 if shown == 0 {
-                    for (title, labels) in [
+                    for (group, title, labels) in [
                         (
+                            0,
                             "New",
-                            &[
-                                ("Library", ToolIcon::Shared("library"), "New library · Planned"),
-                                ("Symbol", ToolIcon::Symbol, "New symbol · Planned"),
-                                ("Footprint", ToolIcon::Footprint, "New footprint · Planned"),
-                                ("Generic part", ToolIcon::Bom, "New generic part · Planned"),
-                            ][..],
+                            vec![
+                                ("Library", ToolIcon::Shared("library"), "Create native library", idle && !crate::IN_BROWSER),
+                                ("Symbol", ToolIcon::Symbol, "New symbol", true),
+                                ("Footprint", ToolIcon::Footprint, "New footprint", true),
+                                ("Generic part", ToolIcon::Bom, "New generic part · Planned", false),
+                            ],
                         ),
                         (
+                            1,
                             "Item",
-                            &[
-                                ("Edit", ToolIcon::Shared("edit"), "Edit item · Planned"),
-                                ("Edit copy", ToolIcon::Shared("copy"), "Edit copy · Planned"),
-                                ("Compare", ToolIcon::Shared("compare"), "Compare items · Planned"),
-                            ][..],
+                            vec![
+                                ("Edit", ToolIcon::Shared("edit"), "Edit published item", editable),
+                                ("Edit copy", ToolIcon::Shared("copy"), "Edit a copy under a new identity", selected),
+                                ("Compare", ToolIcon::Shared("compare"), "Compare items · Planned", false),
+                            ],
                         ),
-                        ("Share", &[("Export", ToolIcon::Shared("export"), "Export library item · Planned")][..]),
+                        (2, "Share", vec![("Export", ToolIcon::Shared("export"), "Export library item · Planned", false)]),
                     ] {
                         workspace::ribbon_separator(ui);
-                        let planned: Vec<_> = labels
+                        let entries: Vec<_> = labels
                             .iter()
-                            .map(|(label, icon, description)| RibbonTool {
+                            .map(|(label, icon, description, enabled)| RibbonTool {
                                 icon: *icon,
                                 label,
                                 description,
                                 shortcut: "",
-                                enabled: false,
+                                enabled: *enabled,
                                 active: false,
                                 menu_check: None,
                             })
                             .collect();
-                        workspace::ribbon_group(ui, title, &planned);
+                        if let Some(index) = workspace::ribbon_group(ui, title, &entries) {
+                            authoring_action = Some(if group == 0 { index } else { index + 3 });
+                        }
                     }
                 }
             },
@@ -303,6 +327,18 @@ impl PcbApp {
         }
         if let Some(folder) = acquisition {
             self.message = self.acquire_library(ui.ctx(), None, folder).err();
+        }
+        if let Some(action) = authoring_action {
+            match action {
+                0 => self.message = self.library_source_action(ui.ctx(), Action::NewLibrary, None).err(),
+                1 | 2 => self.new_library_item(if action == 1 {
+                    pcbcraft_engine::authoring::Kind::Symbol
+                } else {
+                    pcbcraft_engine::authoring::Kind::Footprint
+                }),
+                3 | 4 => self.message = self.edit_catalog_selection(ui.ctx(), action == 4).err(),
+                _ => {}
+            }
         }
         if let Some(action) = action {
             let source = self.views.active.library.as_ref().and_then(|s| s.source.clone());
@@ -332,6 +368,16 @@ impl PcbApp {
         }
         self.repaint_editors(ctx);
         match action {
+            Action::NewLibrary => {
+                if crate::IN_BROWSER {
+                    return Err("Native library creation is desktop-only.".into());
+                }
+                if self.library_mutation_busy() || self.library_sources.busy() || self.library_editors.busy() {
+                    return Err("Finish the current library operation first.".into());
+                }
+                self.dialog = Dialog::NewLibrary(Default::default());
+                Ok(())
+            }
             Action::Add => {
                 self.dialog = Dialog::AddLibrary(None);
                 Ok(())
@@ -393,6 +439,7 @@ impl PcbApp {
         }
         if id == "app.library_source" {
             let action = match params["action"].as_str() {
+                Some("new") => Action::NewLibrary,
                 Some("add") => Action::Add,
                 Some("refresh") => Action::Refresh,
                 Some("relocate") => Action::Relocate,
@@ -407,6 +454,13 @@ impl PcbApp {
             self.bind_editor_host(host);
             self.activate_editor(ctx, view);
             let result = self.library_source_action(ctx, action, source);
+            self.bind_editor_host(self.views.main);
+            return result;
+        }
+        if id == "app.library_catalog_edit" {
+            self.bind_editor_host(host);
+            self.activate_editor(ctx, view);
+            let result = self.edit_catalog_selection(ctx, params["copy"] == true);
             self.bind_editor_host(self.views.main);
             return result;
         }
@@ -426,13 +480,20 @@ impl PcbApp {
         let state = self.views.view(view).and_then(|v| v.library.as_ref()).ok_or("Library pane is unavailable")?;
         let source = source.or_else(|| state.source.clone());
         let kind = params["type"].as_u64().map(|n| n as usize).unwrap_or(state.kind);
+        if params.get("definition_revision").is_some() && params.get("item").is_none() {
+            return Err("An exact revision requires an item ID.".into());
+        }
         let selected = if let Some(item) = params["item"].as_str() {
             Some(
                 self.session
                     .libraries()
                     .source_items(source.as_deref().unwrap_or(""))
                     .iter()
-                    .filter(|i| i.key.id == item && (kind == 0 || kind_index(i.key.kind) == kind))
+                    .filter(|i| {
+                        i.key.id == item
+                            && (kind == 0 || kind_index(i.key.kind) == kind)
+                            && params["definition_revision"].as_u64().is_none_or(|revision| u64::from(i.key.revision) == revision)
+                    })
                     .max_by_key(|i| i.key.revision)
                     .ok_or("Item is unavailable for this source and Type")?
                     .key
@@ -624,7 +685,7 @@ impl PcbApp {
                         }
                     }
                     if state.source.as_ref() == Some(id) {
-                        if let Some(status) = status {
+                        if let Some(status) = status.filter(|status| *status != "Available") {
                             ui.label(egui::RichText::new(status).color(if matches!(status, "Needs reopening" | "Loading…") {
                                 pcbcraft_chrome::Tokens::get().text_dim
                             } else {

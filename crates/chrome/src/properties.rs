@@ -79,6 +79,27 @@ pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, option
     .inner
 }
 
+/// Compose a value selector with one creation action using the shared dropdown and aligned
+/// menu rows. The host owns the selected key and handles creation after the popup dismisses.
+pub fn choice_with_action(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)], action: &str) -> bool {
+    let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, name)| name.as_str()).unwrap_or("Choose library…");
+    let mut create = false;
+    field(ui, label, |ui| {
+        crate::controls::Choice::from_id_salt(id).selected_text(selected).width(ui.available_width()).show_ui(ui, |ui| {
+            for (key, name) in options {
+                if crate::MenuItem::new(name).choice(*key == value.as_str()).show(ui) {
+                    *value = (*key).into();
+                }
+            }
+            if !options.is_empty() {
+                ui.separator();
+            }
+            create = crate::MenuItem::new(action).show(ui);
+        });
+    });
+    create
+}
+
 /// Align a typed selector with the inspector's text fields, using the full value column and shared control height.
 pub fn select(ui: &mut Ui, label: &str, id: egui::Id, selected: &str, add: impl FnOnce(&mut Ui)) -> egui::Response {
     let t = Tokens::get();

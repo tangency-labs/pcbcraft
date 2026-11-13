@@ -1288,3 +1288,17 @@ metrics. PCBcraft retains its original electronics glyphs and accessible picker
 response, with wrapped titles composed inside the existing Craft card. The
 shared toolkit's retained Brand and Interface notice continues to apply; no
 source implementation, asset or dependency was added.
+
+## Native library publication
+
+The filesystem-free draft preparation, published-session binding, reserved external
+library identities and immutable native-folder publication are original PCBcraft
+work for #308 under MIT OR Apache-2.0. They reuse existing native record formats,
+original connector/header fixtures, bounded source validation and verified directory
+handles. New library and Publish forms compose the pinned Craft property-form,
+fields, choices and fixed action footer through `crates/chrome`; authoring actions
+reuse the app's menus, ribbon and workspace host. The existing value-only selector has no creation action, so chrome composes the
+shared dropdown and aligned menu rows for collection selection and New library.
+Save As copies and destination/status presentation follow @travle1's explicit
+workflow clarification. No dependency, external EDA implementation, artwork or
+library asset was introduced.

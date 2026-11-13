@@ -2,6 +2,9 @@
 #[cfg(test)]
 mod basics_tests;
 mod operations;
+pub mod publishing;
+#[cfg(test)]
+mod publishing_tests;
 use crate::{
     board::definition as footprint,
     library,
@@ -446,6 +449,17 @@ impl Item {
 
     /// Fork an exact symbol under a new identity, leaving its source and placed copies unchanged.
     pub fn from_symbol(definition: &SymbolDefinition) -> Result<Self, String> {
+        Self::read_symbol(definition, true)
+    }
+
+    /// Reconstruct a published symbol without migrating its drawing or changing terminal/unit IDs.
+    /// Primitive IDs are allocated in native unit, pin and drawing order for this session.
+    pub fn edit_symbol(definition: &SymbolDefinition) -> Result<Self, String> {
+        Self::read_symbol(definition, false)
+    }
+
+    /// Share reconstruction with explicit forks, limiting legacy lead integration to the copy path.
+    fn read_symbol(definition: &SymbolDefinition, fork: bool) -> Result<Self, String> {
         let mut item = Self::new(Kind::Symbol)?;
         item.objects.clear();
         item.name = format!("{} copy", definition.name).chars().take(64).collect();
@@ -480,7 +494,7 @@ impl Item {
                         name: pin.name.clone(),
                         electrical_type: pin.electrical_type,
                         at: pin.offset,
-                        appearance: pin.appearance.clone().or_else(|| operations::legacy_pin(unit, pin, &mut consumed)),
+                        appearance: pin.appearance.clone().or_else(|| fork.then(|| operations::legacy_pin(unit, pin, &mut consumed)).flatten()),
                     },
                 );
             }
@@ -504,6 +518,14 @@ impl Item {
         item.objects = item.other_units.remove(&item.unit).ok_or("Missing default symbol unit.")?;
         if !item.other_units.is_empty() {
             item.format = MULTI_UNIT_FORMAT.into();
+        }
+        if !fork {
+            item.library = definition.library.clone();
+            item.id = definition.id.clone();
+            item.name = definition.name.clone();
+            item.revision = definition.revision();
+            item.allocation.revision = item.revision;
+            item.source = format!("Published {}/{} r{}", item.library, item.id, item.revision);
         }
         item.validate()?;
         Ok(item)
@@ -531,6 +553,19 @@ impl Item {
             item.objects.insert(item.objects.len() as u64 + 1, primitive);
         }
         item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(0);
+        item.validate()?;
+        Ok(item)
+    }
+
+    /// Reopen an exact footprint, numbering primitives deterministically and retaining pad IDs.
+    pub fn edit_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
+        let mut item = Self::from_footprint(definition)?;
+        item.library = definition.library.clone();
+        item.id = definition.id.clone();
+        item.name = definition.name.clone();
+        item.source = definition.source.reference.clone();
+        item.revision = definition.revision;
+        item.allocation.revision = item.revision;
         item.validate()?;
         Ok(item)
     }
@@ -728,6 +763,8 @@ pub struct Session {
     revision: u64,
     next_id: u64,
     next_content_revision: u32,
+    published: Option<publishing::Address>,
+    publication_saved: Option<Arc<Item>>,
 }
 
 impl Session {
@@ -737,7 +774,17 @@ impl Session {
         let next_id = item.allocation.object.checked_add(1).ok_or("Primitive ID limit reached.")?;
         let next_content_revision = item.allocation.revision.checked_add(1).ok_or("Content revision limit reached.")?;
         let item = Arc::new(item);
-        Ok(Self { saved: saved.then(|| item.clone()), item, undo: Vec::new(), redo: Vec::new(), revision: 0, next_id, next_content_revision })
+        Ok(Self {
+            saved: saved.then(|| item.clone()),
+            item,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: 0,
+            next_id,
+            next_content_revision,
+            published: None,
+            publication_saved: None,
+        })
     }
     /// Retain immutable data for rendering or an in-flight save.
     pub fn snapshot(&self) -> Arc<Item> {
@@ -929,7 +976,7 @@ impl Session {
     }
     /// Report document and primitive identities used by the GUI and live tools.
     pub fn inspect(&self) -> Value {
-        json!({"revision":self.revision,"dirty":self.dirty(),"saved_content_revision":self.saved.as_ref().map(|item|item.revision),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"item":self.item.as_ref()})
+        json!({"revision":self.revision,"dirty":self.dirty(),"published":self.published,"publication_dirty":self.publication_dirty(),"saved_content_revision":self.saved.as_ref().map(|item|item.revision),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"item":self.item.as_ref()})
     }
 }
 

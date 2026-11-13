@@ -37,7 +37,7 @@ enum Outcome {
 impl PcbApp {
     /// Source writes/deletion never overlap a source reader or another destructive operation.
     pub(crate) fn library_mutation_busy(&self) -> bool {
-        self.library_sources.mutation.is_some()
+        self.library_sources.mutating() || self.library_editors.publisher.busy()
     }
     /// Command and ribbon-caption acquisition choices use the standard menu surface.
     /// Pointer position is captured once so the menu remains anchored while it is open.

@@ -75,6 +75,11 @@ pub fn file<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerRespon
     })
 }
 
+/// Definition actions use the same anchored menu surface, rows and keyboard routing as File.
+pub fn library<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    top(ui, "Library", add)
+}
+
 /// Draw the ? button and, while it is open, the Help menu under it, on the same surface and rows
 /// as File. Returns the content's value while the menu shows. Picking a row closes it.
 pub fn help<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {

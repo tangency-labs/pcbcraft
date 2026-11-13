@@ -32,6 +32,8 @@ pub const SEARCH: &str = "library.search";
 pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
 pub const PARSE_QUANTITY: &str = "library.parse_quantity";
+/// Prepare validated native revision documents; only a host can confirm a durable publication.
+pub const PREPARE_PUBLICATION: &str = "library.prepare_publication";
 
 /// Accept missing legacy attribution only when every definition field otherwise matches.
 /// Complete source definitions still compare their full content, including provenance.
@@ -64,7 +66,39 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 6] = [
+pub(crate) const COMMANDS: [Command; 7] = [
+    Command {
+        id: PREPARE_PUBLICATION,
+        title: "Prepare library publication",
+        summary: "Validate a captured authoring draft and return immutable native documents. No files are written and no save is confirmed.",
+        params: &[
+            Param { name: "item", summary: "Captured native authoring envelope", required: true, kind: ParamKind::AuthoringItem },
+            Param {
+                name: "documents",
+                summary: "Transported destination documents including library.json; no filesystem paths",
+                required: true,
+                kind: ParamKind::LibraryDocuments,
+            },
+            Param {
+                name: "base_revision",
+                summary: "Published revision on which this edit is based",
+                required: false,
+                kind: ParamKind::DefinitionRevision,
+            },
+            Param {
+                name: "allow_older",
+                summary: "Confirm that publishing an older edit may omit intervening changes",
+                required: false,
+                kind: ParamKind::Flag,
+            },
+            Param {
+                name: "copy",
+                summary: "Prepare a derivative under a new identity, preserving the original published item",
+                required: false,
+                kind: ParamKind::Flag,
+            },
+        ],
+    },
     Command {
         id: LOAD,
         title: "Load library source",
@@ -289,6 +323,9 @@ impl NativeSource {
         check_documents(documents)?;
         let manifest =
             parse_manifest(documents.get("library.json").ok_or("library.json: missing manifest")?).map_err(|e| format!("library.json: {e}"))?;
+        if manifest.id.starts_with("project-") {
+            return Err("library.json: project- library IDs are reserved for pinned project records".into());
+        }
         let mut source = Self { library: manifest.id, name: manifest.name, license: manifest.license, items: Vec::new(), problems: Vec::new() };
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
             match source.parse_item(path, text) {
@@ -496,6 +533,16 @@ pub fn manufacturer_digest(part: &ManufacturerPart) -> String {
     format!("{:x}", Sha256::digest(serde_json::to_value(part).unwrap_or(Value::Null).to_string().as_bytes()))
 }
 impl Catalog {
+    /// Keep allocation above every known revision, including unavailable or quarantined copies.
+    pub fn highest_revision(&self, library: &str, kind: Kind, id: &str) -> u32 {
+        self.sources
+            .values()
+            .flat_map(|source| &source.items)
+            .filter(|item| item.key.library == library && item.key.kind == kind && item.key.id == id)
+            .map(|item| item.key.revision)
+            .max()
+            .unwrap_or(0)
+    }
     /// Resolve an exact item, refusing missing, conflicting and unavailable definitions without fallback.
     fn exact(&self, reference: &Reference, kind: Kind) -> Result<&Item, String> {
         reference.validate()?;
@@ -808,6 +855,38 @@ impl Session {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
         match id {
+            PREPARE_PUBLICATION => {
+                let fail = CommandError::InvalidParams;
+                let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;
+                let documents: Documents = serde_json::from_value(params["documents"].clone()).map_err(|e| fail(e.to_string()))?;
+                let destination = NativeSource::load(&documents).map_err(fail)?;
+                let kind = if item.kind == crate::authoring::Kind::Symbol { Kind::Symbol } else { Kind::Footprint };
+                let latest = destination
+                    .items()
+                    .iter()
+                    .filter(|record| record.key.kind == kind && record.key.id == item.id)
+                    .map(|record| record.key.revision)
+                    .max()
+                    .unwrap_or(0)
+                    .max(self.libraries.highest_revision(destination.library(), kind, &item.id));
+                if params["copy"] == true {
+                    return crate::authoring::publishing::prepare_copy(
+                        Arc::new(item),
+                        documents.get("library.json").ok_or_else(|| fail("Missing library manifest".into()))?,
+                    )
+                    .map(|prepared| prepared.inspect())
+                    .map_err(fail);
+                }
+                crate::authoring::publishing::prepare(
+                    Arc::new(item),
+                    documents.get("library.json").ok_or_else(|| fail("Missing library manifest".into()))?,
+                    latest,
+                    params["base_revision"].as_u64().map(|n| n as u32),
+                    params["allow_older"] == true,
+                )
+                .map(|prepared| prepared.inspect())
+                .map_err(fail)
+            }
             LOAD => {
                 let documents: Documents =
                     serde_json::from_value(params["documents"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;

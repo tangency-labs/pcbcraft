@@ -94,6 +94,7 @@ enum ParamKind {
     NetLabelId,
     LibrarySource,
     LibraryDocuments,
+    AuthoringItem,
     LibraryQuery,
     LibraryKind,
     LibraryQuantity,
@@ -199,6 +200,9 @@ impl ParamKind {
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
+            }
+            Self::AuthoringItem => {
+                json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
             }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
@@ -401,11 +405,13 @@ impl ParamKind {
             Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
+            Self::AuthoringItem if serde_json::to_vec(value).is_ok_and(|bytes| authoring::Item::decode(&bytes).is_ok()) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
             Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
             Self::LibraryQuantity => Err("must name a supported physical quantity"),
@@ -1607,6 +1613,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[3],
     library::sources::COMMANDS[4],
     library::sources::COMMANDS[5],
+    library::sources::COMMANDS[6],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2334,7 +2341,8 @@ impl Session {
             | library::sources::LIST
             | library::sources::SEARCH
             | library::sources::RESOLVE_PART
-            | library::sources::PARSE_QUANTITY => true,
+            | library::sources::PARSE_QUANTITY
+            | library::sources::PREPARE_PUBLICATION => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),

@@ -380,7 +380,7 @@ mod live {
                     name: "action",
                     summary: "Source operation",
                     required: true,
-                    kind: Kind::Choice(&["add", "refresh", "relocate", "remove", "delete"]),
+                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete"]),
                 },
                 Param { name: "source", summary: "Registration ID, defaults to selected source", required: false, kind: Kind::Name },
             ],
@@ -401,6 +401,12 @@ mod live {
                 },
                 Param { name: "item", summary: "Item ID within selected source and Type", required: false, kind: Kind::Name },
                 Param {
+                    name: "definition_revision",
+                    summary: "Exact published revision; requires item, defaults to latest",
+                    required: false,
+                    kind: Kind::Integer { min: 1, max: u32::MAX as i64, step: 1 },
+                },
+                Param {
                     name: "preview",
                     summary: "Independent read-only geometry camera",
                     required: false,
@@ -417,6 +423,43 @@ mod live {
             title: "New Library Item",
             summary: "Create an independent symbol or footprint definition workspace without editing project instances.",
             params: &[Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_catalog_edit",
+            title: "Open Published Library Item",
+            summary: "Edit the exact selected symbol or footprint in a Parts Library pane; copy explicitly creates a derivative identity.",
+            params: &[
+                VIEW,
+                Param { name: "copy", summary: "Create a copy instead of retaining the published address", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_publish",
+            title: "Publish Library Item",
+            summary: "Publish a captured editor draft to a registered writable native source. No arbitrary filesystem paths; host confirmation binds its identity.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current authoring document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "source", summary: "Registered writable destination source ID", required: true, kind: Kind::Name },
+                Param {
+                    name: "allow_older",
+                    summary: "Confirm publishing an older edit may omit intervening changes",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+                Param {
+                    name: "copy",
+                    summary: "Publish under a new item identity; a different library always creates a copy",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_copy",
+            title: "Copy Library Draft",
+            summary: "Create a derivative draft under a fresh item identity using the same editor Edit copy action.",
+            params: &[Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument }],
         },
         WindowCommand {
             id: "app.library_fork_selected",
@@ -1032,6 +1075,7 @@ mod live {
             "message": app.message,
             "windows": windows,
             "library_editors":app.library_editors.inspect(),
+            "library_destinations":app.inspect_library_destinations(),
             "views": views,
             "arrangements": {
                 "active": app.arrangements.active(),
@@ -1125,7 +1169,7 @@ mod live {
                 self.bind_editor_host(self.views.main);
                 return result;
             }
-            if matches!(id, "app.library_source" | "app.library_browse") {
+            if matches!(id, "app.library_source" | "app.library_browse" | "app.library_catalog_edit") {
                 return self.library_workspace_command(ctx, id, params);
             }
             if id.starts_with("app.library_") {

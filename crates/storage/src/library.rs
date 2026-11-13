@@ -1,11 +1,20 @@
 //! Read-only, bounded native library folders. Call from a worker, never the editor loop.
 use pcbcraft_engine::library::sources::{Documents, MAX_FILE_BYTES, MAX_FILES, MAX_SOURCE_BYTES, NativeSource, is_document_path};
 use std::{fs, io::Read, path::Path};
+pub mod publishing;
 
 /// Read only library.json and flat native item directories. Symlinks and special
 /// files are refused. Bad item files become individual diagnostics; a bad manifest or source
 /// exceeding aggregate bounds fails without returning a partial snapshot. No locks or writes occur.
 pub fn load(root: &Path) -> Result<NativeSource, String> {
+    let (documents, problems) = read_documents(root)?;
+    let mut source = NativeSource::load(&documents)?;
+    source.add_adapter_problems(problems);
+    Ok(source)
+}
+
+/// Retain bounded original text for pre-publication capacity checks without re-encoding prior revisions.
+fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
     let metadata = fs::symlink_metadata(root).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
         return Err("Library source must be a directory, not a symlink or special file".into());
@@ -57,9 +66,7 @@ pub fn load(root: &Path) -> Result<NativeSource, String> {
             }
         }
     }
-    let mut source = NativeSource::load(&documents)?;
-    source.add_adapter_problems(problems);
-    Ok(source)
+    Ok((documents, problems))
 }
 
 /// Bound regular-file reads even if a file grows after metadata was checked; invalid UTF-8 fails.
