@@ -229,6 +229,12 @@ impl Automation {
         self.job.is_some()
     }
 
+    /// Only an injected held button (or its pending release) owns an editor pointer gesture.
+    /// An idle or accepted-but-unstarted operation must not clear the person's previews.
+    fn owns_pointer_gesture(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| job.held.is_some()) || self.release.as_ref().is_some_and(|(_, button, _)| button.is_some())
+    }
+
     /// Retain a failure and schedule an off-window button release, which cannot activate a control.
     fn cancel(&mut self, reason: &str) {
         self.cancel_after_paint = false;
@@ -271,8 +277,11 @@ impl PcbApp {
         let host = self.views.host;
         let released = self.automation.injected.as_ref().is_some_and(|(id, _, releasing)| *id == viewport(host) && *releasing);
         if self.automation.cancel_after_paint && self.automation.job.as_ref().is_some_and(|job| job.host == host) {
+            let owned = self.automation.owns_pointer_gesture();
             self.automation.cancel("Cancelled by client after the in-flight UI pass");
-            self.views.cancel_gestures();
+            if owned {
+                self.views.cancel_gestures();
+            }
         }
         if self.automation.injected.as_ref().is_some_and(|(id, _, _)| *id == viewport(host)) {
             self.automation.injected = None;
@@ -329,8 +338,11 @@ impl PcbApp {
                 if self.automation.job.as_ref().is_some_and(|job| job.issued) {
                     self.automation.cancel_after_paint = true;
                 } else {
+                    let owned = self.automation.owns_pointer_gesture();
                     self.automation.cancel("Cancelled by client");
-                    self.views.cancel_gestures();
+                    if owned {
+                        self.views.cancel_gestures();
+                    }
                 }
             }
             self.repaint_editors(ctx);
@@ -395,6 +407,9 @@ impl PcbApp {
         }
         if !snapshot.focused {
             return Err("Focus the addressed editor window before sending UI input".into());
+        }
+        if ctx.input(|input| input.pointer.any_down()) {
+            return Err("Release held pointer buttons before sending UI input".into());
         }
         if self.files.busy() {
             return Err("Wait for the current file operation before sending UI input".into());
@@ -469,12 +484,17 @@ impl PcbApp {
                 Some("Named input target moved, became disabled or was covered")
             } else if input.viewport_id == viewport(job.host) && input.events.iter().any(physical_input) {
                 Some("Physical input interrupted automation")
+            } else if input.viewport_id == viewport(job.host) && job.held.is_none() && ctx.input(|input| input.pointer.any_down()) {
+                Some("A held physical pointer button interrupted automation")
             } else {
                 None
             };
             if let Some(reason) = invalid {
+                let owned = self.automation.owns_pointer_gesture();
                 self.automation.cancel(reason);
-                self.views.cancel_gestures();
+                if owned {
+                    self.views.cancel_gestures();
+                }
             }
         }
         if let Some((host, button, modifiers)) = self.automation.release

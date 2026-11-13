@@ -2277,7 +2277,8 @@ impl PcbApp {
         }
     }
 
-    /// Enable or revoke a connection for this window and copy its client configuration on request.
+    /// Require human input to enable a connection or export its credential-bearing configuration.
+    /// Synthetic input may still revoke the endpoint or close this dialog.
     #[cfg(not(target_arch = "wasm32"))]
     fn local_mcp_dialog(&mut self, ctx: &egui::Context, mut error: Option<String>, mut copied: bool) {
         let mut close = false;
@@ -2286,7 +2287,14 @@ impl PcbApp {
                 ui.label("Clients with this configuration can inspect and edit this project and control its editor windows.");
                 let disable = ui
                     .horizontal(|ui| {
-                        if pcbcraft_chrome::controls::button(ui, if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
+                        if pcbcraft_chrome::controls::enabled_button(
+                            ui,
+                            pcbcraft_chrome::automation::human_input(ctx),
+                            if copied { "Configuration copied" } else { "Copy configuration" },
+                        )
+                        .clicked()
+                            && pcbcraft_chrome::automation::human_input(ctx)
+                        {
                             ctx.copy_text(control.client_configuration());
                             copied = true;
                         }
@@ -2299,7 +2307,9 @@ impl PcbApp {
                 }
             } else {
                 ui.label("Let a local MCP client inspect and edit this project and control its editor windows.");
-                if pcbcraft_chrome::controls::button(ui, "Enable local connection").clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, pcbcraft_chrome::automation::human_input(ctx), "Enable local connection").clicked()
+                    && pcbcraft_chrome::automation::human_input(ctx)
+                {
                     match live_control::LiveControl::start(ctx) {
                         Ok(control) => {
                             self.live_control = Some(control);

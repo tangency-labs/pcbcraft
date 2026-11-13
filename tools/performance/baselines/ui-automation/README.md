@@ -47,3 +47,10 @@ and passes after it, checking that synthetic Enter leaves the draft, prompts,
 messages and turn unchanged while human Enter still sends. All six focused
 synthetic-input tests and app Clippy passed; these are functional checks without
 new performance or presentation measurements.
+
+The `review-third*` records cover connection enable/export consent, idle cancellation,
+held physical pointer admission and deterministic disconnect readiness on base
+`96643a9`. Three behavior regressions fail before the fixes. The app suite passed
+867 tests (eight ignored); the strengthened socket fixture passed separately,
+along with final app Clippy, formatting and the WebAssembly check. These records
+add no performance or presentation qualification.

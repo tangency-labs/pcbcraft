@@ -249,28 +249,45 @@ fn cancellation_during_an_inflight_button_pass_cannot_recreate_and_commit_a_drag
 }
 
 #[test]
-fn a_client_disconnected_before_acceptance_cannot_leave_queued_ui_input() {
-    use craft_control::loopback::{Connection, Token};
+fn idle_cancel_preserves_the_persons_wire_tool_and_draft() {
     let mut h = ready();
-    let live = h.state().live_control.as_ref().unwrap();
-    let token = Token::parse(live.secret()).unwrap();
-    let client = Connection::connect(
-        live.port(),
-        &token,
-        json!({"method":"engine.execute","params":{"command":"ui.key","params":{"window":0,"key":"W"}}}),
-        Duration::from_secs(2),
-    )
-    .unwrap();
-    drop(client);
-    // Do not run the editor while the bounded socket worker observes EOF. This is longer than
-    // its 20 ms sampling interval and does not depend on a rendering/event-loop race.
-    std::thread::sleep(Duration::from_millis(100));
-    for _ in 0..4 {
-        tick(&mut h);
+    h.state_mut().views.active.schematic.tool = Some(crate::Tool::Wire { revision: h.state().session.revision(), start: None });
+    h.state_mut().views.active.schematic.wire_draft.horizontal_first = false;
+    command(&mut h, "ui.cancel", json!({})).unwrap();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Wire { .. })));
+    assert!(!h.state().views.active.schematic.wire_draft.horizontal_first);
+}
+
+/// A stationary physical press remains owned by the person, including a press that arrives
+/// between admission and injection. Cancellation must leave its held state and gesture intact.
+#[test]
+fn stationary_held_buttons_block_automation_without_cancelling_the_persons_gesture() {
+    for before_admission in [true, false] {
+        let mut h = ready();
+        let at = symbol(&h);
+        if !before_admission {
+            command(&mut h, "ui.key", json!({"window":0,"key":"W"})).unwrap();
+        }
+        h.input_mut().events.extend([
+            Event::PointerMoved(at),
+            Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        ]);
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(at + egui::vec2(40.0, 0.0)));
+        h.step();
+        assert!(h.ctx.input(|input| input.pointer.any_down()));
+        assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Move { .. })));
+        let before = h.state().session.inspect();
+        if before_admission {
+            assert!(command(&mut h, "ui.key", json!({"window":0,"key":"W"})).unwrap_err().contains("held"));
+        } else {
+            tick(&mut h);
+            assert_eq!(h.state().automation.status()["state"], "cancelled");
+        }
+        assert!(h.ctx.input(|input| input.pointer.any_down()));
+        assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Move { .. })));
+        assert_eq!(h.state().session.inspect(), before);
     }
-    assert!(h.state().automation.job.is_none());
-    assert!(h.state().automation.last.is_null());
-    assert!(h.state().views.active.schematic.tool.is_none());
 }
 
 /// Provenance covers every synthetic pass and cleanup, then clears for ordinary human input.
@@ -282,4 +299,51 @@ fn synthetic_input_provenance_is_set_by_the_raw_adapter_and_cleared_afterward() 
     assert!(!pcbcraft_chrome::automation::human_input(&h.ctx));
     tick(&mut h);
     assert!(pcbcraft_chrome::automation::human_input(&h.ctx));
+}
+
+/// Provisioning and credential export require a human even when coordinates or Enter target
+/// the dialog; real enable/copy and synthetic revocation remain available.
+#[test]
+fn synthetic_input_cannot_enable_or_export_a_local_connection() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = crate::tests::harness();
+    h.state_mut().dialog = crate::Dialog::LocalMcp { error: None, copied: false };
+    h.run();
+    let at = h.get_by_label("Enable local connection").rect().center();
+    pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+    h.input_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    assert!(h.state().live_control.is_none());
+    pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+    h.run();
+    h.get_by_label("Enable local connection").click();
+    h.run();
+    assert!(h.state().live_control.is_some());
+    h.get_by_label("Copy configuration").focus();
+    h.run();
+    pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+    h.key_press(egui::Key::Enter);
+    h.step();
+    assert!(matches!(h.state().dialog, crate::Dialog::LocalMcp { copied: false, .. }));
+    assert!(!h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_))));
+    pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+    h.run();
+    h.get_by_label("Copy configuration").click();
+    h.step();
+    assert!(matches!(h.state().dialog, crate::Dialog::LocalMcp { copied: true, .. }));
+    assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_))));
+    h.run();
+    let at = h.get_by_label("Disable connection").rect().center();
+    pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+    h.input_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    assert!(h.state().live_control.is_none());
 }

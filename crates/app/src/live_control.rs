@@ -600,6 +600,40 @@ mod tests {
         assert_eq!(endpoint.requests.recv_timeout(timeout).unwrap().body, request);
         Ok(())
     }
+
+    /// Observe the worker's disconnect flag before letting the editor poll the queued request.
+    /// A bounded channel handoff preserves production poll/expiry behavior without a fixed delay.
+    #[test]
+    fn a_client_disconnected_before_acceptance_cannot_leave_queued_ui_input() {
+        let mut h = crate::tests::harness();
+        crate::tests::resistor_at_origin(&mut h);
+        let ctx = h.ctx.clone();
+        h.state_mut().live_control = Some(LiveControl::start_with_wait(&ctx, Duration::from_secs(10)).unwrap());
+        h.state_mut().automation.observing = true;
+        h.run();
+        let live = h.state_mut().live_control.as_mut().unwrap();
+        let client = Connection::connect(
+            live.port(),
+            &live.token,
+            json!({"method":"engine.execute","params":{"command":"ui.key","params":{"window":0,"key":"W"}}}),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let request = live.requests.recv_timeout(Duration::from_secs(2)).expect("socket worker did not queue the request");
+        let connected = request.connected.clone();
+        let (send, receive) = mpsc::sync_channel(1);
+        send.try_send(request).unwrap();
+        live.requests = receive;
+        drop(client);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while connected.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "socket worker did not publish peer disconnect");
+            thread::sleep(Duration::from_millis(1));
+        }
+        h.run_steps(4);
+        assert!(!h.state().automation.busy());
+        assert!(h.state().views.active.schematic.tool.is_none());
+    }
 }
 
 #[cfg(test)]

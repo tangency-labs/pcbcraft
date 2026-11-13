@@ -109,3 +109,10 @@ including when a permission popup was already open. The host tracks input
 provenance per viewport, so coordinate clicks and keyboard activation follow the
 same consent rule as named clicks. Detached Assistant controls are not collected
 into an editor window's lookup.
+
+Enabling a local MCP connection and copying its credential-bearing configuration
+also require human input; automation can still disable a connection or close the
+dialog. Input admission refuses a held physical pointer button, including a
+stationary press, and rechecks before injection. Idle cancellation leaves the
+person's editor gestures intact; cancellation clears previews only while
+automation owns the pointer gesture.
