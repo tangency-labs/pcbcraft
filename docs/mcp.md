@@ -346,8 +346,9 @@ pin/wire target objects. `view.select` exposes marker selection and
 `view.set_selection_filters` accepts `no_connects`. Passing these targets to
 `schematic.delete_items` removes only the selected markers, or combines them
 with ordinary owner deletion in one undoable transaction. Target validation is
-sheet-scoped and revision-checked. Copy/move selections must include each
-selected marker's owner; standalone marker geometry is not persisted.
+sheet-scoped and revision-checked. Copy/group-move selections must include each selected marker's owner; standalone
+marker geometry is not persisted. A direct wire-end X drag uses the existing
+`schematic.move_junction` command and preserves marker identity.
 
 A placed no-connect mark blocks new wire attachments at that point. Shared
 wire drawing, pin connection and endpoint attachment commands reject the edit

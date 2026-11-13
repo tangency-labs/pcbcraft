@@ -159,7 +159,8 @@ the same `VCC` net name, which can be changed before placement.
    For an intentionally unused pin or open wire end, hover its lead or endpoint
    and press **Q**, or use **Capture → No connect** and click several targets.
    The X snaps to each attachment. Press **Esc**, select a placed X, then press
-   **Delete** to remove only the marker. Right-click **Delete** also removes it. **Analyze → Electrical menu → No-connect check** inspects
+   **Delete** to remove only the marker. Dragging a wire-end X stretches its wire;
+   **Esc** cancels the drag. Right-click **Delete** also removes the marker. **Analyze → Electrical menu → No-connect check** inspects
    this intent and any saved wiring conflicts. Remove the X before adding a wire;
    marked endpoints block new connections, including with **W**.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right

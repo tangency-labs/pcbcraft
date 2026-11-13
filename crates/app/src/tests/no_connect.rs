@@ -725,3 +725,144 @@ fn no_connect_hover_approach_and_fast_click_do_not_start_wires() {
         assert_eq!(h.state().session.revision(), revision);
     }
 }
+
+/// Begin a physical marker drag with a held primary button, preserving its click offset.
+fn start_marker_drag(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(from.lerp(to, 0.5)));
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(to));
+    h.run_steps(1);
+}
+
+/// Release without PointerGone so the existing endpoint tool can resolve the final destination.
+fn release_marker_drag(h: &mut Harness<'_, PcbApp>, at: egui::Pos2) {
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+}
+
+/// The selected wire-end X stretches its attached route through the junction tool, retaining
+/// identity and selection. Preview/cancel are read-only; commit, reopen and Undo retain intent.
+#[test]
+fn no_connect_wire_end_drag_moves_wire_and_keeps_marker_selected() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    for (width, dark) in [(1400., true), (700., false)] {
+        let mut h = editor(width, dark);
+        h.state_mut().browser.open = false;
+        let pin0 = h.state().session.project().unwrap().symbols()[0].terminals()[0];
+        let (end, to) = (Point { x_nm: -13 * GRID_NM, y_nm: 5 * GRID_NM }, Point { x_nm: -18 * GRID_NM, y_nm: 9 * GRID_NM });
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::DRAW_WIRE,
+            &json!({"from":pin0.inspect(),"to":end,"bends":[{"x_nm":end.x_nm,"y_nm":-3*GRID_NM}],"expected_revision":revision}),
+        );
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let at = h.state().views.active.camera.screen(end, canvas);
+        h.hover_at(at);
+        h.key_press(Key::Q);
+        h.run();
+        marker_click(&mut h, at, Modifiers::NONE);
+        let before = h.state().session.snapshot().unwrap();
+        let docs = encode_documents(before.clone()).unwrap();
+        let target = before.check_no_connects(0).wire_markers[0].target.clone();
+        let screen = h.state().views.active.camera.screen(to, canvas);
+        start_marker_drag(&mut h, at + egui::vec2(3., 3.), screen + egui::vec2(3., 3.));
+        assert!(matches!(h.state().views.active.schematic.tool,Some(Tool::Reshape{ref drag,..}) if drag.marker.as_ref()==Some(&target)));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        assert!(h.get_by_label("No connect wire end").rect().center().distance(screen) < 1.);
+        release_marker_drag(&mut h, screen + egui::vec2(3., 3.));
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        let moved = h.state().session.snapshot().unwrap();
+        assert_eq!(moved.check_no_connects(0).wire_markers[0].appearance.at, to);
+        assert_eq!(moved.check_no_connects(0).wire_markers[0].target, target);
+        assert_ne!(moved.wire_path(&moved.wires()[0]), before.wire_path(&before.wires()[0]));
+        assert_eq!(moved.inspect_schematic()["netlist"], before.inspect_schematic()["netlist"]);
+        assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 1);
+        assert!(h.state().views.active.schematic.selection.wires.is_empty());
+        let moved_docs = encode_documents(moved.clone()).unwrap();
+        assert_eq!(encode_documents(pcbcraft_engine::persistence::decode_documents(&moved_docs).unwrap()).unwrap(), moved_docs);
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), docs);
+        h.state_mut().run("edit.redo", &json!({}));
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), moved_docs);
+        // Cancel a second drag, then reject a connection drop onto an unmarked pin.
+        let cancel = screen + egui::vec2(-35., 25.);
+        start_marker_drag(&mut h, screen, cancel);
+        h.key_press(Key::Escape);
+        h.run();
+        release_marker_drag(&mut h, cancel);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), moved_docs);
+        let destination = pin(&h, 1);
+        start_marker_drag(&mut h, screen, destination);
+        release_marker_drag(&mut h, destination);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), moved_docs);
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().check_no_connects(0).total_markers, 0);
+        assert_eq!(h.state().session.project().unwrap().wires(), moved.wires());
+    }
+}
+
+/// Immediate Q placement, duplicate Q and Capture activation clear prior owner/segment
+/// selection and counterpart highlights, so Delete cannot act on a previously selected item.
+#[test]
+fn no_connect_activation_clears_previous_selection_and_peer_highlights() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    let mut h = editor(1400., true);
+    h.state_mut().browser.open = false;
+    let terminal = h.state().session.project().unwrap().symbols()[0].terminals()[1];
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::DRAW_WIRE,
+        &json!({"from":terminal.inspect(),"to":{"x_nm":-13*GRID_NM,"y_nm":-GRID_NM},"bends":[],"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let source = h.state().views.active.id();
+    let peer = h.state().views.hosts.values().flat_map(|host| host.layout.views()).find(|id| *id != source).unwrap();
+    let p = h.state().session.snapshot().unwrap();
+    let wire = p.wires()[0].id();
+    let midpoint = Point { x_nm: -8 * GRID_NM, y_nm: -GRID_NM };
+    let leg = schematic_canvas::LegTarget::at_model(&p, &wire, midpoint, h.state().session.revision()).unwrap();
+    h.state_mut().select_leg(leg.clone());
+    h.run();
+    assert!(!h.state().views.highlight_for(peer, &h.state().session).is_empty());
+    let canvas = h.get_by_label(&format!("Schematic canvas {}", source.0 + 1)).rect();
+    let at = h.state().views.active.camera.screen(p.symbols()[0].pins()[0], canvas);
+    h.hover_at(at);
+    h.key_press(Key::Q);
+    h.run();
+    assert!(h.state().views.active.schematic.selection.is_empty());
+    assert!(h.state().views.active.schematic.selected_leg.is_none());
+    assert!(h.state().views.highlight_for(peer, &h.state().session).is_empty());
+    let marked = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().select(Selection::one_symbol(p.symbols()[0].id()));
+    h.run();
+    assert!(!h.state().views.highlight_for(peer, &h.state().session).is_empty());
+    let revision = h.state().session.revision();
+    h.hover_at(at);
+    h.key_press(Key::Q);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(h.state().views.active.schematic.selection.is_empty());
+    assert!(h.state().views.highlight_for(peer, &h.state().session).is_empty());
+    h.state_mut().select_leg(leg);
+    h.run();
+    click(&mut h, "Capture");
+    click(&mut h, "Mark unused pins or wire ends (Q)");
+    assert!(h.state().views.active.schematic.selection.is_empty());
+    assert!(h.state().views.active.schematic.selected_leg.is_none());
+    assert!(h.state().views.highlight_for(peer, &h.state().session).is_empty());
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press(Key::Delete);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), marked);
+}

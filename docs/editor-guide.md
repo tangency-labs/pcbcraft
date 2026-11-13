@@ -197,8 +197,11 @@ a marked target and choose **Delete**, or click the X and press **Delete** or
 outline identifies the selected X. Shift/Ctrl, window/crossing selection and
 Select All include markers; the **No connects** selection filter controls them
 independently. Deleting selected marks clears only their intent, preserving the
-pin or wire. These edits support Undo/Redo and travel with copied parts and wires.
-Normal marks use dedicated blue theme ink; conflicts remain red.
+pin or wire. Drag a wire-end X to stretch its attached wire; the X stays selected
+and follows the same endpoint. **Esc** cancels that drag, and dropping onto a
+connection is refused while the mark remains. Q/Capture clears the previous
+selection and highlights. These edits support Undo/Redo and travel with copied
+parts and wires. Normal marks use dedicated blue theme ink; conflicts remain red.
 
 **Analyze → Electrical menu → No-connect check** lists intentional no-connects,
 unmarked unconnected pins and open wire ends, plus connected, missing or

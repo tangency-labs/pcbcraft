@@ -100,10 +100,15 @@ combine hits with Shift/Ctrl, or include it in a window/crossing selection or
 Select All. The No connects filter is independent of symbol and wire filters.
 Delete/Backspace and context Delete remove selected intent atomically, without
 removing its electrical owner; Undo/Redo restore the exact marker records.
-Selection itself does not edit the project or create history. Moving or copying
-a selected marker requires its owner in the selection, because an X has no
-independent coordinate and cannot be left detached. Markers also continue to
-travel implicitly with copied owners. Normal marks use a dedicated blue canvas
+Selection itself does not edit the project or create history. Dragging a
+wire-end X stretches its attached routes through the ordinary junction edit,
+retaining marker identity and selection. A free drop moves the termination;
+Escape or a connection drop leaves the model unchanged. Pin marks follow their
+symbols. Copying or translating an explicit group still requires each selected
+marker's owner, because an X has no independent coordinate and cannot be left
+detached. Markers also travel implicitly with copied owners. Q/Capture activation
+and successful placement release the previous active selection, selected wire
+segment and projected counterpart highlights. Normal marks use a dedicated blue canvas
 token; selected outlines and red conflicts remain distinct.
 
 The placed mark is an X centered on the attachment, with no added lead. Q and

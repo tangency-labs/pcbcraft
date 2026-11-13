@@ -590,6 +590,21 @@ pub(crate) fn show(
         }
         return None;
     }
+    // Dragging a wire-end mark stretches its attached routes through the existing junction
+    // edit. A pin mark stays with its symbol; drawing tools retain their own input priority.
+    if input_enabled
+        && !lost_focus
+        && tool.is_none()
+        && filters.no_connects
+        && selected.len() <= 1
+        && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        && let Some(pcbcraft_engine::no_connect::Attachment::WireEnd(marker)) = crate::no_connect::marker_at(project, camera, rect, origin)
+        && let Some(drag) = wires::marker_drag(project, marker, camera.snap(origin, rect))
+    {
+        return Some(Click::GrabReshape(drag));
+    }
     // Endpoint and corner handles use their own hit area before the narrow stroke picker.
     // A ready wire tool allows a deliberate handle drag; a plain click still starts a wire.
     if input_enabled

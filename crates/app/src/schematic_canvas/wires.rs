@@ -68,6 +68,8 @@ pub(crate) struct ReshapeDrag {
     pub(crate) wire: String,
     pub(crate) edit: Reshape,
     pub(crate) grabbed: Point,
+    /// A drag picked through an X retains marker selection rather than selecting its owner.
+    pub(crate) marker: Option<pcbcraft_engine::no_connect::WireTarget>,
     /// A connected segment's orientation constrains its travel. Detached straight pieces
     /// have no axis constraint, like corners and free-end handles.
     horizontal: Option<bool>,
@@ -82,7 +84,7 @@ impl ReshapeDrag {
     /// Capture geometry and the departure guard only after an unambiguous handle is picked.
     fn new(project: &Project, wire: &str, edit: Reshape, grabbed: Point, horizontal: Option<bool>, origin: Point) -> Self {
         let departure = std::rc::Rc::new(RefCell::new(departure::Departure::new(project, wire, &edit)));
-        Self { wire: wire.to_owned(), edit, grabbed, horizontal, origin, pickup: false, departure }
+        Self { wire: wire.to_owned(), edit, grabbed, marker: None, horizontal, origin, pickup: false, departure }
     }
 
     /// Resolve a drag destination using drawing's unambiguous pin/junction hit test for a
@@ -150,6 +152,23 @@ impl ReshapeDrag {
         }
         to
     }
+}
+
+/// A wire-end X is a handle for its owning junction. Capture the existing reshape operation,
+/// retaining exact identity and grab offset; unknown, unmarked or foreign-sheet targets fail.
+pub(super) fn marker_drag(project: &Project, marker: pcbcraft_engine::no_connect::WireTarget, origin: Point) -> Option<ReshapeDrag> {
+    let end = marker.endpoint()?;
+    if !project.has_no_connect_attachment(&pcbcraft_engine::no_connect::Attachment::WireEnd(marker.clone())) {
+        return None;
+    }
+    let WireEndpoint::Junction(id) = end else {
+        return None;
+    };
+    let point = project.endpoint_position(end)?;
+    let wire = project.wires().iter().find(|wire| wire.endpoints().contains(&end))?;
+    let mut drag = ReshapeDrag::new(project, &wire.id(), Reshape::Junction(id), point, None, origin);
+    drag.marker = Some(marker);
+    Some(drag)
 }
 
 /// What a press at `pointer` grabs on `wire`: one of its free ends or

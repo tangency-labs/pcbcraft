@@ -673,7 +673,8 @@ impl PcbApp {
 
     /// Commit a finished reshape drag through the matching shared command at the revision the
     /// drag began on, so an edit made meanwhile makes it fail visibly. Segments rebind to the
-    /// new geometry when unambiguous, otherwise clear; corner/junction edits keep the wire selected.
+    /// new geometry when unambiguous, otherwise clear; corner/junction edits retain the
+    /// grabbed wire or marker selection.
     /// Dropping a junction on an explicit endpoint attaches it; free positions only reshape it.
     fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::wire::Anchor, revision: u64) {
         use pcbcraft_engine::wire::{Anchor, Reshape};
@@ -1650,7 +1651,9 @@ impl PcbApp {
                 }
             }
             (None | Some(Tool::Wire { start: None, .. }), Click::GrabReshape(drag)) => {
-                if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
+                if let Some(marker) = &drag.marker {
+                    self.select(Selection::one_no_connect(pcbcraft_engine::no_connect::Attachment::WireEnd(marker.clone())));
+                } else if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
                     if let Some(leg) = self
                         .views
                         .active

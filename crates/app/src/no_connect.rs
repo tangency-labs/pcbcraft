@@ -256,23 +256,29 @@ impl PcbApp {
         rows
     }
 
-    /// Arm repeated pin and wire-end marking at current view authority; Escape/right-click cancels normally.
+    /// Arm repeated marking at current view authority, releasing prior selection and highlights.
+    /// Escape/right-click cancels normally without changing authored state.
     pub(super) fn begin_no_connect(&mut self) {
         if self.views.active.workspace != Workspace::Schematic || self.views.active.input(&self.session).is_none() {
             return;
         }
         self.views.sync(&self.session);
+        self.select(Selection::default());
         self.message = None;
         self.views.active.schematic.tool = Some(Tool::NoConnect { revision: self.session.revision() });
     }
 
-    /// Use the same revision-checked engine edit for canvas/context and MCP actions.
+    /// Use the shared revision-checked edit. Successful placement releases prior edit selection
+    /// and its counterpart highlights; removal leaves other valid selected markers alone.
     pub(super) fn set_no_connect(&mut self, source: ViewInput, target: Attachment, marked: bool) {
         if !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session)) {
             return;
         }
         let repeat = matches!(self.views.active.schematic.tool, Some(Tool::NoConnect { .. }));
         self.run(pcbcraft_engine::no_connect::SET, &json!({"target":target,"marked":marked,"expected_revision":source.revision}));
+        if marked && self.message.is_none() {
+            self.select(Selection::default());
+        }
         if repeat && self.message.is_none() {
             self.views.active.schematic.tool = Some(Tool::NoConnect { revision: self.session.revision() });
         }

@@ -10,6 +10,11 @@ pub struct WireTarget {
 }
 
 impl WireTarget {
+    /// Resolve the same canonical identity used by wire edits without parsing it in the UI.
+    pub fn endpoint(&self) -> Option<WireEndpoint> {
+        self.ordinal().map(WireEndpoint::Junction)
+    }
+
     /// Resolve the canonical endpoint identity accepted by commands and reports.
     pub(crate) fn ordinal(&self) -> Option<u64> {
         crate::schematic::wiring::parse_id(&self.junction, "junction-")
