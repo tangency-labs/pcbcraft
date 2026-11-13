@@ -1126,6 +1126,20 @@ pub struct DocumentsEncoder {
     generated_legs: Vec<GeneratedLegRecord<'static>>,
 }
 
+/// Identical shared pins are reusable, but one immutable address cannot discard a different body.
+fn collect_definition<T: PartialEq>(
+    definitions: &mut BTreeMap<crate::board::definition::Key, Arc<T>>,
+    key: crate::board::definition::Key,
+    definition: &Arc<T>,
+    kind: &str,
+) -> Result<(), String> {
+    if definitions.get(&key).is_some_and(|existing| existing != definition) {
+        return Err(format!("Conflicting pinned {kind} {}/{}.r{} during save", key.0, key.1, key.2));
+    }
+    definitions.insert(key, definition.clone());
+    Ok(())
+}
+
 impl DocumentsEncoder {
     /// Retain the immutable save snapshot without walking its contents in the input handler.
     pub fn new(project: Arc<Project>) -> Self {
@@ -1258,8 +1272,12 @@ impl DocumentsEncoder {
                         if let Some(part) = &c.part {
                             crate::part_instances::storage::collect(part, &mut self.documents)?;
                         }
-                        self.definitions
-                            .insert((c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()), c.definition.clone());
+                        collect_definition(
+                            &mut self.definitions,
+                            (c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()),
+                            &c.definition,
+                            "symbol",
+                        )?;
                         self.cursor = id;
                     } else {
                         if self.project.schematic_packages.assignments.is_empty() {
@@ -1280,7 +1298,7 @@ impl DocumentsEncoder {
                         let key = assignment.key();
                         let definition =
                             self.project.schematic_packages.definitions.get(&key).ok_or("unresolved schematic footprint choice during save")?;
-                        self.footprint_definitions.insert(key, Arc::clone(definition));
+                        collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         self.cursor = id;
                     } else {
                         self.finish_project_document()?;
@@ -1433,7 +1451,7 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, assignment)?;
                         let key = assignment.key();
                         let definition = self.project.board.definitions.get(&key).ok_or("unresolved assigned footprint during save")?;
-                        self.footprint_definitions.insert(key, Arc::clone(definition));
+                        collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         self.cursor = id;
                     } else {
                         if !self.project.board.assignments.is_empty() {
@@ -1446,7 +1464,7 @@ impl DocumentsEncoder {
                     if let Some(f) = self.project.board.footprints().get(self.cursor as usize) {
                         if let Some(key) = f.key() {
                             let definition = self.project.board.definitions.get(&key).ok_or("unresolved pinned footprint during save")?;
-                            self.footprint_definitions.insert(key, Arc::clone(definition));
+                            collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         }
                         record(&mut self.bytes, &mut self.first, f)?;
                         self.cursor += 1;
@@ -1466,7 +1484,7 @@ impl DocumentsEncoder {
                         {
                             let key = (library.clone(), package.definition.clone(), package.revision);
                             let definition = self.project.board.definitions.get(&key).ok_or("unresolved accepted package during save")?;
-                            self.footprint_definitions.insert(key, Arc::clone(definition));
+                            collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         }
                         self.cursor = id;
                     } else {

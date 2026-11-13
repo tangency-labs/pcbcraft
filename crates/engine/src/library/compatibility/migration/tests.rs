@@ -161,6 +161,26 @@ fn part_dependency_addresses_and_source_resolution_migrate_together() {
     let mut before = session.snapshot().unwrap();
     Arc::make_mut(&mut Arc::make_mut(&mut before).components).values_mut().next().unwrap().part =
         Some(crate::part_instances::Selection { resolved, package: Some("0603".into()), manufacturer: None, requirements: BTreeMap::new() });
+    // A source-only resolution may normalize to a project-occupied address, but the ordinary
+    // placement validator must reject that conflict atomically rather than publishing either body.
+    let mut conflict = before.clone();
+    rename_pin(&mut conflict, "basic-components");
+    let conflict = project(decode_documents(&encode_documents(conflict).unwrap()).unwrap()).unwrap();
+    let original = encode_documents(conflict.clone()).unwrap();
+    let mut rejected = Session::default();
+    rejected.open_snapshot(conflict.clone());
+    rejected.install_library_source("legacy-parts", source.clone()).unwrap();
+    let reference = conflict.components().next().unwrap().part.as_ref().unwrap().resolved.definition.reference();
+    let resolved = rejected.libraries().resolve_part(&reference).unwrap();
+    assert_eq!(resolved.symbol.library, "basic-components");
+    let digest = sources::part_digest(resolved);
+    let revision = rejected.revision();
+    let result = rejected.apply(crate::part_instances::PLACE_PART,&json!({"library":reference.library,"definition":reference.id,"definition_revision":reference.revision,"definition_digest":digest,"x_nm":20_000_000,"y_nm":0,"expected_revision":revision}));
+    assert!(result.unwrap_err().to_string().contains("conflicts with its pinned project copy"));
+    assert_eq!(rejected.revision(), revision);
+    assert!(Arc::ptr_eq(&conflict, &rejected.snapshot().unwrap()));
+    assert_eq!(encode_documents(rejected.snapshot().unwrap()).unwrap(), original);
+    assert_eq!(encode_documents(decode_documents(&original).unwrap()).unwrap(), original);
     let opened = project(decode_documents(&encode_documents(before).unwrap()).unwrap()).unwrap();
     let selection = opened.components().next().unwrap().part.as_ref().unwrap();
     assert_eq!(selection.resolved.definition.symbol.library, "basic-components");
@@ -191,4 +211,27 @@ fn part_dependency_addresses_and_source_resolution_migrate_together() {
     session.install_library_source("conflicting", Arc::new(NativeSource::load(&conflicting).unwrap())).unwrap();
     assert!(session.libraries().resolve_part(&reference).is_err(), "normalization must not bypass target-source quarantine");
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// A malformed in-memory candidate must fail both encoders instead of silently selecting one body.
+#[test]
+fn encoder_refuses_different_symbol_bodies_at_one_address() {
+    let original = project(fixture(false).snapshot().unwrap()).unwrap();
+    let documents = encode_documents(original.clone()).unwrap();
+    let mut candidate = original.clone();
+    let id = *candidate.components.keys().next_back().unwrap();
+    let mut changed = serde_json::to_value(crate::library::saved_copy(&candidate.components.get(&id).unwrap().definition)).unwrap();
+    changed["name"] = json!("Different pinned content");
+    let changed = crate::library::read_saved_copy(changed).unwrap();
+    let project = Arc::make_mut(&mut candidate);
+    Arc::make_mut(&mut project.components).get_mut(&id).unwrap().definition = changed.clone();
+    for sheet in Arc::make_mut(&mut project.sheets) {
+        for placement in Arc::make_mut(&mut sheet.symbols).iter_mut().filter(|placement| placement.component == id) {
+            placement.definition = changed.clone();
+        }
+    }
+    for error in [encode_documents(candidate.clone()).unwrap_err(), encode_packed(candidate).unwrap_err()] {
+        assert!(error.contains("Conflicting pinned symbol basic-components/connector.r"), "{error}");
+    }
+    assert_eq!(encode_documents(original).unwrap(), documents);
 }

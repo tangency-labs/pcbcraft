@@ -20,6 +20,8 @@ pub(super) enum SaveFormat {
     Archive,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod download;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(target_arch = "wasm32")]
@@ -264,8 +266,9 @@ impl ProjectFiles {
                 .as_ref()
                 .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest)
                 .map(|saved| Arc::clone(&saved.bytes));
-            let documents = self.saved.as_ref().filter(|saved| Arc::ptr_eq(&saved.snapshot, &snapshot)).and_then(|saved| saved.documents.clone());
-            web::Download::new(snapshot, unchanged, documents, send)?
+            let original =
+                self.saved.as_ref().and_then(|saved| download::Original::for_project(saved.snapshot.clone(), saved.documents.clone()?, &snapshot));
+            web::Download::new(snapshot, unchanged, original, send)?
         };
         self.job = Some(Job {
             receiver: receive,
