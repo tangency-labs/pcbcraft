@@ -192,8 +192,13 @@ Hover a pin lead or open wire endpoint and press **Q**, or choose
 arrow, snapping its center to the attachment. The placed X follows the pin or
 wire end as it moves. **Esc** or right-click cancels the placement tool;
 empty-space and wire-interior clicks cannot create detached marks. Right-click
-a marked target and choose **Remove no-connect marker** to clear its intent.
-These edits support Undo/Redo and travel with copied parts and wires.
+a marked target and choose **Delete**, or click the X and press **Delete** or
+**Backspace**. Marker selection takes precedence over starting a wire, and its
+outline identifies the selected X. Shift/Ctrl, window/crossing selection and
+Select All include markers; the **No connects** selection filter controls them
+independently. Deleting selected marks clears only their intent, preserving the
+pin or wire. These edits support Undo/Redo and travel with copied parts and wires.
+Normal marks use dedicated blue theme ink; conflicts remain red.
 
 **Analyze → Electrical menu → No-connect check** lists intentional no-connects,
 unmarked unconnected pins and open wire ends, plus connected, missing or
@@ -299,8 +304,8 @@ local cleanup does not route around obstacles or resolve conflicting net names
 ## Symbol properties and selection
 
 The **Selection filters** card sits below Properties in schematic and PCB views.
-Its checkboxes control symbols (including power/ground), wires, local/global and hierarchical labels, and sheets in the
-schematic, and footprints and board graphics in PCB layout. **All items** toggles
+Its checkboxes control symbols (including power/ground), wires, no-connect
+markers, local/global and hierarchical labels, and sheets in the schematic, and footprints and board graphics in PCB layout. **All items** toggles
 the supported categories together; **Reset** enables them all. Categories without
 individual selection support are disabled. Filtering does not hide geometry or
 change connectivity. Turning a category off clears its edit selection and cancels

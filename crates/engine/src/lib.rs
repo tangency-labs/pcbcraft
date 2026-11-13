@@ -243,7 +243,8 @@ impl ParamKind {
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()},
-                "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()}
+                "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()},
+                "no_connects": {"type":"array", "maxItems":no_connect::MAX_MARKERS, "uniqueItems":true, "items":Self::PartTerminal.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
             Self::NetLabelStyle => json!({"type":"string","enum":["local","global"]}),
             Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
@@ -1521,7 +1522,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: DELETE_ITEMS,
         title: "Delete Selected Items",
-        summary: "Remove symbols, named-net anchors, selected and incident wires, and unused components. With an accepted baseline, retain their footprints pending review; otherwise remove them. One undoable edit.",
+        summary: "Remove selected no-connect markers without deleting their owners, or symbols, named-net anchors, selected and incident wires, and unused components. With an accepted baseline, retain their footprints pending review; otherwise remove them. One undoable edit.",
         params: &[ITEMS, EXPECTED_REVISION],
     },
     Command {

@@ -490,6 +490,7 @@ impl BoardFragment {
                 symbols: circuit.fragment.project.symbols().iter().map(|s| s.id()).collect(),
                 wires: circuit.fragment.project.wires().iter().map(|w| w.id()).collect(),
                 net_labels: circuit.fragment.project.net_labels().iter().map(|l| l.object_id()).collect(),
+                ..Default::default()
             };
             if expected != actual {
                 return Err(invalid("copied circuit contains objects outside the selected footprint scope"));

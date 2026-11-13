@@ -340,3 +340,11 @@ revision-qualified report even with `inspect:false`; its `markers`/`findings`
 arrays describe pins and `wire_markers`/`wire_findings` describe wire ends.
 Totals and truncation cover both. These markers record intent without changing
 the real netlist or physical DRC. See the [contract](no-connect-markers.md).
+
+Schematic selections may include an optional `no_connects` array of the same
+pin/wire target objects. `view.select` exposes marker selection and
+`view.set_selection_filters` accepts `no_connects`. Passing these targets to
+`schematic.delete_items` removes only the selected markers, or combines them
+with ordinary owner deletion in one undoable transaction. Target validation is
+sheet-scoped and revision-checked. Copy/move selections must include each
+selected marker's owner; standalone marker geometry is not persisted.

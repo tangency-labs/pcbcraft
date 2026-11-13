@@ -23,6 +23,7 @@ fn all(s: &Session) -> Selection {
         symbols: p.symbols().iter().map(|s| s.id()).collect(),
         wires: p.wires().iter().map(|w| w.id()).collect(),
         net_labels: p.net_labels().iter().map(|l| l.object_id()).collect(),
+        ..Default::default()
     }
 }
 

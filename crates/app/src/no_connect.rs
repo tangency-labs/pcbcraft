@@ -1,6 +1,6 @@
 //! Pin- and wire-attached original schematic marks and a focused read-only intent report.
 use crate::{Dialog, PcbApp, Selection, Tool, ViewInput, Workspace, editor_view::DocumentTarget, schematic_canvas::Camera};
-use egui::{Painter, Pos2, Rect, Stroke, Ui, vec2};
+use egui::{Painter, Pos2, Rect, Stroke, StrokeKind, Ui, vec2};
 use pcbcraft_chrome::{Tokens, controls, shell};
 use pcbcraft_engine::{
     Project,
@@ -112,18 +112,47 @@ pub(super) fn target_at(project: &Project, camera: &Camera, rect: Rect, pointer:
 
 /// Draw the original attachment-centered cross independently of symbol body geometry and fields.
 fn cross(painter: &Painter, center: Pos2, step: f32, color: egui::Color32) {
-    let radius = (step * 0.5).clamp(5., 12.);
+    let radius = radius(step);
     for direction in [-1., 1.] {
         let offset = vec2(radius, direction * radius);
         painter.line_segment([center - offset, center + offset], Stroke::new(2., color));
     }
 }
 
+/// The same extent drives painting, picking and window selection at every zoom.
+pub(super) fn radius(step: f32) -> f32 {
+    (step * 0.5).clamp(5., 12.)
+}
+
+/// Select only an authored X, leaving empty pin tips and unmarked ends to the wire tool.
+pub(super) fn marker_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Attachment> {
+    project
+        .no_connect_appearances()
+        .filter_map(|(target, at)| {
+            let delta = pointer - camera.screen(at, rect);
+            let extent = radius(camera.unit_step());
+            let on_stroke = delta.x.abs().max(delta.y.abs()) <= extent + 3. && (delta.x.abs() - delta.y.abs()).abs() <= 4.;
+            on_stroke.then_some((delta.length_sq(), target))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+        .map(|(_, target)| target)
+}
+
+/// Outline selected X geometry without selecting or recoloring its electrical owner.
+fn selection_outline(painter: &Painter, center: Pos2, step: f32, ink: egui::Color32) {
+    painter.rect_stroke(
+        Rect::from_center_size(center, vec2(2. * radius(step) + 6., 2. * radius(step) + 6.)),
+        0,
+        Stroke::new(1.5, ink),
+        StrokeKind::Outside,
+    );
+}
+
 /// Paint only authored markers on this projection, resolving coordinates from current
 /// terminal and endpoint geometry. Connected flags stay visible in error ink instead of hiding the wire.
 /// The connectivity projection retains logical aliases wired on another sheet, so repeated
 /// appearances of the same pin share their conflict color.
-pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &Camera, rect: Rect) {
+pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &Camera, rect: Rect, selected: &Selection, highlighted: &Selection) {
     for symbol in project.symbols() {
         let Some(part) = project.component(symbol).filter(|part| !part.no_connects.is_empty()) else { continue };
         for (index, (terminal, at)) in symbol.terminals().into_iter().zip(symbol.pins()).enumerate() {
@@ -134,7 +163,18 @@ pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &
             }
             let connected = project.connectivity().net_index_for(terminal).is_some();
             let incompatible = symbol.unit_definition().pins().get(index).is_some_and(|pin| pin.electrical_type != *expected);
-            cross(painter, center, camera.unit_step(), if connected || incompatible { Tokens::get().error } else { Tokens::get().schematic_wire });
+            cross(
+                painter,
+                center,
+                camera.unit_step(),
+                if connected || incompatible { Tokens::get().error } else { Tokens::get().schematic_no_connect },
+            );
+            let target = Attachment::Pin(pcbcraft_engine::no_connect::Target { part: symbol.component_id(), terminal: terminal.number().into() });
+            if selected.no_connects.contains(&target) {
+                selection_outline(painter, center, camera.unit_step(), Tokens::get().accent);
+            } else if highlighted.no_connects.contains(&target) {
+                selection_outline(painter, center, camera.unit_step(), Tokens::get().schematic_highlight);
+            }
             ui.interact(
                 Rect::from_center_size(center, vec2(12., 12.)),
                 ui.scope_id().with(("no_connect", symbol.id(), terminal.number())),
@@ -150,7 +190,12 @@ pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &
         if !rect.contains(center) {
             continue;
         }
-        cross(painter, center, camera.unit_step(), if conflict { Tokens::get().error } else { Tokens::get().schematic_wire });
+        cross(painter, center, camera.unit_step(), if conflict { Tokens::get().error } else { Tokens::get().schematic_no_connect });
+        if selected.no_connects.contains(&Attachment::WireEnd(target.clone())) {
+            selection_outline(painter, center, camera.unit_step(), Tokens::get().accent);
+        } else if highlighted.no_connects.contains(&Attachment::WireEnd(target.clone())) {
+            selection_outline(painter, center, camera.unit_step(), Tokens::get().schematic_highlight);
+        }
         ui.interact(Rect::from_center_size(center, vec2(20., 20.)), ui.scope_id().with(("no_connect_end", &target.junction)), egui::Sense::hover())
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "No connect wire end"));
     }

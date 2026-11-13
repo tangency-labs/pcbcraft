@@ -158,8 +158,8 @@ the same `VCC` net name, which can be changed before placement.
    path when the old alternative has no intermediate pin or branch.
    For an intentionally unused pin or open wire end, hover its lead or endpoint
    and press **Q**, or use **Capture → No connect** and click several targets.
-   The X snaps to each attachment. Right-click a marked target to
-   remove its marker. **Analyze → Electrical menu → No-connect check** inspects
+   The X snaps to each attachment. Press **Esc**, select a placed X, then press
+   **Delete** to remove only the marker. Right-click **Delete** also removes it. **Analyze → Electrical menu → No-connect check** inspects
    this intent and any later wiring conflicts.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.

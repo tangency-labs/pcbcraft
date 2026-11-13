@@ -28,6 +28,8 @@ the copied part's new identity, with partial-unit copies retaining only flags on
 the captured terminals and whole-part copies retaining unresolved intent too.
 Partial-unit copy refuses unknown-terminal intent that cannot be assigned to one
 of those units; resolve it or copy all placed units.
+Explicitly selected markers must be copied with their selected pin or wire
+owner; marker-only copy is rejected rather than creating detached intent.
 Wire-end flags follow copied junction IDs in flat and hierarchical captures,
 including descendant sheets. Explicit wire attachments
 inside the copied group stay attached to the copies. Endpoints whose owners are

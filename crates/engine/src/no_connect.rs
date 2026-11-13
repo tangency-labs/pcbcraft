@@ -22,7 +22,7 @@ mod wire_ends;
 pub use wire_ends::{Attachment, WireAppearance, WireFinding, WireMarker, WireTarget};
 
 /// A stable logical terminal address, independent of unit geometry and reference text.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Target {
     pub part: String,

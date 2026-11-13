@@ -462,7 +462,7 @@ pub(crate) fn show(
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
     overlap_index.paint(ui, response.id, project, camera, rect);
-    crate::no_connect::paint(ui, &painter, project, camera, rect);
+    crate::no_connect::paint(ui, &painter, project, camera, rect, selected, highlighted);
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
@@ -596,6 +596,8 @@ pub(crate) fn show(
         && !lost_focus
         && matches!(tool, None | Some(Tool::Wire { start: None, .. }))
         && selected.len() <= 1
+        && !(filters.no_connects
+            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| crate::no_connect::marker_at(project, camera, rect, p).is_some()))
         && !whole_wire_drag
         && filters.wires
         && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
@@ -651,6 +653,9 @@ pub(crate) fn show(
                 button: if right { egui::PointerButton::Secondary } else { egui::PointerButton::Primary },
             }));
         }
+        if !hit.no_connects.is_empty() && selected.symbols.is_empty() && selected.wires.is_empty() && selected.net_labels.is_empty() {
+            return Some(Click::SelectItems(selected.combine(&hit, false, false)));
+        }
         if hit.is_subset(selected) && (selected.len() > 1 || whole_wire_drag) {
             return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect)));
         }
@@ -685,9 +690,14 @@ pub(crate) fn show(
         let choices = captured_choices.as_ref().map_or(&[][..], |choices| choices.entries.as_slice());
         let pin_key = response.id.with("no_connect_pin");
         if let Some(pointer) = pressed {
-            let pin = crate::no_connect::target_at(project, camera, rect, pointer, selected).filter(|pick| match pick.target {
-                pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
-                pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+            let pin = crate::no_connect::target_at(project, camera, rect, pointer, selected).filter(|pick| {
+                if project.has_no_connect_attachment(&pick.target) {
+                    return filters.no_connects;
+                }
+                match pick.target {
+                    pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
+                    pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+                }
             });
             ui.data_mut(|data| {
                 data.remove::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Attachment, bool)>(pin_key);
@@ -699,12 +709,16 @@ pub(crate) fn show(
         }
         let pin = ui
             .data(|data| data.get_temp::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Attachment, bool)>(pin_key))
-            .filter(|(sheet, captured_revision, target, _)| {
+            .filter(|(sheet, captured_revision, target, marked)| {
                 *sheet == project.sheet_target()
                     && *captured_revision == revision
-                    && match target {
-                        pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
-                        pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+                    && if *marked {
+                        filters.no_connects
+                    } else {
+                        match target {
+                            pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
+                            pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+                        }
                     }
             });
         let mut target = match pressed {
@@ -752,11 +766,13 @@ pub(crate) fn show(
         });
         let picked = menu::context(&response, |ui| {
             if let Some((_, _, target, marked)) = &pin {
-                if MenuItem::new(if *marked { "Remove no-connect marker" } else { "Mark no connect" })
-                    .shortcut(if *marked { "" } else { "Q" })
-                    .show(ui)
+                if (!marked || !group)
+                    && MenuItem::new(if *marked { "Delete" } else { "Mark no connect" }).shortcut(if *marked { "Del" } else { "Q" }).show(ui)
                 {
                     return Some(Click::NoConnect(target.clone(), !marked));
+                }
+                if *marked && !group {
+                    return None;
                 }
                 menu::separator(ui);
             }
@@ -818,6 +834,9 @@ pub(crate) fn show(
             return Some(click);
         }
         if pressed.is_some() && !group {
+            if let Some((_, _, target, true)) = &pin {
+                return Some(Click::SelectItems(Selection::one_no_connect(target.clone())));
+            }
             if let Some(leg) = leg.filter(|_| target.is_none()) {
                 return Some(Click::SelectLeg(leg));
             }
@@ -870,6 +889,7 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && !ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command)
         && let Some(pointer) = response.hover_pos()
+        && !(filters.no_connects && crate::no_connect::marker_at(project, camera, rect, pointer).is_some())
         && (!filters.symbols || fields::at(ui, project, camera, rect, pointer).is_none())
         && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
         && let Some(point) = anchor.position(project)
@@ -928,6 +948,14 @@ pub(crate) fn show(
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
+        if let Some(target) = filters.no_connects.then(|| crate::no_connect::marker_at(project, camera, rect, pointer)).flatten() {
+            let modifiers = ui.input(|i| i.modifiers);
+            return Some(Click::SelectItems(selected.combine(
+                &Selection::one_no_connect(target),
+                modifiers.shift,
+                modifiers.ctrl || modifiers.command,
+            )));
+        }
         if filters.symbols
             && let Some(field) = fields::at(ui, project, camera, rect, pointer)
         {
@@ -940,6 +968,9 @@ pub(crate) fn show(
         }
         let hit = selection::at(ui, project, camera, rect, pointer, filters);
         let modifiers = ui.input(|i| i.modifiers);
+        if !hit.no_connects.is_empty() {
+            return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
+        }
         if !modifiers.shift
             && !modifiers.ctrl
             && !modifiers.command

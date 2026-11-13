@@ -3,7 +3,7 @@ use super::*;
 use crate::schematic::WireEndpoint;
 
 /// A project-unique free junction belonging to a wire, independent of coordinates or net names.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireTarget {
     pub junction: String,
@@ -17,7 +17,7 @@ impl WireTarget {
 }
 
 /// Marker targets keep the existing part/terminal vocabulary and add a distinct wire-end form.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Attachment {
     Pin(Target),
@@ -127,6 +127,44 @@ impl Project {
                 target.ordinal().and_then(|id| self.components.get(&id)).is_some_and(|part| part.no_connects.contains_key(&target.terminal))
             }
             Attachment::WireEnd(target) => target.ordinal().is_some_and(|id| self.sheets.iter().any(|sheet| sheet.no_connect_ends.contains(&id))),
+        }
+    }
+
+    /// Every visible authored mark on the projected sheet, resolved from its current owner.
+    /// Repeated drawings share a target identity but may supply more than one position.
+    pub fn no_connect_appearances(&self) -> impl Iterator<Item = (Attachment, Point)> + '_ {
+        let pins =
+            self.symbols().iter().filter(|symbol| self.component(symbol).is_some_and(|part| !part.no_connects.is_empty())).flat_map(move |symbol| {
+                symbol
+                    .terminals()
+                    .into_iter()
+                    .zip(symbol.pins())
+                    .filter(move |(pin, _)| self.has_no_connect(*pin))
+                    .map(move |(pin, at)| (Attachment::Pin(Target { part: symbol.component_id(), terminal: pin.number().into() }), at))
+            });
+        let ends = self
+            .no_connect_ends
+            .iter()
+            .filter_map(|&id| Some((Attachment::WireEnd(WireTarget { junction: format!("junction-{id}") }), *self.junctions.get(&id)?)));
+        pins.chain(ends)
+    }
+
+    /// Clear validated sheet-local intent in a disposable candidate before group publication.
+    /// Its owner and actual electrical connectivity are preserved.
+    pub(crate) fn remove_no_connect_attachment(&mut self, target: &Attachment) {
+        match target {
+            Attachment::Pin(pin) => {
+                if let Some(id) = pin.ordinal()
+                    && let Some(part) = Arc::make_mut(&mut self.components).get_mut(&id)
+                {
+                    part.no_connects.remove(&pin.terminal);
+                }
+            }
+            Attachment::WireEnd(end) => {
+                if let Some(id) = end.ordinal() {
+                    Arc::make_mut(&mut self.sheet_mut().no_connect_ends).remove(&id);
+                }
+            }
         }
     }
 

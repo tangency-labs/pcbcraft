@@ -62,6 +62,19 @@ fn no_connect_wire_end_commands_are_shared_with_mcp() {
             .iter()
             .any(|end| end["id"] == target.junction && end["no_connect"] == true)
     );
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::DELETE_ITEMS,
+        "params":{"items":{"symbols":[],"wires":[],"no_connects":[target]},"expected_revision":revision},"inspect":false}),
+    )
+    .unwrap();
+    assert_eq!(s.project().unwrap().check_no_connects(s.revision()).total_markers, 0);
+    assert_eq!(s.project().unwrap().wires(), before.wires());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.project().unwrap().check_no_connects(s.revision()).total_markers, 1);
 }
 
 fn server() -> Server {

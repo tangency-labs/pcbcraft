@@ -9,8 +9,10 @@ commands, bounded diagnostic inspection and project/19 plus sheet/8 storage are 
 Apache-2.0 PCBcraft work for #285. The attachment-centered X, larger X cursor and lead-and-cross ribbon
 glyph are original geometry; the pinned Craft kit has no electronics no-connect
 command glyph, so
-the host draws that mark while reusing its existing ribbon, menu, modal and
-control adapters. Interaction follows the published
+the host draws that mark and its selection outline while reusing existing
+ribbon, menu, modal, filter checkbox and control adapters. Stable marker
+selection and atomic intent deletion are original PCBcraft work; the blue mark
+color is a separate host canvas token. Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
 consulted November 12, 2026. Tests use shared commands, original starter/native
 example definitions and production codecs; no external EDA implementation,

@@ -229,3 +229,78 @@ fn wire_no_connect_and_pin_intent_preserve_physical_drc_findings() {
     assert_eq!(after.board_view(board).unwrap().check_design(Default::default()), drc);
     assert_eq!(after.check_no_connects(s.revision()).markers[0].issues, ["no_connect_connected"]);
 }
+
+/// A mixed marker selection deletes only intent in one history entry; stale, missing and
+/// malformed selections fail atomically, and native saves retain the resulting marker removal.
+#[test]
+fn no_connect_selection_delete_preserves_owners_and_roundtrips() {
+    use crate::selection::Selection;
+    let (mut s, wire) = stub();
+    mark(&mut s, &wire, true);
+    let p = s.snapshot().unwrap();
+    let pin = p.no_connect_target(p.symbols()[0].terminals()[1]).unwrap();
+    s.apply(SET, &json!({"target":pin,"marked":true,"expected_revision":s.revision()})).unwrap();
+    let before = s.snapshot().unwrap();
+    let items = Selection { no_connects: [Attachment::Pin(pin.clone()), Attachment::WireEnd(wire.clone())].into(), ..Default::default() };
+    assert_eq!(Selection::parse(&json!(items)), Some(items.clone()));
+    assert_eq!(items.len(), 2);
+    let revision = s.revision();
+    for params in [
+        json!({"items":items,"expected_revision":revision-1}),
+        json!({"items":{"symbols":[],"wires":[],"no_connects":[pin.clone(),pin.clone()]},"expected_revision":revision}),
+        json!({"items":{"symbols":[],"wires":[],"no_connects":[{"junction":"junction-99999"}]},"expected_revision":revision}),
+        json!({"items":{"symbols":[],"wires":[],"no_connects":[{"part":pin.part,"terminal":pin.terminal,"extra":true}]},"expected_revision":revision}),
+    ] {
+        assert!(s.apply(crate::DELETE_ITEMS, &params).is_err());
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+    for command in [crate::MOVE_ITEMS, crate::clipboard::COPY] {
+        assert!(s.execute(command, &json!({"items":items,"dx_nm":12_700_000,"dy_nm":0,"expected_revision":revision})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+    s.apply(crate::DELETE_ITEMS, &json!({"items":items,"expected_revision":revision})).unwrap();
+    let after = s.snapshot().unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(after.symbols(), before.symbols());
+    assert_eq!(after.wires(), before.wires());
+    assert_eq!(after.junctions, before.junctions);
+    assert_eq!(after.electrical_connectivity().inspect(), before.electrical_connectivity().inspect());
+    assert_eq!(after.check_no_connects(s.revision()).total_markers, 0);
+    let docs = persistence::encode_documents(after.clone()).unwrap();
+    let reopened = persistence::decode_documents(&docs).unwrap();
+    assert_eq!(reopened.check_no_connects(0).total_markers, 0);
+    assert_eq!(reopened.wires(), before.wires());
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), docs);
+    s.apply("edit.undo", &json!({})).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+    s.apply("edit.redo", &json!({})).unwrap();
+    crate::assert_same_content(&after, &s.snapshot().unwrap());
+}
+
+/// Marker selection stays within the addressed sheet; grouping with its owner keeps normal
+/// copy/move behavior, while deletion of both an owner and its mark is still a single edit.
+#[test]
+fn no_connect_selection_respects_sheet_and_owner_scope() {
+    use crate::selection::Selection;
+    let (mut s, target) = stub();
+    mark(&mut s, &target, true);
+    let before = s.snapshot().unwrap();
+    let mut items = Selection::one_no_connect(Attachment::WireEnd(target));
+    items.wires.insert(before.wires()[0].id());
+    s.apply(crate::MOVE_ITEMS, &json!({"items":items,"dx_nm":0,"dy_nm":12_700_000,"expected_revision":s.revision()})).unwrap();
+    let moved = s.snapshot().unwrap();
+    assert_eq!(moved.check_no_connects(0).wire_markers[0].appearance.at.y_nm, 12_700_000);
+    let fragment = crate::clipboard::Fragment::capture(&moved, &items).unwrap();
+    assert_eq!(crate::clipboard::Fragment::from_text(&fragment.to_text().unwrap()).unwrap().project.check_no_connects(0).total_markers, 1);
+    let root = moved.sheet_target();
+    s.apply(crate::sheets::CREATE_SHEET, &json!({"name":"Other","expected_revision":s.revision()})).unwrap();
+    let other = s.project().unwrap().sheets().find(|sheet| sheet.target != root).unwrap().target;
+    let snapshot = s.snapshot().unwrap();
+    assert!(s.apply(crate::DELETE_ITEMS, &json!({"sheet":other.id(),"items":items,"expected_revision":s.revision()})).is_err());
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+    s.apply(crate::DELETE_ITEMS, &json!({"sheet":root.id(),"items":items,"expected_revision":s.revision()})).unwrap();
+    assert!(s.project().unwrap().wires().is_empty());
+    assert_eq!(s.project().unwrap().check_no_connects(0).total_markers, 0);
+    s.apply("edit.undo", &json!({})).unwrap();
+    crate::assert_same_content(&snapshot, &s.snapshot().unwrap());
+}

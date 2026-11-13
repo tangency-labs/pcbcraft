@@ -106,6 +106,7 @@ impl Fragment {
     /// Capture one sheet's geometry, either qualifying the user's initial selection or retaining
     /// the enclosing fragment's part intent while a hierarchy is remapped sheet by sheet.
     fn capture_sheet(project: &Project, items: &Selection, intent_scope: IntentScope) -> Result<Self, CommandError> {
+        items.validate_marker_owners(project)?;
         let mut found = items.clone();
         found.retain(project);
         if items.is_empty() || &found != items {

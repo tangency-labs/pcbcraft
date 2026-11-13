@@ -77,6 +77,7 @@ impl Fragment {
         }
         let (blocks, labels) = selected(project, objects)?;
         let included = descendants(project, &blocks)?;
+        items.validate_marker_owners(project)?;
         let mut root = SchematicSheet::empty(project.sheet_target().id(), project.sheet_name().into());
         root.occurrence_id = project.sheet_occurrence(project.sheet_target()).map(|record| record.id);
         root.symbols = Arc::new(project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).cloned().collect());
@@ -252,6 +253,7 @@ impl Fragment {
                 symbols: projection.symbols().iter().map(|s| s.id()).collect(),
                 wires: projection.wires().iter().map(|w| w.id()).collect(),
                 net_labels: projection.net_labels().iter().map(|l| l.object_id()).collect(),
+                ..Default::default()
             };
             if items.is_empty() {
                 continue;

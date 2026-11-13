@@ -93,6 +93,17 @@ The UI shows that limit when reached. Marker-specific latency and large-design
 ERC scheduling budgets are unmeasured; this focused reference does not certify
 the responsiveness targets in the [performance guide](performance-testing.md).
 
+Markers participate in the ordinary disposable selection model. Click an X,
+combine hits with Shift/Ctrl, or include it in a window/crossing selection or
+Select All. The No connects filter is independent of symbol and wire filters.
+Delete/Backspace and context Delete remove selected intent atomically, without
+removing its electrical owner; Undo/Redo restore the exact marker records.
+Selection itself does not edit the project or create history. Moving or copying
+a selected marker requires its owner in the selection, because an X has no
+independent coordinate and cannot be left detached. Markers also continue to
+travel implicitly with copied owners. Normal marks use a dedicated blue canvas
+token; selected outlines and red conflicts remain distinct.
+
 The placed mark is an X centered on the attachment, with no added lead. Q and
 the Capture tool use a larger X cursor in place of the arrow and snap to a pin
 endpoint, the drawn pin lead, or a nearby open wire endpoint. Empty-space and

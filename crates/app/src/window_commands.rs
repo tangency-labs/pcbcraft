@@ -189,7 +189,7 @@ mod live {
                 Self::Selection => {
                     let mut labels = ids.clone();
                     labels["maxItems"] = json!(pcbcraft_engine::net_labels::MAX_LABELS);
-                    json!({"type": "object", "properties": {"symbols": ids, "wires": ids, "net_labels": labels}, "required": ["symbols", "wires"], "additionalProperties": false})
+                    json!({"type": "object", "properties": {"symbols": ids, "wires": ids, "net_labels": labels, "no_connects": pcbcraft_engine::selection::Selection::marker_schema()}, "required": ["symbols", "wires"], "additionalProperties": false})
                 }
                 Self::Footprints => ids,
             }
@@ -639,6 +639,7 @@ mod live {
                 setting("wires", "Select schematic wires", Kind::Bool),
                 setting("sheets", "Select hierarchical sheet symbols", Kind::Bool),
                 setting("labels", "Select hierarchical labels", Kind::Bool),
+                setting("no_connects", "Select no-connect markers", Kind::Bool),
                 setting("footprints", "Select board footprints", Kind::Bool),
                 setting("tracks", "Select board tracks", Kind::Bool),
                 setting("vias", "Select board vias", Kind::Bool),
@@ -650,7 +651,7 @@ mod live {
         WindowCommand {
             id: "view.select",
             title: "Select",
-            summary: "Replace a schematic view's selection with these symbols, wires and named-net anchors, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
+            summary: "Replace a schematic view's selection with these symbols, wires, named-net anchors and no-connect markers, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
             params: &[VIEW, Param { name: "items", summary: "IDs from inspect_project", required: true, kind: Kind::Selection }],
         },
         WindowCommand {
@@ -1328,8 +1329,8 @@ mod live {
                     self.apply_view_action(ctx, view, ViewAction::Workspace { workspace, placement });
                 }
                 ("view.select", Some((view, _)), _) => {
-                    let items =
-                        Selection::parse(&params["items"]).ok_or("`items` must contain symbol, wire and optional named-net anchor ID lists")?;
+                    let items = Selection::parse(&params["items"])
+                        .ok_or("`items` must contain symbol/wire lists and optional named-net anchors or no-connect targets")?;
                     let mut filtered = items.clone();
                     if let Some(state) = self.views.view(view) {
                         state.filters.retain(&mut filtered, state.snapshot(&self.session).as_deref());

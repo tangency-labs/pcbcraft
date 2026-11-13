@@ -73,6 +73,8 @@ pub struct Tokens {
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
     pub schematic_wire: Color32,
+    /// Intentional no-connect geometry is distinct from electrical wire ink.
+    pub schematic_no_connect: Color32,
     /// Counterpart highlight from another editor, distinct from this view's edit selection.
     pub schematic_highlight: Color32,
     /// PCB canvas stays near-black with either chrome theme, following the FigCraft layout.
@@ -213,6 +215,7 @@ impl Tokens {
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(135, 148, 166),
             schematic_wire: Color32::from_rgb(20, 112, 75),
+            schematic_no_connect: Color32::from_rgb(30, 90, 190),
             schematic_highlight: Color32::from_rgb(145, 88, 12),
             board_canvas: Color32::from_rgb(0, 16, 32),
             board_ink: Color32::from_rgb(213, 221, 221),
@@ -325,6 +328,7 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
+        t.schematic_no_connect = Color32::from_rgb(110, 175, 255);
         t.schematic_highlight = Color32::from_rgb(240, 192, 106);
         t.catalog_symbol = Color32::from_rgb(143, 176, 205);
         t.stack_dielectric = Color32::from_rgb(57, 90, 80);

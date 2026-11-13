@@ -2,8 +2,8 @@
 
 [Intentional no-connect markers](no-connect-markers.md) attach to logical part
 terminals and open wire ends through Q, Capture and context actions. They follow
-placed units and endpoints,
-survive duplication/clipboard and native save/reopen, and have a focused,
+placed units and endpoints, support ordinary click/marquee selection and
+Delete/Backspace without deleting their owners, survive duplication/clipboard and native save/reopen, and have a focused,
 read-only check with navigable missing, incompatible and connected-target
 findings, including unmarked dangling wire ends. Marker edits preserve the actual
 netlist and physical DRC findings. Full type-conflict/power-driver ERC and incremental scheduling remain

@@ -1261,6 +1261,12 @@ impl PcbApp {
                     } else {
                         "Paste · Click to place · Esc cancel"
                     }));
+                } else if self.views.active.schematic.tool.is_none()
+                    && !self.views.active.schematic.selection.no_connects.is_empty()
+                    && self.views.active.schematic.selection.len() == self.views.active.schematic.selection.no_connects.len()
+                {
+                    let count = self.views.active.schematic.selection.len();
+                    ui.label(dim(format!("{count} no-connect marker{} selected · Del delete", if count == 1 { "" } else { "s" })));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
@@ -1739,6 +1745,7 @@ impl PcbApp {
             symbols: project.symbols().iter().map(|symbol| symbol.id()).collect(),
             wires: project.wires().iter().map(|wire| wire.id()).collect(),
             net_labels: project.net_labels().iter().map(|label| label.object_id()).collect(),
+            no_connects: project.no_connect_appearances().map(|(target, _)| target).collect(),
         };
         self.views.active.filters.retain(&mut selected, Some(&project));
         self.select(selected);

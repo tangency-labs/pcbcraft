@@ -49,7 +49,7 @@ fn no_connect_pin_actions_and_history_work_in_both_themes_and_widths() {
             h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
             h.run();
         }
-        click(&mut h, "Remove no-connect marker");
+        click(&mut h, "Delete");
         assert!(h.query_by_label("No connect J1 pin 1").is_none());
         h.get_by_label("No connect J1 pin 2");
         h.state_mut().run("edit.undo", &json!({}));
@@ -294,7 +294,7 @@ fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
             app.views.active.open_document(crate::editor_view::DocumentTarget::Sheet(sheet), &app.session);
             h.run();
             let center = h.get_by_label("No connect U1 pin 3").rect().center();
-            let expected = if connected { Tokens::get().error } else { Tokens::get().schematic_wire };
+            let expected = if connected { Tokens::get().error } else { Tokens::get().schematic_no_connect };
             let crosses = h
                 .output()
                 .shapes
@@ -448,4 +448,186 @@ fn no_connect_wire_end_survives_native_save_and_reopen() {
     assert_eq!(report.wire_markers.len(), 1);
     assert!(report.wire_findings.is_empty());
     assert_eq!(report.wire_markers[0].appearance.at, at);
+}
+
+/// Use actual pointer modifiers for additive/toggle selection without borrowing a tool's input.
+fn marker_click(h: &mut Harness<'_, PcbApp>, at: egui::Pos2, modifiers: Modifiers) {
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers });
+        if pressed {
+            h.run_steps(1);
+        } else {
+            h.run();
+        }
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+}
+
+/// Clicking an X takes precedence over starting a wire. Delete/Backspace remove only selected
+/// intent; modifier selection, Undo/Redo and the dedicated filter all preserve the owners.
+#[test]
+fn no_connect_select_and_delete_preserves_pins_and_wires() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    for (width, dark) in [(1400., true), (700., false)] {
+        let mut h = editor(width, dark);
+        h.state_mut().browser.open = false;
+        for index in 0..2 {
+            let at = pin(&h, index);
+            h.hover_at(at);
+            h.key_press(Key::Q);
+            h.run();
+        }
+        let terminal = h.state().session.project().unwrap().symbols()[0].terminals()[2];
+        let end = Point { x_nm: -13 * GRID_NM, y_nm: GRID_NM };
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::DRAW_WIRE, &json!({"from":terminal.inspect(),"to":end,"bends":[],"expected_revision":revision}));
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let wire_at = h.state().views.active.camera.screen(end, canvas);
+        h.hover_at(wire_at);
+        h.key_press(Key::Q);
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        assert_eq!(before.check_no_connects(0).total_markers, 3, "fixture markers={:?}", before.check_no_connects(0));
+        let docs = encode_documents(before.clone()).unwrap();
+        let revision = h.state().session.revision();
+        let at = pin(&h, 0);
+        assert!(crate::no_connect::marker_at(&before, &h.state().views.active.camera, canvas, at).is_some(), "missing geometric hit at {at:?}");
+        marker_click(&mut h, at, Modifiers::NONE);
+        assert_eq!(
+            h.state().views.active.schematic.selection.no_connects.len(),
+            1,
+            "selection={:?},tool={:?},filter={},message={:?}",
+            h.state().views.active.schematic.selection,
+            h.state().views.active.schematic.tool,
+            h.state().views.active.filters.no_connects,
+            h.state().message
+        );
+        assert!(h.state().views.active.schematic.selection.symbols.is_empty());
+        assert!(h.state().views.active.schematic.selection.wires.is_empty());
+        assert!(h.state().views.active.schematic.selected_leg.is_none());
+        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "a selectable X must not show the wiring cursor");
+        assert!(h.state().views.active.schematic.tool.is_none(), "clicking X must not start a wire");
+        assert_eq!(h.state().session.revision(), revision);
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().check_no_connects(0).total_markers, 2);
+        assert_eq!(h.state().session.project().unwrap().wires(), before.wires());
+        assert_eq!(h.state().session.project().unwrap().symbols(), before.symbols());
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), docs);
+        let at = pin(&h, 0);
+        marker_click(&mut h, at, Modifiers::NONE);
+        let at = pin(&h, 1);
+        marker_click(&mut h, at, Modifiers::SHIFT);
+        assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 2);
+        let at = pin(&h, 0);
+        marker_click(&mut h, at, Modifiers::CTRL);
+        assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 1);
+        marker_click(&mut h, wire_at, Modifiers::SHIFT);
+        assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 2);
+        h.key_press(Key::Backspace);
+        h.run();
+        let after = h.state().session.snapshot().unwrap();
+        assert_eq!(after.check_no_connects(0).total_markers, 1);
+        assert_eq!(after.symbols(), before.symbols());
+        assert_eq!(after.wires(), before.wires());
+        assert_eq!(after.inspect_schematic()["netlist"], before.inspect_schematic()["netlist"]);
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        let id = h.state().views.active.id();
+        h.state_mut().set_selection_filters(id, &json!({"symbols":false,"wires":false})).unwrap();
+        h.run();
+        let at = pin(&h, 0);
+        marker_click(&mut h, at, Modifiers::NONE);
+        assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 1);
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().check_no_connects(0).total_markers, 2);
+        assert_eq!(h.state().session.project().unwrap().symbols(), before.symbols());
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        let at = pin(&h, 0);
+        marker_click(&mut h, at, Modifiers::NONE);
+        h.state_mut().set_selection_filters(id, &json!({"no_connects":false})).unwrap();
+        h.run();
+        assert!(h.state().views.active.schematic.selection.no_connects.is_empty());
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().check_no_connects(0).total_markers, 3);
+        assert_eq!(h.state().session.project().unwrap().wires(), before.wires());
+    }
+}
+
+/// A containment marquee can select only the mark, and Select All includes marks as distinct
+/// objects. Marker selection and its filter never mutate the document.
+#[test]
+fn no_connect_marquee_and_select_all_include_markers() {
+    let mut h = editor(1400., true);
+    h.state_mut().browser.open = false;
+    let at = pin(&h, 0);
+    h.hover_at(at);
+    h.key_press(Key::Q);
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let at = pin(&h, 0);
+    let (from, to) = (at - egui::vec2(10., 9.), at + egui::vec2(10., 9.));
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 1);
+    assert!(h.state().views.active.schematic.selection.symbols.is_empty());
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.query_by_label("No connect J1 pin 1").is_none());
+    assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    h.state_mut().select_all_schematic();
+    h.run();
+    assert_eq!(h.state().views.active.schematic.selection.no_connects.len(), 1);
+    assert_eq!(h.state().views.active.schematic.selection.symbols.len(), 1);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Ordinary clicks select marks, while an explicit Wire tool still reaches the marked pin.
+/// A real new connection retains the mark as a reported conflict instead of consuming it.
+#[test]
+fn no_connect_selection_does_not_block_explicit_wiring() {
+    let mut h = editor(1400., true);
+    h.state_mut().browser.open = false;
+    let at = pin(&h, 0);
+    h.hover_at(at);
+    h.key_press(Key::Q);
+    h.run();
+    let at = pin(&h, 1);
+    h.hover_at(at);
+    h.key_press(Key::W);
+    h.run();
+    let at = pin(&h, 0);
+    click_canvas_at(&mut h, at);
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let p = h.state().session.project().unwrap();
+    assert_eq!(p.wires().len(), 1);
+    assert_eq!(p.check_no_connects(0).markers[0].issues, ["no_connect_connected"]);
+    let at = pin(&h, 0);
+    marker_click(&mut h, at, Modifiers::NONE);
+    h.key_press(Key::Delete);
+    h.run();
+    let p = h.state().session.project().unwrap();
+    assert_eq!(p.wires().len(), 1);
+    assert_eq!(p.symbols().len(), 1);
+    assert_eq!(p.check_no_connects(0).total_markers, 0);
 }
