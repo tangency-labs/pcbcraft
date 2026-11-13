@@ -96,27 +96,37 @@ fn no_connect_ribbon_tool_marks_clicked_pins_repeatedly() {
     }
 }
 
-/// Arming the tool gives visible geometric feedback over empty canvas, without creating a
-/// detached authored mark; hovering a pin still previews its exact electrical endpoint.
+/// Arming the tool gives a legible badge clear of a large system pointer, including near canvas
+/// edges. Moving it over empty canvas never creates a detached authored mark.
 #[test]
 fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
     let mut h = editor(1400., true);
     let before = h.state().session.snapshot().unwrap();
     click(&mut h, "Mark intentionally unused pins (Q)");
     let canvas = h.get_by_label("Schematic canvas").rect();
-    let pointer = canvas.right_bottom() - egui::vec2(50., 50.);
-    h.hover_at(pointer);
-    h.run();
-    let cursor_lines = h
-        .output()
-        .shapes
-        .iter()
-        .filter(|shape| {
-            matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
-            if stroke.color == Tokens::get().accent && points.iter().all(|point| point.distance(pointer) < 25.))
-        })
-        .count();
-    assert!(cursor_lines >= 3, "the armed cursor needs a lead and two cross strokes");
+    for pointer in [canvas.center() + egui::vec2(100., 80.), canvas.right_bottom() - egui::vec2(10., 10.)] {
+        h.hover_at(pointer);
+        h.run();
+        let lines = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == Tokens::get().accent && points.iter().all(|point| point.distance(pointer) < 90.) =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3, "the armed cursor needs a lead and two cross strokes");
+        let bounds = lines.iter().fold(egui::Rect::NOTHING, |bounds, points| bounds.union(egui::Rect::from_two_pos(points[0], points[1])));
+        assert!(bounds.width() >= 30. && bounds.height() >= 18., "the badge must remain legible");
+        let system_pointer = egui::Rect::from_min_max(pointer - egui::vec2(4., 4.), pointer + egui::vec2(22., 42.));
+        assert!(!bounds.intersects(system_pointer), "the badge must clear the system pointer");
+        assert!(canvas.shrink(2.).contains_rect(bounds), "the complete badge stays on the canvas");
+    }
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     assert_eq!(h.state().session.project().unwrap().check_no_connects(h.state().session.revision()).total_markers, 0);
 }

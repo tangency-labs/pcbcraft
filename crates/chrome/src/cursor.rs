@@ -20,12 +20,22 @@ pub fn track(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool) {
 }
 
 /// Identify the armed no-connect tool with a short lead ending in a cross beside the pointer.
+/// Keep the badge clear of a large system pointer and inside the canvas near its edges.
 /// This is a cursor badge, independent of any authored pin or electrical connection.
 pub fn no_connect(painter: &Painter, pointer: Pos2) {
     let t = Tokens::get();
-    let center = pointer + vec2(12., 14.);
-    for stroke in [Stroke::new(3.5, t.canvas), Stroke::new(1.5, t.accent)] {
-        for (from, to) in [(vec2(-12., 0.), vec2(0., 0.)), (vec2(-4., -4.), vec2(4., 4.)), (vec2(-4., 4.), vec2(4., -4.))] {
+    let canvas = painter.clip_rect().shrink(4.);
+    let mut center = pointer + vec2(50., 24.);
+    if center.x + 9. > canvas.right() {
+        center.x = pointer.x - 30.;
+    }
+    if center.y + 9. > canvas.bottom() {
+        center.y = pointer.y - 24.;
+    }
+    center.x = center.x.clamp(canvas.left() + 24., (canvas.right() - 9.).max(canvas.left() + 24.));
+    center.y = center.y.clamp(canvas.top() + 9., (canvas.bottom() - 9.).max(canvas.top() + 9.));
+    for stroke in [Stroke::new(4.5, t.canvas), Stroke::new(2., t.accent)] {
+        for (from, to) in [(vec2(-24., 0.), vec2(0., 0.)), (vec2(-9., -9.), vec2(9., 9.)), (vec2(-9., 9.), vec2(9., -9.))] {
             painter.line_segment([center + from, center + to], stroke);
         }
     }
