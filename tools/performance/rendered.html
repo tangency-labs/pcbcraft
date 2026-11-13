@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PCBcraft rendered performance replay</title>
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden}canvas{width:100%;height:100%}#report{position:absolute;top:0;max-height:100%;overflow:auto;background:white;color:black}</style>
+<canvas id="replay"></canvas><pre id="report">Loading rendered replay…</pre>
+<script type="module">
+let runner;
+// A stalled adapter/module startup must fail without retaining a late-created runner.
+const bounded = async (operation, label, cleanup = () => {}) => {
+  let expired = false;
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {expired = true; reject(new Error(`${label} timed out`));}, 30000);
+  });
+  const pending = Promise.resolve(operation).then(value => {
+    if (expired) {cleanup(value); throw new Error(`${label} completed after timeout`);}
+    return value;
+  });
+  try {return await Promise.race([pending, deadline]);}
+  finally {clearTimeout(timer);}
+};
+try {
+  const params = new URLSearchParams(location.search);
+  const iterations = Number(params.get('iterations') ?? 100);
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > 10000) throw new Error('Invalid iterations');
+  const read = async name => {
+    const url = params.get(name);
+    if (!url) throw new Error(`Missing ${name} URL parameter`);
+    const response = await fetch(url, {signal: AbortSignal.timeout(30000)});
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    return response.text();
+  };
+  const {default: init, start_rendered} = await bounded(import('./pkg/board_perf_web.js'), 'Module import');
+  await bounded(init(), 'WASM initialization');
+  const [artifact, environment] = await Promise.all([read('artifact'), read('environment')]);
+  document.querySelector('#report').hidden = true;
+  runner = await bounded(start_rendered(document.querySelector('#replay'), artifact, environment, iterations, params.get('backend') ?? 'default'),
+    'Renderer startup', value => value.destroy());
+  globalThis.cancelPerformanceReplay = () => {runner.destroy(); globalThis.performanceError = 'Replay cancelled';};
+  for (;;) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    if (globalThis.performanceError) throw new Error(globalThis.performanceError);
+    const report = runner.poll();
+    if (report !== undefined && report !== null) {
+      globalThis.performanceReport = JSON.parse(report);
+      document.querySelector('#report').textContent = report;
+      document.querySelector('#report').hidden = false;
+      break;
+    }
+  }
+} catch (error) {
+  globalThis.performanceError = String(error);
+  document.querySelector('#report').textContent = String(error);
+  document.querySelector('#report').hidden = false;
+} finally {
+  runner?.destroy();
+}
+</script>

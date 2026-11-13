@@ -91,5 +91,8 @@ Raw evidence:
 - [Native capacity smoke](../tools/performance/baselines/native-capacity-smoke.json)
 - [Browser reference](../tools/performance/baselines/browser-reference.json)
 
-#240 remains open for rendered-window timing, broader workload/trace coverage,
-allocation/queue measurements, cross-platform baselines and endurance work.
+At this initial collection, #240 remained open for rendered-window timing,
+broader workloads, allocation/queue measurements, cross-platform baselines and
+endurance work. The subsequent [coverage record](performance-coverage.md)
+describes the extended tooling and its observed limits without rewriting these
+historical samples.

@@ -73,10 +73,19 @@ original fixture set, use a destination that does not already exist:
 cargo run --locked -p pcbcraft-engine --example storage_fixtures -- /tmp/pcbcraft-fixtures-new
 ```
 
-For ERC/routing performance work under #237, read the
-[performance-testing guide](docs/performance-testing.md) before implementation.
-It defines saved workload/replay artifacts, matched native/browser CPU comparisons
-and the measurements still needed for actual display-latency claims.
+For changes affecting routing/checking, geometry queries, connectivity, live MCP edits or editor
+interaction/rendering performance, use the [performance-testing guide](docs/performance-testing.md)
+before implementation. Its runner-selection table links the CPU, native/browser
+rendered and process-resource commands, saved workloads and comparison tools.
+Collect matched before/after evidence for the affected paths and include the raw
+reports, environment, correctness results and any regressions in the PR; the
+[coverage record](docs/performance-coverage.md) explains existing observations and
+measurement limits.
+
+Routine CI verifies the harness and saved reports with short tests. Full rendered
+baselines, allocation profiles and endurance runs are collected separately when
+relevant to the change or release qualification. Unrelated or documentation-only
+changes do not need fresh performance baselines.
 
 ## Choose a bounded change
 

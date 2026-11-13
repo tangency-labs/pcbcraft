@@ -1,0 +1,8 @@
+BROWSER error Failed to load resource: the server responded with a status of 404 (Not Found)
+BROWSER warning [egui_wgpu] egui-wgpu/src/lib.rs:718: Software rasterizer detected - loss of performance expected. backend: BrowserWebGpu, device_type: Cpu, subgroup_size: 4..=4, transient_saves_memory: None, limit_bucket: None
+BROWSER info [eframe::web::web_runner] eframe/src/web/web_runner.rs:94: event handlers installed.
+BROWSER warning A valid external Instance reference no longer exists.
+BROWSER info [pcbcraft_app::performance::rendered] app/src/performance/rendered.rs:282: at_ms=1340.300000011921 inject arm.down: tool=false, routing=false
+BROWSER info [pcbcraft_app::performance::rendered] app/src/performance/rendered.rs:341: at_ms=1345.1000000238419 after arm.up: tool=true, routing=false, pointer=(true, None, false, false, [Key { key: X, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }])
+Error: rendered capture is blank or changed dimensions during replay
+    at /tmp/pcbcraft-240-completion-browser.cjs:22:22

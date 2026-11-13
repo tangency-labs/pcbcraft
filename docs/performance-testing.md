@@ -1,16 +1,42 @@
 # Performance testing for #237
 
 Agents implementing the ERC/routing work in [#237](https://github.com/tangency-labs/pcbcraft/issues/237)
-should use this harness before and after changing a measured path. It is the first
-measurement slice of [#240](https://github.com/tangency-labs/pcbcraft/issues/240),
-which remains open for the unmeasured work below. Timing results describe one
-machine and build; they are evidence for choosing work, rather than portable CI
-pass/fail limits.
+should use this harness before and after changing a measured path. The
+[#240](https://github.com/tangency-labs/pcbcraft/issues/240) infrastructure covers
+CPU replay, actual rendered windows, authenticated native MCP edits and process
+resources. The [coverage record](performance-coverage.md) distinguishes exercised
+boundaries from feature-dependent or unavailable measurements. Timing results
+describe one machine and build; they are evidence for choosing work, rather than
+portable CI pass/fail limits.
+
+## Choose a runner
+
+For changes to the paths below, collect a baseline before implementation and
+repeat the affected workloads afterward with identical saved inputs and matched
+environments. The [AGENTS.md rule](../AGENTS.md#performance-evidence) and
+[contribution guide](../CONTRIBUTING.md#build-and-find-your-way-around) make this
+part of the development workflow even after #240 closes.
+
+| Changed path or question | Tool and instructions |
+| --- | --- |
+| Geometry queries, connectivity, DRC or validated engine commands | `board_perf` with the [CPU collection and comparison commands](#record-native-evidence); the CPU example also has a [browser runner](#record-browser-evidence) |
+| Editor input, routing interaction, painting or live MCP edits | `board_perf_window` and browser `rendered.html`, with [rendered replay and comparison](#rendered-native-and-browser-replay) |
+| Memory/allocation costs, including a new index or worker implementation | Add [process-resource collection](#extended-workloads-and-process-resources) to the affected workload; keep profiler timings separate |
+| Native idle/exposure behavior or the recorded Wayland stall | Use the [idle and presentation diagnostics](#idle-and-presentation-diagnostics) and preserve failed instances for investigation |
+| Harness correctness or ordinary CI verification | Run the short [harness verification](#harness-verification); it validates replay, failure paths and saved evidence without collecting full GPU baselines |
+
+Saved inputs live under `tools/performance/fixtures/`, and recorded results and
+source fingerprints under `tools/performance/baselines/`. Select relevant recipes
+from the tables below and report raw before/after samples, their comparison,
+correctness results and limitations in the PR. New feature-dependent boundaries
+must be added with their owning implementations. Full rendered baselines,
+allocation profiling and endurance sessions are separate targeted runs; routine
+CI and unrelated/documentation-only changes do not collect them.
 
 ## What the harness measures
 
 Enable `pcbcraft-app/performance-harness` to build the diagnostics. Ordinary
-application builds exclude them. Both native and browser runners execute the same
+application builds exclude them. Both native and browser CPU runners execute the same
 engine operations and `PcbApp::frame`, using the existing Craft chrome and board
 painting code. They do not create an eframe window or submit pixels to a GPU.
 
@@ -18,6 +44,7 @@ painting code. They do not create an eframe window or submit pixels to a GPU.
 | --- | --- |
 | `decode.cold` | Unpack, decode and validate a fresh production archive |
 | `connectivity.cold` / `connectivity.cached` | First lazy schematic connectivity construction / subsequent access |
+| `electrical_connectivity.first` / `.repeat` | First/repeated whole-project connectivity projection after sheet access; may clone a named graph or rebuild unnamed connectivity, so neither implies a separate project-cache hit |
 | `clearance.prepare` | Snapshot query preparation, including board copper connectivity and contours |
 | `clearance.pairs` | Current sweep candidate enumeration and represented-contour decisions |
 | `clearance.candidates.empty` / `.crowded` | Candidate enumeration in empty space / through the diagonal copper region |
@@ -77,8 +104,9 @@ native bytes. Retain and reuse the exact artifact across revisions and runtimes;
 reports hash the entire envelope, including the trace. Changing recipes, seeds,
 trace semantics or measurements requires a version change and a new baseline.
 Fixtures are synthetic workloads, not manufacturable reference designs or BGA
-capacity claims. Dedicated BGA, branching/narrow-channel, hierarchy/ERC and curved
-routing recipes remain work for #240 and their owning feature issues.
+capacity claims. The extended recipes below add branching/channel and current
+hierarchy-limit workloads. BGA, ERC progress and curved-routing cases still need
+their owning feature implementations.
 
 `route-reverse-layer-cancel-edit-v1` arms X, starts a route in empty board space,
 reverses pointer direction repeatedly, changes copper layer with PgDn, cancels
@@ -185,8 +213,9 @@ the actual boundary, fixture, profile, sample count and tail distributions. Do n
 turn missing measurements or unsupported features into passes. A useful PR report
 contains the before/after revisions and artifact hashes, environment, comparison,
 correctness results, identified misses and remaining gaps. Explain why the measured
-operation represents the changed feature. Keep #237 and #240 open for incomplete
-acceptance work.
+operation represents the changed feature. Keep the owning feature or qualification
+issue open for its incomplete acceptance work; completing the reusable harness
+does not qualify unimplemented features.
 
 When adding jobs (#243), extend the harness with queue length, coalesced/replaced
 requests, preparation/publication time, cancellation acknowledgement and stale
@@ -196,8 +225,9 @@ When adding an index (#244), retain the current exhaustive oracle and measure co
 build, ordinary updates and disposable overlay queries using identical artifacts;
 record memory and allocation costs before selecting an implementation. Walkaround
 and shove need their own valid-preview/commit traces, reversal and rollback cases.
-ERC needs symbol/hierarchy-limit recipes and progress/cancel coverage. None of
-these future capabilities is supplied by this first harness slice.
+ERC can reuse the symbol/hierarchy-limit recipes added below, but still needs
+progress/cancel coverage with its implementation. Worker and indexed-query
+capabilities are not supplied by this harness.
 
 Actual end-to-end claims require a rendered native/browser window and instrumentation
 at input receipt, valid preview acceptance, frame submission and presentation, with
@@ -216,10 +246,164 @@ resolve the reported overnight Wayland redraw stall.
 cargo test --locked -p pcbcraft-app --features performance-harness performance::
 cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
 cargo check --locked -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
-python3 -m unittest discover -s scripts -p test_compare_performance.py
-node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs
+python3 -B -m unittest discover -s scripts -p 'test*performance*.py'
+node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
 ```
 
 Run the repository's ordinary required checks as well. CI smoke tests establish
 artifact/replay correctness; shared-runner timings are not accepted performance
 baselines and no machine-dependent wall-clock threshold gates CI.
+
+## Rendered native and browser replay
+
+`board_perf_window` and the browser's `rendered.html` open the production editor
+through eframe and submit its geometry to the GPU. They consume the same saved
+artifact and assert route start, reversals, copper-layer change, cancellation
+without authored changes, stale-draft invalidation and an inactive tool at exit.
+Native replay sends the shared edit through a real authenticated loopback MCP
+connection while the window continues painting. Browser replay uses the shared
+engine command because the browser has no native MCP endpoint.
+
+```sh
+cargo build --locked --release -p pcbcraft-app --features performance-harness --example board_perf_window
+# ENVIRONMENT_JSON must identify the window system, GPU/driver, compositor and power conditions.
+target/release/examples/board_perf_window tools/performance/fixtures/reference-v1.json /tmp/window-env.json 100 /tmp/window-report.json
+python3 scripts/compare-rendered-performance.py /tmp/window-before.json /tmp/window-report.json
+```
+
+The diagnostic window uses fresh presentation state, does not restore or save
+user settings and never saves its synthetic project. It requests an exposed,
+fixed 1400×900 window. Close before completion is a failed run. Native runs need
+an available display and loopback sockets; use an isolated display when needed
+and identify software adapters/virtual displays in the environment. A software
+or virtual-display result is not a hardware/compositor baseline.
+
+For the browser, rebuild `board_perf_web` with the existing WASM instructions,
+serve `tools/performance`, and open:
+
+```text
+http://127.0.0.1:8782/rendered.html?artifact=fixtures/reference-v1.json&environment=environment.json&iterations=100
+```
+
+`backend=gl` explicitly selects wgpu's WebGL backend; the default retains eframe's
+normal selection. Keep backend, browser, flags, CSS viewport, device scale and
+headless/headed mode identical in comparisons. A failed WebGPU run cannot be
+silently relabeled as a passing WebGPU baseline after selecting WebGL. Retrieve
+`globalThis.performanceReport` or the visible JSON. `performanceError` is a failed
+run; `cancelPerformanceReplay()` releases the runner without returning a report.
+
+The rendered report has its own schema and comparator. Each boundary retains
+raw samples and nearest-rank p50/p95/p99/max:
+
+| Boundary | Observed interval |
+| --- | --- |
+| `rendered.<step>.ui` | Production app input handling, layout and shape generation |
+| `rendered.<step>.input_to_ui` | Synthetic framework input injection through completion of that app pass; the native shared-edit step also includes transport waiting |
+| `rendered.<step>.input_to_gpu_readback` | Injection through native screenshot callback, or browser canvas pixel readback after frame submission |
+| `rendered.<step>.readback_delivery` | Pixel availability through consumption by the next UI pass, including hashing and delivery/scheduling delay |
+| `mcp.roundtrip` | Native authenticated socket request through its complete reply |
+
+Press/release pairs are delivered atomically in the rendered runner, unlike the
+CPU runner's separate logical frames. GPU readback must not stretch a click into
+a long press. Actions are paced at no more than 60 Hz, using the real framework
+clock; reports record this input policy, so these measurements cannot be compared
+to a different injection policy. One accepted UI pass corresponds to one sample.
+Input batches remain pending across logic-only callbacks until an accepted UI
+pass consumes them; an obscured/temporarily unpainted window must not erase a
+click. The original artifact remains unchanged. Images must have nonzero, stable
+physical dimensions and varying pixels; raw callback deadlines, dropped callbacks,
+state assertion failures and renderer shutdown never produce passing reports.
+The browser page also bounds module import, WASM initialization and renderer
+startup to 30 seconds each, destroying a runner that arrives after its deadline.
+Native startup and accepted UI progress are monitored by a separate 30-second
+watchdog. Intentional idle holds extend that deadline; a stalled event loop cannot
+hide failure merely by preventing its in-app timer from running. Watchdog expiry
+normally exits this diagnostic process with an error and no report. Browser host
+polling likewise rejects 30 seconds without accepted UI progress, independently
+of the app's animation callbacks.
+
+Only one screenshot is outstanding. Native mapping completion is serviced by a
+nonblocking `Device::poll(PollType::Poll)` worker at a 1 ms interval while that
+capture is pending. It stops on completion, cancellation or timeout; the UI never
+joins it or waits on a socket. Browser readback copies the submitted canvas in a
+microtask before the drawing buffer may be discarded. Image-copy and mapping
+costs are included in the readback boundary; hashing follows its timestamp.
+The renderer and last image digest are retained with capture counts and dimensions.
+
+These are rendered **readback** measurements. They include instrumentation costs
+and do not observe physical input arrival or the compositor's presentation time.
+A readback budget miss is evidence about this boundary, not proof of a visible
+preview miss. Do not promote a CPU pass or a GPU readback pass to an
+input-to-photon claim. Native and browser clocks remain separate monotonic domains.
+
+## Extended workloads and process resources
+
+The following original command-generated recipes extend the existing artifacts:
+
+| Recipe | Supported coverage |
+| --- | --- |
+| `board-limits-v1` | Exactly 4,096 tracks and 2,048 vias, with 512 footprints; the older `capacity-v1` artifact stays unchanged |
+| `channels-v1` | 64 footprints, mixed widths/pad sizes, 410 tracks, through vias, two narrow parallel rails and 48 attached branches |
+| `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
+| `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |
+
+Generate with `board_perf generate RECIPE REVISION ARTIFACT`, retain the exact
+artifact, then reuse it across runs. CPU reports now distinguish sheet-local
+connectivity from project-wide electrical connectivity and include a channel
+probe checked against the exhaustive contour reference. BGA/high-pin-count and
+curved tracks remain owned by #251–#253 and #259–#262; straight-track fixtures do
+not qualify unsupported geometry or routing features.
+
+Collect process memory without adding an allocator to production Rust:
+
+```sh
+python3 scripts/collect-performance-resources.py target/release/examples/board_perf tools/performance/fixtures/reference-v1.json /tmp/native-env.json /tmp/reference-resources --iterations 100 --allocations
+```
+
+The output directory must not exist. The collector records executable/artifact
+hashes, commands, raw timings, 10 ms Linux RSS samples and observed process high
+water where available. `--allocations` additionally uses an installed Valgrind
+for a separate one-iteration whole-process allocation count. Its timings have
+profiler overhead and are explicitly named `profiled-timings-not-a-baseline.json`.
+Missing process counters remain unavailable, and missing profiler totals fail
+collection rather than turning into zeros. These measurements include startup,
+decoding, correctness oracles, fonts and reporting; they are not isolated index
+allocation costs. Collection is bounded by a deadline and terminates only its
+own child on failure. Preserve both successful evidence and failure logs.
+
+## Idle and presentation diagnostics
+
+Native replay can hold the same window between complete traces:
+
+```sh
+target/release/examples/board_perf_window tools/performance/fixtures/reference-v1.json /tmp/wayland-env.json 2 /tmp/idle-report.json --idle-seconds 28800 --preserve-on-stall
+```
+
+The report records the requested idle interval and actual total elapsed time.
+A short hold verifies the mechanism; it does not establish eight-hour endurance.
+Use `--preserve-on-stall` for an endurance investigation: the independent watchdog
+reports failure and the diagnostic PID while preserving the process for stacks
+and protocol investigation. Even if it later recovers, it cannot write a passing
+report. End only that diagnostic after collecting evidence. Automated smoke runs
+should omit this flag so failure exits promptly.
+Diagnostic logs timestamp injected actions and their checked app state. For an
+isolated Wayland run, `WAYLAND_DEBUG=client` also records protocol frame callbacks,
+configure/visibility traffic and surface commits. Retain those logs with the
+exact executable hash and environment, explaining clock alignment before comparing
+protocol timestamps with the harness's monotonic milliseconds. Do not enable
+protocol logging on an unrelated user's editing instance.
+
+Follow the workspace's freeze record for occlusion, workspace switching,
+lock/unlock, display sleep/wake and monitor transitions. Record each transition
+and whether painting and File/resize input recover. Replay intentionally owns
+its inputs and synthetic project; an ordinary editor endurance session is also
+needed to qualify normal manual interaction. Preserve a stalled process and
+collect its stacks and traces before recovery. The harness does not claim to fix
+the recorded Wayland stall.
+
+Feature-dependent queue lengths, coalescing, stale completions, index updates,
+ERC progress and walkaround/shove commits must be instrumented with #243–#247,
+#47 and the corresponding feature PRs. This infrastructure supplies reusable
+artifacts, comparisons, rendered replay and resource collection; it cannot
+measure implementations that do not exist. Record Windows/macOS coverage as
+available or unavailable instead of inventing cross-platform results.

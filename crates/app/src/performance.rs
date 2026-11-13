@@ -1,9 +1,17 @@
-//! Opt-in diagnostics for #240 and the #237 routing/checker work. This is CPU measurement,
-//! not GPU presentation or input-to-visible latency. Ordinary application builds exclude it.
+//! Opt-in CPU and rendered diagnostics for #240 and the #237 routing/checker work.
+//! Rendered GPU/canvas readback is distinct from compositor presentation or physical
+//! input-to-visible latency. Ordinary application builds exclude the harness.
 
+#[cfg(target_arch = "wasm32")]
+mod browser_capture;
 mod fixture;
+#[cfg(not(target_arch = "wasm32"))]
+mod remote;
+pub mod rendered;
 mod replay;
 mod report;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod watchdog;
 pub use report::{Environment, Metric, Report};
 
 use pcbcraft_engine::{
@@ -131,14 +139,8 @@ fn verify_probe(query: &ClearanceQuery, contour: &Contour, layers: &[Uuid], actu
     Ok(())
 }
 
-/// Run cold-snapshot and warm-query workloads plus the production editor's CPU input/paint
-/// replay. Invalid fixtures, missed input, oracle disagreement or stale authority fail the run.
-/// Samples are bounded to prevent accidental unbounded runs; no wall-clock budgets gate CI.
-pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> Result<Report> {
-    environment.validate()?;
-    if !(1..=10_000).contains(&iterations) {
-        return Err("iterations must be between 1 and 10000".into());
-    }
+/// Validate the envelope and versioned trace before any diagnostic can emit evidence.
+fn load_artifact(artifact_json: &str) -> Result<Artifact> {
     let artifact: Artifact = serde_json::from_str(artifact_json).map_err(|e| e.to_string())?;
     if artifact.schema != "pcbcraft-performance-fixture/1"
         || artifact.project_sha256 != digest(&artifact.project)
@@ -153,11 +155,22 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
     {
         return Err("standard trace ID does not match its versioned steps".into());
     }
+    Ok(artifact)
+}
+
+/// Run cold-snapshot and warm-query workloads plus the production editor's CPU input/paint
+/// replay. Invalid fixtures, missed input, oracle disagreement or stale authority fail the run.
+/// Samples are bounded to prevent accidental unbounded runs; no wall-clock budgets gate CI.
+pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> Result<Report> {
+    environment.validate()?;
+    if !(1..=10_000).contains(&iterations) {
+        return Err("iterations must be between 1 and 10000".into());
+    }
+    let artifact = load_artifact(artifact_json)?;
     let source = decode_packed(&artifact.project)?.project;
     let view = source.board_view(artifact.board).ok_or("fixture board target does not exist")?;
     let track = view.tracks().first().ok_or("fixture requires a track for publication")?.id;
-    let geometry =
-        json!({"symbols":source.symbols().len(),"tracks":view.tracks().len(),"vias":view.vias().len(),"footprints":view.footprints().count()});
+    let geometry = json!({"symbols":source.all_symbols().count(),"sheets":source.sheets().len(),"tracks":view.tracks().len(),"vias":view.vias().len(),"footprints":view.footprints().count()});
     let mut samples = BTreeMap::new();
     for iteration in 0..iterations {
         let project = timed(&mut samples, "decode.cold", || decode_packed(&artifact.project))?.project;
@@ -165,6 +178,8 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         session.open_snapshot(project.clone());
         timed(&mut samples, "connectivity.cold", || black_box(project.connectivity()));
         timed(&mut samples, "connectivity.cached", || black_box(project.connectivity()));
+        timed(&mut samples, "electrical_connectivity.first", || black_box(project.electrical_connectivity()));
+        timed(&mut samples, "electrical_connectivity.repeat", || black_box(project.electrical_connectivity()));
         let query =
             timed(&mut samples, "clearance.prepare", || session.clearance_query(artifact.board, DEFAULT_CLEARANCE_NM)).map_err(|e| e.to_string())?;
         let pairs = timed(&mut samples, "clearance.pairs", || black_box(query.pairs()));
@@ -176,6 +191,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         for (id, start, end) in [
             ("empty", Point { x_nm: -5_080_000, y_nm: -5_080_000 }, Point { x_nm: 5_080_000, y_nm: -5_080_000 }),
             ("crowded", Point { x_nm: 100_000_000, y_nm: 25_000_000 }, Point { x_nm: 110_000_000, y_nm: 35_000_000 }),
+            ("channel", Point { x_nm: 100_000_000, y_nm: 60_750_000 }, Point { x_nm: 140_000_000, y_nm: 60_750_000 }),
         ] {
             let probe = Contour::segment(start, end, 250_000).map_err(|e| e.to_string())?;
             let candidates =
@@ -221,7 +237,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         unmeasured: [
             "input-to-visible / GPU presentation",
             "native event-loop scheduling and Wayland endurance",
-            "allocator counts / peak memory",
+            "per-operation allocator/index memory (whole-process collection is separate)",
             "background queues / cancellation / progress (not implemented)",
             "spatial index updates (not implemented)",
             "ERC / walkaround / shove (not implemented)",
@@ -316,6 +332,22 @@ mod tests {
         assert_eq!(project.symbols().len(), 128);
         assert_eq!(board.tracks().len(), 1008);
         assert_eq!(board.vias().len(), 112);
+    }
+
+    /// New recipes must round-trip through production codecs and exercise real supported
+    /// sheet ownership and crowded branch copper rather than only changing workload labels.
+    #[test]
+    fn branch_and_hierarchy_recipes_have_their_declared_geometry() {
+        let channels: Artifact = serde_json::from_str(&generate("channels-v1", "test").unwrap()).unwrap();
+        let project = decode_packed(&channels.project).unwrap().project;
+        let board = project.board_view(channels.board).unwrap();
+        assert_eq!(board.tracks().len(), 410);
+        let hierarchy: Artifact = serde_json::from_str(&generate("hierarchy-v1", "test").unwrap()).unwrap();
+        let project = decode_packed(&hierarchy.project).unwrap().project;
+        assert_eq!(project.sheets().len(), 64);
+        assert_eq!(project.all_symbols().count(), 64);
+        assert_eq!(project.sheets().filter(|sheet| project.parent_sheet(sheet.target).is_some()).count(), 63);
+        assert!(!project.electrical_connectivity().nets.is_empty());
     }
 
     /// Corrupt archives, unsupported recipes and invalid sample/environment metadata must

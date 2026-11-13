@@ -1,0 +1,10 @@
+{
+  "revision": "14bbda9ec1f8e4fc80b309010dae53f0b420447a + source SHA-256 f6599391441cc9e94ea6c461eb922188a8894bb4a95ebc9175389ec5bd6da62a",
+  "hardware": "AMD Ryzen 9 7950X 16-Core Processor; MemTotal:       65006780 kB",
+  "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "runtime": "eframe native rendered replay; GNOME Wayland; normal adapter selection",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "profile": "release",
+  "power": "CPU governor performance; AC/thermal state unmeasured; concurrent development/browser activity recorded, not controlled",
+  "notes": "Current-source observations, not an optimization or cross-runtime comparison. Source/binary hashes retained in source.json. Short rendered replay only; no overnight endurance claim. Native launcher matches shipping Linux integrated titlebar/decorations. One iteration is smoke only."
+}

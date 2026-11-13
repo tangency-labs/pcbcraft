@@ -1,0 +1,30 @@
+{
+  "base_revision": "14bbda9ec1f8e4fc80b309010dae53f0b420447a",
+  "source_sha256": "38b237e4b049b230fe298cd7f17a1756c100e58f1a84d2cf16c9cdeed1b6ce9b",
+  "files": {
+    "Cargo.lock": "07c12e83ad3ecbd0f60a3f6bb53919406658f22721e3fffcb2ffdd759931d821",
+    "crates/app/Cargo.toml": "4cd1adcbb8ead7f5261c4868aa544077065a89df545f66a47b3e65d4ab88c255",
+    "crates/app/examples/board_perf_web.rs": "93ec4e7a83ef3e85888ce71075069012668019084a3728202f707305eb7ee7af",
+    "crates/app/examples/board_perf_window.rs": "3ab4175f3d09e01f5591669d9ce58d0e8a66b4403dfb19c462460f0a89aae5b3",
+    "crates/app/src/performance.rs": "d1365f2d5275cb3fcaaaf0f545ed0939229574c26490ec5456c380542fa3c278",
+    "crates/app/src/performance/browser_capture.rs": "8354aba3112aa14b0b6616e41a7dfe88b79073b224fc5f6e9a2d78236ebeb9fe",
+    "crates/app/src/performance/fixture.rs": "daee48c30c8a138056cc20bbc418e197cb3a26912760d6dc5ef9c9c19a11d394",
+    "crates/app/src/performance/remote.rs": "9545167ce580bef29c1091012c0a7a0754216758b7544e34a67399e5c85cb609",
+    "crates/app/src/performance/rendered.rs": "b7b5f8cf30878e6bdbca7a6279465d4288bb9ba2f5dd1b07317b44b39a687d6f",
+    "crates/app/src/performance/replay.rs": "0cc373e18431f67b980c2c4c2c92e96b00d87a885f63604991a87d3f51b40e3b",
+    "crates/app/src/performance/watchdog.rs": "b01868847a96ab27952f665d239fc2c085509166b476c03dc977d600a39c77b0",
+    "scripts/collect-performance-resources.py": "63f9b4e4443575d80340b7cfbefc45abec8d68d110542bac9aada034550828d2",
+    "scripts/compare-rendered-performance.py": "05c3098c635347fe68091ea27257511af2b46faa4fa95ce5374996bed2a8f31a",
+    "scripts/test-rendered-performance-page.cjs": "9ebef831290adecc05428c64ecdea314f1b2b4a7e025cb86a1a44446497f839a",
+    "scripts/test_performance_evidence.py": "286b776d1360c04d25e7b932dc437bd83ebef4e7e1506b469c76a39512dd88e2",
+    "scripts/test_performance_resources.py": "6706890a4d388e915201253011bc1ecdb03f983ee52c17c610f6b77d7d089f34",
+    "scripts/test_rendered_performance.py": "0eb8272333d85a7c2d73464b51e98da1f3703a1685c92c15fbf08804f4fceaa4",
+    "tools/performance/rendered.html": "c8191ca0a4df5bbcb225fbcc66f0e1963c4dd29229ebfe815329d621f94a4fdd"
+  },
+  "source_archive_sha256": "3dabf0403cd2ffc5c4910b6b1d1957d0b389618e23c5febcb25bd997617a7584",
+  "board_perf_window_sha256": "fe45b6a319b3d6449f9cc511b2948a97be302e0cde9365f3fa18c3c8f21051b6",
+  "raw_wasm_sha256": "3b829a3c0a1c392846eff06972d528d84fe3d0f1ce39a3bf879c3afa12be5533",
+  "optimized_wasm_sha256": "3776df7829ddc697535d86bc747e979f5eaa4087b8a13d1754463926c0971ae4",
+  "generated_glue_sha256": "784a379997285185170c40d6a002636a2295bfb229fbacbbf70e537bd311e38d",
+  "postprocessing": "wasm-bindgen 0.2.130 --target web; wasm-opt 123 -Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+}

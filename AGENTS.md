@@ -122,9 +122,26 @@ In the PR description, name the failure paths reviewed and distinguish the ones 
 
 ## Performance evidence
 
-Before implementing or optimizing the ERC/routing work under #237, read
-[the performance-testing guide](docs/performance-testing.md). Use its saved
-command-generated fixtures and replay traces for matched before/after runs,
-retain raw samples and environment metadata, and report unmeasured budgets
-explicitly. CPU replay timings do not establish input-to-visible latency or
-resolve the workspace's recorded Wayland endurance failure.
+Before changing routing, ERC/DRC, geometry queries, connectivity, snapshot
+preparation/publication, live MCP edits, or performance-sensitive editor input/rendering paths,
+read [the performance-testing guide](docs/performance-testing.md) and its
+[coverage record](docs/performance-coverage.md). Select the saved command-generated
+fixtures and runners affected by the change: CPU replay for engine costs,
+native/browser rendered replay for editor/renderer or live MCP behavior, and
+process-resource collection for memory/allocation claims. Record a baseline
+before implementation and rerun the same artifacts afterward under matched
+conditions on affected, available targets.
+
+Include revisions, artifact hashes, environment/build metadata, raw samples,
+comparisons and correctness results in the PR. Explain regressions and unavailable
+or unmeasured boundaries; a faster result must still pass the oracle and replay
+assertions. Extend the measurements with the feature when adding worker queues,
+an index, ERC progress or new routing behavior. These instructions continue to
+apply after the initial infrastructure issue #240 closes.
+
+Routine CI runs the short harness checks and saved-evidence validators. Full
+100-iteration rendered baselines, allocation profiling and endurance sessions
+are targeted development/qualification runs, rather than requirements for every
+PR. Documentation, copy and unrelated changes need the ordinary required checks,
+without fresh performance baselines. CPU or GPU-readback timings do not establish
+compositor presentation latency or resolve the recorded Wayland endurance failure.
