@@ -648,6 +648,38 @@ fn properties_edit_the_selected_track_width() {
     assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 400_000);
 }
 
+/// Accepted copper edits disable all properties until publication, then expose the new model
+/// values without disturbing the existing form's layout or accessible control identities.
+#[test]
+fn copper_properties_wait_for_pending_publication() {
+    let mut h = routable();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":0,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let id = vias(&h)[0].id;
+    h.state_mut().views.active.board.tracks.selected = std::collections::BTreeSet::from([id]);
+    h.run();
+    let source = h.state().views.active.input(&h.state().session).unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().prepare_canvas_copper(crate::board_drawing::Command::new(
+        source,
+        pcbcraft_engine::SET_VIA_SIZE,
+        json!({"vias":[id],"via_diameter_nm":800_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    ));
+    h.step();
+    for label in ["Copper lock", "Selected via pad", "Selected via drill"] {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+    }
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(vias(&h)[0].diameter_nm, 800_000);
+    for label in ["Copper lock", "Selected via pad", "Selected via drill"] {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+    }
+}
+
 /// Let the asynchronous checker finish through ordinary application frames.
 fn finish_drc(h: &mut Harness<'_, PcbApp>) {
     for _ in 0..1000 {
@@ -1709,6 +1741,55 @@ fn checker_escape_navigation_and_view_release_preserve_authored_state() {
     assert!(!h.state().views.active.board.drc.pending());
     assert_eq!(h.state().session.revision(), revision);
     assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+}
+
+/// Higher-priority keyboard owners retain Escape while a checker is pending. The unclaimed
+/// canvas key still cancels the checker through the same shortcut dispatcher.
+#[test]
+fn checker_escape_respects_popup_text_and_assistant_keyboard_ownership() {
+    let mut h = routable();
+    let ctx = h.ctx.clone();
+    let popup = egui::Id::unique("checker escape host popup");
+    h.state_mut().run_drc();
+    egui::Popup::open_id(&ctx, popup);
+    h.key_press(Key::Escape);
+    h.step();
+    assert!(h.state().views.active.board.drc.pending(), "the host must not steal a popup's Escape");
+    egui::Popup::close_id(&ctx, popup);
+    h.state_mut().views.active.board.drc.cancel();
+    for owner in 0..4 {
+        h.state_mut().run_drc();
+        let popup = egui::Id::unique("checker escape owner");
+        if owner == 0 {
+            egui::Popup::open_id(&ctx, popup);
+        }
+        let mut text = String::new();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                focused: true,
+                events: vec![egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = ui.ctx().clone();
+                if owner == 1 {
+                    ui.text_edit_singleline(&mut text).request_focus();
+                    assert!(ctx.egui_wants_keyboard_input());
+                }
+                let view = h.state().views.active.id();
+                h.state_mut().shortcuts(&ctx, owner == 2, view);
+                assert_eq!(h.state().views.active.board.drc.pending(), owner != 3);
+                assert_eq!(ctx.input(|i| i.key_pressed(Key::Escape)), owner != 3);
+            },
+        );
+        egui::Popup::close_id(&ctx, popup);
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
+        h.state_mut().views.active.board.drc.cancel();
+    }
 }
 
 /// A route remains a neutral ghost while preparation is pending. Escape during that interval

@@ -37,6 +37,11 @@ collection polls at one-millisecond intervals; browser timing resolution can
 report small operations as zero. These are service-cost observations, not physical
 input-to-visible measurements.
 
+Review found that the retained native `route.cancel_acknowledgement` samples also
+include one one-millisecond sleep after completion was observed. The diagnostic
+now stops timing before that sleep. The saved samples retain their original
+values and this limitation; they were not rerun or adjusted for the correction.
+
 Broad editor replay did not isolate the changed scheduler. Transient slowdowns
 also appeared in unchanged UI/tessellation work, so these reports do not establish
 that the scheduler caused those tails or that the whole editor became faster.

@@ -75,6 +75,9 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         queue.cancel();
         while queue.busy() {
             let _ = timed(&mut samples, "route.queue_poll", || queue.poll());
+            if !queue.busy() {
+                break;
+            }
             if clock_ms() - began > 30_000. {
                 return Err("route cancellation acknowledgement timed out".into());
             }

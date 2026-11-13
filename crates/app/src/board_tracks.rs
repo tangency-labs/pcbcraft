@@ -253,13 +253,17 @@ impl State {
     pub(super) fn route_contact(&self) -> Option<&RouteContact> {
         self.draft.as_ref()?.contact.as_ref()
     }
-    /// Whether a tool or an unfinished route owns canvas input.
+    /// Whether a tool, unfinished route or accepted pending commit owns canvas input.
     pub(super) fn busy(&self) -> bool {
-        self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some() || self.segment.is_some()
+        self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some() || self.segment.is_some() || self.preparation.committing()
     }
     /// Current preparation state for the focused route's status bar.
     pub(super) fn preparation_status(&self) -> Option<String> {
         self.preparation.status()
+    }
+    /// Property controls remain read-only until the accepted copper edit is published or canceled.
+    pub(super) fn committing(&self) -> bool {
+        self.preparation.committing()
     }
 
     /// The displacement to paint selected copper with: a move in progress, or one just submitted.
@@ -1029,7 +1033,7 @@ pub(super) fn paint_draft(
                 params["via_diameter_nm"] = json!(state.via_diameter_nm);
                 params["via_drill_nm"] = json!(state.via_drill_nm);
             }
-            state.preparation.request(
+            let _ = state.preparation.request(
                 Command::new(draft.source, pcbcraft_engine::ADD_TRACKS, params),
                 active.map(str::to_owned),
                 (state.width_nm, state.via_diameter_nm, state.via_drill_nm),

@@ -39,6 +39,7 @@ pub(super) struct Preparation {
     generation: u64,
     notice: Option<String>,
     failed: bool,
+    retryable_failure: bool,
     pub stale: u64,
 }
 impl std::fmt::Debug for Preparation {
@@ -48,14 +49,23 @@ impl std::fmt::Debug for Preparation {
     }
 }
 impl Preparation {
-    /// Replace only obsolete work. Promoting the same preview to a commit reuses its validation.
-    pub(super) fn request(&mut self, edit: Command, layer: Option<String>, sizes: (i64, i64, i64), commit: bool) {
+    /// Coalesce previews but refuse changes while a final edit awaits publication. Promoting
+    /// the same preview reuses validation, or retries a scheduling failure on explicit commit.
+    pub(super) fn request(&mut self, edit: Command, layer: Option<String>, sizes: (i64, i64, i64), commit: bool) -> Result<(), &'static str> {
         let key = Key { source: edit.source, command: edit.id, params: edit.params, layer, sizes };
         if let Some(wanted) = &mut self.wanted
             && wanted.key == key
         {
+            if commit && !wanted.commit && self.retryable_failure {
+                self.failed = false;
+                self.retryable_failure = false;
+                self.notice = None;
+            }
             wanted.commit |= commit;
-            return;
+            return Ok(());
+        }
+        if self.committing() {
+            return Err("A copper edit is still preparing; wait for it to finish");
         }
         self.generation = self.generation.wrapping_add(1);
         self.queue.cancel();
@@ -63,6 +73,8 @@ impl Preparation {
         self.wanted = Some(Wanted { key, generation: self.generation, commit });
         self.notice = None;
         self.failed = false;
+        self.retryable_failure = false;
+        Ok(())
     }
     /// Revoke publication immediately; worker cancellation remains cooperative and never joins.
     pub(super) fn cancel(&mut self) {
@@ -72,6 +84,7 @@ impl Preparation {
         self.queue.cancel();
         self.notice = None;
         self.failed = false;
+        self.retryable_failure = false;
     }
     /// A final route awaits authoritative publication, retaining its ghost until completion.
     pub(super) fn committing(&self) -> bool {
@@ -125,6 +138,7 @@ impl Preparation {
                         let commit = wanted.commit;
                         self.ready = None;
                         self.failed = true;
+                        self.retryable_failure = completion.retryable;
                         self.notice = Some(error.clone());
                         if commit {
                             self.wanted = None;
@@ -147,6 +161,9 @@ impl Preparation {
                 let source = wanted.key.source;
                 self.wanted = None;
                 self.queue.cancel();
+                // Publication retires this source even before the next host poll. A new
+                // property edit must capture the published revision rather than inherit it.
+                self.context = None;
                 return Some(Ok((source, ready.edit)));
             }
             self.ready = Some(ready);
@@ -167,6 +184,7 @@ impl Preparation {
                 Err(error) => {
                     let commit = self.committing();
                     self.failed = true;
+                    self.retryable_failure = false;
                     self.notice = Some(error.clone());
                     if commit {
                         self.wanted = None;
@@ -187,7 +205,9 @@ impl PcbApp {
     pub(crate) fn prepare_canvas_copper(&mut self, edit: Command) {
         let tracks = &mut self.views.active.board.tracks;
         let sizes = (tracks.width_nm, tracks.via_diameter_nm, tracks.via_drill_nm);
-        tracks.preparation.request(edit, self.views.active.board.active_layer.clone(), sizes, true);
+        if let Err(error) = tracks.preparation.request(edit, self.views.active.board.active_layer.clone(), sizes, true) {
+            self.message = Some(error.into());
+        }
     }
     /// Publish only current view-owned prepared commands through the shared session transaction.
     /// Polling never waits on a worker, and a source change invalidates other views' pending edits.
@@ -271,18 +291,92 @@ mod tests {
     fn poll(p: &mut Preparation, s: &Session, view: &EditorView, layer: &str) -> Option<Result<(ViewInput, PreparedCopperEdit), String>> {
         p.poll(s, view.input(s), view.board.target, Some(layer), (250_000, 600_000, 300_000))
     }
+    /// Only scheduler failures retry on explicit promotion; invalid geometry remains cached.
+    #[test]
+    fn explicit_commit_retries_scheduling_failure_without_retrying_invalid_geometry() {
+        for retryable in [false, true] {
+            let (s, view, layer) = fixture();
+            let mut p = Preparation::default();
+            p.request(command(&s, &view, &layer, 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), false).unwrap();
+            // Reproduce the state left by a terminal preview completion. The native capacity
+            // regression separately verifies that the scheduler marks that error retryable.
+            p.failed = true;
+            p.retryable_failure = retryable;
+            p.notice = Some("preview failed".into());
+            p.request(command(&s, &view, &layer, 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), true).unwrap();
+            let mut result = None;
+            for _ in 0..30 {
+                if let Some(done) = poll(&mut p, &s, &view, &layer) {
+                    result = Some(done);
+                    break;
+                }
+            }
+            assert_eq!(result.unwrap().is_ok(), retryable);
+        }
+    }
+
+    /// A second commit and pointer preview cannot replace an accepted property edit. Once it
+    /// publishes, a new edit uses the updated model, so paired via dimensions are retained.
+    #[test]
+    fn pending_property_commit_is_owned_and_cannot_be_replaced() {
+        let (mut s, mut view, layer) = fixture();
+        s.apply(
+            pcbcraft_engine::ADD_VIA,
+            &json!({"at":{"x_nm":0,"y_nm":0},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        view.bind_opened_project(&s);
+        view.switch(Workspace::Board, &s);
+        let id = s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().vias()[0].id;
+        let edit = |s: &Session, pad, drill| {
+            Command::new(
+                view.input(s).unwrap(),
+                pcbcraft_engine::SET_VIA_SIZE,
+                json!({"vias":[id],"via_diameter_nm":pad,"via_drill_nm":drill,"expected_revision":s.revision()}),
+            )
+        };
+        let mut state = State::default();
+        state.preparation.request(edit(&s, 800_000, 300_000), Some(layer.clone()), (250_000, 600_000, 300_000), true).unwrap();
+        assert!(state.busy(), "a released edit keeps canvas ownership while preparing");
+        let generation = state.preparation.generation;
+        for commit in [true, false] {
+            assert!(state.preparation.request(edit(&s, 600_000, 400_000), Some(layer.clone()), (250_000, 600_000, 300_000), commit).is_err());
+            assert_eq!(state.preparation.generation, generation);
+        }
+        let revision = s.revision();
+        for _ in 0..30 {
+            if let Some(result) = poll(&mut state.preparation, &s, &view, &layer) {
+                s.commit_copper_edit(result.unwrap().1).unwrap();
+                break;
+            }
+        }
+        assert_eq!(s.revision(), revision + 1);
+        let via = &s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().vias()[0];
+        assert_eq!((via.diameter_nm, via.drill_nm), (800_000, 300_000));
+        state.preparation.request(edit(&s, via.diameter_nm, 400_000), Some(layer.clone()), (250_000, 600_000, 300_000), true).unwrap();
+        for _ in 0..30 {
+            if let Some(result) = poll(&mut state.preparation, &s, &view, &layer) {
+                s.commit_copper_edit(result.unwrap().1).unwrap();
+                break;
+            }
+        }
+        assert_eq!(s.revision(), revision + 2);
+        let via = &s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().vias()[0];
+        assert_eq!((via.diameter_nm, via.drill_nm), (800_000, 400_000));
+    }
+
     /// Pointer replacement discards completed but unconsumed older work, reuses the source context,
     /// retains bounded state and promotes only the latest ready preview to one final transaction.
     #[test]
     fn coalesced_preview_and_out_of_order_completion_publish_only_latest() {
         let (mut s, view, layer) = fixture();
         let mut p = Preparation::default();
-        p.request(command(&s, &view, &layer, 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), false);
+        p.request(command(&s, &view, &layer, 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), false).unwrap();
         poll(&mut p, &s, &view, &layer);
         // Leave the active request unconsumed while replacing its publication generation.
         // Even a finished worker is obsolete before the next host poll.
         for x in 2..100 {
-            p.request(command(&s, &view, &layer, x * 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), false);
+            p.request(command(&s, &view, &layer, x * 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), false).unwrap();
         }
         assert!(p.ready.is_none());
         for _ in 0..30 {
@@ -290,7 +384,7 @@ mod tests {
         }
         assert!(p.ready());
         let revision = s.revision();
-        p.request(command(&s, &view, &layer, 99_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), true);
+        p.request(command(&s, &view, &layer, 99_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), true).unwrap();
         let (_, edit) = poll(&mut p, &s, &view, &layer).unwrap().unwrap();
         s.commit_copper_edit(edit).unwrap();
         assert_eq!(s.revision(), revision + 1);
@@ -302,7 +396,11 @@ mod tests {
     fn canceled_or_changed_view_authority_never_publishes() {
         for mode in 0..7 {
             let (mut s, mut view, layer) = fixture();
-            view.board.tracks.preparation.request(command(&s, &view, &layer, 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), true);
+            view.board
+                .tracks
+                .preparation
+                .request(command(&s, &view, &layer, 1_000_000), Some(layer.clone()), (250_000, 600_000, 300_000), true)
+                .unwrap();
             // Take preparation out briefly to exercise the owner API without aliasing the view.
             let mut p = std::mem::take(&mut view.board.tracks.preparation);
             poll(&mut p, &s, &view, &layer);

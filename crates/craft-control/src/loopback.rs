@@ -134,17 +134,29 @@ impl Connection {
     /// own this connection exclusively: the nonblocking setting is restored before returning.
     /// Buffered or pending input means the peer has not yet been observed closed.
     pub fn peer_closed(&self) -> io::Result<bool> {
+        Ok(self.pending_input()? == Some(0))
+    }
+
+    /// Invalidate a single-request exchange on shutdown or any unexpected trailing input.
+    /// This includes bytes already buffered during authentication and bytes still in the socket;
+    /// callers supporting multiple frames should use `peer_closed` instead.
+    pub fn peer_closed_or_pending_input(&self) -> io::Result<bool> {
+        Ok(self.pending_input()?.is_some())
+    }
+
+    /// Probe without consuming data: None means no observed input, zero means shutdown, and
+    /// a positive count means buffered or socket input. Restore blocking I/O before returning.
+    fn pending_input(&self) -> io::Result<Option<usize>> {
         if !self.reader.buffer().is_empty() {
-            return Ok(false);
+            return Ok(Some(self.reader.buffer().len()));
         }
         let socket = &self.reader.get_ref().socket;
         socket.set_nonblocking(true)?;
         let result = socket.peek(&mut [0]);
         socket.set_nonblocking(false)?;
         match result {
-            Ok(0) => Ok(true),
-            Ok(_) => Ok(false),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Ok(count) => Ok(Some(count)),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error),
         }
     }

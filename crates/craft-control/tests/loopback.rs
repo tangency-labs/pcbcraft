@@ -77,6 +77,36 @@ fn stalled_first_request_reports_timed_out() -> io::Result<()> {
     Ok(())
 }
 
+/// Single-request peers reject both reader-buffered and subsequently arriving bytes without
+/// changing the ordinary multi-frame connection's shutdown semantics.
+#[test]
+fn single_request_rejects_buffered_and_socket_trailing_input() -> io::Result<()> {
+    for buffered in [false, true] {
+        let listener = Listener::bind(0)?;
+        let mut sender = TcpStream::connect((Ipv4Addr::LOCALHOST, listener.port()?))?;
+        if buffered {
+            sender.write_all(b"{}\nx")?;
+        } else {
+            sender.write_all(b"{}\n")?;
+        }
+        let mut peer = listener.accept(TIMEOUT)?;
+        assert_eq!(peer.receive(16)?, Some(json!({})));
+        if !buffered {
+            assert!(!peer.peer_closed_or_pending_input()?);
+            sender.write_all(b"x")?;
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while !peer.peer_closed_or_pending_input()? {
+            assert!(std::time::Instant::now() < deadline);
+            thread::yield_now();
+        }
+        assert!(!peer.peer_closed()?, "ordinary multi-frame clients can still receive trailing input");
+        drop(sender);
+        assert!(peer.peer_closed_or_pending_input()?);
+    }
+    Ok(())
+}
+
 /// Observing a peer shutdown never waits for the socket's two-second frame timeout.
 #[test]
 fn observes_disconnect_without_waiting_for_a_frame() -> io::Result<()> {

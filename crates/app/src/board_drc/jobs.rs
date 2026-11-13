@@ -50,6 +50,8 @@ pub(crate) struct Completion<T = Report> {
     pub id: u64,
     pub source: CheckSource,
     pub report: Result<Option<T>, String>,
+    /// Scheduling failed before engine validation, so an explicit retry may run again.
+    pub retryable: bool,
 }
 /// Bounded scheduling retains one active and one replaceable pending request per owner.
 pub(crate) struct Queue<J: Work = CheckJob> {
@@ -169,6 +171,7 @@ mod incremental {
                 id: request.id,
                 source: request.job.source().clone(),
                 report: if self.canceled { Ok(None) } else { request.job.take_output() },
+                retryable: false,
             })
         }
 
@@ -202,7 +205,7 @@ mod native {
     /// Bound CPU checker workers across every view and live MCP endpoint in this process.
     #[cfg(test)]
     pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
-    static ACTIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static ACTIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
     struct WorkerSlot;
     impl WorkerSlot {
         /// Refuse excess work immediately rather than allocating another worker thread.
@@ -231,6 +234,7 @@ mod native {
         cancel: Arc<AtomicBool>,
         progress: Arc<Mutex<CheckProgress>>,
         result: Receiver<Result<Option<J::Output>, String>>,
+        retryable: bool,
     }
     impl<J: Work> Running<J> {
         /// Own a snapshot on one worker; its one-result channel never blocks publication.
@@ -243,7 +247,7 @@ mod native {
             let id = request.id;
             let Some(slot) = WorkerSlot::acquire() else {
                 let _ = tx.try_send(Err("Snapshot worker capacity reached; retry after a running job completes".into()));
-                return Self { id, source, cancel, progress, result };
+                return Self { id, source, cancel, progress, result, retryable: true };
             };
             let failed = tx.clone();
             let spawned = std::thread::Builder::new().name("pcbcraft-snapshot".into()).spawn(move || {
@@ -264,10 +268,11 @@ mod native {
                 };
                 let _ = tx.try_send(report);
             });
+            let retryable = spawned.is_err();
             if let Err(error) = spawned {
                 let _ = failed.try_send(Err(format!("Could not start snapshot job: {error}")));
             }
-            Self { id, source, cancel, progress, result }
+            Self { id, source, cancel, progress, result, retryable }
         }
         /// Captured source, absent after an incremental request has been consumed.
         pub fn source(&self) -> Option<&CheckSource> {
@@ -288,7 +293,7 @@ mod native {
                 Err(TryRecvError::Empty) => return None,
                 Err(TryRecvError::Disconnected) => Err("Snapshot worker stopped before completing".into()),
             };
-            Some(Completion { id: self.id, source: self.source.clone(), report })
+            Some(Completion { id: self.id, source: self.source.clone(), report, retryable: self.retryable })
         }
     }
 
@@ -315,6 +320,7 @@ mod native {
                 cancel: Arc::new(AtomicBool::new(false)),
                 progress: Arc::new(Mutex::new(job.progress())),
                 result,
+                retryable: false,
             };
             assert!(running.poll().unwrap().report.unwrap_err().contains("stopped"));
         }
@@ -363,7 +369,9 @@ mod native {
             let mut session = pcbcraft_engine::Session::default();
             session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
             let mut running = Running::start(Request { id: 1, job: session.design_check_job(&serde_json::json!({})).unwrap() });
-            assert!(running.poll().unwrap().report.unwrap_err().contains("capacity"));
+            let completion = running.poll().unwrap();
+            assert!(completion.retryable);
+            assert!(completion.report.unwrap_err().contains("capacity"));
             drop(first);
             drop(second);
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
@@ -450,5 +458,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         drop(native::Running::start(request(&s, 3)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while native::ACTIVE_WORKERS.load(std::sync::atomic::Ordering::Acquire) > 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
     }
 }

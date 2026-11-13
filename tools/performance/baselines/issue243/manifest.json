@@ -350,9 +350,9 @@
       "uncompressed_bytes": 8815
     },
     "README.md": {
-      "stored_sha256": "24e879b2facfa4fa6b8876b19c889c883f2ba1d7add50878e243b1de2fb5cd5c",
-      "uncompressed_sha256": "24e879b2facfa4fa6b8876b19c889c883f2ba1d7add50878e243b1de2fb5cd5c",
-      "uncompressed_bytes": 4128
+      "stored_sha256": "093e45d85f725da6808a3b6250e9b6ca2193a5631e93f3378a502edcb89f3bb9",
+      "uncompressed_sha256": "093e45d85f725da6808a3b6250e9b6ca2193a5631e93f3378a502edcb89f3bb9",
+      "uncompressed_bytes": 4447
     }
   },
   "fixtures": {

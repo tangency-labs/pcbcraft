@@ -802,9 +802,10 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         if ends.is_empty() || unique.len() != ends.len() {
             return Err(CommandError::InvalidParams("name each track to reshape once".into()));
         }
+        let positions: BTreeMap<Uuid, usize> = tracks.iter().enumerate().map(|(position, track)| (track.id, position)).collect();
         for ends in &ends {
-            let track = tracks.iter_mut().find(|track| track.id == ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
-            (track.start, track.end) = (ends.start, ends.end);
+            let &position = positions.get(&ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
+            (tracks[position].start, tracks[position].end) = (ends.start, ends.end);
         }
         added.extend(unique);
     } else if command == SET_TRACK_WIDTH {

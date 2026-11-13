@@ -1885,6 +1885,10 @@ impl PcbApp {
                 self.home = false;
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
+            if self.views.active.board.drc.pending() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.views.active.board.drc.cancel();
+                return;
+            }
             // Ctrl temporarily bypasses the routing grid while these tool controls stay available.
             let route_keys = Modifiers { ctrl: self.views.active.board.tracks.tool && ctx.input(|i| i.modifiers.ctrl), ..Modifiers::NONE };
             if ctx.input_mut(|i| i.consume_key(route_keys, Key::Escape))
@@ -2415,9 +2419,6 @@ impl PcbApp {
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
         self.editor_window_focus(&ctx);
-        if self.views.active.board.drc.pending() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            self.views.active.board.drc.cancel();
-        }
         self.views.sync(&self.session);
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();

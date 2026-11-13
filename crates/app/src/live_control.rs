@@ -511,7 +511,8 @@ fn listen(
 }
 
 /// Configure and authenticate one peer before submitting its request to the editor.
-/// Failed authentication or I/O closes only this peer. A full editor queue gets a busy reply.
+/// Failed authentication, I/O or unexpected trailing input closes only this peer. A full editor
+/// queue gets a busy reply; the single-request exchange never leaves trailing bytes unread.
 fn serve_peer(
     peer: AcceptedPeer,
     token: &Token,
@@ -541,7 +542,7 @@ fn serve_peer(
     }
     ctx.request_repaint();
     while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
-        if peer.peer_closed().unwrap_or(true) {
+        if peer.peer_closed_or_pending_input().unwrap_or(true) {
             break;
         }
         match response.recv_timeout(ACCEPT_POLL.min(deadline.saturating_duration_since(Instant::now()))) {
@@ -638,7 +639,7 @@ mod checker_tests {
 #[cfg(test)]
 mod copper_tests {
     use super::*;
-    use craft_control::loopback::Connection;
+    use std::net::{Ipv4Addr, TcpStream};
 
     /// Existing commands provide a board and copper parameters without fixture file surgery.
     fn fixture() -> (PcbApp, egui::Context, Value) {
@@ -711,25 +712,36 @@ mod copper_tests {
         }
     }
     /// The actual socket worker revokes a deferred request when it observes a client disconnect,
-    /// rather than keeping that mutation alive until the original request timeout.
+    /// rather than keeping that mutation alive until the original request timeout. Trailing
+    /// input, including an incomplete frame, cannot conceal the shutdown.
     #[test]
     fn socket_disconnect_revokes_copper_preparation() {
-        let (mut app, ctx, body) = fixture();
-        let endpoint = app.live_control.as_ref().unwrap();
-        let client = Connection::connect(endpoint.port, &endpoint.token, body, Duration::from_secs(2)).unwrap();
-        let r = endpoint.requests.recv_timeout(Duration::from_secs(2)).unwrap();
-        let connected = r.connected.clone();
-        app.start_remote_copper(&ctx, r, false);
-        drop(client);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while connected.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline);
-            thread::yield_now();
+        use std::io::Write;
+        for trailing in [b"".as_slice(), b"x", b"{}\n"] {
+            let (mut app, ctx, mut body) = fixture();
+            let endpoint = app.live_control.as_ref().unwrap();
+            body["token"] = json!(endpoint.token.secret());
+            let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, endpoint.port)).unwrap();
+            let mut frame = serde_json::to_vec(&body).unwrap();
+            frame.push(b'\n');
+            client.write_all(&frame).unwrap();
+            let r = endpoint.requests.recv_timeout(Duration::from_secs(2)).unwrap();
+            let connected = r.connected.clone();
+            let revision = app.session.revision();
+            app.start_remote_copper(&ctx, r, false);
+            client.write_all(trailing).unwrap();
+            drop(client);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while connected.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline);
+                thread::yield_now();
+            }
+            for _ in 0..100 {
+                app.poll_remote_copper(&ctx);
+            }
+            assert_eq!(app.session.revision(), revision);
+            assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
+            assert!(!app.remote_copper.queue.busy());
         }
-        for _ in 0..100 {
-            app.poll_remote_copper(&ctx);
-        }
-        assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
-        assert!(!app.remote_copper.queue.busy());
     }
 }

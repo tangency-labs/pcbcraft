@@ -119,6 +119,9 @@ impl PcbApp {
                         );
                     }
                     [] if !state.tracks.selected.is_empty() => {
+                        if state.tracks.committing() {
+                            ui.disable();
+                        }
                         copper_edit = copper_properties(ui, target, &state.tracks.selected, unit);
                     }
                     [] => {

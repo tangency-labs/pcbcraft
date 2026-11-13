@@ -186,9 +186,10 @@ impl CopperEditJob {
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);
-                if self.candidate.is_none() {
+                if self.candidate.is_none() || self.added.is_empty() {
                     self.phase = 4;
-                    self.result = Some(Ok(PreparedCopperEdit { source: self.context.source.clone(), candidate: None, command: self.command }));
+                    self.result =
+                        Some(Ok(PreparedCopperEdit { source: self.context.source.clone(), candidate: self.candidate.take(), command: self.command }));
                     return Ok(true);
                 }
             }
@@ -353,6 +354,65 @@ mod tests {
         forged["valid"] = json!(true);
         assert!(s.prepare_copper_edit(MOVE_TRACKS, &forged).is_err());
     }
+    /// Deletions finish without projecting pads or traversing contacts, while still rejecting
+    /// stale publication and retaining exact Undo behavior through the ordinary transaction.
+    #[test]
+    fn deletion_skips_contacts_but_retains_candidate_and_source_authority() {
+        let mut s = routed_fixture();
+        s.apply(ADD_TRACKS, &params(&s)).unwrap();
+        let before = encode_documents(s.snapshot().unwrap()).unwrap();
+        let revision = s.revision();
+        let context = s.copper_preparation(view(&s).target).unwrap();
+        let p = json!({"tracks":[view(&s).tracks()[0].id],"expected_revision":revision});
+        let mut job = s.prepare_copper_edit_with(&context, DELETE_TRACKS, &p).unwrap();
+        assert!(job.step(1), "deletion needs no contact-validation batches");
+        assert_eq!(context.base.lock().unwrap().next, 0);
+        let prepared = job.take_result().unwrap().unwrap();
+        let stale = finish(s.prepare_copper_edit(DELETE_TRACKS, &p).unwrap());
+        s.commit_copper_edit(prepared).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        assert!(view(&s).tracks().is_empty());
+        assert!(s.commit_copper_edit(stale).is_err());
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+    }
+
+    /// Indexed reshape lookup handles shuffled selections, preserves exact command results and
+    /// rejects unknown IDs without publishing any of the other endpoint changes.
+    #[test]
+    fn indexed_reshape_preserves_track_identity_and_unknown_id_atomicity() {
+        let mut s = routed_fixture();
+        let mut p = params(&s);
+        p["points"] = json!((0..128).map(|x| Point { x_nm: x * 1_000_000, y_nm: -20_000_000 }).collect::<Vec<_>>());
+        s.apply(ADD_TRACKS, &p).unwrap();
+        let before = s.snapshot().unwrap();
+        let ends: Vec<_> = view(&s)
+            .tracks()
+            .iter()
+            .rev()
+            .map(|track| {
+                json!({"track":track.id,
+            "start":Point {y_nm:track.start.y_nm - 1_000_000,..track.start},
+            "end":Point {y_nm:track.end.y_nm - 1_000_000,..track.end}})
+            })
+            .collect();
+        let p = json!({"tracks":ends,"expected_revision":s.revision()});
+        let mut invalid = p.clone();
+        invalid["tracks"][1]["track"] = json!(Uuid::from_u128(u128::MAX));
+        let mut job = s.prepare_copper_edit(RESHAPE_TRACKS, &invalid).unwrap();
+        while !job.step(256) {}
+        assert!(job.take_result().err().unwrap().to_string().contains("unknown track"));
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        let mut reference = Session::default();
+        reference.open_snapshot(before);
+        let mut reference_params = p.clone();
+        reference_params["expected_revision"] = json!(reference.revision());
+        reference.apply(RESHAPE_TRACKS, &reference_params).unwrap();
+        let prepared = finish(s.prepare_copper_edit(RESHAPE_TRACKS, &p).unwrap());
+        s.commit_copper_edit(prepared).unwrap();
+        assert_eq!(encode_documents(reference.snapshot().unwrap()).unwrap(), encode_documents(s.snapshot().unwrap()).unwrap());
+    }
+
     /// Contact preparation uses the candidate's moved copper, excluding its old location.
     /// Both short failures and lock failures remain atomic under the prepared path.
     #[test]
