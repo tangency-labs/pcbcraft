@@ -1264,6 +1264,7 @@ as literals by the shared kit/look/theme from that revision's
 controls render, including text-edit context menus. Application/electronics copy
 remains host-owned. The extracted shared UI English data follows the same retained
 Brand and Interface notice; no new fonts or unrelated application assets were copied.
+
 ## UI automation adapter
 
 The native UI automation adapter uses the existing pinned

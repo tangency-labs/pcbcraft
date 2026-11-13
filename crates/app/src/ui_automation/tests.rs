@@ -1,6 +1,6 @@
 //! Real editor interactions, queue authority and authenticated MCP discovery.
 use super::*;
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
 
 #[cfg(target_os = "linux")]
 mod native;
@@ -72,6 +72,29 @@ fn named_ribbon_click_and_keyboard_follow_real_editor_tools() {
     command(&mut h, "ui.key", json!({"window":0,"key":"Escape"})).unwrap();
     assert_eq!(finish(&mut h)["state"], "completed");
     assert!(h.state().views.active.schematic.tool.is_none());
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Parts Library's early content return still publishes the shared host's named
+/// controls and accepts queued input without changing the parked project.
+#[test]
+fn library_workspace_retains_shared_automation_host() {
+    let mut h = ready();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    let before = h.state().session.inspect();
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":view,"workspace":"library"})).unwrap();
+    h.run();
+    let handles = command(&mut h, "ui.handles", json!({"window":0,"prefix":"toolbar:Sources:"})).unwrap();
+    assert!(handles["handles"].as_array().unwrap().iter().any(|t| t["name"] == "toolbar:Sources:Add library" && t["enabled"] == true));
+    command(&mut h, "ui.click", json!({"window":0,"target":{"handle":"toolbar:Sources:Add library"}})).unwrap();
+    assert_eq!(finish(&mut h)["state"], "completed");
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    // Completion accepts the click's UI pass; egui paints the newly opened
+    // popup on the following pass rather than making that presentation promise.
+    h.run();
+    h.get_by_label("Choose folder…");
+    h.get_by_label("Choose bundle…");
     assert_eq!(h.state().session.inspect(), before);
 }
 
@@ -168,6 +191,7 @@ fn queue_bounds_duplicate_handles_stale_layout_and_busy_commands_are_refused_ato
     command(&mut h, "ui.key", json!({"window":0,"key":"W"})).unwrap();
     assert!(command(&mut h, "ui.key", json!({"window":0,"key":"Escape"})).unwrap_err().contains("busy"));
     assert!(command(&mut h, "view.fit", json!({"view":0})).unwrap_err().contains("queued UI input"));
+    assert!(command(&mut h, "app.library_source", json!({"view":0,"action":"refresh"})).unwrap_err().contains("queued UI input"));
     command(&mut h, "ui.cancel", json!({})).unwrap();
     finish(&mut h);
     assert_eq!(h.state().session.inspect(), before);

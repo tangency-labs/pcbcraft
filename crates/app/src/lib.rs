@@ -2442,25 +2442,21 @@ impl PcbApp {
     /// Blocked project actions disable editor controls, while native window interactions remain
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
+        let ctx = ui.ctx().clone();
         #[cfg(not(target_arch = "wasm32"))]
         let observing = self.automation.observing;
         #[cfg(target_arch = "wasm32")]
         let observing = false;
         pcbcraft_chrome::automation::begin(ui.ctx(), observing);
         self.editor_host_contents(ui, integrated_titlebar);
-        #[cfg(not(target_arch = "wasm32"))]
-        self.automation_painted(ui.ctx());
-    }
-
-    /// Draw a bound native host while the wrapper owns its named-target snapshot lifecycle.
-    fn editor_host_contents(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
-        let ctx = ui.ctx().clone();
-        self.editor_host_contents(ui, integrated_titlebar);
-        // Native host gestures belong above every workspace and its dialogs.
+        // Native host gestures remain outside every workspace's early return,
+        // while automation publishes only after the complete host pass.
         if integrated_titlebar {
             shell::resize_window_edges(ui);
         }
         self.editor_drag_cursor(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.automation_painted(ui.ctx());
     }
 
     /// Dispatch workspace content without bypassing the common native-host epilogue.

@@ -340,6 +340,13 @@ mod tests {
             let mut h = Harness::builder().with_size(egui::vec2(2000., 1000.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
             h.run();
             assert!(h.get_by_role_and_label(egui::Role::TextInput, "Name").accesskit_node().is_disabled());
+            let ctx = h.ctx.clone();
+            let view = h.state().views.active.id().0;
+            let result = pcbcraft_mcp::live::call_editor(
+                &mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx },
+                &json!({"method":"engine.execute","params":{"command":"app.library_source","params":{"view":view,"action":"refresh","source":"deletable"}}}),
+            );
+            assert!(result.unwrap_err().contains("library folder operation"));
             let before = h.state().library_editors.inspect();
             h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
             h.run();
