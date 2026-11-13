@@ -130,8 +130,15 @@ impl PackedEncoder {
 }
 
 /// Fixed entry metadata makes archives reproducible without affecting working-folder diffs.
+/// Every entry records Unix as its creator with mode 0644, on every platform.
 fn options() -> SimpleFileOptions {
-    SimpleFileOptions::default().compression_method(CompressionMethod::Stored).last_modified_time(zip::DateTime::default()).unix_permissions(0o644)
+    SimpleFileOptions::default()
+        // Left unset, the zip crate records MS-DOS on Windows builds and Unix elsewhere, which
+        // changes the bytes and makes readers derive a mode from DOS attributes instead.
+        .system(zip::System::Unix)
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::default())
+        .unix_permissions(0o644)
 }
 
 /// Read current or previous split archives. Previous manifests are verified before migration
