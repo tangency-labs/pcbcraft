@@ -33,9 +33,10 @@ to collect matched evidence for a change.
 
 GPU readback proves that pixels were produced after a checked app pass. Its transfer,
 software rendering and instrumentation costs prevent treating it as a substitute
-for physical presentation. The tooling extension is reviewable independently;
-the literal input-to-visible acceptance item in #240 is still unfulfilled. Do not
-close that item by interpreting the readback reports as presentation evidence.
+for physical presentation. Actual input-to-visible-preview latency remains
+unmeasured. Presentation qualification under #237 is separate from completion of
+the reusable measurement infrastructure; closing the tooling work does not turn
+this unmeasured boundary into a pass.
 
 ## Recorded platforms
 

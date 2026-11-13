@@ -9,6 +9,30 @@ boundaries from feature-dependent or unavailable measurements. Timing results
 describe one machine and build; they are evidence for choosing work, rather than
 portable CI pass/fail limits.
 
+## Choose a runner
+
+For changes to the paths below, collect a baseline before implementation and
+repeat the affected workloads afterward with identical saved inputs and matched
+environments. The [AGENTS.md rule](../AGENTS.md#performance-evidence) and
+[contribution guide](../CONTRIBUTING.md#build-and-find-your-way-around) make this
+part of the development workflow even after #240 closes.
+
+| Changed path or question | Tool and instructions |
+| --- | --- |
+| Geometry queries, connectivity, DRC or validated engine commands | `board_perf` with the [CPU collection and comparison commands](#record-native-evidence); the CPU example also has a [browser runner](#record-browser-evidence) |
+| Editor input, routing interaction, painting or live MCP edits | `board_perf_window` and browser `rendered.html`, with [rendered replay and comparison](#rendered-native-and-browser-replay) |
+| Memory/allocation costs, including a new index or worker implementation | Add [process-resource collection](#extended-workloads-and-process-resources) to the affected workload; keep profiler timings separate |
+| Native idle/exposure behavior or the recorded Wayland stall | Use the [idle and presentation diagnostics](#idle-and-presentation-diagnostics) and preserve failed instances for investigation |
+| Harness correctness or ordinary CI verification | Run the short [harness verification](#harness-verification); it validates replay, failure paths and saved evidence without collecting full GPU baselines |
+
+Saved inputs live under `tools/performance/fixtures/`, and recorded results and
+source fingerprints under `tools/performance/baselines/`. Select relevant recipes
+from the tables below and report raw before/after samples, their comparison,
+correctness results and limitations in the PR. New feature-dependent boundaries
+must be added with their owning implementations. Full rendered baselines,
+allocation profiling and endurance sessions are separate targeted runs; routine
+CI and unrelated/documentation-only changes do not collect them.
+
 ## What the harness measures
 
 Enable `pcbcraft-app/performance-harness` to build the diagnostics. Ordinary
@@ -189,8 +213,9 @@ the actual boundary, fixture, profile, sample count and tail distributions. Do n
 turn missing measurements or unsupported features into passes. A useful PR report
 contains the before/after revisions and artifact hashes, environment, comparison,
 correctness results, identified misses and remaining gaps. Explain why the measured
-operation represents the changed feature. Keep #237 and #240 open for incomplete
-acceptance work.
+operation represents the changed feature. Keep the owning feature or qualification
+issue open for its incomplete acceptance work; completing the reusable harness
+does not qualify unimplemented features.
 
 When adding jobs (#243), extend the harness with queue length, coalesced/replaced
 requests, preparation/publication time, cancellation acknowledgement and stale
