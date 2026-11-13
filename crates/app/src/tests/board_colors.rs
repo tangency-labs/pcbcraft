@@ -18,7 +18,7 @@ fn board<'a>() -> Harness<'a, PcbApp> {
     }
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.query_all_by_label("Fit board").next().unwrap().click();
     h.run();
     h
@@ -178,7 +178,7 @@ fn shared_colors_survive_renaming_and_do_not_leak_to_other_boards() {
     h.state_mut().set_layer_color(original, &top, Some([35, 180, 130])).unwrap();
     let before = h.state().board_appearance.storage_text();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let inspected = crate::window_commands::inspect_editor(h.state());
     let palettes: Vec<_> = inspected["views"]
         .as_array()

@@ -28,12 +28,25 @@ pub(super) struct State {
     tab: usize,
     preview_collapsed: bool,
     browser_collapsed: bool,
+    preview_key: Option<Key>,
+    symbol_camera: crate::library_preview::Camera,
+    footprint_camera: crate::library_preview::Camera,
 }
 impl State {
+    /// Selection changes reset both independent cameras exactly once, including when
+    /// a command selects an item and configures its camera in the same request.
+    fn sync_preview(&mut self) {
+        if self.preview_key != self.selected {
+            self.preview_key = self.selected.clone();
+            self.symbol_camera = Default::default();
+            self.footprint_camera = Default::default();
+        }
+    }
+
     /// Inspect stable source/item identities without granting project edit authority.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
+        json!({"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
     }
 }
 
@@ -94,7 +107,7 @@ impl PcbApp {
         let mut help = None;
         shell::app_bar(
             ui,
-            Some(("Libraries", false)),
+            Some(("Parts Library", false)),
             integrated,
             enabled,
             |ui| {
@@ -203,7 +216,7 @@ impl PcbApp {
         let mut acquisition = None;
         let response = workspace::ribbon(
             ui,
-            "Library",
+            "Parts Library",
             &["Manage", "View"],
             &mut tab,
             workspace::Workspaces { entries: &entries, ..crate::WORKSPACES },
@@ -427,7 +440,7 @@ impl PcbApp {
         } else {
             None
         };
-        let state = self.views.view_mut(view).and_then(|v| v.library.as_mut()).ok_or("Library pane is unavailable")?;
+        let mut state = self.views.view(view).and_then(|v| v.library.clone()).ok_or("Library pane is unavailable")?;
         if state.source != source || state.kind != kind {
             state.selected = None;
         }
@@ -439,6 +452,28 @@ impl PcbApp {
         if let Some(selected) = selected {
             state.selected = Some(selected);
         }
+        state.sync_preview();
+        let camera = match params["preview"].as_str() {
+            Some("symbol") => Some(&mut state.symbol_camera),
+            Some("footprint") => Some(&mut state.footprint_camera),
+            Some(_) => return Err("Choose symbol or footprint preview".into()),
+            None => None,
+        };
+        let zoom = params.get("zoom_percent").map(|v| v.as_f64().map(|z| z as f32 / 100.0).ok_or("Preview zoom must be a number")).transpose()?;
+        let pan = match (params.get("pan_x"), params.get("pan_y")) {
+            (None, None) => None,
+            (Some(x), Some(y)) => {
+                Some(egui::vec2(x.as_f64().ok_or("pan_x must be a number")? as f32, y.as_f64().ok_or("pan_y must be a number")? as f32))
+            }
+            _ => return Err("Preview pan requires both pan_x and pan_y".into()),
+        };
+        let fit = params.get("fit").map(|v| v.as_bool().ok_or("fit must be a boolean")).transpose()?.unwrap_or(false);
+        if let Some(camera) = camera {
+            *camera = camera.configured(fit, zoom, pan)?;
+        } else if fit || zoom.is_some() || pan.is_some() {
+            return Err("Choose a preview before changing its camera".into());
+        }
+        self.views.view_mut(view).ok_or("Library pane is unavailable")?.library = Some(state);
         self.repaint_editors(ctx);
         Ok(())
     }
@@ -754,6 +789,7 @@ impl PcbApp {
     }
     /// Preview metadata and exact dependency references from the selected source revision.
     fn library_item_preview(&self, ui: &mut egui::Ui, state: &mut State) {
+        state.sync_preview();
         let all = self.session.libraries().source_items(state.source.as_deref().unwrap_or(""));
         let Some(item) = state.selected.as_ref().and_then(|key| all.iter().find(|i| i.key == *key)) else {
             ui.label("Select an item");
@@ -768,18 +804,16 @@ impl PcbApp {
                 ui.label(egui::RichText::new("Quarantined: conflicting content at this revision").color(pcbcraft_chrome::Tokens::get().error));
             }
             if let Some(symbol) = item.symbol() {
-                pcbcraft_chrome::catalog::preview(ui, |p, r| {
-                    crate::schematic_canvas::paint_preview(p, &symbol, r, pcbcraft_chrome::Tokens::get().canvas_ink)
-                });
+                crate::library_preview::workspace_symbol(ui, &symbol, &mut state.symbol_camera);
                 chrome::detail(ui, "Units", &symbol.units().len().to_string());
             }
             if let Some(footprint) = item.footprint() {
-                crate::library_preview::static_footprint(ui, &footprint);
+                crate::library_preview::workspace_footprint(ui, &footprint, &mut state.footprint_camera);
             }
             chrome::detail(ui, "License", &item.license);
             let mut references = Vec::new();
             if let Some(part) = item.part() {
-                self.generic_preview(ui, &part, &mut references);
+                self.generic_preview(ui, &part, &mut references, state);
             }
             if let Some(record) = item.manufacturer_part() {
                 chrome::detail(ui, "Manufacturer", &record.manufacturer);
@@ -799,7 +833,7 @@ impl PcbApp {
                 references.push(record.part.clone());
                 match self.session.libraries().resolve_part(&record.part) {
                     Ok(part) => {
-                        self.generic_preview(ui, &part.definition, &mut references);
+                        self.generic_preview(ui, &part.definition, &mut references, state);
                     }
                     Err(error) => {
                         ui.label(egui::RichText::new(error).color(pcbcraft_chrome::Tokens::get().error));
@@ -832,7 +866,7 @@ impl PcbApp {
         });
     }
     /// Resolve geometry without creating placements; unresolved definitions retain inspectable metadata.
-    fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, references: &mut Vec<Reference>) {
+    fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, references: &mut Vec<Reference>, state: &mut State) {
         references.push(part.symbol.clone());
         if let Some(category) = &part.category {
             references.push(category.definition.clone());
@@ -846,18 +880,14 @@ impl PcbApp {
                     let footprint = self.session.libraries().footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision);
                     ui.columns(2, |columns| {
                         chrome::detail(&mut columns[0], "Symbol", &resolved.symbol.name);
-                        pcbcraft_chrome::catalog::preview(&mut columns[0], |p, r| {
-                            crate::schematic_canvas::paint_preview(p, &resolved.symbol, r, pcbcraft_chrome::Tokens::get().canvas_ink)
-                        });
+                        crate::library_preview::workspace_symbol(&mut columns[0], &resolved.symbol, &mut state.symbol_camera);
                         chrome::detail(&mut columns[1], "Footprint", &package.name);
                         if let Some(footprint) = footprint {
-                            crate::library_preview::static_footprint(&mut columns[1], &footprint);
+                            crate::library_preview::workspace_footprint(&mut columns[1], &footprint, &mut state.footprint_camera);
                         }
                     });
                 } else {
-                    pcbcraft_chrome::catalog::preview(ui, |p, r| {
-                        crate::schematic_canvas::paint_preview(p, &resolved.symbol, r, pcbcraft_chrome::Tokens::get().canvas_ink)
-                    });
+                    crate::library_preview::workspace_symbol(ui, &resolved.symbol, &mut state.symbol_camera);
                 }
             }
             Err(error) => {

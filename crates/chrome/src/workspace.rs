@@ -12,7 +12,8 @@ pub mod panels;
 
 /// The card is tall enough for the tabs, the groups and PCBcraft Next's 5 point gutter under them.
 const RIBBON_HEIGHT: f32 = 135.0;
-const WORKSPACE_WIDTH: f32 = 88.0;
+/// Every workspace uses the same tile, including long editor names.
+const WORKSPACE_WIDTH: f32 = 120.0;
 const RIBBON_COMPACT_WIDTH: f32 = 1000.0;
 
 /// Compact ribbons promote working tools while retaining planned controls in their group menus.
@@ -296,7 +297,7 @@ pub fn ribbon_with_controls(
 ) -> RibbonResponse {
     let RibbonLayout { workspaces, quick, pinned_fields, controls_label } = layout;
     let t = Tokens::get();
-    let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
+    let wide = ui.available_width() >= 600.0;
     let tab_gap = if wide { t.space_6 } else { t.space_2 };
     let tab_padding = if wide { t.space_8 } else { t.space_4 };
     let tab_width = tabs
@@ -337,7 +338,7 @@ pub fn ribbon_with_controls(
                                 ui,
                                 workspace,
                                 workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
-                                height,
+                                RIBBON_HEIGHT,
                             )
                         })
                         .inner;
@@ -350,7 +351,8 @@ pub fn ribbon_with_controls(
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
                         if !wide {
                             let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                            let tile = crate::controls::small_button(ui, format!("{workspace}    "));
+                            let (rect, _) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH, t.space_24), Sense::hover());
+                            let tile = solidcraft_ui_kit::button_at(ui, workspace, rect, "", solidcraft_ui_kit::Button::Small);
                             let c = tile.rect.right_center() - vec2(t.space_6, 0.0);
                             ui.painter()
                                 .add(Shape::line(vec![c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], Stroke::new(1.0, t.text_dim)));
@@ -461,14 +463,12 @@ pub fn ribbon_with_controls(
 }
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
-/// a caret that points up while the picker is open. The tile is a button that toggles the picker.
+/// a caret that points up while the picker is open. Its shared fixed dimensions do not
+/// depend on the active workspace's title or extra ribbon control rows.
 fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(if workspace.len() > 10 { WORKSPACE_WIDTH + 32.0 } else { WORKSPACE_WIDTH } - 2.0 * inset, height - 2.0 * inset),
-        Sense::click(),
-    );
+    let (rect, response) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Choose workspace"));
     let open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
     let center = rect.center();

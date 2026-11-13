@@ -302,10 +302,19 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         workspace::Workspace {
             id: "board",
             multiple_views: true,
-            title: "PCB layout",
+            title: "PCB Layout",
             description: "Inspect footprint placements and linked schematic components",
             tabs: Some("Layout · Draw · Analyze · Manufacture · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "library",
+            title: "Parts Library",
+            description: "Browse and manage native libraries",
+            tabs: Some("Manage · View"),
+            icon: workspace::WorkspaceIcon::Library,
+            multiple_views: true,
             current: false,
         },
         workspace::Workspace {
@@ -323,15 +332,6 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             description: "Author footprint definitions and pads",
             tabs: Some("Draw · Library · View"),
             icon: workspace::WorkspaceIcon::Layout,
-            multiple_views: true,
-            current: false,
-        },
-        workspace::Workspace {
-            id: "library",
-            title: "Library",
-            description: "Browse and manage native libraries",
-            tabs: Some("Manage · View"),
-            icon: workspace::WorkspaceIcon::Library,
             multiple_views: true,
             current: false,
         },
@@ -2570,29 +2570,29 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
-    list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
-    list.push(("PCB layout", "Move reference designator", "M or left drag over the reference".to_owned()));
-    list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
-    list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
-    list.push(("PCB layout", "Flip footprint to the other side", "F".to_owned()));
-    list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
-    list.push(("PCB layout", "Route track", "X".to_owned()));
-    list.push(("PCB layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
-    list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
-    list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
-    list.push(("PCB layout", "Select connected copper", "U".to_owned()));
-    list.push(("PCB layout", "Drag a track segment, keeping it attached", "D".to_owned()));
-    list.push(("PCB layout", "Highlight the net under the pointer", "`".to_owned()));
-    list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
-    list.push(("PCB layout", "Flip track posture", "/".to_owned()));
-    list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
-    list.push(("PCB layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
-    list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
-    list.push(("PCB layout", "Remove last track vertex", "Backspace".to_owned()));
-    list.push(("PCB layout", "Next layer", "+".to_owned()));
-    list.push(("PCB layout", "Previous layer", "−".to_owned()));
-    list.push(("PCB layout", "Front copper layer", "PgUp".to_owned()));
-    list.push(("PCB layout", "Back copper layer", "PgDn".to_owned()));
+    list.push(("PCB Layout", "Move footprint", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Move reference designator", "M or left drag over the reference".to_owned()));
+    list.push(("PCB Layout", "Rotate footprint counterclockwise", "R".to_owned()));
+    list.push(("PCB Layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
+    list.push(("PCB Layout", "Flip footprint to the other side", "F".to_owned()));
+    list.push(("PCB Layout", "Cancel placement", "Esc or right click".to_owned()));
+    list.push(("PCB Layout", "Route track", "X".to_owned()));
+    list.push(("PCB Layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
+    list.push(("PCB Layout", "Place via", key(&PLACE_VIA)));
+    list.push(("PCB Layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
+    list.push(("PCB Layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
+    list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
+    list.push(("PCB Layout", "Move selected tracks and vias", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Flip track posture", "/".to_owned()));
+    list.push(("PCB Layout", "Place via and switch layer while routing", "V".to_owned()));
+    list.push(("PCB Layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
+    list.push(("PCB Layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
+    list.push(("PCB Layout", "Remove last track vertex", "Backspace".to_owned()));
+    list.push(("PCB Layout", "Next layer", "+".to_owned()));
+    list.push(("PCB Layout", "Previous layer", "−".to_owned()));
+    list.push(("PCB Layout", "Front copper layer", "PgUp".to_owned()));
+    list.push(("PCB Layout", "Back copper layer", "PgDn".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));

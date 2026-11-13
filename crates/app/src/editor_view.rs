@@ -31,7 +31,7 @@ impl Workspace {
     pub(super) fn title(self) -> &'static str {
         match self {
             Self::Schematic => "Schematic",
-            Self::Board => "PCB layout",
+            Self::Board => "PCB Layout",
         }
     }
 

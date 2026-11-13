@@ -71,7 +71,7 @@ fn schematic_assignment_then_board_placement_survives_offline_reopen() {
     h.state_mut().session.open_snapshot(decode_documents(&saved).unwrap());
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Assign and place component footprints");
     h.run();
     assert!(matches!(h.state().dialog, Dialog::Footprint(_)), "dialog state {:?}; message {:?}", h.state().dialog, h.state().message);

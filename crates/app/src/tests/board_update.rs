@@ -387,7 +387,12 @@ fn legacy_initialization_scrolls_to_last_missing_assignment() {
     h.run();
     let last = h.get_by_label("Assign footprint to R21").rect();
     assert!(last.top() > header.bottom() && last.bottom() < footer.top());
-    assert_eq!(h.get_by_label("Use current state").rect(), footer);
+    assert_eq!(
+        h.get_by_label("Use current state").rect(),
+        footer,
+        "before header: {header:?}; after header: {:?}",
+        h.get_by_label("Close Update PCB from Schematic").rect()
+    );
     h.get_by_label("Assign footprint to R21").click();
     h.run();
     h.get_by_label("starter / Resistor 0402 (1005 metric) · r4");

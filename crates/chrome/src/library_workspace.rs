@@ -27,6 +27,9 @@ pub fn workspace(
         kit::segmented(ui, compact, &["Browser", "Items", "Preview"], kit::Segments { small: true, ..Default::default() });
         area.min.y = ui.cursor().min.y + t.space_8;
         let region = [Region::Browser, Region::Items, Region::Preview][(*compact).min(2)];
+        if !matches!(region, Region::Preview) {
+            preview.cancel_drag();
+        }
         if matches!(region, Region::Preview) {
             let (_, toggle) =
                 preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, area, *collapsed, |ui| draw(ui, region));

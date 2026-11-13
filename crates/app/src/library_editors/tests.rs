@@ -433,7 +433,7 @@ fn library_workspaces_share_the_picker_with_schematic_and_pcb() {
         h.run();
         let before = h.state().session.snapshot().unwrap();
         let revision = h.state().session.revision();
-        for project in ["Schematic", "PCB layout"] {
+        for project in ["Schematic", "PCB Layout"] {
             choose_workspace(&mut h, project);
             assert!(h.state().library_editors.active.is_none());
             crate::tests::click(&mut h, "File");

@@ -442,6 +442,17 @@ pub fn inline_text(
     response
 }
 
+/// Read-only Library geometry grows with the Preview's width and shares the
+/// ordinary symbol/board palettes, card corners, hit target and inset rhythm.
+pub fn geometry_preview(ui: &mut Ui, label: &str, footprint: bool) -> (egui::Rect, egui::Response) {
+    let t = Tokens::get();
+    let height = (ui.available_width() * 0.75).clamp(180., 360.);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, ui.is_enabled(), label));
+    ui.painter_at(rect).rect_filled(rect, t.radius_md, if footprint { t.board_canvas } else { t.canvas });
+    (rect.shrink(t.space_12), response)
+}
+
 #[cfg(test)]
 mod link_tests {
     /// Ordinary URL fields open on either host, while non-web values remain plain metadata.

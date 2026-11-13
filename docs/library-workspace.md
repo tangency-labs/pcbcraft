@@ -1,4 +1,4 @@
-# Library workspace scope (#315)
+# Parts Library workspace scope (#315)
 
 The implementation follows the browse and orderable-parts renders supplied by
 @travle1 in [#315](https://github.com/tangency-labs/pcbcraft/issues/315). Their
@@ -54,3 +54,41 @@ between frames. Shared pane headers are clipped separately from workspace
 content, and every workspace uses the same native-window resize epilogue.
 Add library opens a trigger-anchored Craft menu with full-width action rows;
 Git and remote connections remain disabled.
+
+
+Preview navigation is presentation state owned by each pane. Symbol and footprint
+canvases share the footprint picker's pointer-centred wheel zoom and drag-to-pan,
+with independent cameras, Fit and zoom buttons; double-click also fits. Selecting
+another item or revision resets both cameras. Wheel input over geometry zooms
+that canvas, while wheel input over metadata continues scrolling the inspector.
+
+A floating Preview uses the pinned toolkit's accessible width and height sashes,
+with arrow-key adjustment after focus. Its position menu provides Expand and
+Reset size. Dimensions survive docking and saved local arrangements; older
+arrangements without dimensions retain the default size. Escape or focus loss
+cancels an active resize. Expanding the Preview changes only its host layout,
+never a library record or project document. The pinned kit's workspace card supplies side anchoring and an inner width rail.
+Free positioning, independent height and full-host expansion are composed in the
+existing shared `Panel` adapter using the kit's accessible sash controls.
+
+An interactive 3D view is a later extension of this Preview host, contingent on
+[#86](https://github.com/tangency-labs/pcbcraft/issues/86)'s model records,
+package bindings and renderer. That future view should retain the same source
+and revision ownership while using its own 3D camera. The current work renders
+native 2D symbol and footprint geometry only.
+
+
+Live clients use `app.library_browse` with `preview: "symbol"` or `"footprint"`
+and `fit`, `zoom_percent`, or paired `pan_x`/`pan_y` values in logical canvas
+points. Inspection reports both independent cameras. The existing
+`view.set_panel_position` accepts `panel: "preview"` in a Library pane, with
+paired `width`/`height` for floating placement. Invalid compound requests leave
+both browsing and navigation unchanged. These commands share the GUI's camera
+and panel state without editing project data.
+
+
+The picker orders Schematic, PCB Layout and Parts Library before the definition
+editors. All five working workspaces use the shared chooser's fixed wide tile
+or fixed compact button at one breakpoint. A title's length and extra ribbon
+control rows do not change that chooser's dimensions. The display name is Parts
+Library; its stable command/layout key remains `library`.

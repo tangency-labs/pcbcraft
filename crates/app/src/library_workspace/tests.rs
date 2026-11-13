@@ -83,6 +83,10 @@ fn mcp_mixed_views_detach_and_source_protection() {
     let inspect = crate::window_commands::inspect_editor(&app);
     assert!(inspect["views"].as_array().unwrap().iter().any(|v| v["workspace"] == "library"));
     assert!(app.session.project().is_none());
+    app.run_window_command(&ctx, "view.set_panel_position", &json!({"view":root.0,"panel":"preview","position":"floating","width":640,"height":600}))
+        .unwrap();
+    assert_eq!(app.views.view(root).unwrap().panels[crate::workspace_panels::PROPERTIES].saved_state().size, Some([640., 600.]));
+    assert!(app.run_window_command(&ctx, "view.set_panel_position", &json!({"view":root.0,"panel":"selection_filters","position":"left"})).is_err());
 }
 
 /// Failed browsing validates before changing pane state, and sibling views retain independent queries.
@@ -208,7 +212,7 @@ fn split_library_keeps_shared_headers_visible_and_usable() {
     let id = h.state().views.active.id();
     h.state_mut().views.open_beside(id).unwrap();
     h.run();
-    let headers: Vec<_> = h.query_all_by_label("Close view Library").map(|n| n.rect()).collect();
+    let headers: Vec<_> = h.query_all_by_label("Close view Parts Library").map(|n| n.rect()).collect();
     assert_eq!(headers.len(), 2);
     for header in headers {
         for s in &h.output().shapes {
@@ -222,7 +226,7 @@ fn split_library_keeps_shared_headers_visible_and_usable() {
             }
         }
     }
-    h.get_all_by_label("Close view Library").next().unwrap().click();
+    h.get_all_by_label("Close view Parts Library").next().unwrap().click();
     h.run();
     assert!(!h.state().views.is_split());
 }
@@ -254,4 +258,237 @@ fn add_library_uses_standard_menu_rows_and_dismissal() {
     h.key_press(egui::Key::Escape);
     h.run();
     assert!(matches!(h.state().dialog, Dialog::None));
+}
+
+/// Read-only cameras own wheel and drag only over their canvas, remain independent,
+/// and reset for another revision/item without touching the project or source records.
+#[test]
+fn geometry_navigation_is_independent_and_resets_on_selection() {
+    let mut h = fixture(1800.);
+    let ctx = h.ctx.clone();
+    let id = h.state().views.active.id();
+    h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":id.0,"source":"example-parts","type":3,"item":"resistor"})).unwrap();
+    h.run();
+    let before = h.state().session.inspect();
+    for (label, symbol) in [("Symbol preview", true), ("Footprint preview", false)] {
+        let initial = if symbol {
+            h.state().views.active.library.as_ref().unwrap().symbol_camera.clone()
+        } else {
+            h.state().views.active.library.as_ref().unwrap().footprint_camera.clone()
+        };
+        click(&mut h, &format!("Zoom in {label}"));
+        let zoomed = if symbol {
+            h.state().views.active.library.as_ref().unwrap().symbol_camera.clone()
+        } else {
+            h.state().views.active.library.as_ref().unwrap().footprint_camera.clone()
+        };
+        assert_ne!(zoomed, initial);
+        let canvas = h.get_by_label(label).rect();
+        h.hover_at(canvas.center() + egui::vec2(15., 10.));
+        h.run();
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            phase: egui::TouchPhase::Move,
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0., 80.),
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        assert_eq!(h.get_by_label(label).rect(), canvas, "wheel over geometry must not scroll the inspector");
+        let wheeled = if symbol {
+            h.state().views.active.library.as_ref().unwrap().symbol_camera.clone()
+        } else {
+            h.state().views.active.library.as_ref().unwrap().footprint_camera.clone()
+        };
+        assert_ne!(wheeled, zoomed);
+        h.drag_at(canvas.center());
+        h.run();
+        h.hover_at(canvas.center() + egui::vec2(35., 20.));
+        h.run();
+        h.drop_at(canvas.center() + egui::vec2(35., 20.));
+        h.run();
+        let panned = if symbol {
+            h.state().views.active.library.as_ref().unwrap().symbol_camera.clone()
+        } else {
+            h.state().views.active.library.as_ref().unwrap().footprint_camera.clone()
+        };
+        assert_ne!(panned, wheeled);
+        let state = h.state().views.active.library.as_ref().unwrap();
+        assert_eq!(if symbol { &state.footprint_camera } else { &state.symbol_camera }, &crate::library_preview::Camera::default());
+        click(&mut h, &format!("Fit {label}"));
+        let state = h.state().views.active.library.as_ref().unwrap();
+        assert_eq!(state.symbol_camera, crate::library_preview::Camera::default());
+        assert_eq!(state.footprint_camera, crate::library_preview::Camera::default());
+    }
+    click(&mut h, "Zoom in Symbol preview");
+    h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":id.0,"source":"example-parts","type":3,"item":"connector"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.library.as_ref().unwrap().symbol_camera, crate::library_preview::Camera::default());
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Floating resizing uses shared edge sashes, supports keyboard adjustment and
+/// Escape, and retains sizes through docking and local layout serialization.
+#[test]
+fn floating_preview_resizes_expands_and_restores() {
+    use crate::workspace_panels::PROPERTIES;
+    let mut h = fixture(1800.);
+    let before = h.state().session.inspect();
+    click(&mut h, "Preview position");
+    click(&mut h, "Float");
+    let left = h.get_by_label("Resize Preview width from left").rect();
+    let old_right = h.get_by_label("Resize Preview width").rect().right();
+    h.drag_at(left.center());
+    h.run();
+    h.hover_at(left.center() - egui::vec2(60., 0.));
+    h.run();
+    h.drop_at(left.center() - egui::vec2(60., 0.));
+    h.run();
+    assert!(h.state().views.active.panels[PROPERTIES].saved_state().size.unwrap()[0] > 480.);
+    assert!((h.get_by_label("Resize Preview width").rect().right() - old_right).abs() < 1.0);
+    let width = h.get_by_label("Resize Preview width").rect();
+    h.drag_at(width.center());
+    h.run();
+    h.hover_at(width.center() - egui::vec2(140., 0.));
+    h.run();
+    h.drop_at(width.center() - egui::vec2(140., 0.));
+    h.run();
+    let size = h.state().views.active.panels[PROPERTIES].saved_state().size.unwrap();
+    assert!(size[0] > 300. && size[0] < 400.);
+    let height = h.get_by_label("Resize Preview height").rect();
+    h.drag_at(height.center());
+    h.run();
+    h.hover_at(height.center() + egui::vec2(0., 90.));
+    h.run();
+    h.drop_at(height.center() + egui::vec2(0., 90.));
+    h.run();
+    let state = h.state().views.active.panels[PROPERTIES].saved_state();
+    assert!(state.size.unwrap()[1] > 500.);
+    let height = h.get_by_label("Resize Preview height").rect();
+    h.drag_at(height.center());
+    h.run();
+    h.hover_at(height.center() + egui::vec2(0., 40.));
+    h.run();
+    h.key_press(egui::Key::Escape);
+    h.run();
+    h.drop_at(height.center());
+    h.run();
+    assert_eq!(h.state().views.active.panels[PROPERTIES].saved_state(), state);
+    h.get_by_label("Resize Preview width").click();
+    h.run();
+    h.key_press(egui::Key::ArrowRight);
+    h.run();
+    assert!(h.state().views.active.panels[PROPERTIES].saved_state().size.unwrap()[0] > state.size.unwrap()[0]);
+    let saved = h.state().views.active.panels[PROPERTIES].saved_state();
+    let decoded: pcbcraft_chrome::workspace::panels::PanelState = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+    assert!(decoded.valid());
+    assert_eq!(decoded, saved);
+    click(&mut h, "Preview position");
+    click(&mut h, "Dock right");
+    click(&mut h, "Preview position");
+    click(&mut h, "Float");
+    assert_eq!(h.state().views.active.panels[PROPERTIES].saved_state().size, saved.size);
+    click(&mut h, "Preview position");
+    click(&mut h, "Expand Preview");
+    let expanded = h.state().views.active.panels[PROPERTIES].saved_state().size.unwrap();
+    assert!(expanded[0] > 1700. && expanded[1] > 650.);
+    assert!(h.get_by_label("Resize Preview width").rect().right() < 1800.);
+    click(&mut h, "Preview position");
+    click(&mut h, "Reset Preview size");
+    assert!(h.state().views.active.panels[PROPERTIES].saved_state().size.is_none());
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Existing local arrangements omit size; invalid dimensions must not grant a
+/// floating card an unbounded or non-finite layout rectangle.
+#[test]
+fn panel_sizes_accept_old_layouts_and_reject_invalid_dimensions() {
+    use pcbcraft_chrome::workspace::panels::PanelState;
+    let old: PanelState = serde_json::from_value(json!({"position":"floating","at":[12,24]})).unwrap();
+    assert!(old.valid());
+    assert!(old.size.is_none());
+    for size in [[-1., 100.], [100., 0.], [f32::INFINITY, 100.], [100., f32::NAN], [100_001., 100.]] {
+        assert!(!PanelState { size: Some(size), ..old }.valid());
+    }
+}
+
+/// Live clients address the same independent cameras and floating card state as GUI
+/// controls. Invalid compound requests publish neither navigation nor browsing changes.
+#[test]
+fn preview_commands_share_state_and_reject_partial_updates() {
+    let mut h = fixture(1800.);
+    let ctx = h.ctx.clone();
+    let id = h.state().views.active.id();
+    let before = h.state().session.inspect();
+    h.state_mut()
+        .run_window_command(
+            &ctx,
+            "app.library_browse",
+            &json!({"view":id.0,"source":"example-parts","type":3,"item":"resistor","preview":"symbol","zoom_percent":125}),
+        )
+        .unwrap();
+    h.run();
+    let state = h.state().views.active.library.as_ref().unwrap();
+    assert_eq!(state.inspect()["previews"]["symbol"]["zoom_percent"], json!(125.0));
+    assert_eq!(state.footprint_camera, crate::library_preview::Camera::default());
+    let saved = state.inspect();
+    for extra in [json!({"zoom_percent":0}), json!({"pan_x":10}), json!({"fit":true,"zoom_percent":125}), json!({"pan_x":100001,"pan_y":0})] {
+        let mut request = json!({"view":id.0,"source":"example-parts","type":3,"item":"connector","query":"should not commit","preview":"symbol"});
+        request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(h.state_mut().run_window_command(&ctx, "app.library_browse", &request).is_err());
+        assert_eq!(h.state().views.active.library.as_ref().unwrap().inspect(), saved);
+    }
+    h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":id.0,"preview":"symbol","pan_x":25,"pan_y":-10})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.library.as_ref().unwrap().inspect()["previews"]["symbol"]["pan"], json!([25.0, -10.0]));
+    click(&mut h, "Fit Symbol preview");
+    assert_eq!(h.state().views.active.library.as_ref().unwrap().symbol_camera, crate::library_preview::Camera::default());
+    h.state_mut()
+        .run_window_command(
+            &ctx,
+            "view.set_panel_position",
+            &json!({"view":id.0,"panel":"preview","position":"floating","x":100,"y":50,"width":620,"height":600}),
+        )
+        .unwrap();
+    h.run();
+    use crate::workspace_panels::PROPERTIES;
+    let panel = h.state().views.active.panels[PROPERTIES].saved_state();
+    assert_eq!(panel.size, Some([620., 600.]));
+    assert!(
+        h.state_mut()
+            .run_window_command(
+                &ctx,
+                "view.set_panel_position",
+                &json!({"view":id.0,"panel":"preview","position":"floating","width":-1,"height":500})
+            )
+            .is_err()
+    );
+    assert_eq!(h.state().views.active.panels[PROPERTIES].saved_state(), panel);
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Workspace titles and picker order follow the host catalogue, while every working
+/// workspace shares identical wide/compact chooser dimensions even with wrapped tools.
+#[test]
+fn workspace_names_order_and_standard_tile_sizes() {
+    let order: Vec<_> = crate::WORKSPACES.entries.iter().map(|e| (e.id, e.title)).collect();
+    assert_eq!(&order[..3], &[("schematic", "Schematic"), ("board", "PCB Layout"), ("library", "Parts Library")]);
+    for width in [1800., 620., 520.] {
+        let mut h = fixture(width);
+        let ctx = h.ctx.clone();
+        let mut expected = None;
+        for key in ["schematic", "board", "library", "symbol_editor", "footprint_editor"] {
+            h.state_mut().enter_workspace(&ctx, key, Placement::Here).unwrap();
+            h.run();
+            let size = h.get_by_label("Choose workspace").rect().size();
+            if let Some(expected) = expected {
+                assert_eq!(size, expected, "{key}, width={width}");
+            } else {
+                expected = Some(size);
+            }
+        }
+        click(&mut h, "Choose workspace");
+        assert!(h.get_by_label("PCB Layout").rect().top() < h.get_by_label("Parts Library").rect().top());
+        assert!(h.get_by_label("Parts Library").rect().top() < h.get_by_label("Symbol Editor").rect().top());
+    }
 }

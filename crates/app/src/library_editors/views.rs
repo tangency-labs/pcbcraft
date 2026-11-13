@@ -146,7 +146,7 @@ impl PcbApp {
     /// Native titles and pane headers resolve the actual document instead of its parked project target.
     pub(crate) fn view_title(&self, view: ViewId) -> String {
         if self.views.view(view).is_some_and(|view| view.library.is_some()) {
-            return "Library".into();
+            return "Parts Library".into();
         }
         self.views
             .view(view)

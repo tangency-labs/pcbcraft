@@ -783,7 +783,7 @@ fn retained_part_quantity_is_shared_by_board_properties_and_browser() {
     let symbol = h.state().session.project().unwrap().symbols()[0].id();
     edit(&mut h, pcbcraft_engine::DELETE_SYMBOL, json!({"symbol":symbol}));
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Footprint R1  100 mΩ");
     let snapshot = h.state().session.snapshot().unwrap();
     let saved = encode_documents(snapshot.clone()).unwrap();

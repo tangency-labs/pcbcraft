@@ -785,7 +785,7 @@ fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
                 // egui 0.37 sizes a new popup in a hidden child pass. The harness only
                 // settles root repaints, so deliver the child's requested paint too.
                 h.run();
-                let at = child_rect(&peer, "PCB layout").center();
+                let at = child_rect(&peer, "PCB Layout").center();
                 child_click_at(&mut h, &peer, at);
             }
             let survivor = if close_original { child } else { HostId::ROOT };
@@ -1534,7 +1534,7 @@ fn board_windows_open_directly_and_share_counterpart_highlights() {
     let before = h.state().session.inspect();
     for _ in 0..2 {
         click(&mut h, "Choose workspace");
-        click(&mut h, "Open PCB layout in new window");
+        click(&mut h, "Open PCB Layout in new window");
         h.get_by_label("Schematic canvas");
         assert!(!h.state().views.is_split());
     }
@@ -1633,7 +1633,7 @@ fn child_tab_menu(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, label: 
 fn project_open_rebinds_detached_pcb_and_main_schematic() {
     let (mut h, peer) = multi_window();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout in new window");
+    click(&mut h, "Open PCB Layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let stale = h.state().views.view(child).unwrap().input(&h.state().session).unwrap();
     let (_copy, path) = dual_led_copy();
@@ -1718,7 +1718,7 @@ fn footprint_transforms_in_detached_windows_share_history_and_cancel_on_focus_lo
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout in new window");
+    click(&mut h, "Open PCB Layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let canvas = child_rect(&peer, "PCB canvas");
     let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
@@ -1769,7 +1769,7 @@ fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
     let (mut h, peer) = multi_window();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout in new window");
+    click(&mut h, "Open PCB Layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let layer = child_rect(&peer, "Activate layer Board Outline").center();
     child_click_at(&mut h, &peer, layer);
@@ -1884,7 +1884,7 @@ fn detached_physical_footprint_click_then_delete_uses_its_own_input() {
         );
         h.run();
         click(&mut h, "Choose workspace");
-        click(&mut h, "Open PCB layout in new window");
+        click(&mut h, "Open PCB Layout in new window");
         let host = h.state().views.detached_hosts()[0];
         let peer = peers.borrow()[&editor_windows::viewport(host)].clone();
         let view = h.state().views.hosts[&host].focused;

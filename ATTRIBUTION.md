@@ -963,7 +963,7 @@ dependency or native saved-format change was introduced.
 ## Shared Craft UI migration
 
 `solidcraft-ui-kit`, `solidcraft-look` and `solidcraft-theme` are pinned to
-SolidCraft revision `f56114219b2d7f6d16de8dd58700479646948f8a`, copyright
+SolidCraft revision `73bdb6cdd39efc3899fb54e7217289a630a89efe`, copyright
 2026 the SolidCraft maintainers, under the SolidCraft Brand and Interface
 Licence. They retain that licence independently of PCBcraft's MIT OR Apache-2.0
 code. The retained text is
@@ -1218,3 +1218,30 @@ Library workspace follow-up chrome composes the same qualified panel host and
 menu rows for reserved Preview columns and acquisition choices. Native edge
 gestures and pane headers remain PCBcraft's existing shared host framework;
 these corrections add no assets or dependencies.
+
+Library Preview navigation reuses PCBcraft's original footprint-picker camera and
+native geometry painters for symbol and footprint inspection. Floating-card size
+controls compose the already qualified pinned Craft panel sashes, surfaces and
+menu rows through the shared chrome adapter. It uses the existing shared dependency
+family without external model data, artwork or EDA implementation; local arrangement dimensions do not
+change native project or library formats.
+
+
+On November 13, 2026, @travle1 explicitly authorized pinning the latest shared
+UI and fixing compatibility. The coupled UI kit, look, theme, registry and text
+crates now use SolidCraft 0.41.0 at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, replacing the initial migration's
+`f56114219b2d7f6d16de8dd58700479646948f8a` pin. The egui-wgpu and winit patches
+use the same revision; their source directories are unchanged between these pins.
+The Brand and Interface licence bytes and retained SHA-256 are unchanged, and
+`deny.toml` keeps its exceptions limited to the three covered 0.41.0 packages.
+The existing upstream written-record request remains separate from this local
+official-project authorization; no release or publication is part of this work.
+
+`solidcraft-ui-text` and `solidcraft-ui-registry` retain MIT OR Apache-2.0.
+`crates/chrome/assets/shared-ui/en.json` retains the English entries referenced
+as literals by the shared kit/look/theme from that revision's
+`assets/locales/en.json`. PCBcraft installs this host catalog before shared
+controls render, including text-edit context menus. Application/electronics copy
+remains host-owned. The extracted shared UI English data follows the same retained
+Brand and Interface notice; no new fonts or unrelated application assets were copied.

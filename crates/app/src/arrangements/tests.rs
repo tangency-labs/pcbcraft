@@ -69,9 +69,9 @@ fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     let mut h = harness();
     h.get_by_label("Arrangement Views");
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.state_mut().views.active.camera.center_on(Point { x_nm: 15_000_000, y_nm: 4_000_000 });
     h.run();
     let original = h.state().arrangement_snapshot().unwrap();
@@ -105,9 +105,9 @@ fn saved_project_restores_arrangement_windows_and_panels_without_electrical_chan
     let path = dir.path().join("project");
     save(&mut h, &path, false);
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let source = h.state().views.active.id();
     h.state_mut().views.open_window(source).unwrap();
     h.run();
@@ -228,7 +228,7 @@ fn invalid_newer_and_duplicate_placements_do_not_replace_saved_state() {
 fn missing_target_is_not_rebound_and_can_be_explicitly_replaced() {
     let mut h = harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let state = h.state().arrangement_snapshot().unwrap();
     let mut value = serde_json::to_value(&state).unwrap();
     value["views"][state.hosts[0].focused]["target"]["Board"]["board"] = json!("00000000-0000-4000-8000-000000000099");
@@ -239,7 +239,7 @@ fn missing_target_is_not_rebound_and_can_be_explicitly_replaced() {
     assert!(h.state().views.active.input(&h.state().session).is_none());
     h.get_by_label("This document is unavailable. Choose a workspace to replace this view.");
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert!(!h.state().views.active.unavailable());
     assert_eq!(h.state().views.active.workspace, Workspace::Board);
 }
@@ -253,11 +253,11 @@ fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements(
     let revision = h.state().session.revision();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let companion = h.state().views.hosts[&h.state().views.main].layout.views()[1];
     let companion_camera = h.state().views.view(companion).unwrap().camera.saved_state();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let board = h.state().views.active.id();
     assert_ne!(board, original);
     assert_ne!(board, companion);
@@ -273,7 +273,7 @@ fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements(
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     // The picker returns to the existing camera without exposing cached documents as tabs.
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert_eq!(h.state().views.active.id(), board);
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert_eq!(h.query_all_by_label("Close view Arrangement test › Board").count(), 2);
@@ -290,7 +290,7 @@ fn workspace_switches_keep_single_views_clear_and_split_actions_address_whole_pa
     let canvas_top = h.get_by_label("Schematic canvas").rect().top();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let board = h.state().views.active.id();
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert!(h.query_by_label("Close view Arrangement test › Board").is_none());
@@ -299,7 +299,7 @@ fn workspace_switches_keep_single_views_clear_and_split_actions_address_whole_pa
     assert_eq!(h.get_by_label("Schematic canvas").rect().top(), canvas_top);
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Choose workspace");
     click(&mut h, "Open Schematic beside current view");
     let group = h.state().views.hosts[&h.state().views.main].layout.group(board).unwrap().views();
@@ -473,7 +473,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
 fn new_single_view_arrangement_keeps_the_previous_setup() {
     let mut h = harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let before = h.state().arrangement_snapshot().unwrap();
     click(&mut h, "New arrangement");
     click(&mut h, "Single view in one window");
@@ -513,7 +513,7 @@ fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     let design = h.state().arrangement_snapshot().unwrap();
     action(&mut h, Action::Create { name: "Review".into(), start: Start::Current });
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let review = h.state().arrangement_snapshot().unwrap();
     let active = h.state().arrangements.active();
     let view = h.state().views.active.id();
