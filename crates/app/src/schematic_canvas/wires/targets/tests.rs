@@ -82,3 +82,37 @@ fn named_contact_is_unambiguous_and_occupied_routes_keep_selection_priority() {
     assert_eq!(targets.automatic_node(pos), None);
     assert_eq!(targets.anchor(&camera, rect, pos, None, true), Some(Anchor::Existing(end)));
 }
+
+/// No-connect intent suppresses automatic starts across the complete magnetic radius without
+/// losing the raw target used for blocked-cursor feedback. Cache rebuilds follow marking, removal and Undo.
+#[test]
+fn no_connect_targets_keep_selection_priority_throughout_magnetic_radius() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+    let pin = s.project().unwrap().symbols()[0].terminals()[0];
+    let pin_target = s.project().unwrap().no_connect_target(pin).unwrap();
+    let pin_end = WireEndpoint::Terminal(pin);
+    run(&mut s, DRAW_WIRE, json!({"from":{"x_nm":-76_200_000,"y_nm":0},"to":{"x_nm":-50_800_000,"y_nm":0},"bends":[]}));
+    let wire = s.project().unwrap().wire_end_targets().next().unwrap().0;
+    let wire_end = WireEndpoint::parse(&json!({"junction":wire.junction})).unwrap();
+    let camera = Camera::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1400., 900.));
+    let mut cache = Cache::default();
+    for (end, target) in [(pin_end, json!(pin_target)), (wire_end, json!(wire))] {
+        let at = camera.screen(s.project().unwrap().endpoint_position(end).unwrap(), rect);
+        let near = at + egui::vec2(0., -13.);
+        assert_eq!(cache.get(s.project().unwrap(), s.revision(), &camera, rect).automatic_node(near), Some(Anchor::Existing(end)));
+        run(&mut s, pcbcraft_engine::no_connect::SET, json!({"target":target,"marked":true}));
+        let targets = cache.get(s.project().unwrap(), s.revision(), &camera, rect);
+        for offset in [egui::vec2(0., -13.), egui::vec2(13., 0.), egui::vec2(-13., 0.), egui::vec2(0., 13.), egui::Vec2::ZERO] {
+            assert_eq!(targets.automatic_node(at + offset), None, "end={end:?},offset={offset:?}");
+            assert_eq!(targets.anchor(&camera, rect, at + offset, None, true), Some(Anchor::Existing(end)));
+            assert!(!targets.connection_allowed(s.project().unwrap(), Anchor::Existing(end)));
+        }
+        run(&mut s, pcbcraft_engine::no_connect::SET, json!({"target":target,"marked":false}));
+        assert_eq!(cache.get(s.project().unwrap(), s.revision(), &camera, rect).automatic_node(near), Some(Anchor::Existing(end)));
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(cache.get(s.project().unwrap(), s.revision(), &camera, rect).automatic_node(near), None);
+    }
+}

@@ -12,7 +12,9 @@ command glyph, so
 the host draws that mark and its selection outline while reusing existing
 ribbon, menu, modal, filter checkbox and control adapters. Stable marker
 selection and atomic intent deletion are original PCBcraft work; the blue mark
-color is a separate host canvas token. Interaction follows the published
+color is a separate host canvas token. The shared immutable no-connect attachment
+policy and magnetic-target suppression are original engine/view-cache changes;
+no external implementation or dependency was introduced. Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
 consulted November 12, 2026. Tests use shared commands, original starter/native
 example definitions and production codecs; no external EDA implementation,

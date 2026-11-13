@@ -1501,6 +1501,14 @@ impl PcbApp {
         {
             return;
         }
+        if let Click::WirePoint(anchor, _) | Click::StartWire(anchor) = &click
+            && let Some(project) = self.views.active.snapshot(&self.session)
+            && let Some(at) = anchor.position(&project)
+            && let Err(error) = project.wire_attachment_policy().check(at)
+        {
+            self.message = Some(error.to_string());
+            return;
+        }
         match (self.views.active.schematic.tool.clone(), click) {
             (None, Click::BeginNoConnect) => self.begin_no_connect(),
             (None | Some(Tool::NoConnect { .. }), Click::NoConnect(target, marked)) => self.set_no_connect(source, target, marked),

@@ -447,9 +447,15 @@ pub(super) fn pick(
         let point = target.and_then(|anchor| anchor.position(project)).unwrap_or_else(|| {
             if painter.ctx().input(|input| input.modifiers.ctrl) { camera.unsnapped(pointer, rect) } else { camera.snap(pointer, rect) }
         });
-        painter.ctx().set_cursor_icon(egui::CursorIcon::None);
-        let connected = target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_)));
-        pcbcraft_chrome::cursor::wire(painter, pointer, camera.screen(point, rect), connected);
+        let allowed =
+            target.is_none_or(|anchor| draft.target_cache.borrow_mut().get(project, revision, camera, rect).connection_allowed(project, anchor));
+        if allowed {
+            painter.ctx().set_cursor_icon(egui::CursorIcon::None);
+            let connected = target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_)));
+            pcbcraft_chrome::cursor::wire(painter, pointer, camera.screen(point, rect), connected);
+        } else {
+            painter.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+        }
     }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
     target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))
@@ -478,10 +484,19 @@ pub(super) fn preview(
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
         && let Some(path) = draft.path(from, to, auto_heal)
     {
-        paint_route(painter, rect, camera, path, tokens.accent);
+        paint_route(
+            painter,
+            rect,
+            camera,
+            path,
+            if target.is_some_and(|anchor| targets.connection_allowed(project, anchor)) { tokens.accent } else { tokens.error },
+        );
     }
     for &(endpoint, pos) in &targets.endpoints {
         let anchor = Anchor::Existing(endpoint);
+        if !targets.connection_allowed(project, anchor) {
+            continue;
+        }
         let active = start == Some(anchor) || target == Some(anchor);
         paint_pin(painter, pos, if active { tokens.schematic_wire } else { tokens.canvas_ink });
     }
@@ -586,8 +601,9 @@ pub(super) fn symbol_position(
     if ambiguous { camera.snap(pointer, rect) } else { best.map_or_else(|| camera.snap(pointer, rect), |(at, _)| at) }
 }
 
-/// Resolve an unconnected pin or free wire end for automatic starts. Occupied pins and
-/// junctions keep normal selection behavior; W may still explicitly start at those targets.
+/// Resolve an unconnected pin or free wire end for automatic starts. Occupied or marked
+/// endpoints keep normal selection behavior. W can start at occupied contacts, while marked
+/// endpoints require removing their no-connect intent first.
 /// Equal-distance nodes are ambiguous and cannot start a connection.
 pub(super) fn node_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, draft: &Draft, revision: u64) -> Option<Anchor> {
     if !rect.contains(pointer) {

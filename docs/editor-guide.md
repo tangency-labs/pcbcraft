@@ -205,9 +205,10 @@ unmarked unconnected pins and open wire ends, plus connected, missing or
 type-changed marker targets. Use **Show** to navigate to a target. Error ink
 identifies conflicting intent. A marker suppresses only its own unconnected-pin
 or dangling-end warning; it never removes wires, changes the netlist or clears
-physical DRC violations. Extending through a marked end reports a conflict;
-remove its marker before joining it directly to a pin or named contact. This
-focused check does not implement the remaining type-conflict and power-driver
+physical DRC violations. New wires and endpoint attachments at an X are blocked,
+including with **W**; remove the mark first. Hovering or quickly clicking near
+an X does not start a wire. Older saved conflicts remain visible in the check.
+This focused check does not implement the remaining type-conflict and power-driver
 ERC rules. See the [identity and storage contract](no-connect-markers.md).
 
 ### Wires

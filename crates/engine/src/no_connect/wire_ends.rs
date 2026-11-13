@@ -68,6 +68,21 @@ pub struct WireFinding {
     pub appearance: WireAppearance,
 }
 
+/// Snapshot-derived validation shared by editing and cursor target caches. Keeping only
+/// marked coordinates avoids rescanning pins for each merge or pointer movement.
+#[derive(Clone, Debug, Default)]
+pub struct WireAttachments {
+    blocked: BTreeSet<(i64, i64)>,
+}
+
+impl WireAttachments {
+    /// New attachments at intentional terminations require removing the mark first.
+    /// This checks coordinates as well as identity aliases and never changes the snapshot.
+    pub fn check(&self, at: Point) -> Result<(), CommandError> {
+        if self.blocked.contains(&(at.x_nm, at.y_nm)) { Err(CommandError::InvalidParams(WIRE_BLOCKED.into())) } else { Ok(()) }
+    }
+}
+
 impl Project {
     /// Count all authored pin and wire-end markers against one project-wide budget.
     pub(crate) fn no_connect_count(&self) -> usize {
@@ -128,6 +143,12 @@ impl Project {
             }
             Attachment::WireEnd(target) => target.ordinal().is_some_and(|id| self.sheets.iter().any(|sheet| sheet.no_connect_ends.contains(&id))),
         }
+    }
+
+    /// Capture this sheet's no-connect attachment rule once for an edit or view target cache.
+    /// The immutable policy uses exact model positions, including aliases of an endpoint.
+    pub fn wire_attachment_policy(&self) -> WireAttachments {
+        WireAttachments { blocked: self.no_connect_appearances().map(|(_, at)| (at.x_nm, at.y_nm)).collect() }
     }
 
     /// Every visible authored mark on the projected sheet, resolved from its current owner.
@@ -222,8 +243,8 @@ impl Project {
 }
 
 impl Session {
-    /// Mark a live dangling endpoint or remove its existing intent atomically. New connections
-    /// remain real connections and are reported as conflicts rather than being erased.
+    /// Mark a live dangling endpoint or remove its existing intent atomically. New wire
+    /// attachments are blocked while marked; retained saved conflicts remain inspectable.
     pub(super) fn set_wire_no_connect(&mut self, target: &WireTarget, params: &Value) -> Result<(), CommandError> {
         let id = target.ordinal().ok_or_else(|| CommandError::InvalidParams("Invalid wire endpoint.".into()))?;
         let marked = params["marked"].as_bool().ok_or_else(|| CommandError::InvalidParams("marked must be a boolean".into()))?;

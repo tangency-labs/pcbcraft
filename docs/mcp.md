@@ -348,3 +348,10 @@ pin/wire target objects. `view.select` exposes marker selection and
 with ordinary owner deletion in one undoable transaction. Target validation is
 sheet-scoped and revision-checked. Copy/move selections must include each
 selected marker's owner; standalone marker geometry is not persisted.
+
+A placed no-connect mark blocks new wire attachments at that point. Shared
+wire drawing, pin connection and endpoint attachment commands reject the edit
+atomically with “Remove the no-connect marker before connecting a wire.” This
+also covers coordinate and wire/at aliases. Remove the mark through the same
+commands or Delete before connecting; saved conflicts from older projects are
+preserved and remain reportable.

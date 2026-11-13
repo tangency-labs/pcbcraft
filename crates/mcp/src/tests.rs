@@ -64,6 +64,14 @@ fn no_connect_wire_end_commands_are_shared_with_mcp() {
     );
     let before = s.snapshot().unwrap();
     let revision = s.revision();
+    let rejected = crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::DRAW_WIRE,
+        "params":{"from":{"junction":target.junction},"to":{"x_nm":-25_400_000,"y_nm":0},"bends":[],"expected_revision":revision},"inspect":false}),
+    );
+    assert!(rejected.unwrap_err().contains(pcbcraft_engine::no_connect::WIRE_BLOCKED));
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     crate::backend::call_session(
         &mut s,
         "engine.execute",

@@ -753,7 +753,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: no_connect::SET,
         title: "Set No Connect",
-        summary: "Set/remove intentional disconnection on a logical pin or dangling wire end. Wiring remains unchanged; incompatible connections remain checkable conflicts. Undoable.",
+        summary: "Set/remove intentional disconnection on a logical pin or dangling wire end. Wiring remains unchanged; placed marks block new wires, while existing incompatible connections remain checkable conflicts. Undoable.",
         params: &[
             EXPECTED_REVISION,
             Param {
@@ -3155,6 +3155,12 @@ impl Session {
                 .ok_or_else(|| CommandError::InvalidParams(format!("`{name}` must reference an existing symbol terminal")))
         };
         let mut terminals = [endpoint("from")?, endpoint("to")?];
+        let attachments = project.wire_attachment_policy();
+        for terminal in terminals {
+            if let Some(at) = project.terminal_position(terminal) {
+                attachments.check(at)?;
+            }
+        }
         terminals.sort_unstable();
         if terminals[0] == terminals[1] {
             return Err(CommandError::InvalidParams("a wire needs two distinct terminals".to_owned()));

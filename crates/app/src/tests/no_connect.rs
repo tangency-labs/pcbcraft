@@ -279,6 +279,9 @@ fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
     h.state_mut().run(no_connect::SET, &json!({"target":{"part":first.component_id(),"terminal":"3"},"marked":true,"expected_revision":revision}));
     for connected in [false, true] {
         if connected {
+            let revision = h.state().session.revision();
+            h.state_mut()
+                .run(no_connect::SET, &json!({"target":{"part":first.component_id(),"terminal":"3"},"marked":false,"expected_revision":revision}));
             let p = h.state().session.project().unwrap().for_sheet(second).unwrap();
             let terminal = p.symbols()[0].terminals().into_iter().find(|pin| pin.number() == "3").unwrap();
             let at = p.terminal_position(terminal).unwrap();
@@ -287,6 +290,9 @@ fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
                 pcbcraft_engine::DRAW_WIRE,
                 &json!({"sheet":second.id(),"from":terminal.inspect(),"to":{"x_nm":at.x_nm+12_700_000,"y_nm":at.y_nm},"bends":[],"expected_revision":revision}),
             );
+            let revision = h.state().session.revision();
+            h.state_mut()
+                .run(no_connect::SET, &json!({"target":{"part":first.component_id(),"terminal":"3"},"marked":true,"expected_revision":revision}));
         }
         assert!(h.state().message.is_none(), "{:?}", h.state().message);
         for sheet in [root, second] {
@@ -600,34 +606,122 @@ fn no_connect_marquee_and_select_all_include_markers() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Ordinary clicks select marks, while an explicit Wire tool still reaches the marked pin.
-/// A real new connection retains the mark as a reported conflict instead of consuming it.
+/// Explicit wiring is blocked at marked pins and wire ends in either direction. The draft
+/// remains available after a rejected destination; removing the X allows the same route.
 #[test]
-fn no_connect_selection_does_not_block_explicit_wiring() {
-    let mut h = editor(1400., true);
-    h.state_mut().browser.open = false;
-    let at = pin(&h, 0);
-    h.hover_at(at);
-    h.key_press(Key::Q);
-    h.run();
-    let at = pin(&h, 1);
-    h.hover_at(at);
-    h.key_press(Key::W);
-    h.run();
-    let at = pin(&h, 0);
-    click_canvas_at(&mut h, at);
-    h.key_press(Key::Escape);
-    h.run();
-    assert!(h.state().message.is_none(), "{:?}", h.state().message);
-    let p = h.state().session.project().unwrap();
-    assert_eq!(p.wires().len(), 1);
-    assert_eq!(p.check_no_connects(0).markers[0].issues, ["no_connect_connected"]);
-    let at = pin(&h, 0);
-    marker_click(&mut h, at, Modifiers::NONE);
-    h.key_press(Key::Delete);
-    h.run();
-    let p = h.state().session.project().unwrap();
-    assert_eq!(p.wires().len(), 1);
-    assert_eq!(p.symbols().len(), 1);
-    assert_eq!(p.check_no_connects(0).total_markers, 0);
+fn no_connect_marks_block_explicit_wiring_until_removed() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    for wire_end in [false, true] {
+        let mut h = editor(1400., true);
+        h.state_mut().browser.open = false;
+        let mut target_at = pin(&h, 0);
+        if wire_end {
+            let terminal = h.state().session.project().unwrap().symbols()[0].terminals()[0];
+            let end = Point { x_nm: -13 * GRID_NM, y_nm: -3 * GRID_NM };
+            let revision = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::DRAW_WIRE, &json!({"from":terminal.inspect(),"to":end,"bends":[],"expected_revision":revision}));
+            h.run();
+            target_at = h.state().views.active.camera.screen(end, h.get_by_label("Schematic canvas").rect());
+        }
+        h.hover_at(target_at);
+        h.key_press(Key::Q);
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        // W at a marked endpoint arms the tool but must not capture it as a source.
+        h.hover_at(target_at);
+        h.key_press(Key::W);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        assert!(h.state().message.as_ref().is_some_and(|m| m.contains("Remove the no-connect")));
+        assert_eq!(h.state().session.revision(), revision);
+        h.key_press(Key::Escape);
+        h.run();
+        let from = pin(&h, 1);
+        h.hover_at(from);
+        h.key_press(Key::W);
+        h.run();
+        h.hover_at(target_at + egui::vec2(0., -10.));
+        h.run_steps(1);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::NotAllowed);
+        click_canvas_at(&mut h, target_at);
+        assert!(h.state().message.as_ref().is_some_and(|m| m.contains("Remove the no-connect")));
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: Some(_), .. })));
+        assert_same_content(&before, &h.state().session.snapshot().unwrap());
+        h.key_press(Key::Escape);
+        h.run();
+        marker_click(&mut h, target_at, Modifiers::NONE);
+        h.key_press(Key::Delete);
+        h.run();
+        let from = pin(&h, 1);
+        h.hover_at(from);
+        h.key_press(Key::W);
+        h.run();
+        click_canvas_at(&mut h, target_at);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        assert_eq!(h.state().session.project().unwrap().wires().len(), before.wires().len() + 1);
+    }
+}
+
+/// Approach from outside the X's narrow ink hit area, checking each first frame and clicking
+/// without a settled hover. Neither the magnetic preview nor an automatic wire may appear.
+#[test]
+fn no_connect_hover_approach_and_fast_click_do_not_start_wires() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    for (width, dark) in [(1400., true), (700., false)] {
+        let mut h = editor(width, dark);
+        h.state_mut().browser.open = false;
+        let at = pin(&h, 0);
+        h.hover_at(at);
+        h.key_press(Key::Q);
+        h.run();
+        let terminal = h.state().session.project().unwrap().symbols()[0].terminals()[2];
+        let end = Point { x_nm: -13 * GRID_NM, y_nm: GRID_NM };
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::DRAW_WIRE, &json!({"from":terminal.inspect(),"to":end,"bends":[],"expected_revision":revision}));
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let wire_at = h.state().views.active.camera.screen(end, canvas);
+        h.hover_at(wire_at);
+        h.key_press(Key::Q);
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let docs = encode_documents(before.clone()).unwrap();
+        for center in [pin(&h, 0), wire_at] {
+            for offset in
+                [egui::vec2(0., -13.), egui::vec2(12., 0.), egui::vec2(-12., 0.), egui::vec2(-9., -9.), egui::vec2(9., -9.), egui::Vec2::ZERO]
+            {
+                let point = center + offset;
+                h.hover_at(point);
+                h.run_steps(1);
+                assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "hover offset={offset:?}");
+                assert!(
+                    !h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Circle(circle)
+                    if (circle.radius-pcbcraft_chrome::theme::WIRE_CURSOR_TARGET_RADIUS).abs()<0.01
+                    && circle.center.distance(center)<0.01 && circle.stroke.color==Tokens::get().schematic_wire)),
+                    "connection ring at offset={offset:?}"
+                );
+                // Move back out, then press at the new location immediately: no settled frame.
+                h.hover_at(canvas.center() + egui::vec2(150., 100.));
+                h.run();
+                h.drag_at(point);
+                h.run_steps(1);
+                h.drop_at(point);
+                h.run();
+                assert!(h.state().views.active.schematic.tool.is_none(), "fast click offset={offset:?}: {:?}", h.state().views.active.schematic.tool);
+                assert_eq!(h.state().session.revision(), revision);
+                assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), docs);
+            }
+        }
+        let id = h.state().views.active.id();
+        h.state_mut().set_selection_filters(id, &json!({"no_connects":false})).unwrap();
+        h.run();
+        let point = pin(&h, 0) + egui::vec2(0., -13.);
+        click_canvas_at(&mut h, point);
+        assert!(h.state().views.active.schematic.tool.is_none(), "hiding marker selection must not enable accidental wiring");
+        assert_eq!(h.state().session.revision(), revision);
+    }
 }

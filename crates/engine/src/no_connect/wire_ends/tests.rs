@@ -93,10 +93,10 @@ fn wire_no_connect_storage_roundtrips_and_rejects_invalid_records() {
     assert!(persistence::decode_documents(&old).is_err());
 }
 
-/// The marker follows moved endpoints and copied IDs. Extending a marked end preserves its
-/// conflict instead of silently healing it away; deleting its owning wire removes the marker.
+/// The marker follows moved endpoints and copied IDs. New wires at the marked end are
+/// rejected; deleting its owning wire removes the marker and Undo restores it.
 #[test]
-fn wire_no_connect_moves_copies_and_preserves_connection_conflicts() {
+fn wire_no_connect_moves_copies_and_blocks_new_connections() {
     let (mut s, target) = stub();
     mark(&mut s, &target, true);
     s.apply(MOVE_JUNCTION, &json!({"junction":target.junction,"to":{"x_nm":-38_100_000,"y_nm":0},"expected_revision":s.revision()})).unwrap();
@@ -110,28 +110,15 @@ fn wire_no_connect_moves_copies_and_preserves_connection_conflicts() {
     assert_ne!(report.wire_markers[0].target, report.wire_markers[1].target);
     assert_eq!(report.wire_markers[0].target, target);
     s.apply("edit.undo", &json!({})).unwrap();
-    s.apply(DRAW_WIRE, &json!({"from":{"junction":target.junction},"to":{"x_nm":-50_800_000,"y_nm":0},"bends":[],"expected_revision":s.revision()}))
-        .unwrap();
-    let report = s.project().unwrap().check_no_connects(s.revision());
-    assert_eq!(report.wire_markers.len(), 1);
-    assert_eq!(report.wire_markers[0].issues, ["no_connect_not_dangling"]);
-    assert!(report.wire_findings.iter().any(|finding| finding.rule == "no_connect_not_dangling"));
-    let extended = s.snapshot().unwrap();
-    let pin = extended.symbols()[0].terminals()[0];
-    let pin_at = extended.terminal_position(pin).unwrap();
-    let far = extended.wire_end_targets().next().unwrap().0;
-    // A preferred redraw must not erase the older route through a marked transit point.
-    s.apply(
-        DRAW_WIRE,
-        &json!({"from":pin.inspect(),"to":{"junction":far.junction},
-        "bends":[{"x_nm":pin_at.x_nm,"y_nm":12_700_000},{"x_nm":-50_800_000,"y_nm":12_700_000}],
-        "expected_revision":s.revision()}),
-    )
-    .unwrap();
-    assert_eq!(s.project().unwrap().check_no_connects(s.revision()).wire_markers[0].target, target);
-    assert_eq!(s.project().unwrap().check_no_connects(s.revision()).wire_markers[0].issues, ["no_connect_not_dangling"]);
-    s.apply("edit.undo", &json!({})).unwrap();
-    s.apply("edit.undo", &json!({})).unwrap();
+    let protected = s.snapshot().unwrap();
+    assert!(
+        s.apply(
+            DRAW_WIRE,
+            &json!({"from":{"junction":target.junction},"to":{"x_nm":-50_800_000,"y_nm":0},"bends":[],"expected_revision":s.revision()})
+        )
+        .is_err()
+    );
+    assert!(Arc::ptr_eq(&protected, &s.snapshot().unwrap()));
     s.apply(crate::DELETE_WIRE, &json!({"wire":wire,"expected_revision":s.revision()})).unwrap();
     assert_eq!(s.project().unwrap().check_no_connects(s.revision()).wire_markers.len(), 0);
     s.apply("edit.undo", &json!({})).unwrap();
@@ -303,4 +290,91 @@ fn no_connect_selection_respects_sheet_and_owner_scope() {
     assert_eq!(s.project().unwrap().check_no_connects(0).total_markers, 0);
     s.apply("edit.undo", &json!({})).unwrap();
     crate::assert_same_content(&snapshot, &s.snapshot().unwrap());
+}
+
+/// All public wire-creation targets obey one point-based rule, preventing coordinate aliases
+/// and wire/at endpoint targeting from bypassing pin or wire-end termination intent.
+#[test]
+fn no_connect_blocks_new_wire_commands_atomically_until_removed() {
+    let (mut s, wire) = stub();
+    let p = s.snapshot().unwrap();
+    let pin = p.symbols()[0].terminals()[1];
+    let pin_target = p.no_connect_target(pin).unwrap();
+    mark(&mut s, &wire, true);
+    s.apply(SET, &json!({"target":pin_target,"marked":true,"expected_revision":s.revision()})).unwrap();
+    let before = s.snapshot().unwrap();
+    let docs = persistence::encode_documents(before.clone()).unwrap();
+    let revision = s.revision();
+    let wire_at = before.check_no_connects(revision).wire_markers[0].appearance.at;
+    let pin_at = before.terminal_position(pin).unwrap();
+    for target in
+        [pin.inspect(), json!(pin_at), json!({"junction":wire.junction}), json!(wire_at), json!({"wire":before.wires()[0].id(),"at":wire_at})]
+    {
+        for reverse in [false, true] {
+            for auto_heal in [false, true] {
+                let far = json!({"x_nm":-100_000_000,"y_nm":0});
+                let (from, to) = if reverse { (far, target.clone()) } else { (target.clone(), far) };
+                let error =
+                    s.apply(DRAW_WIRE, &json!({"from":from,"to":to,"bends":[],"auto_heal":auto_heal,"expected_revision":revision})).unwrap_err();
+                assert!(error.to_string().contains(WIRE_BLOCKED), "{error}");
+                assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+                assert_eq!(s.revision(), revision);
+            }
+        }
+    }
+    let other = before.symbols()[0].terminals()[0];
+    assert!(
+        s.apply(crate::CONNECT_PINS, &json!({"from":pin.inspect(),"to":other.inspect(),"expected_revision":revision}))
+            .unwrap_err()
+            .to_string()
+            .contains(WIRE_BLOCKED)
+    );
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), docs);
+    s.apply(SET, &json!({"target":pin_target,"marked":false,"expected_revision":s.revision()})).unwrap();
+    s.apply(DRAW_WIRE, &json!({"from":pin.inspect(),"to":{"x_nm":100_000_000,"y_nm":0},"bends":[],"expected_revision":s.revision()})).unwrap();
+    assert_eq!(s.project().unwrap().check_no_connects(0).total_markers, 1);
+}
+
+/// Neither a marked moving source nor a marked destination may be attached by endpoint
+/// dragging. A rejected drop preserves geometry, intent and history in either cleanup mode.
+#[test]
+fn no_connect_blocks_endpoint_attachment_in_both_directions() {
+    let (mut s, target) = stub();
+    s.apply(DRAW_WIRE, &json!({"from":{"x_nm":50_800_000,"y_nm":0},"to":{"x_nm":76_200_000,"y_nm":0},"bends":[],"expected_revision":s.revision()}))
+        .unwrap();
+    let other = s.project().unwrap().wire_end_targets().find(|(_, at)| at.x_nm == 50_800_000).unwrap().0;
+    mark(&mut s, &target, true);
+    let before = s.snapshot().unwrap();
+    for auto_heal in [false, true] {
+        for (source, to) in
+            [(other.junction.clone(), json!({"junction":target.junction})), (target.junction.clone(), json!({"junction":other.junction}))]
+        {
+            let error = s
+                .apply(crate::ATTACH_JUNCTION, &json!({"junction":source,"to":to,"auto_heal":auto_heal,"expected_revision":s.revision()}))
+                .unwrap_err();
+            assert!(error.to_string().contains(WIRE_BLOCKED), "{error}");
+            assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        }
+    }
+    mark(&mut s, &target, false);
+    s.apply(crate::ATTACH_JUNCTION, &json!({"junction":other.junction,"to":{"junction":target.junction},"expected_revision":s.revision()})).unwrap();
+}
+
+/// Older saved projects can retain a connected marker. Preserve and report that evidence on
+/// reopen; the new editing policy must not silently erase it or accept additional attachments.
+#[test]
+fn legacy_wire_no_connect_conflicts_reopen_without_losing_intent() {
+    let (mut s, target) = stub();
+    mark(&mut s, &target, true);
+    mark(&mut s, &target, false);
+    s.apply(DRAW_WIRE,&json!({"from":{"junction":target.junction},"to":{"x_nm":-50_800_000,"y_nm":0},"bends":[],"auto_heal":false,"expected_revision":s.revision()})).unwrap();
+    // Retain the intent bit as written by the prior editor policy; topology is command-built.
+    let mut retained = (*s.snapshot().unwrap()).clone();
+    Arc::make_mut(&mut retained.sheet_mut().no_connect_ends).insert(target.ordinal().unwrap());
+    let docs = persistence::encode_documents(Arc::new(retained)).unwrap();
+    let reopened = persistence::decode_documents(&docs).unwrap();
+    let report = reopened.check_no_connects(0);
+    assert_eq!(report.wire_markers[0].target, target);
+    assert_eq!(report.wire_markers[0].issues, ["no_connect_not_dangling"]);
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), docs);
 }

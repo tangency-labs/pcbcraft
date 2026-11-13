@@ -38,9 +38,11 @@ Wire-end intent belongs to the live junction at a physical degree-one endpoint,
 using its project-unique `junction-N` identity. It follows moves and fresh-ID
 clipboard copies, including root routes and descendant sheets in a hierarchical
 copy. Deleting the last owning wire removes the marker; Undo restores both.
-Extending through a marked end preserves the marker and reports a conflict.
-Joining a marked end directly to a pin or named contact requires removing the
-marker first, so route healing cannot silently drop or retarget intent. A net
+New wires cannot start, finish or join at a marked pin or wire end. Remove the X
+before wiring there, including with W, endpoint drops or MCP. The same rule
+checks exact model positions, so coordinate and wire/at targets cannot bypass
+intent. Existing wires may still move with their marked owner. Route healing
+cannot silently drop or retarget a marker to accept a new connection. A net
 name elsewhere on the net does not terminate its physical open end. An exact
 named contact at an unmarked endpoint already supplies an electrical termination.
 
@@ -83,7 +85,7 @@ unmarked unconnected terminals and dangling wire ends, connected marked targets,
 missing targets and incompatible electrical types. It does not claim the complete type-conflict or
 power-driver checks tracked by #47, or incremental scheduling under #245/#243.
 Marking a wire end suppresses only that endpoint's `dangling_wire` warning;
-`no_connect_not_dangling` reports later connections. Normal netlist inspection
+`no_connect_not_dangling` reports retained connected ends from older projects. Normal netlist inspection
 and physical board DRC continue to describe the actual connectivity.
 There are at most 128 marker records per part and 4,096 per project. All
 transactions, including compound pastes, validate these limits before publication.
@@ -108,7 +110,16 @@ The placed mark is an X centered on the attachment, with no added lead. Q and
 the Capture tool use a larger X cursor in place of the arrow and snap to a pin
 endpoint, the drawn pin lead, or a nearby open wire endpoint. Empty-space and
 wire-interior clicks cannot author detached markers. The schematic marker is
-original domain geometry. Controls and report surfaces reuse the pinned Craft toolkit through chrome. Interaction follows the published
+original domain geometry. Controls and report surfaces reuse the pinned Craft
+toolkit through chrome.
+
+In selection mode, marked endpoints are excluded from automatic wire targets
+throughout the magnetic radius, not only over the X strokes. Hover and fast clicks
+there do not preview or start wires. Explicit Wire mode shows a blocked cursor
+and rejects the click without changing the draft's starting point or the model.
+The immutable model policy is captured once per engine edit or view target-cache
+revision and reused for both source/destination checks and merges.
+Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html)
 for intentionally unused pins; no implementation source, artwork or external
 fixture is used.

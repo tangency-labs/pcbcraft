@@ -15,11 +15,13 @@ use std::{
 pub const SET: &str = "schematic.set_no_connect";
 /// Inspect no-connect intent and its focused unconnected-pin, dangling-end and conflict diagnostics.
 pub const CHECK: &str = "schematic.check_no_connects";
+/// New wires and attachment edits require explicit removal of authored termination intent.
+pub const WIRE_BLOCKED: &str = "Remove the no-connect marker before connecting a wire.";
 /// Bound persisted intent and detailed query allocation independently of total pin count.
 pub const MAX_MARKERS: usize = 4096;
 const MAX_FINDINGS: usize = 256;
 mod wire_ends;
-pub use wire_ends::{Attachment, WireAppearance, WireFinding, WireMarker, WireTarget};
+pub use wire_ends::{Attachment, WireAppearance, WireAttachments, WireFinding, WireMarker, WireTarget};
 
 /// A stable logical terminal address, independent of unit geometry and reference text.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

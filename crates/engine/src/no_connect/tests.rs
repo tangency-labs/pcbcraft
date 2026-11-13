@@ -56,7 +56,12 @@ fn edits_and_checks_preserve_actual_connectivity_and_history() {
     }
     let p = s.snapshot().unwrap();
     let other = p.symbols()[0].terminals()[1];
+    let before_connection = s.snapshot().unwrap();
+    assert!(s.apply(CONNECT_PINS, &json!({"from":terminal.inspect(),"to":other.inspect(),"expected_revision":s.revision()})).is_err());
+    assert!(Arc::ptr_eq(&before_connection, &s.snapshot().unwrap()));
+    mark(&mut s, &target, false);
     s.apply(CONNECT_PINS, &json!({"from":terminal.inspect(),"to":other.inspect(),"expected_revision":s.revision()})).unwrap();
+    mark(&mut s, &target, true);
     assert_eq!(s.snapshot().unwrap().check_no_connects(s.revision()).markers[0].issues, vec!["no_connect_connected"]);
     mark(&mut s, &target, false);
     assert!(!s.snapshot().unwrap().has_no_connect(terminal));
