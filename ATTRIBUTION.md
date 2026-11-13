@@ -2,6 +2,25 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Layer-aware spatial queries
+
+The #244 implementation uses `geo-index` 0.4.0 (MIT OR Apache-2.0), pinned by
+Cargo.lock, for immutable packed Hilbert R-trees. Its published API documentation
+at https://docs.rs/geo-index/0.4.0/geo_index/rtree/ was consulted; no source was
+copied. `rstar` 0.14.0 (MIT OR Apache-2.0) is a benchmark-only alternative, using
+its published bulk-loading API. Both packages are unmodified and retain their
+upstream package notices. Dependency source/license/ban checks qualify their
+locked dependency closure under deny.toml.
+
+The layer grouping, bounded session cache, disposable overlay and original
+BVH/grid comparison prototypes are PCBcraft work under MIT OR Apache-2.0.
+The curve/diagonal stress generator uses original analytic geometry and synthetic
+intent tags; its output is not an imported EDA design or native curve contract.
+Algorithm background was read in Flatbush's published README
+(https://github.com/mourner/flatbush) and Box2D's dynamic-tree documentation
+(https://box2d.org/documentation/group__tree.html); neither implementation was
+copied or linked. No EDA implementation, artwork or project-format change is added.
+
 ## Intentional no-connect markers
 
 Logical terminal and wire-end intent, captured electrical-type evidence, shared

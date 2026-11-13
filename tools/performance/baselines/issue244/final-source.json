@@ -1,0 +1,25 @@
+{
+  "base_revision": "de281fd630212e7198e85df315e38e5db3f7b640",
+  "files": {
+    "ATTRIBUTION.md": "d168ceab0552c947151b0296b426d038f08b501d8a012769102a23e86e9fb4ce",
+    "Cargo.lock": "f32b017a46a211c29298040dcfc5ef6752f621b9f7173501bbca53224b856c80",
+    "crates/engine/Cargo.toml": "781576145ff563b604615829eafa7aac1fb8ccb20f5226f9fc3e15c2030445d4",
+    "crates/engine/examples/spatial_index.rs": "518783beaacf7d54f775c340d92c28dc9dce5413a64f7840662b6b2d0498fbd2",
+    "crates/engine/examples/spatial_index/alternatives.rs": "f140d03c6d8112d06a70ddc58966f4340c5faef4e94594348cb5479461b120ff",
+    "crates/engine/examples/spatial_index/bvh.rs": "143198b915c74feafcdd0164484a9dd7ec02cf118b48e87a4124dfad5f297f2b",
+    "crates/engine/examples/spatial_index/grid.rs": "7ba0983890823e7a5084998da5a825a5cf3fde4e83f1a491974d4be81777adf6",
+    "crates/engine/examples/spatial_index/hash_grid.rs": "10df9801f0fb5b0295e6fe82801c5bd17109e9086a1a2c897ec0fc7e67e35e33",
+    "crates/engine/examples/spatial_probe.rs": "87b540660ccb897ced1b0a09b20804bdb39b99c465e432a43ba6832abba85cf7",
+    "crates/engine/src/board/clearance.rs": "cc052742d3a6f2fc81dca978d828523aba6f03a84ba189ae11acada899554301",
+    "crates/engine/src/board/clearance/index.rs": "4217114ec95a7577b12129a8c4a7c59390c5c0bd2de381cf889811f2bd602889",
+    "crates/engine/src/board/clearance/overlay.rs": "b46aec4a1a6421e0417df6dff9886a4b660f368a3199a457ad7cf4f2996cb3d4",
+    "crates/engine/src/board/clearance/tests.rs": "2fb95b1cb349b5166f64a53c0b9f2a137d3faf7e0730886d232203e9f27220e4",
+    "crates/engine/src/lib.rs": "0161aeb758573c13061beb5920466c2ad14a3d66b2b5ade059efcd77085563b3",
+    "docs/copper-clearance-query.md": "6a9f5c2c40df8fda9046f32db723c9a292f0d64e140b9f0ba37c44d5d087d084",
+    "docs/performance-testing.md": "9559257d0a9e20768cfbaa7fc9d614534881c6aa7891bd238cb75faed2225552",
+    "scripts/simulate-spatial-obstacles.py": "b59db6123b9c8bc385c47b3596cf4c5682fcc252f9c727e6743cd8c2d6c01497",
+    "scripts/test_spatial_performance.py": "c843f0c28a874952d77c49283e6b93b40bf6aff950389b16de4c4f1eef0d9d69",
+    "executable:spatial_index": "4dc278e81e7fc8a2442f5980ab0954ad45e48ba84ff66bbfb57f89fc61e190e8",
+    "executable:spatial_probe": "47e3ca3296cc6706a6dd4e8a866a5cd0fcf6440f0b8e8f250d918e449d261ed1"
+  }
+}

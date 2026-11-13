@@ -1,0 +1,10 @@
+{
+  "revision": "de281fd + #244 local implementation",
+  "hardware": "AMD Ryzen 9 7950X 16-Core Processor",
+  "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "runtime": "native CPU replay",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\n",
+  "profile": "release",
+  "power": "AC/thermal conditions unmeasured; other development activity may be present",
+  "notes": "After runtime changes; 10-iteration integration context only; executable SHA256 269691dc7f203169f6d37d57e5ac7e006bd37bf5de53fff1799d53c7a05942b4"
+}

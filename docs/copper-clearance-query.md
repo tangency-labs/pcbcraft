@@ -38,8 +38,12 @@ the existing same-physical-island clearance exemption remains separate.
 `pairs()` evaluates a conservative bounds sweep. `exhaustive_pairs()` bypasses
 that spatial pruning and provides a small-fixture reference for later indexes.
 Both evaluate actual contours on common copper layers. `candidates()` separately
-returns a conservative linear obstacle set for a disposable contour on explicit
-board copper layers. Extra candidates are permitted; the final gap/contact
+returns a conservative obstacle set for a disposable contour on explicit
+board copper layers. Single-layer copper uses layer-local packed Hilbert R-trees
+from `geo-index` 0.4.0; spanning copper has one shared group, so a through via
+is not duplicated 64 times. Groups below 128 objects retain a contiguous scan.
+That crossover is a tuning choice, not a universal optimum. Results return in
+source order after exact layer filtering. Extra candidates are permitted; the final gap/contact
 predicate decides the result. DRC streams its candidates and skips its existing
 same-island and known same-net clearance exemptions before evaluating distances,
 so it does not allocate an intermediate all-pairs decision table.
@@ -49,8 +53,26 @@ with unknown membership otherwise. It combines the intended memberships of all
 contacted obstacles before evaluating the result, so an initially unnamed probe
 bridging two nets still reports conflicting contact at zero required clearance.
 A probe retests contacts without assuming its old physical island remains joined.
-This single-contour operation does not implement a multi-object routing overlay,
-connected-move solver or routing gesture authority; those remain later slices.
+`overlay()` adds disposable replacements, removals and UUID-addressed additions
+over the same index. Replacements suppress their originals, retain source intent
+and keep their source identity; added objects can inherit one source's intent.
+Overlay probes use the same exact predicates and combine contacted memberships.
+Dropping the overlay cancels it without editing the model. `OverlayResults::is_current`
+checks source authority, overlay identity and its edit generation, so a changed
+or replacement gesture cannot adopt old results. The overlay accepts at most
+8,192 changed/added objects and never authorizes a model transaction by itself.
+
+A session retains at most one prepared board geometry/index, keyed by the exact
+snapshot and board target. Repeated queries across views reuse it; a changed
+snapshot misses the cache and reopening clears it. The cache holds a weak project
+reference rather than keeping undo snapshots alive. Contended cache readers
+prepare independently instead of waiting, and cold index construction is charged
+to query preparation rather than the first lookup. Current rules remain separate
+captured inputs, and the existing revision-checked command path owns publication.
+
+The [index comparison](../tools/performance/baselines/issue244/README.md) records
+the selection evidence and its limits. Curve bounds in that simulation are
+synthetic; native curved copper and curve routing are not introduced here.
 
 Copper contact includes exact tangency (`gap <= 0`), independently of a strict
 clearance violation (`gap < clearance`). Equality with required clearance passes.

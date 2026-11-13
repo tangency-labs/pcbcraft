@@ -1,0 +1,9 @@
+{
+  "base_revision": "de281fd630212e7198e85df315e38e5db3f7b640",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\n",
+  "platform": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+  "profile": "release (workspace defaults)",
+  "power": "AC/thermal conditions unmeasured; other development activity may be present",
+  "scope": "Candidate-selection bounds service costs only; fixed fixtures, same binary; no presentation or endurance claim"
+}
