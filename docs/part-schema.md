@@ -182,7 +182,8 @@ changes saved data, MCP output or the component's stored Value text.
 `library.parse_quantity` accepts a declared quantity and up to 128 input bytes.
 It recognizes decimal/scientific input, compatible base units and case-sensitive
 SI prefixes `a`, `f`, `p`, `n`, `u`/`µ`/`μ`, `m`, `k`, `M`, `G`, `T`, `P`, `E`; resistance also accepts
-`Ohm`, `ohm`, `ohms`, `Ω`, `R` and the `milli` prefix. A bare prefix uses the
+`Ohm`, `ohm`, `ohms`, `Ω`, `R` and the `milli` prefix. The Ohm sign (U+2126) and
+Kelvin sign (U+212A), which look like `Ω` and `K`, are read as those letters. A bare prefix uses the
 field's unit. An explicit base unit takes precedence, so `100 m` in a length
 field means 100 metres and `100 mm` means 0.1 metres.
 Scientific exponent notation is distinct from exa: `1E3 Hz` means 1000 Hz,

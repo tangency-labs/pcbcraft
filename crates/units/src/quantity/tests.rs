@@ -25,6 +25,19 @@ fn registry_validation_keeps_aliases_out_of_canonical_records() {
     assert_eq!(Quantity::Capacitance.parse("1fF").unwrap().into_parts(), ("0.000000000000001".into(), "F".into()));
 }
 
+/// The Ohm sign (U+2126) and Kelvin sign (U+212A) are Unicode canonical equivalents of Ω and
+/// K. Datasheet text and character pickers produce them, so they parse like the letters,
+/// alone or after an SI prefix and with or without a space.
+#[test]
+fn ohm_and_kelvin_signs_parse_like_their_letters() {
+    let expected = Quantity::Resistance.parse("4.7kΩ").unwrap().into_parts();
+    for text in ["4.7k\u{2126}", "4.7 k\u{2126}", "4700\u{2126}"] {
+        assert_eq!(Quantity::Resistance.parse(text).unwrap().into_parts(), expected, "{text}");
+    }
+    assert_eq!(Quantity::Resistance.parse("100m\u{2126}").unwrap().value(), "0.1");
+    assert_eq!(Quantity::Temperature.parse("300\u{212a}").unwrap().into_parts(), ("300".into(), "K".into()));
+}
+
 /// Display text uses engineering SI prefixes, keeps every digit and parses back to the stored value.
 #[test]
 fn quantities_display_with_si_prefixes_and_round_trip() {
