@@ -120,6 +120,21 @@ exposure pauses.
 
 ## Verify and submit
 
+Validate documentation links locally without network access:
+
+```sh
+python -B scripts/check-markdown-links.py
+python -B -m unittest discover -s scripts -p 'test_markdown_links.py'
+```
+
+The check covers README.md, CONTRIBUTING.md and docs/**/*.md. Supported destinations
+include inline Markdown links and images, full/collapsed/shortcut references,
+angle-bracket destinations and HTML href/src attributes. Fenced/inline code,
+external URLs, repository-root-relative URLs and fragment-only links are ignored.
+Query strings and fragments are stripped for file-existence checks; heading anchor
+names and external link availability are not validated. Missing local targets are
+reported with the source file and line number.
+
 Apply the [bounded verification rule](AGENTS.md#keep-verification-bounded):
 choose checks that answer a specific question about the change, and stop when
 the required checks pass and no unresolved correctness or acceptance question
