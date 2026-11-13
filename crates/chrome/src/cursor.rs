@@ -19,6 +19,18 @@ pub fn track(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool) {
     drawing(painter, pointer, target, connected, t.accent, t.board_canvas);
 }
 
+/// Identify the armed no-connect tool with a short lead ending in a cross beside the pointer.
+/// This is a cursor badge, independent of any authored pin or electrical connection.
+pub fn no_connect(painter: &Painter, pointer: Pos2) {
+    let t = Tokens::get();
+    let center = pointer + vec2(12., 14.);
+    for stroke in [Stroke::new(3.5, t.canvas), Stroke::new(1.5, t.accent)] {
+        for (from, to) in [(vec2(-12., 0.), vec2(0., 0.)), (vec2(-4., -4.), vec2(4., 4.)), (vec2(-4., 4.), vec2(4., -4.))] {
+            painter.line_segment([center + from, center + to], stroke);
+        }
+    }
+}
+
 /// Paint the shared crosshair at the pointer and the ring or dot at the resolved target.
 fn drawing(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool, ink: Color32, canvas: Color32) {
     let arm = theme::WIRE_CURSOR_ARM;

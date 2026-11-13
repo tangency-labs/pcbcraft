@@ -78,6 +78,49 @@ fn no_connect_tool_cancel_and_empty_space_are_inert() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
 
+/// The repeated ribbon tool authors visible marks on actual pin clicks, then remains armed
+/// for the next pin. The Q shortcut must not be required to finish the toolbar interaction.
+#[test]
+fn no_connect_ribbon_tool_marks_clicked_pins_repeatedly() {
+    for (width, dark) in [(1400., true), (700., false)] {
+        let mut h = editor(width, dark);
+        click(&mut h, "Mark intentionally unused pins (Q)");
+        for index in 0..3 {
+            let at = pin(&h, index);
+            click_canvas_at(&mut h, at);
+            assert!(h.state().message.is_none(), "{:?}", h.state().message);
+            h.get_by_label(&format!("No connect J1 pin {}", index + 1));
+            assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NoConnect { .. })));
+        }
+        assert_eq!(h.state().session.project().unwrap().check_no_connects(h.state().session.revision()).total_markers, 3);
+    }
+}
+
+/// Arming the tool gives visible geometric feedback over empty canvas, without creating a
+/// detached authored mark; hovering a pin still previews its exact electrical endpoint.
+#[test]
+fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
+    let mut h = editor(1400., true);
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Mark intentionally unused pins (Q)");
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    let pointer = canvas.right_bottom() - egui::vec2(50., 50.);
+    h.hover_at(pointer);
+    h.run();
+    let cursor_lines = h
+        .output()
+        .shapes
+        .iter()
+        .filter(|shape| {
+            matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+            if stroke.color == Tokens::get().accent && points.iter().all(|point| point.distance(pointer) < 25.))
+        })
+        .count();
+    assert!(cursor_lines >= 3, "the armed cursor needs a lead and two cross strokes");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.project().unwrap().check_no_connects(h.state().session.revision()).total_markers, 0);
+}
+
 /// Read-only report navigation and deliberate removal use stable addresses, and a stale
 /// captured view action cannot mark a changed document.
 #[test]

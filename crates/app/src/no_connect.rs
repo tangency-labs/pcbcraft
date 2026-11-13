@@ -70,8 +70,10 @@ pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &
     }
 }
 
-/// Preview a valid pin target without placing free marks or changing project state.
+/// Identify the armed tool everywhere over the canvas, then highlight an exact pin target
+/// when one is near the pointer. The cursor badge never authors a detached marker.
 pub(super) fn preview(painter: &Painter, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, selected: &Selection) -> Option<Terminal> {
+    pcbcraft_chrome::cursor::no_connect(painter, pointer);
     let terminal = pin_at(project, camera, rect, pointer, selected)?;
     cross(painter, camera.screen(project.terminal_position(terminal)?, rect), camera.unit_step(), Tokens::get().accent);
     Some(terminal)

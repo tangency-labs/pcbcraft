@@ -31,7 +31,7 @@ const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
-    /// Original pin-centered intentional-disconnection mark.
+    /// Original lead-and-cross intentional-disconnection glyph.
     NoConnect,
     Select,
     Pin,
@@ -1388,8 +1388,9 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
         ToolIcon::NoConnect => {
-            line(&[(16., 16.), (48., 48.)], stroke(4., ink));
-            line(&[(16., 48.), (48., 16.)], stroke(4., ink));
+            line(&[(10., 32.), (42., 32.)], stroke(4., ink));
+            line(&[(30., 20.), (54., 44.)], stroke(4., ink));
+            line(&[(30., 44.), (54., 20.)], stroke(4., ink));
         }
         ToolIcon::Ground => {
             line(&[(32., 10.), (32., 29.)], stroke(3., ink));
