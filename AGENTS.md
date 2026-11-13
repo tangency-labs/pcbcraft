@@ -110,6 +110,33 @@ shared libraries remain reuse candidates under the source rules above. New
 integration work must not silently synchronize, replace or transfer ownership
 of either application's documents.
 
+## Keep verification bounded
+
+Before an expensive verification run, state the question it answers, the changed
+behavior or boundary it exercises, the smallest suitable test and its stopping
+condition. Choose a scope that can change an implementation or acceptance
+decision; collecting more evidence is not a goal by itself.
+
+Run required checks once after a coherent change. Repeat affected checks when
+subsequent code changes invalidate their results, a concrete failure needs
+verification, or a narrower experiment tests a specific hypothesis. Once the
+required checks pass and no unresolved correctness failure or acceptance question
+requires another run, stop testing and finish the work.
+
+Inconclusive timings, noisy results or a rejected comparison do not by themselves
+justify another broad replay, rebuild or larger sample count. Check whether the
+test actually isolates the changed work before attributing a slowdown to it. If
+it cannot answer that question, use a focused measurement with a stated hypothesis
+or preserve the result and report the limitation. Do not repeat runs until a
+comparison looks clean, discard inconvenient samples or treat an unmeasured
+boundary as a pass.
+
+Extensive baselines, allocation profiling and endurance sessions need an explicit
+qualification scope and stopping condition. They are separate from routine
+correctness checks and should not grow into an open-ended investigation during
+feature delivery. Keep any required check that failed or could not run visible
+in the handoff.
+
 ## Review failure paths before opening a PR
 
 For changes that introduce or alter blocking I/O, concurrency, or shared state, do a separate review pass after the usual checks. Follow the changed code into its callers and callees, including across crates, and verify the relevant cases:
@@ -124,7 +151,8 @@ In the PR description, name the failure paths reviewed and distinguish the ones 
 
 Before changing routing, ERC/DRC, geometry queries, connectivity, snapshot
 preparation/publication, live MCP edits, or performance-sensitive editor input/rendering paths,
-read [the performance-testing guide](docs/performance-testing.md) and its
+apply [the verification stopping rule](#keep-verification-bounded) and read
+[the performance-testing guide](docs/performance-testing.md) and its
 [coverage record](docs/performance-coverage.md). Select the saved command-generated
 fixtures and runners affected by the change: CPU replay for engine costs,
 native/browser rendered replay for editor/renderer or live MCP behavior, and
@@ -142,6 +170,6 @@ apply after the initial infrastructure issue #240 closes.
 Routine CI runs the short harness checks and saved-evidence validators. Full
 100-iteration rendered baselines, allocation profiling and endurance sessions
 are targeted development/qualification runs, rather than requirements for every
-PR. Documentation, copy and unrelated changes need the ordinary required checks,
-without fresh performance baselines. CPU or GPU-readback timings do not establish
+PR. Follow the [change-appropriate submission checks](CONTRIBUTING.md#verify-and-submit)
+for documentation, copy and unrelated changes, without fresh performance baselines. CPU or GPU-readback timings do not establish
 compositor presentation latency or resolve the recorded Wayland endurance failure.

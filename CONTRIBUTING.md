@@ -83,9 +83,9 @@ reports, environment, correctness results and any regressions in the PR; the
 measurement limits.
 
 Routine CI verifies the harness and saved reports with short tests. Full rendered
-baselines, allocation profiles and endurance runs are collected separately when
-relevant to the change or release qualification. Unrelated or documentation-only
-changes do not need fresh performance baselines.
+baselines, allocation profiles and endurance runs need a separate qualification
+scope and stopping condition under the [bounded verification rule](AGENTS.md#keep-verification-bounded).
+Unrelated or documentation-only changes do not need fresh performance baselines.
 
 ## Choose a bounded change
 
@@ -120,7 +120,27 @@ exposure pauses.
 
 ## Verify and submit
 
-Run the workspace checks before a commit, including for documentation changes:
+Apply the [bounded verification rule](AGENTS.md#keep-verification-bounded):
+choose checks that answer a specific question about the change, and stop when
+the required checks pass and no unresolved correctness or acceptance question
+requires more work.
+
+For documentation-only changes, review wording and formatting, verify local links
+and check any changed commands or examples. Prose and link edits do not require
+Rust builds, Clippy, workspace tests or fresh performance baselines. Changes to
+build configuration, generated sources or executable examples need the checks
+appropriate to their effects, even when they accompany documentation.
+
+During code development, use affected-crate checks and focused regressions for
+the behavior or failure path being changed. Verify the affected native/browser
+behavior when platform interaction changes; a passing check on one target does
+not establish behavior on another.
+
+Before submitting a code PR for review, run the broader workspace checks once
+after the coherent change is complete. These are submission checks, not a
+requirement before every local commit. Reuse results for unchanged code; after
+further edits, repeat affected checks and broaden them when shared behavior or a
+concrete failure warrants it:
 
 ```sh
 cargo fmt --all --check
@@ -131,8 +151,8 @@ cargo check --locked -p pcbcraft-web --target wasm32-unknown-unknown
 
 The test suite includes loopback transport tests, so a sandbox that forbids local
 sockets cannot run the complete suite. Report that limitation rather than
-silently skipping those tests. Match CI's dependency check when cargo-deny is
-available:
+silently skipping those tests. For code or dependency changes, match CI's
+dependency check when cargo-deny is available:
 
 ```sh
 cargo install --locked cargo-deny --version 0.20.2

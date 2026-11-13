@@ -17,6 +17,21 @@ environments. The [AGENTS.md rule](../AGENTS.md#performance-evidence) and
 [contribution guide](../CONTRIBUTING.md#build-and-find-your-way-around) make this
 part of the development workflow even after #240 closes.
 
+Before collecting evidence, apply the [verification stopping rule](../AGENTS.md#keep-verification-bounded).
+State which decision the measurement will inform, the boundary it must isolate,
+the smallest suitable workload and the stopping condition. For example, routing
+job capture, cancellation and publication need measurements of those operations;
+a whole-editor replay supplies integration context but cannot alone attribute a
+slowdown to the job scheduler.
+
+Run the selected before/after pair, then assess whether it answered that question.
+Noise or a comparison rejected for differing environment or window state is a
+limitation to preserve, rather than a reason to repeat the broad run until it
+passes. Further measurement needs a specific hypothesis and a test shaped to
+resolve it. Scope extensive statistical baselines, allocation profiles and
+endurance runs as qualification work instead of automatically adding them to
+routine feature verification.
+
 | Changed path or question | Tool and instructions |
 | --- | --- |
 | Geometry queries, connectivity, DRC or validated engine commands | `board_perf` with the [CPU collection and comparison commands](#record-native-evidence); the CPU example also has a [browser runner](#record-browser-evidence) |
@@ -62,8 +77,11 @@ and warms fonts/layout for eight frames before measuring the trace. Logical inpu
 time advances at 60 Hz without sleeping; this measures CPU service cost and does
 not measure event-loop scheduling, dropped frames or actual refresh cadence.
 Each boundary retains all samples in milliseconds and nearest-rank p50/p95/p99/max.
-Use at least 100 samples for baseline evidence and preferably 1,000 for a useful
-p99 tail. One-sample runs are correctness/build smoke tests.
+For a statistical latency baseline, use at least 100 samples and preferably
+1,000 for a useful p99 tail. That sample guidance does not make a full statistical
+baseline mandatory for every change. A smaller targeted run can verify correctness
+and expose service costs; label its scope and avoid tail-latency conclusions that
+its sample count cannot support. One-sample runs are correctness/build smoke tests.
 
 ## Generate and retain fixtures
 
