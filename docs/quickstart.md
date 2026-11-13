@@ -535,7 +535,8 @@ saving a current project without edits preserves its document bytes. The
 [storage guide](native-project-storage.md) explains the compatibility break and failed
 or interrupted saves.
 
-Selected tracks and vias have a **Lock** choice in Properties. **Locked** keeps
+Selected tracks and vias brighten in their copper colors, like footprint pads,
+and have a **Lock** choice in Properties. **Locked** keeps
 them selectable while protecting geometry and sizes from edits; unlock them
 before moving, reshaping or deleting them. Copy/duplicate retain locks, and Cut
 refuses protected copper. See the [lock policy](pcb-layout-workflow.md#fixed-tracks-and-vias)

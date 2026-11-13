@@ -122,6 +122,10 @@ external artwork is imported. Front/back colors retain the shared board palette;
 the alternate internal-layer green is an original palette extension. Color
 choices are presentation settings and make no material/manufacturing claim.
 
+Copper selection reuses PCBcraft's existing layer-color emphasis helper for
+tracks and through vias, matching footprint pads without accent outlines. This
+is original PCBcraft drawing work; no new controls, artwork or dependencies were added.
+
 ## Layer controls
 
 The active-layer selector, full-row activation, active arrow and independent

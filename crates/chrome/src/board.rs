@@ -63,7 +63,10 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>,
     let color = if selected || preview { t.accent } else { color };
     if let Some(width) = width {
         for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len().saturating_sub(usize::from(!closed))) {
-            track(p, [*a, *b], width, color, selected, preview);
+            if selected {
+                track(p, [*a, *b], width.max(1.) + 3., t.accent, false, false);
+            }
+            track(p, [*a, *b], width, color, false, preview);
         }
     } else {
         p.add(egui::Shape::Path(egui::epaint::PathShape {
@@ -81,18 +84,10 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>,
 }
 
 /// Paint one copper track segment at its physical width with round ends, never thinner than a
-/// hairline. Selection draws an accent outline; a preview lightens the supplied layer color.
+/// hairline. Selection and previews lighten the supplied layer color without adding an outline.
 pub fn track(p: &Painter, ends: [Pos2; 2], width: f32, color: Color32, selected: bool, preview: bool) {
-    let t = Tokens::get();
     let width = width.max(1.);
-    let fill = copper_emphasis(color, preview.then_some(true));
-    if selected {
-        let outline = Stroke::new(width + 3., t.accent);
-        p.line_segment(ends, outline);
-        for end in ends {
-            p.circle_filled(end, outline.width / 2., t.accent);
-        }
-    }
+    let fill = copper_emphasis(color, (selected || preview).then_some(true));
     p.line_segment(ends, Stroke::new(width, fill));
     for end in ends {
         p.circle_filled(end, width / 2., fill);
@@ -122,14 +117,12 @@ pub fn routing_clearance(p: &Painter, [a, b]: [Pos2; 2], width: f32, clearance: 
 }
 
 /// Paint a through via: a round pad of `radius` with its drill hole, never smaller than a dot.
-/// Selection draws an accent ring; an authored via takes the current copper emphasis.
+/// Selection lightens through-hole copper without an accent ring. Net focus takes precedence
+/// over selection, matching pads; the placement preview retains its separate ghost color.
 pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool, emphasized: Option<bool>) {
     let t = Tokens::get();
     let radius = radius.max(2.);
-    if selected {
-        p.circle_filled(center, radius + 1.5, t.accent);
-    }
-    let fill = if preview { t.accent.gamma_multiply(0.6) } else { copper_emphasis(t.board_through, emphasized) };
+    let fill = if preview { t.accent.gamma_multiply(0.6) } else { copper_emphasis(t.board_through, emphasized.or_else(|| selected.then_some(true))) };
     p.circle_filled(center, radius, fill);
     p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
 }

@@ -903,7 +903,8 @@ fn layer_color(view: BoardView<'_>, appearance: &Appearance, layer: &str) -> egu
 /// Paint visible tracks with round ends at their physical width, inactive copper first so the
 /// active layer reads on top, then vias above all copper. A route committed this frame is
 /// painted where it will land, and `carried` tracks (stretched by a footprint move preview)
-/// are painted at their carried ends.
+/// are painted at their carried ends. Net focus takes precedence over selection tinting,
+/// matching pads and avoiding a second brightening of selected copper.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     ui: &Ui,
@@ -926,7 +927,7 @@ pub(super) fn paint(
             [camera.screen(a, rect), camera.screen(b, rect)],
             width_px(camera, rect, width_nm),
             pcbcraft_chrome::board::copper_emphasis(layer_color(view, appearance, layer), emphasized),
-            selected,
+            selected && emphasized.is_none(),
             false,
         );
     };
