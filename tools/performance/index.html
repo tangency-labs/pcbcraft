@@ -5,7 +5,7 @@
 <script type="module">
 const params = new URLSearchParams(location.search);
 try {
-  const { default: init, run_performance, run_checker } = await import('./pkg/board_perf_web.js');
+  const { default: init, run_performance, run_checker, run_routes } = await import('./pkg/board_perf_web.js');
   await init();
   const read = async name => {
     const url = params.get(name);
@@ -17,7 +17,7 @@ try {
   const [artifact, environment] = await Promise.all([read('artifact'), read('environment')]);
   const iterations = Number(params.get('iterations') ?? 100);
   if (!Number.isInteger(iterations) || iterations < 1 || iterations > 10000) throw new Error('Invalid iterations');
-  const report = params.get("checks") === "1" ? run_checker(artifact, environment, iterations) : run_performance(artifact, environment, iterations);
+  const report = params.get("routes") === "1" ? run_routes(artifact, environment, iterations) : params.get("checks") === "1" ? run_checker(artifact, environment, iterations) : run_performance(artifact, environment, iterations);
   globalThis.performanceReport = JSON.parse(report);
   document.querySelector('#report').textContent = report;
 } catch (error) {

@@ -23,6 +23,8 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+mod preparation;
+
 /// Screen distance within which the pointer snaps to a pad center, track end or via.
 const SNAP_PX: f32 = 8.;
 /// A free routing point follows the pointer when the nearest grid point is farther away.
@@ -94,6 +96,8 @@ struct SegmentDrag {
 /// Independent route tool, sizes and track/via selection for one board view, never saved in files.
 #[derive(Debug)]
 pub(super) struct State {
+    preparation: preparation::Preparation,
+    retry_route: Option<Draft>,
     rules_source: Option<(BoardTarget, Option<pcbcraft_engine::board::rules::Settings>)>,
     pub(super) tool: bool,
     /// Place › Via: each click places one standalone via until Esc or right-click.
@@ -131,6 +135,8 @@ pub(super) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            preparation: Default::default(),
+            retry_route: None,
             rules_source: None,
             tool: false,
             via_tool: false,
@@ -198,6 +204,11 @@ impl State {
     }
     /// Drop the tool, any unfinished route and pending key requests. Selection and sizes remain.
     pub(super) fn cancel(&mut self) {
+        self.preparation.cancel();
+        self.retry_route = None;
+        self.committed = None;
+        self.committed_ends.clear();
+        self.committed_move = None;
         self.tool = false;
         self.via_tool = false;
         self.draft = None;
@@ -216,6 +227,15 @@ impl State {
     /// Escape drops an unfinished route first, then exits the tool, then clears the selection.
     /// Returns false when there was nothing to escape.
     pub(super) fn escape(&mut self) -> bool {
+        if self.preparation.committing() {
+            self.preparation.cancel();
+            self.retry_route = None;
+            self.committed = None;
+            self.committed_ends.clear();
+            self.committed_move = None;
+            return true;
+        }
+        self.preparation.cancel();
         if self.draft.take().is_some() || self.moving.take().is_some() || self.segment.take().is_some() {
             return true;
         }
@@ -237,6 +257,11 @@ impl State {
     pub(super) fn busy(&self) -> bool {
         self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some() || self.segment.is_some()
     }
+    /// Current preparation state for the focused route's status bar.
+    pub(super) fn preparation_status(&self) -> Option<String> {
+        self.preparation.status()
+    }
+
     /// The displacement to paint selected copper with: a move in progress, or one just submitted.
     fn shift(&self) -> Option<(i64, i64)> {
         self.moving.as_ref().map(|moving| moving.offset).or(self.committed_move)
@@ -482,6 +507,7 @@ fn width_px(camera: &Camera, rect: Rect, width_nm: i64) -> f32 {
 /// Build the one route transaction for a finished path, with its vias and the current sizes.
 /// A path without a single segment produces nothing.
 fn add(state: &mut State, draft: Draft) -> Option<Command> {
+    state.retry_route = Some(draft.clone());
     if draft.points.len() < 2 {
         return None;
     }
@@ -564,7 +590,9 @@ pub(super) fn interact(
 ) -> Interaction {
     state.sync_rules(view);
     let mut out = Interaction::default();
-    state.committed = None;
+    if !state.preparation.committing() {
+        state.committed = None;
+    }
     let rect = response.rect;
     let visible: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
     let vias = view.vias();
@@ -579,6 +607,7 @@ pub(super) fn interact(
         egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(response));
     }
     if !enabled || stale_route {
+        state.preparation.cancel();
         state.draft = None;
     }
     if !route_available {
@@ -595,6 +624,13 @@ pub(super) fn interact(
     let move_copper = std::mem::take(&mut state.move_requested);
     let select_connected = std::mem::take(&mut state.connected_requested);
     let drag_segment = std::mem::take(&mut state.drag_segment_requested);
+    if state.preparation.committing() {
+        if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+            state.escape();
+        }
+        out.consumed = true;
+        return out;
+    }
     state.committed_move = None;
     state.committed_ends.clear();
     if !enabled || state.segment.as_ref().is_some_and(|segment| Some(segment.source) != source) {
@@ -921,11 +957,26 @@ pub(super) fn paint(
     if let Some(committed) = &state.committed {
         for (layer, a, b) in &committed.segments {
             if !hidden.contains(layer) {
-                segment(layer, *a, *b, committed.width_nm, false, None);
+                pcbcraft_chrome::board::track(
+                    &painter,
+                    [camera.screen(*a, rect), camera.screen(*b, rect)],
+                    width_px(camera, rect, committed.width_nm),
+                    pcbcraft_chrome::Tokens::get().text_dim,
+                    false,
+                    true,
+                );
             }
         }
         for at in &committed.vias {
-            via(*at, committed.via_diameter_nm, committed.via_drill_nm, false, None);
+            pcbcraft_chrome::board::via(
+                &painter,
+                camera.screen(*at, rect),
+                width_px(camera, rect, committed.via_diameter_nm) / 2.,
+                width_px(camera, rect, committed.via_drill_nm) / 2.,
+                false,
+                true,
+                None,
+            );
         }
     }
     for item in view.vias() {
@@ -943,7 +994,7 @@ pub(super) fn paint_draft(
     response: &Response,
     camera: &Camera,
     view: BoardView<'_>,
-    state: &State,
+    state: &mut State,
     active: Option<&str>,
     appearance: &Appearance,
 ) {
@@ -969,6 +1020,24 @@ pub(super) fn paint_draft(
     let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
     if let Some(draft) = &state.draft {
         let path = extended(&draft.points, at, state.diagonal_first);
+        // Queue the exact geometry already resolved for painting; do not project every pad
+        // a second time merely to prepare the same pointer request.
+        if (2..=MAX_PATH_POINTS).contains(&path.len()) && Some(draft.layer.as_str()) == active {
+            let mut params = json!({"board":view.target.board,"layer":draft.start,"width_nm":state.width_nm,"points":path,"expected_revision":draft.source.revision});
+            if !draft.changes.is_empty() {
+                params["layer_changes"] = json!(draft.changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
+                params["via_diameter_nm"] = json!(state.via_diameter_nm);
+                params["via_drill_nm"] = json!(state.via_drill_nm);
+            }
+            state.preparation.request(
+                Command::new(draft.source, pcbcraft_engine::ADD_TRACKS, params),
+                active.map(str::to_owned),
+                (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
+                false,
+            );
+        } else if !state.preparation.committing() {
+            state.preparation.cancel();
+        }
         let layers = segment_layers(&draft.start, &draft.changes, path.len());
         let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
         let width = width_px(camera, rect, state.width_nm);
@@ -981,7 +1050,14 @@ pub(super) fn paint_draft(
             pcbcraft_chrome::board::routing_clearance(painter, [path[*index]; 2], via_width.max(4.0), clearance);
         }
         for (pair, layer) in path.windows(2).zip(layers) {
-            pcbcraft_chrome::board::track(painter, [pair[0], pair[1]], width, layer_color(view, appearance, layer), false, true);
+            pcbcraft_chrome::board::track(
+                painter,
+                [pair[0], pair[1]],
+                width,
+                if state.preparation.ready() { layer_color(view, appearance, layer) } else { pcbcraft_chrome::Tokens::get().text_dim },
+                false,
+                true,
+            );
         }
         for (index, _) in &draft.changes {
             pcbcraft_chrome::board::via(painter, path[*index], via_width / 2., width_px(camera, rect, state.via_drill_nm) / 2., false, true, None);

@@ -429,7 +429,7 @@ phase or a geometric predicate. Retain measured overruns rather than reporting
 that allowance as achieved latency.
 
 Each view retains one running check and at most one replaceable pending snapshot.
-Native execution has a process-wide limit of two checker workers; excess starts
+Native execution has a process-wide limit of two snapshot workers shared by checking and copper preparation; excess starts
 fail with a capacity error. The live MCP endpoint retains at most one deferred
 check and refuses another until the slot retires. Canceling revokes publication
 immediately; worker acknowledgement occurs after the current batch. Neither
@@ -439,6 +439,38 @@ These new metrics are checker CPU/queue boundaries, separate from the establishe
 CPU and rendered reports. Compare the existing reports with their existing
 comparators, and retain the new report separately. Its synchronous browser
 collector does not demonstrate a responsive window; real editor frames and the
-rendered replay remain required for interaction claims. ERC and route mutation
-preparation are subsequent #243 slices, and this checker implementation does not
-close the broader issue or qualify Wayland endurance/presentation latency.
+rendered replay remain required for interaction claims. The routing continuation adds `board_perf routes ARTIFACT ENVIRONMENT ITERATIONS REPORT`
+and `&routes=1` on the browser CPU page. Its separate
+`pcbcraft-route-preparation-performance/1` report measures source/request capture,
+resumable stages, publication, replacement and cancellation acknowledgement. It
+asserts exact saved-byte equivalence with the synchronous shared command, one
+revision per commit and stale-source rejection. The ordinary replay remains the
+matched before/after measure for pointer reversals, layer transitions, cancellation
+and concurrent MCP edits; these diagnostics do not establish presentation latency.
+
+Copper preparation uses the same two-worker process limit and incremental browser
+logic as checking. Each view retains one running job, one coalesced desired input,
+one ready candidate and one immutable source context. Pad projection survives
+pointer replacement while the source remains current. Capturing does not encode
+project files. Candidate construction and final shared history publication remain
+linear phases with supported model bounds; their measured costs are reported
+separately rather than hidden by the browser polling allowance.
+
+The route's source covers session identity, project opening, physical board,
+revision and immutable rules/geometry. The host additionally checks view/input
+epoch, request generation, active layer and local dimensions. An opaque prepared
+edit can publish only once through `Session::commit_copper_edit`; stale edits,
+reopening and Undo/Redo revoke it. GUI copper gestures and size properties defer
+preparation. Headless callers drain the same engine job synchronously. Live MCP
+retains one deferred copper request, rechecks its deadline, endpoint/Assistant
+turn and modal ownership before publication, and cancels observed disconnects.
+The socket worker samples disconnects at up to 20 ms intervals; no distributed
+check can eliminate a disconnect racing an already authorized transaction.
+
+Pending route geometry uses the existing chrome adapter's ghost styling and
+progress appears in the board status. Escape and right-click cancel final
+preparation; navigation runs before the gesture input gate. Prepared status means
+the existing command's contact/lock checks passed, with clearance enforcement
+and walkaround/shove still owned by their subsequent issues. ERC jobs remain
+with the ERC feature. These checks do not qualify Wayland endurance/presentation
+latency.

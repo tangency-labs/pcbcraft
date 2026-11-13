@@ -1,35 +1,78 @@
 //! Bounded per-view scheduling: one running snapshot and one replaceable pending snapshot.
 use pcbcraft_engine::board::drc::{CheckJob, CheckProgress, CheckSource, Report};
 
+/// Engine work shared by checker and routing queues; hosts retain publication authority.
+pub(crate) trait Work: Send + 'static {
+    type Output: Send + 'static;
+    fn source(&self) -> &CheckSource;
+    fn progress(&self) -> CheckProgress;
+    fn step(&mut self, budget: usize) -> bool;
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String>;
+}
+impl Work for CheckJob {
+    type Output = Report;
+    fn source(&self) -> &CheckSource {
+        self.source()
+    }
+    fn progress(&self) -> CheckProgress {
+        self.progress()
+    }
+    fn step(&mut self, budget: usize) -> bool {
+        self.step(budget)
+    }
+    fn take_output(&mut self) -> Result<Option<Report>, String> {
+        Ok(self.take_report())
+    }
+}
+impl Work for pcbcraft_engine::board::track::preparation::CopperEditJob {
+    type Output = pcbcraft_engine::board::track::preparation::PreparedCopperEdit;
+    fn source(&self) -> &CheckSource {
+        self.source()
+    }
+    fn progress(&self) -> CheckProgress {
+        self.progress()
+    }
+    fn step(&mut self, budget: usize) -> bool {
+        self.step(budget)
+    }
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+        self.take_result().map_err(|e| e.to_string())
+    }
+}
+
 /// One immutable checker request tagged with its owner's publication generation.
-pub(crate) struct Request {
+pub(crate) struct Request<J: Work = CheckJob> {
     pub id: u64,
-    pub job: CheckJob,
+    pub job: J,
 }
 /// A terminal completion carries its source; canceled work contains no report.
-pub(crate) struct Completion {
+pub(crate) struct Completion<T = Report> {
     pub id: u64,
     pub source: CheckSource,
-    pub report: Result<Option<Report>, String>,
+    pub report: Result<Option<T>, String>,
 }
 /// Bounded scheduling retains one active and one replaceable pending request per owner.
-#[derive(Default)]
-pub(crate) struct Queue {
-    active: Option<Running>,
-    pending: Option<Request>,
+pub(crate) struct Queue<J: Work = CheckJob> {
+    active: Option<Running<J>>,
+    pending: Option<Request<J>>,
     pub replaced: u64,
     pub canceled: u64,
     pub completed: u64,
 }
-impl std::fmt::Debug for Queue {
-    /// Debug output exposes occupancy without retaining or formatting project contents.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CheckerQueue").field("running", &self.active.is_some()).field("pending", &self.pending.is_some()).finish()
+impl<J: Work> Default for Queue<J> {
+    fn default() -> Self {
+        Self { active: None, pending: None, replaced: 0, canceled: 0, completed: 0 }
     }
 }
-impl Queue {
+impl<J: Work> std::fmt::Debug for Queue<J> {
+    /// Debug output exposes occupancy without retaining or formatting project contents.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnapshotQueue").field("running", &self.active.is_some()).field("pending", &self.pending.is_some()).finish()
+    }
+}
+impl<J: Work> Queue<J> {
     /// Coalesce replacements without starting another worker until cancellation is acknowledged.
-    pub fn submit(&mut self, request: Request) {
+    pub fn submit(&mut self, request: Request<J>) {
         if let Some(active) = &mut self.active {
             active.cancel();
             self.replaced += u64::from(self.pending.is_some());
@@ -47,7 +90,7 @@ impl Queue {
         }
     }
     /// Return at most one completion, then start the latest queued request.
-    pub fn poll(&mut self) -> Option<Completion> {
+    pub fn poll(&mut self) -> Option<Completion<J::Output>> {
         let result = self.active.as_mut().and_then(Running::poll);
         if result.is_some() {
             self.active = None;
@@ -94,13 +137,13 @@ mod incremental {
     extern "C" {
         fn checker_now() -> f64;
     }
-    pub(super) struct Running {
-        request: Option<Request>,
+    pub(super) struct Running<J: Work> {
+        request: Option<Request<J>>,
         canceled: bool,
     }
-    impl Running {
+    impl<J: Work> Running<J> {
         /// Retain the captured engine job directly; browser execution serializes no project.
-        pub fn start(request: Request) -> Self {
+        pub fn start(request: Request<J>) -> Self {
             Self { request: Some(request), canceled: false }
         }
         /// Captured source, absent after an incremental request has been consumed.
@@ -116,7 +159,7 @@ mod incremental {
             self.request.as_ref().map(|r| r.job.progress())
         }
         /// Advance one engine batch, publishing only a complete report or cancellation.
-        fn poll_batch(&mut self) -> Option<Completion> {
+        fn poll_batch(&mut self) -> Option<Completion<J::Output>> {
             let request = self.request.as_mut()?;
             if !self.canceled && !request.job.step(256) {
                 return None;
@@ -125,12 +168,12 @@ mod incremental {
             Some(Completion {
                 id: request.id,
                 source: request.job.source().clone(),
-                report: Ok(if self.canceled { None } else { request.job.take_report() }),
+                report: if self.canceled { Ok(None) } else { request.job.take_output() },
             })
         }
 
         /// Yield after two browser milliseconds; tests use one deterministic batch per poll.
-        pub fn poll(&mut self) -> Option<Completion> {
+        pub fn poll(&mut self) -> Option<Completion<J::Output>> {
             #[cfg(target_arch = "wasm32")]
             {
                 let began = checker_now();
@@ -173,16 +216,16 @@ mod native {
             ACTIVE_WORKERS.fetch_sub(1, Ordering::AcqRel);
         }
     }
-    pub(super) struct Running {
+    pub(super) struct Running<J: Work> {
         id: u64,
         source: CheckSource,
         cancel: Arc<AtomicBool>,
         progress: Arc<Mutex<CheckProgress>>,
-        result: Receiver<Result<Option<Report>, String>>,
+        result: Receiver<Result<Option<J::Output>, String>>,
     }
-    impl Running {
+    impl<J: Work> Running<J> {
         /// Own a snapshot on one worker; its one-result channel never blocks publication.
-        pub fn start(mut request: Request) -> Self {
+        pub fn start(mut request: Request<J>) -> Self {
             let cancel = Arc::new(AtomicBool::new(false));
             let progress = Arc::new(Mutex::new(request.job.progress()));
             let (tx, result) = mpsc::sync_channel(1);
@@ -190,30 +233,30 @@ mod native {
             let source = request.job.source().clone();
             let id = request.id;
             let Some(slot) = WorkerSlot::acquire() else {
-                let _ = tx.try_send(Err("Checker worker capacity reached; retry after a running check completes".into()));
+                let _ = tx.try_send(Err("Snapshot worker capacity reached; retry after a running job completes".into()));
                 return Self { id, source, cancel, progress, result };
             };
             let failed = tx.clone();
-            let spawned = std::thread::Builder::new().name("pcbcraft-checker".into()).spawn(move || {
+            let spawned = std::thread::Builder::new().name("pcbcraft-snapshot".into()).spawn(move || {
                 let report = {
                     let _slot = slot;
                     loop {
                         if stop.load(Ordering::Relaxed) {
-                            break None;
+                            break Ok(None);
                         }
                         let done = request.job.step(256);
                         if let Ok(mut p) = update.lock() {
                             *p = request.job.progress();
                         }
                         if done {
-                            break request.job.take_report();
+                            break request.job.take_output();
                         }
                     }
                 };
-                let _ = tx.try_send(Ok(report));
+                let _ = tx.try_send(report);
             });
             if let Err(error) = spawned {
-                let _ = failed.try_send(Err(format!("Could not start checker: {error}")));
+                let _ = failed.try_send(Err(format!("Could not start snapshot job: {error}")));
             }
             Self { id, source, cancel, progress, result }
         }
@@ -230,17 +273,17 @@ mod native {
             self.progress.try_lock().ok().map(|p| *p)
         }
         /// A stopped/panicked worker is a terminal failure, never an empty passing report.
-        pub fn poll(&mut self) -> Option<Completion> {
+        pub fn poll(&mut self) -> Option<Completion<J::Output>> {
             let report = match self.result.try_recv() {
                 Ok(result) => result,
                 Err(TryRecvError::Empty) => return None,
-                Err(TryRecvError::Disconnected) => Err("Checker worker stopped before completing".into()),
+                Err(TryRecvError::Disconnected) => Err("Snapshot worker stopped before completing".into()),
             };
             Some(Completion { id: self.id, source: self.source.clone(), report })
         }
     }
 
-    impl Drop for Running {
+    impl<J: Work> Drop for Running<J> {
         /// Revoking a view never joins its worker during teardown.
         fn drop(&mut self) {
             self.cancel();
@@ -257,7 +300,7 @@ mod native {
             let job = session.design_check_job(&serde_json::json!({})).unwrap();
             let (tx, result) = mpsc::sync_channel(1);
             drop(tx);
-            let mut running = Running {
+            let mut running = Running::<CheckJob> {
                 id: 1,
                 source: job.source().clone(),
                 cancel: Arc::new(AtomicBool::new(false)),
@@ -265,6 +308,36 @@ mod native {
                 result,
             };
             assert!(running.poll().unwrap().report.unwrap_err().contains("stopped"));
+        }
+        /// A real native copper worker returns a typed edit without changing the session;
+        /// cancellation and an abandoned receiver release the shared worker permit.
+        #[test]
+        fn native_copper_worker_prepares_without_publication() {
+            let _lock = TEST_LOCK.lock().unwrap();
+            let mut session = pcbcraft_engine::Session::default();
+            session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
+            session
+                .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":2,"expected_revision":session.revision()}))
+                .unwrap();
+            let project = session.project().unwrap();
+            let view = project.board_view(project.board_target().unwrap()).unwrap();
+            let layer = view.layers().into_iter().find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper).unwrap().id;
+            let params = serde_json::json!({"layer":layer,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1_000_000,"y_nm":0}],"expected_revision":session.revision()});
+            let revision = session.revision();
+            let job = session.prepare_copper_edit(pcbcraft_engine::ADD_TRACKS, &params).unwrap();
+            let mut running = Running::start(Request { id: 1, job });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let completion = loop {
+                if let Some(done) = running.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert_eq!(session.revision(), revision);
+            session.commit_copper_edit(completion.report.unwrap().unwrap()).unwrap();
+            assert_eq!(session.revision(), revision + 1);
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
         }
         /// Excess native work is refused without spawning a third worker or waiting.
         #[test]

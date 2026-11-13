@@ -577,7 +577,7 @@ pub(super) fn show(
         }
     }
     if route.consumed {
-        crate::board_tracks::paint_draft(&p, &response, camera, project, &state.tracks, state.active_layer.as_deref(), appearance);
+        crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if project.footprints().next().is_none()

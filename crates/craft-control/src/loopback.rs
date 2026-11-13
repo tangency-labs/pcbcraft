@@ -130,6 +130,25 @@ impl Connection {
         self.reader.get_mut().socket.write_all(&line)
     }
 
+    /// Check for an observed peer shutdown without waiting for another frame. The caller must
+    /// own this connection exclusively: the nonblocking setting is restored before returning.
+    /// Buffered or pending input means the peer has not yet been observed closed.
+    pub fn peer_closed(&self) -> io::Result<bool> {
+        if !self.reader.buffer().is_empty() {
+            return Ok(false);
+        }
+        let socket = &self.reader.get_ref().socket;
+        socket.set_nonblocking(true)?;
+        let result = socket.peek(&mut [0]);
+        socket.set_nonblocking(false)?;
+        match result {
+            Ok(0) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Read one JSON value within the configured timeout or return `None` when the peer closes.
     /// A stalled frame returns `io::ErrorKind::TimedOut` on every platform.
     /// Drop the connection on error because some of the frame may already have been consumed.

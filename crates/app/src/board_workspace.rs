@@ -615,7 +615,7 @@ impl PcbApp {
                 && let Some(target) = self.views.active.board.target
             {
                 edit.params["board"] = serde_json::json!(target.board);
-                self.run(edit.id, &edit.params);
+                self.prepare_canvas_copper(edit);
             }
             if let Some(placement) = pick.placement
                 && self.views.active.accepts(placement.source, &self.session)

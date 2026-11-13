@@ -76,3 +76,19 @@ fn stalled_first_request_reports_timed_out() -> io::Result<()> {
     assert!(matches!(&result, Err(error) if error.kind() == io::ErrorKind::TimedOut), "{result:?}");
     Ok(())
 }
+
+/// Observing a peer shutdown never waits for the socket's two-second frame timeout.
+#[test]
+fn observes_disconnect_without_waiting_for_a_frame() -> io::Result<()> {
+    let listener = Listener::bind(0)?;
+    let sender = TcpStream::connect((Ipv4Addr::LOCALHOST, listener.port()?))?;
+    let peer = listener.accept(TIMEOUT)?;
+    assert!(!peer.peer_closed()?);
+    drop(sender);
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while !peer.peer_closed()? {
+        assert!(std::time::Instant::now() < deadline);
+        thread::yield_now();
+    }
+    Ok(())
+}

@@ -1710,3 +1710,25 @@ fn checker_escape_navigation_and_view_release_preserve_authored_state() {
     assert_eq!(h.state().session.revision(), revision);
     assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
 }
+
+/// A route remains a neutral ghost while preparation is pending. Escape during that interval
+/// revokes even a final-click request, while leaving the board and undo revision untouched.
+#[test]
+fn escape_revokes_a_pending_final_route_before_publication() {
+    let mut h = routable();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, Point { x_nm: 0, y_nm: -5_080_000 });
+    let revision = h.state().session.revision();
+    h.hover_at(at(&h, Point { x_nm: 5_080_000, y_nm: -5_080_000 }));
+    h.run_steps(1);
+    assert!(h.state().views.active.board.tracks.preparation_status().unwrap().contains("Prepar"));
+    h.key_press(Key::Enter);
+    h.run_steps(1);
+    assert_eq!(h.state().session.revision(), revision);
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(tracks(&h).is_empty());
+    assert!(!h.state().views.active.board.tracks.routing());
+}
