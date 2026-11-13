@@ -137,7 +137,7 @@ fn custom_spacing_reads_units_and_explains_refusals() {
 fn board_grid_has_its_own_presets_and_remembered_spacing() {
     let mut h = board_harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert_eq!(h.state().views.active.workspace, Workspace::Board);
     assert_eq!(h.state().views.active.camera.snap_nm(), 50 * MIL);
     let before = project_state(&h);
@@ -180,7 +180,7 @@ fn board_grid_has_its_own_presets_and_remembered_spacing() {
     assert_eq!(h.state().preferences.board_grid_nm, 10 * MIL, "a schematic choice keeps the board preference");
 
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
     assert_eq!(project_state(&h), before);
 }
@@ -209,7 +209,7 @@ fn board_grid_changes_leave_off_grid_footprints_and_pads_in_place() {
     let before = project_state(&h);
 
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     for row in ["100 mil", "10 mil", "25 mil", "5 mil"] {
         choose_grid(&mut h, row);
         assert_eq!(placement(&h), original, "{row} moved authored geometry");
@@ -354,7 +354,7 @@ fn the_grid_button_reports_thinned_dots() {
 fn board_grid_button_reports_thinned_dots_without_changing_snap() {
     let mut h = board_harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.state_mut().preferences.board_grid_visible = true;
     h.state_mut().preferences.board_grid_style = grid::Style::Dots;
     choose_grid(&mut h, "10 mil");
@@ -454,7 +454,7 @@ fn saved_workspace_spacings_survive_opening_a_project() {
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
     click(&mut h, "Choose workspace");
     click(&mut h, "Schematic");

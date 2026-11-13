@@ -698,7 +698,7 @@ fn footprint_drag_rotation_and_undo_share_one_command() {
 fn footprint_drag_snaps_to_board_grid_at_several_zoom_levels() {
     let mut h = board_harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let id = h.state().views.active.id();
     h.state_mut().set_view_grid(id, 25 * pcbcraft_chrome::grid::NM_PER_MIL);
     for zoom in [0.5, 1.0, 2.0] {
