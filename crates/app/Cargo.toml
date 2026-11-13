@@ -3,6 +3,7 @@ name = "pcbcraft-app"
 description = "The PCBCraft window, shared by the desktop and browser builds"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

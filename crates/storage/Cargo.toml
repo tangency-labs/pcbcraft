@@ -3,6 +3,7 @@ name = "pcbcraft-storage"
 description = "Native project folder I/O and recoverable saves, shared by desktop and CLI"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

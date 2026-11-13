@@ -3,6 +3,7 @@ name = "pcbcraft-mcp"
 description = "PCBCraft's MCP server: JSON-RPC 2.0 over stdio, driving the same commands the app's menus run"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
