@@ -807,7 +807,9 @@ that would join pads on two different nets is refused, as is a second via on the
 spot. The tool needs a board setup with at least two copper layers.
 
 Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggles) and
-press Delete to remove it; deleting a via keeps its tracks. A selection box also picks
+press Delete to remove it; deleting a via keeps its tracks. Selected copper brightens
+in its layer color, like footprint pads, without adding an outline or changing its
+displayed width. A selection box also picks
 tracks and vias, with the same Window/Crossing rules as footprints. **U** selects every
 track and via joined by copper to the one under the pointer, or to the current copper
 selection. With copper selected and no footprint selected, **M** (or **Layout → Modify → Move**)
