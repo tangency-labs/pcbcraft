@@ -391,14 +391,15 @@ impl EditorView {
     }
 
     /// Start a successfully opened project's default document in this workspace. Runtime identity,
-    /// snap spacing and selection-filter choices survive, while old document addresses, navigation and edit authority expire.
+    /// each workspace's snap spacing and selection-filter choices survive, while old document
+    /// addresses, navigation and edit authority expire.
     /// Saved arrangements are restored separately afterward and still validate explicit targets.
     /// Definition panes retain their document while refreshing the parked project presentation.
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
         let definition = self.definition.take();
         let library = self.library.take();
         let workspace = self.workspace;
-        let snap_nm = self.camera.snap_nm();
+        let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
         let panels = self.panels.clone();
         *self = Self::new(self.id);
@@ -406,6 +407,7 @@ impl EditorView {
         self.panels = panels;
         self.workspace = workspace;
         self.camera.set_snap_nm(snap_nm);
+        self.parked_camera.set_snap_nm(parked_snap_nm);
         self.sync(session);
         self.definition = definition;
         self.library = library;
@@ -773,7 +775,7 @@ impl EditorView {
         let binding = Binding::current(session, self.workspace, board_target, self.sheet);
         let changed = self.binding != binding;
         if changed {
-            let snap_nm = self.camera.snap_nm();
+            let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
             let workspace = self.workspace;
             let sheet = self.sheet;
             let filters = (self.filters, self.filters_collapsed, self.filters_open);
@@ -784,6 +786,7 @@ impl EditorView {
             self.sheet = sheet;
             self.workspace = workspace;
             self.camera.set_snap_nm(snap_nm);
+            self.parked_camera.set_snap_nm(parked_snap_nm);
             self.binding = binding;
         }
         self.board.target = board_target;

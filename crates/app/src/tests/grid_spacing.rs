@@ -442,6 +442,25 @@ fn startup_seeds_each_workspace_from_its_preference() {
     assert_eq!(views.active.camera.snap_nm(), grid::BOARD_SPACING_DEFAULT_NM);
 }
 
+/// Opening a project rebuilds its views. Both workspace spacings survive that rebuild, so a
+/// saved PCB choice is still there on the first switch to PCB layout without reseeding.
+#[test]
+fn saved_workspace_spacings_survive_opening_a_project() {
+    let mut h = harness();
+    h.state_mut().preferences.schematic_grid_nm = 25 * MIL;
+    h.state_mut().preferences.board_grid_nm = 10 * MIL;
+    h.state_mut().views.set_grid_defaults(25 * MIL, 10 * MIL);
+    resistor_with_board_at_origin(&mut h);
+    assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+    assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Schematic");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
+}
+
 /// The grid control lives in the bottom status bar, not in the sheet headers. Changing the
 /// spacing or zooming leaves the ribbon and canvas where they were, and a long status
 /// message truncates before the control instead of running under it.
