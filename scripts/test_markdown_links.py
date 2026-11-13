@@ -110,6 +110,65 @@ class MarkdownLinkChecks(unittest.TestCase):
             '[visible](../missing.md)\n'), [
             'docs/sub/check.md:3: missing local link target: ../missing.md'])
 
+    def test_review_closing_backtick_after_backslash(self):
+        self.assertEqual(self.check(
+            '`[hidden](../missing.md)\\`\n[visible](../absent.md)\n'), [
+            'docs/sub/check.md:2: missing local link target: ../absent.md'])
+
+    def test_review_ordered_list_other_than_one_continues_paragraph(self):
+        self.assertEqual(self.check(
+            'Intro `example\n2. [hidden](../missing.md)`\n'), [])
+        self.assertEqual(self.check(
+            'Intro `example\n20) [hidden](../missing.md)`\n'), [])
+        self.assertEqual(self.check(
+            'Intro `example\n1. [visible](../missing.md)`\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+
+    def test_review_blockquote_lazy_continuation(self):
+        self.assertEqual(self.check(
+            '> `example\n[hidden](../missing.md)`\n'), [])
+        self.assertEqual(self.check(
+            '> > `example\n[hidden](../missing.md)`\n'), [])
+
+    def test_review_blank_line_blocks_quote_continuation(self):
+        self.assertEqual(self.check(
+            '> `example\n\n[visible](../missing.md)`\n'), [
+            'docs/sub/check.md:3: missing local link target: ../missing.md'])
+
+    def test_review_nested_blockquote_and_list_are_separate(self):
+        self.assertEqual(self.check(
+            '> `example\n- [visible](../missing.md)`\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+
+    def test_valid_escaped_backtick_opener_is_not_code(self):
+        self.assertEqual(self.check(
+            r'\`[visible](../missing.md)\`' + '\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_inline_parenthesized_title_and_escaped_title_quotes(self):
+        self.assertEqual(self.check(
+            '[p](../missing.md (description))\n'
+            r'[q](../missing.md "escaped \"quote\" value")' + '\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md',
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+
+    def test_escaped_parentheses_in_local_destinations(self):
+        (self.root / "docs" / "diagram(one).md").write_text("ok", encoding="utf-8")
+        self.assertEqual(self.check(
+            r'[valid](../diagram\(one\).md)' + '\n'), [])
+        self.assertEqual(self.check(
+            r'[missing](../not-here\(one\).md)' + '\n'), [
+            r'docs/sub/check.md:1: missing local link target: ../not-here\(one\).md'])
+
+    def test_html_entities_in_link_destinations(self):
+        (self.root / "docs" / "a&b.md").write_text("ok", encoding="utf-8")
+        self.assertEqual(self.check(
+            '[guide](../a&amp;b.md) <a href="../a&amp;b.md">ok</a>\n'), [])
+
+    def test_escaped_closing_parenthesis_in_destination(self):
+        (self.root / "docs" / "diagram)one.md").write_text("ok", encoding="utf-8")
+        self.assertEqual(self.check(r'[ok](../diagram\)one.md)' + '\n'), [])
+
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
             '[web](https://example.org/x) [email](mailto:help@example.org)\n'

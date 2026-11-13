@@ -7,7 +7,9 @@ This is not a general Markdown renderer or an anchor-heading validator.
 """
 from __future__ import annotations
 
+import html
 import re
+import string
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -47,8 +49,9 @@ def _masked(text: str) -> str:
         closer_index = index + 1
         while closer_index < len(runs):
             candidate = runs[closer_index]
-            if (len(candidate.group()) == len(opener.group())
-                    and not _escaped(text, candidate.start())):
+            # Backslashes are literal within a code span: they cannot escape
+            # a closing backtick run. Only opening delimiters are escapable.
+            if len(candidate.group()) == len(opener.group()):
                 break
             closer_index += 1
         if closer_index == len(runs):
@@ -86,15 +89,22 @@ def _mask_blocks(lines: list[str]) -> list[str]:
                 flush()
             pending.append(line)
             kind = "blockquote"
-        elif LIST_ITEM.match(line):
-            flush()  # each list item is a separate inline block
-            pending.append(line)
-            kind = "list"
+        elif (item := LIST_ITEM.match(line)):
+            # In CommonMark a numbered list beginning with a value other
+            # than 1 cannot interrupt a paragraph. It remains a continuation
+            # of that paragraph, including any multiline code span.
+            ordered = re.match(r"[0-9]{1,9}[.)]", item.group().lstrip())
+            if pending and kind == "paragraph" and ordered and int(ordered.group()[:-1]) != 1:
+                pending.append(line)
+            else:
+                flush()  # each list item starts a new inline block
+                pending.append(line)
+                kind = "list"
         else:
-            if kind == "blockquote":
-                flush()
+            # A paragraph inside a blockquote may have a lazy continuation
+            # without a '>' prefix. Do not split the inline block here.
             pending.append(line)
-            if kind != "list":
+            if kind != "list" and kind != "blockquote":
                 kind = "paragraph"
     flush()
     return output
@@ -126,42 +136,65 @@ def _normalized(label: str) -> str:
 
 
 def _destination(line: str, index: int) -> tuple[str, int] | None:
-    """Read an inline destination after '(', including nested path parentheses."""
+    """Read a single-line inline destination and optional link title."""
     pos = index
-    while pos < len(line) and line[pos].isspace():
+    while pos < len(line) and line[pos] in " \t":
         pos += 1
     if pos >= len(line):
         return None
     if line[pos] == "<":
-        stop = line.find(">", pos + 1)
-        if stop < 0:
+        start = pos + 1
+        pos = start
+        while pos < len(line):
+            if line[pos] == ">" and not _escaped(line, pos):
+                break
+            pos += 1
+        if pos == len(line):
             return None
-        value = line[pos + 1: stop]
-        pos = stop + 1
+        value = line[start:pos]
+        pos += 1
     else:
         start = pos
         depth = 0
         while pos < len(line):
             char = line[pos]
-            if char.isspace() and depth == 0:
+            if char in " \t" and depth == 0:
                 break
-            if char == "(":
-                depth += 1
-            elif char == ")":
-                if depth == 0:
+            if char in "()" and not _escaped(line, pos):
+                if char == "(":
+                    depth += 1
+                elif depth == 0:
                     break
-                depth -= 1
+                else:
+                    depth -= 1
             pos += 1
+        if depth != 0:
+            return None
         value = line[start:pos]
-    tail = line[pos:]
-    closing = re.match(r"\s*(?:[\"'][^\"']*[\"']\s*)?\)", tail)
-    if closing is None:
+    had_space = pos < len(line) and line[pos] in " \t"
+    while pos < len(line) and line[pos] in " \t":
+        pos += 1
+    if had_space and pos < len(line) and line[pos] in "\"' (":
+        opener = line[pos]
+        closer = ")" if opener == "(" else opener
+        pos += 1
+        while pos < len(line) and (line[pos] != closer or _escaped(line, pos)):
+            pos += 1
+        if pos >= len(line):
+            return None
+        pos += 1
+        while pos < len(line) and line[pos] in " \t":
+            pos += 1
+    if pos >= len(line) or line[pos] != ")":
         return None
-    return value, pos + closing.end()
+    return value, pos + 1
 
 
 def _local_target(repo: Path, source: Path, target: str) -> bool:
-    target = target.strip()
+    target = html.unescape(target.strip())
+    # Markdown backslash escapes punctuation in destinations; URL escaping is
+    # handled separately after the query/fragment have been stripped.
+    target = re.sub(r"\\([" + re.escape(string.punctuation) + r"])", r"\1", target)
     if not target or target.startswith(("#", "/", "//")):
         return True
     parsed = urlsplit(target)
