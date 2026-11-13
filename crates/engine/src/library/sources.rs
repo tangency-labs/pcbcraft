@@ -22,7 +22,7 @@ pub const MAX_SOURCE_BYTES: usize = 8 << 20;
 pub type Documents = BTreeMap<String, String>;
 /// Install a bounded native snapshot without editing any pinned project definitions.
 pub const LOAD: &str = "library.load_source";
-/// Remove a source from browsing; already pinned project definitions remain intact.
+/// Remove an external source from browsing; bundled sources and pinned definitions remain intact.
 pub const REMOVE: &str = "library.remove_source";
 /// Inspect loaded sources, provenance and per-file validation/conflict diagnostics.
 pub const LIST: &str = "library.list_sources";
@@ -82,7 +82,7 @@ pub(crate) const COMMANDS: [Command; 6] = [
     Command {
         id: REMOVE,
         title: "Remove library source",
-        summary: "Remove a source from the catalog, preserving pinned project copies.",
+        summary: "Remove an external source from the catalog, preserving bundled sources and pinned project copies.",
         params: &[SOURCE],
     },
     Command {
@@ -442,6 +442,8 @@ pub fn check_documents(documents: &Documents) -> Result<(), String> {
 pub struct Catalog {
     generation: u64,
     sources: BTreeMap<String, Arc<NativeSource>>,
+    /// Trusted delivery origin, assigned only by the embedded-source adapter.
+    builtin: BTreeSet<String>,
     unavailable: BTreeSet<String>,
     /// Keep changed revisions quarantined for this registration until it is removed.
     changed: BTreeMap<String, BTreeSet<Key>>,
@@ -551,7 +553,7 @@ impl Catalog {
         }
         Ok(ResolvedPart { definition: part, symbol, category, footprints })
     }
-    /// Install embedded native documents through the ordinary source validator and conflict index.
+    /// Install read-only embedded registrations through the ordinary validator and conflict index.
     /// Broken bundled manifests remain visible as unavailable registrations rather than hiding
     /// another library. This adapter has no project or history ownership.
     pub fn bundled() -> Self {
@@ -565,7 +567,9 @@ impl Catalog {
                 problems: vec![error],
             });
             // Embedded registrations are bounded by this repository's delivery adapter.
-            catalog.sources.insert(format!("bundled-{id}"), Arc::new(source));
+            let source_id = format!("bundled-{id}");
+            catalog.builtin.insert(source_id.clone());
+            catalog.sources.insert(source_id, Arc::new(source));
         }
         catalog.rebuild_conflicts();
         catalog.generation = 0;
@@ -582,9 +586,15 @@ impl Catalog {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+    /// Refuse mutations to registrations owned by embedded delivery before changing catalog state.
+    fn check_writable(&self, id: &str) -> Result<(), String> {
+        if self.builtin.contains(id) { Err("Built-in library sources are read-only".into()) } else { Ok(()) }
+    }
     /// Atomically replace a source snapshot. Reusing an immutable revision with changed content
-    /// quarantines it rather than silently replacing old geometry. Removing then re-adding is explicit.
+    /// quarantines it rather than silently replacing old geometry. Bundled registrations are
+    /// read-only; external removal and re-adding is explicit.
     pub fn install(&mut self, id: &str, source: Arc<NativeSource>) -> Result<(), String> {
+        self.check_writable(id)?;
         if !crate::board::definition::valid_id(id) {
             return Err("Invalid or reserved source ID".into());
         }
@@ -609,8 +619,9 @@ impl Catalog {
         self.generation = self.generation.wrapping_add(1);
         Ok(())
     }
-    /// Remove only the named registration's disposable source state, refusing unknown IDs.
+    /// Remove external disposable source state, refusing unknown and read-only bundled IDs.
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
+        self.check_writable(id)?;
         if self.sources.remove(id).is_none() {
             return Err("Unknown native source ID".into());
         }
@@ -620,10 +631,10 @@ impl Catalog {
         self.generation = self.generation.wrapping_add(1);
         Ok(())
     }
-    /// Stop offering a failed native source while retaining its prior revision identities for
-    /// conflict checks on refresh. Explicit removal forgets this disposable registration state.
+    /// Stop offering a failed external source while retaining its prior revision identities for
+    /// conflict checks. Bundled registrations cannot be disabled by a failed external refresh.
     pub fn mark_unavailable(&mut self, id: &str) {
-        if self.sources.contains_key(id) && self.unavailable.insert(id.into()) {
+        if !self.builtin.contains(id) && self.sources.contains_key(id) && self.unavailable.insert(id.into()) {
             self.rebuild_conflicts();
             self.generation = self.generation.wrapping_add(1);
         }
@@ -703,7 +714,7 @@ impl Catalog {
             })
             .and_then(Item::symbol)
     }
-    /// List sources with validation and conflict messages; filenames identify invalid items.
+    /// List sources with trusted built-in status and validation/conflict messages by filename.
     pub fn inspect(&self) -> Value {
         let conflicts = &self.conflicts;
         let mut sources = Vec::new();
@@ -726,7 +737,7 @@ impl Catalog {
                     problems.push(format!("{}: {error}",item.file));
                 }
             }
-            json!({"source":id,"library":source.library,"name":source.name,"license":source.license,"available":!self.unavailable.contains(id),"problems":problems,
+            json!({"source":id,"builtin":self.builtin.contains(id),"library":source.library,"name":source.name,"license":source.license,"available":!self.unavailable.contains(id),"problems":problems,
                 "symbols":source.items.iter().filter(|i|i.key.kind==Kind::Symbol).count(),"footprints":source.items.iter().filter(|i|i.key.kind==Kind::Footprint).count(),
                 "manufacturer_parts":source.items.iter().filter(|i|i.key.kind==Kind::ManufacturerPart).count(),
                 "parts":source.items.iter().filter(|i|i.key.kind==Kind::Part).count(),"categories":source.items.iter().filter(|i|i.key.kind==Kind::Category).count()})

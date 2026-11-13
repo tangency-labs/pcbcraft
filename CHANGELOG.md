@@ -25,6 +25,10 @@ generated leg after reopen and never an authored route. Edited legs become
 authored routes again, and removing the last live record returns the sheet to
 the earlier encoding.
 
+Default and Power library sources are marked Built-in and cannot be removed or
+replaced through the Sources dialog or shared library commands. External library
+registrations remain removable without changing pinned project definitions.
+
 Tracks and vias can be locked together in Properties or through
 `pcb.set_copper_locked`. Locked copper stays selectable and refuses geometry,
 size and deletion changes, including indirect changes from footprint transforms

@@ -70,6 +70,9 @@ fn source_dialog_search_and_parts_placement_share_the_catalog() {
         h.step();
         h.run();
         h.get_by_label("Workshop");
+        assert!(h.query_by_label("Actions for Default").is_none());
+        assert!(h.query_by_label("Actions for Power").is_none());
+        assert!(h.query_by_label("Actions for Workshop").is_some());
         assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         assert_eq!(h.state().session.revision(), revision);
         click(&mut h, "Close");

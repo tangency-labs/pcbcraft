@@ -51,6 +51,34 @@ fn source_commands_place_and_pin_offline_through_the_existing_command_path() {
     crate::assert_same_content(&before, &session.snapshot().unwrap());
 }
 
+/// Bundled registrations reject mutation without changing project/catalog state; protection
+/// follows their delivery origin, while external registrations remain removable.
+#[test]
+fn bundled_sources_are_read_only_without_changing_project_or_catalog() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let project = session.snapshot().unwrap();
+    let revision = session.revision();
+    let catalog = session.libraries().inspect();
+    let generation = session.libraries().generation();
+    let bytes = encode_documents(project.clone()).unwrap();
+    for source in ["bundled-starter", "bundled-power"] {
+        assert!(session.execute(REMOVE, &json!({"source":source})).unwrap_err().to_string().contains("read-only"));
+        assert!(session.execute(LOAD, &json!({"source":source,"documents":documents()})).unwrap_err().to_string().contains("read-only"));
+        session.mark_library_unavailable(source);
+        assert_eq!(session.libraries().inspect(), catalog);
+        assert_eq!(session.libraries().generation(), generation);
+        assert!(catalog.as_array().unwrap().iter().any(|entry| entry["source"] == source && entry["builtin"] == true));
+    }
+    session.execute(LOAD, &json!({"source":"bundled-personal","documents":documents()})).unwrap();
+    assert!(session.libraries().inspect().as_array().unwrap().iter().any(|entry| entry["source"] == "bundled-personal" && entry["builtin"] == false));
+    session.execute(REMOVE, &json!({"source":"bundled-personal"})).unwrap();
+    assert_eq!(session.libraries().inspect(), catalog);
+    assert!(Arc::ptr_eq(&project, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
 /// Invalid files are isolated, malformed manifests/transport bounds fail, and upload/folder data agree.
 #[test]
 fn native_validation_reports_paths_and_bounds_before_adoption() {
