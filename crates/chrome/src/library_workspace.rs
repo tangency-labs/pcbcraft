@@ -28,8 +28,8 @@ pub fn workspace(
         area.min.y = ui.cursor().min.y + t.space_8;
         let region = [Region::Browser, Region::Items, Region::Preview][(*compact).min(2)];
         if matches!(region, Region::Preview) {
-            let (_, toggle) = preview
-                .show(ui, ui.scope_id().with("library_preview"), "Preview", area, area, *collapsed, area.width() - 24.0, |ui| draw(ui, region));
+            let (_, toggle) =
+                preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, area, *collapsed, |ui| draw(ui, region));
             *collapsed ^= toggle;
         } else {
             card(ui, area, region, if matches!(region, Region::Browser) { Some(browser_collapsed) } else { None }, &mut draw);
@@ -54,7 +54,7 @@ pub fn workspace(
             card(ui, rect, region, if matches!(region, Region::Browser) { Some(browser_collapsed) } else { None }, &mut draw);
         }
         let (_, toggle) =
-            preview.show(ui, ui.scope_id().with("library_preview"), "Preview", area, preview_rect.expand(12.0), *collapsed, right, |ui| {
+            preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, preview_rect.shrink(1.0), *collapsed, |ui| {
                 draw(ui, Region::Preview)
             });
         *collapsed ^= toggle;
@@ -72,10 +72,11 @@ fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool
     let rect = rect.shrink(1.0);
     let mut child = ui.new_child(UiBuilder::new().id_salt(id).max_rect(rect).layout(Layout::top_down(Align::Min)));
     child.set_clip_rect(ui.clip_rect().intersect(rect));
-    kit::panel_host_frame(ui.ctx(), true).inner_margin(Tokens::get().space_12).show(&mut child, |ui| {
-        let height =
-            if collapsed.as_deref().copied().unwrap_or(false) { Tokens::get().control_height } else { rect.height() - Tokens::get().space_24 };
-        ui.set_min_size(vec2((rect.width() - Tokens::get().space_24).max(0.0), height.max(0.0)));
+    let frame = kit::panel_host_frame(ui.ctx(), true).inner_margin(Tokens::get().space_12);
+    let margin = frame.total_margin().sum();
+    frame.show(&mut child, |ui| {
+        let height = if collapsed.as_deref().copied().unwrap_or(false) { Tokens::get().control_height } else { rect.height() - margin.y };
+        ui.set_min_size(vec2((rect.width() - margin.x).max(0.0), height.max(0.0)));
         ui.set_max_size(ui.min_size());
         if let Some(collapsed) = collapsed.as_deref_mut() {
             ui.horizontal(|ui| {
@@ -257,10 +258,15 @@ pub fn type_filter(ui: &mut Ui, current: &mut usize) {
 
 /// The single acquisition action leads to folder/bundle selection on either platform.
 pub fn add_choices(ui: &mut Ui) -> (bool, bool) {
-    let folder = controls::button(ui, "Choose folder…").clicked();
-    let bundle = controls::button(ui, "Choose bundle…").clicked();
-    controls::enabled_button(ui, false, "Connect Git…").on_disabled_hover_text("Planned");
-    controls::enabled_button(ui, false, "Connect remote catalog…").on_disabled_hover_text("Planned");
+    ui.set_min_width(Tokens::get().control_height * 8.0);
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let folder = crate::MenuItem::new("Choose folder…")
+        .tool_icon(crate::workspace::ToolIcon::LibraryFolder(crate::workspace::LibraryFolderAction::Add))
+        .show(ui);
+    let bundle = crate::MenuItem::new("Choose bundle…").tool_icon(crate::workspace::ToolIcon::Shared("library")).show(ui);
+    crate::menu::separator(ui);
+    crate::MenuItem::new("Connect Git…").enabled(false).show(ui);
+    crate::MenuItem::new("Connect remote catalog…").enabled(false).show(ui);
     (folder, bundle)
 }
 

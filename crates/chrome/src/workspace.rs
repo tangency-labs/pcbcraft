@@ -860,6 +860,18 @@ pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mu
 /// Buttons share a standard width and wrap labels; a wider caption grows its group evenly.
 /// PCBcraft's surrounding layout supplies the separators between these individual groups.
 pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
+    ribbon_group_with_popups(ui, title, tools, menu_tools, |_, _, _| {})
+}
+
+/// Attach host-owned choice menus to actual shared ribbon button responses. The host
+/// renders menu rows through chrome and handles choices after the ribbon pass.
+pub fn ribbon_group_with_popups(
+    ui: &mut Ui,
+    title: &str,
+    tools: &[RibbonTool<'_>],
+    menu_tools: &[RibbonTool<'_>],
+    mut popup: impl FnMut(&mut Ui, usize, &Response),
+) -> Option<usize> {
     use solidcraft_ui_kit::ribbon as shared;
     let t = Tokens::get();
     let caption_width = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24;
@@ -945,6 +957,7 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
         if let Some(tool) = tools.get(button.index) {
             paint_icon(ui.painter(), tool.icon, pos2(button.whole.center().x, button.whole.top() + 16.0), RIBBON_TOOL_ICON, t, tool.enabled);
             button.response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled && ui.is_enabled(), tool.active, tool.description));
+            popup(ui, button.index, &button.response);
             button.response.on_hover_text(tool.description);
         }
     }

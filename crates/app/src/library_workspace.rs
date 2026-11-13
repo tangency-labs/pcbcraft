@@ -143,7 +143,7 @@ impl PcbApp {
             self.editor_workspace(ui, area);
         });
         if self.views.host == self.views.main {
-            self.dialogs(&ctx);
+            self.project_dialogs(&ctx);
         }
     }
     /// Shared ribbon metrics and source-qualified availability match the existing workspaces.
@@ -200,6 +200,7 @@ impl PcbApp {
             (Action::Window, ToolIcon::EditorWindow, "New window", "New Library window", !crate::IN_BROWSER),
         ];
         let mut action = None;
+        let mut acquisition = None;
         let response = workspace::ribbon(
             ui,
             "Library",
@@ -221,8 +222,25 @@ impl PcbApp {
                         menu_check: None,
                     })
                     .collect();
-                if let Some(index) = workspace::ribbon_group(ui, if shown == 0 { "Sources" } else { "Layout" }, &entries) {
-                    action = Some(rows[index].0);
+                let mut add_triggered = false;
+                if let Some(index) =
+                    workspace::ribbon_group_with_popups(ui, if shown == 0 { "Sources" } else { "Layout" }, &entries, &[], |_ui, index, trigger| {
+                        if shown == 0 && index == 0 {
+                            add_triggered = trigger.clicked();
+                            egui::Popup::menu(trigger).frame(menu::frame()).show(|ui| {
+                                let (folder, bundle) = chrome::add_choices(ui);
+                                if folder || bundle {
+                                    acquisition = Some(folder);
+                                }
+                            });
+                        }
+                    })
+                {
+                    // Add opens its anchored menu directly; caption-menu activation uses
+                    // the command's chooser fallback below.
+                    if shown != 0 || index != 0 || !add_triggered {
+                        action = Some(rows[index].0);
+                    }
                 }
                 if shown == 0 {
                     for (title, labels) in [
@@ -268,6 +286,9 @@ impl PcbApp {
         }
         if let Some(pick) = response.workspace {
             self.pick_workspace(ui.ctx(), pick);
+        }
+        if let Some(folder) = acquisition {
+            self.message = self.acquire_library(ui.ctx(), None, folder).err();
         }
         if let Some(action) = action {
             let source = self.views.active.library.as_ref().and_then(|s| s.source.clone());
@@ -440,7 +461,8 @@ impl PcbApp {
                 .cloned();
             state.selected = None;
         }
-        let mut preview = self.views.view(view).map(|v| v.panels[crate::workspace_panels::PROPERTIES].clone()).unwrap_or_default();
+        // Move the runtime panel out temporarily: Clone intentionally drops live drags.
+        let mut preview = self.views.view_mut(view).map(|v| std::mem::take(&mut v.panels[crate::workspace_panels::PROPERTIES])).unwrap_or_default();
         let mut preview_collapsed = state.preview_collapsed;
         let mut browser_collapsed = state.browser_collapsed;
         let previous_compact = state.compact;

@@ -1,6 +1,9 @@
 use super::*;
 use crate::tests::click;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use pcbcraft_engine::library::sources;
 use std::sync::Arc;
 
@@ -139,4 +142,116 @@ fn source_diagnostics_and_browser_collapse_use_real_source_state() {
     assert!(h.state().views.active.library.as_ref().unwrap().browser_collapsed);
     click(&mut h, "Expand Browser");
     assert!(!h.state().views.active.library.as_ref().unwrap().browser_collapsed);
+}
+
+/// A short empty preview still owns a full-height column, and a live header drag
+/// survives frames, cancellation, floating movement and both docking targets.
+#[test]
+fn preview_reserves_space_and_preserves_live_drag() {
+    use crate::workspace_panels::PROPERTIES;
+    use pcbcraft_chrome::workspace::panels::Position;
+    let mut h = fixture(1800.);
+    let before = h.state().session.inspect();
+    let header = h.get_by_label("Move Preview").rect();
+    let table_end = h.get_by_label("Rev").rect();
+    assert!(table_end.right() < header.left(), "docked Preview must not cover the table");
+    let mut pending: Vec<_> = h.output().shapes.iter().map(|s| &s.shape).collect();
+    let mut frames = Vec::new();
+    while let Some(shape) = pending.pop() {
+        match shape {
+            egui::Shape::Vec(shapes) => pending.extend(shapes),
+            egui::Shape::Rect(r) if r.rect.height() > 600. && r.rect.width() < 500. => frames.push(r.rect),
+            _ => {}
+        }
+    }
+    let preview_frame = *frames.iter().find(|r| r.contains_rect(header)).expect("empty Preview must retain its full dock height");
+    let browser_frame = frames.iter().find(|r| r.width() > 220. && r.width() < 240.).unwrap();
+    assert!((preview_frame.top() - browser_frame.top()).abs() < 1.0, "{preview_frame:?}, {browser_frame:?}");
+    assert!((preview_frame.bottom() - browser_frame.bottom()).abs() < 1.0, "{preview_frame:?}, {browser_frame:?}");
+    let center = egui::pos2(900., 420.);
+    h.drag_at(header.center());
+    h.run();
+    h.hover_at(center);
+    h.run();
+    assert_eq!(h.state().views.active.panels[PROPERTIES].position(), Position::Floating);
+    let first = h.get_by_label("Move Preview").rect();
+    h.hover_at(center + egui::vec2(60., 40.));
+    h.run();
+    let moved = h.get_by_label("Move Preview").rect();
+    assert!((moved.min - first.min - egui::vec2(60., 40.)).length() < 1.0, "drag must continue across frames");
+    h.key_press(egui::Key::Escape);
+    h.run();
+    h.drop_at(center);
+    h.run();
+    assert_eq!(h.state().views.active.panels[PROPERTIES].position(), Position::Right);
+    for (at, position) in [(center, Position::Floating), (egui::pos2(20., 420.), Position::Left), (egui::pos2(1780., 420.), Position::Right)] {
+        let from = h.get_by_label("Move Preview").rect().center();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(at);
+        h.run();
+        h.drop_at(at);
+        h.run();
+        assert_eq!(h.state().views.active.panels[PROPERTIES].position(), position);
+        if position == Position::Right {
+            assert!(h.get_by_label("Rev").rect().right() < h.get_by_label("Move Preview").rect().left());
+        }
+    }
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Library content cannot paint over the shared pane tab, even though its background
+/// fills the pane. Closing uses the same host action as schematic/PCB panes.
+#[test]
+fn split_library_keeps_shared_headers_visible_and_usable() {
+    let mut h = fixture(1800.);
+    let id = h.state().views.active.id();
+    h.state_mut().views.open_beside(id).unwrap();
+    h.run();
+    let headers: Vec<_> = h.query_all_by_label("Close view Library").map(|n| n.rect()).collect();
+    assert_eq!(headers.len(), 2);
+    for header in headers {
+        for s in &h.output().shapes {
+            if let egui::Shape::Rect(r) = &s.shape {
+                assert!(
+                    !(r.fill == pcbcraft_chrome::Tokens::get().canvas
+                        && r.rect.width() < 1000.
+                        && r.rect.intersect(s.clip_rect).contains(header.center())),
+                    "workspace fill covers tab"
+                );
+            }
+        }
+    }
+    h.get_all_by_label("Close view Library").next().unwrap().click();
+    h.run();
+    assert!(!h.state().views.is_split());
+}
+
+/// Source acquisition is an anchored Craft menu with full-width rows; dismissing
+/// or clicking future connections never opens a file picker or project modal.
+#[test]
+fn add_library_uses_standard_menu_rows_and_dismissal() {
+    let mut h = fixture(1800.);
+    let trigger = h.get_by_label("Add library").rect();
+    click(&mut h, "Add library");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    let folder = h.get_by_label("Choose folder…").rect();
+    let bundle = h.get_by_label("Choose bundle…").rect();
+    assert!(folder.width() > 200. && (folder.width() - bundle.width()).abs() < 1., "folder={folder:?}, bundle={bundle:?}");
+    assert!(folder.top() >= trigger.bottom() - 1.);
+    assert!((folder.left() - bundle.left()).abs() < 1.);
+    assert!(h.get_by_label("Connect Git…").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Connect remote catalog…").accesskit_node().is_disabled());
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(h.query_by_label("Choose folder…").is_none());
+    assert!(!h.state().library_sources.busy());
+    // The caption and command fallback follow the same row style and Escape behavior.
+    click(&mut h, "Sources menu");
+    h.get_all_by_label("Add library").last().unwrap().click();
+    h.run();
+    h.get_by_label("Choose folder…");
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
 }

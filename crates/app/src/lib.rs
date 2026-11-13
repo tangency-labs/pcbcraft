@@ -2427,6 +2427,17 @@ impl PcbApp {
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
+        self.editor_host_contents(ui, integrated_titlebar);
+        // Native host gestures belong above every workspace and its dialogs.
+        if integrated_titlebar {
+            shell::resize_window_edges(ui);
+        }
+        self.editor_drag_cursor(&ctx);
+    }
+
+    /// Dispatch workspace content without bypassing the common native-host epilogue.
+    fn editor_host_contents(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
+        let ctx = ui.ctx().clone();
         self.observe_editor_drag(&ctx);
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
@@ -2437,12 +2448,10 @@ impl PcbApp {
         self.pending_clipboard_response(&ctx);
         if self.views.active.library.is_some() && !(main && self.home) {
             self.library_workspace_frame(ui, integrated_titlebar);
-            self.editor_drag_cursor(&ctx);
             return;
         }
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
-            self.editor_drag_cursor(&ctx);
             return;
         }
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2508,9 +2517,6 @@ impl PcbApp {
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {
             ctx.send_viewport_cmd_to(editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
         }
-        if integrated_titlebar {
-            shell::resize_window_edges(ui);
-        }
         self.views.sync(&self.session);
         if ctx.viewport_id() != egui::ViewportId::ROOT && self.pointer != self.pointer_next {
             ctx.request_repaint();
@@ -2520,7 +2526,6 @@ impl PcbApp {
             self.repaint_editors(&ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
-        self.editor_drag_cursor(&ctx);
     }
 }
 

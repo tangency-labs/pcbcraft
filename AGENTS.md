@@ -61,6 +61,17 @@ schematic/PCB geometry and domain-specific graphics remain appropriate custom
 drawing. This reuse preference does not authorize dependency upgrades or change
 the source, licence and attribution requirements.
 
+### Menus and action choices
+
+Match the app's existing File, ribbon and context menus when presenting a list
+of actions. Use the shared menu surface and full-width `MenuItem` rows, keeping
+icon, label, shortcut and submenu columns aligned. Anchor choices to their
+trigger; retain the standard keyboard, disabled-state and dismissal behavior.
+Do not substitute a dialog containing a stack of small buttons for an action
+menu. Reserve dialogs for forms, consequential confirmations and errors that
+need context. Review the rendered open menu against an existing app menu in
+both themes before considering the UI complete.
+
 ## Extension and cross-application boundaries
 
 Build useful features in bounded slices while keeping their model, commands,

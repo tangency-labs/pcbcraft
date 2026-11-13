@@ -1006,6 +1006,9 @@ impl PcbApp {
                         }
                     }
                 }
+                // Workspace painters may fill their maximum rectangle. Keep the shared
+                // pane header outside their clip, including Library and definition panes.
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
                 if self.views.view(id).is_some_and(|view| view.library.is_some()) {
                     self.library_workspace_pane(ui, id);
                     return;

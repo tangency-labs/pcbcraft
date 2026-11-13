@@ -1213,3 +1213,8 @@ already qualified pinned Craft tree, tables, surfaces, controls and icon set,
 including its `library` books master. Electronics previews reuse existing original
 PCBcraft painters. No new dependency, third-party EDA source, artwork, library data
 or native project/library format was introduced.
+
+Library workspace follow-up chrome composes the same qualified panel host and
+menu rows for reserved Preview columns and acquisition choices. Native edge
+gestures and pane headers remain PCBcraft's existing shared host framework;
+these corrections add no assets or dependencies.

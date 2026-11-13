@@ -341,27 +341,47 @@ fn window_click(h: &mut Harness<'_, PcbApp>, peer: Option<&Rc<RefCell<Peer>>>, p
 /// pointer serial. Both hosts use the same chrome, including when project controls are blocked.
 #[test]
 fn native_window_gestures_start_on_press_in_each_host() {
+    for workspace in [None, Some("library"), Some("symbol_editor")] {
+        native_window_gestures_for_workspace(workspace);
+    }
+}
+
+/// Service workspaces must not bypass native gestures, including disabled modal frames.
+fn native_window_gestures_for_workspace(workspace: Option<&str>) {
     use egui::ResizeDirection::*;
+    let auxiliary = workspace.is_some();
     for child in [false, true] {
         for modal in [false, true] {
             let (mut h, peer) = multi_window();
             h.state_mut().integrated_titlebar = true;
             detach(&mut h);
+            if let Some(workspace) = workspace {
+                let ctx = h.ctx.clone();
+                for id in h.state_mut().views.all_mut().map(|v| v.id()).collect::<Vec<_>>() {
+                    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":id.0,"workspace":workspace})).unwrap();
+                }
+            }
             h.run_steps(3);
             let host = if child { HostId(1) } else { HostId::ROOT };
             let target = child.then_some(&peer);
             let width = if child { 1100.0 } else { 1400.0 };
             let height = if child { 760.0 } else { 900.0 };
             let preferences = if child { child_rect(&peer, "Preferences") } else { h.get_by_label("Preferences").rect() };
-            let create = if child { child_rect(&peer, "New arrangement") } else { h.get_by_label("New arrangement").rect() };
+            let create = if auxiliary {
+                preferences
+            } else if child {
+                child_rect(&peer, "New arrangement")
+            } else {
+                h.get_by_label("New arrangement").rect()
+            };
             let t = pcbcraft_chrome::Tokens::get();
             let brand = pos2(t.space_8 + (t.space_16 + t.space_4) / 2.0, preferences.center().y);
-            let title = if child {
+            let title = if child || auxiliary {
                 None
             } else {
                 Some(h.query_all_by_label("Untitled").find(|node| node.rect().bottom() <= preferences.bottom()).unwrap().rect())
             };
-            let drag = pos2((create.right() + preferences.left()) / 2.0, preferences.center().y);
+            let drag = pos2(if auxiliary { width / 2.0 } else { (create.right() + preferences.left()) / 2.0 }, preferences.center().y);
             if modal {
                 h.state_mut().dialog = Dialog::About;
             }

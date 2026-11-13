@@ -45,5 +45,12 @@ It has no standalone source-refresh master or folder Add/Relocate/Remove variant
 Those ribbon actions compose its existing folder with original action marks;
 the refresh loop is original chrome geometry using the kit's icon weight and
 palette. Native drawings remain separate from these generic interface graphics.
-Preview uses the existing draggable/collapsible panel host, including its docking
-menu, rather than a separate library-specific panel control.
+Preview uses the existing draggable/collapsible panel host and docking menu.
+Its default right dock reserves a full-height column aligned with Browser and
+Items; only an explicit Float choice or header drag overlays the table. The
+shared panel adapter supports exact dock slots while preserving the existing
+canvas-card spacing elsewhere. Runtime drag ownership remains with the pane
+between frames. Shared pane headers are clipped separately from workspace
+content, and every workspace uses the same native-window resize epilogue.
+Add library opens a trigger-anchored Craft menu with full-width action rows;
+Git and remote connections remain disabled.

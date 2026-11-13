@@ -178,25 +178,62 @@ impl Panel {
         toolbar: impl FnOnce(&mut Ui),
         add: impl FnOnce(&mut Ui),
     ) -> (Rect, bool) {
-        if !ui.is_enabled() || ui.ctx().input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
+        self.show_card(ui, id, title, canvas, dock, collapsed, width, toolbar_min_height, false, toolbar, add)
+    }
+
+    /// Use an exact, reserved dock slot for a workspace column. Floating remains opt-in
+    /// through the same header drag and position menu as contextual canvas cards.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_in_slot(
+        &mut self,
+        ui: &Ui,
+        id: Id,
+        title: &str,
+        canvas: Rect,
+        dock: Rect,
+        collapsed: bool,
+        add: impl FnOnce(&mut Ui),
+    ) -> (Rect, bool) {
+        self.show_card(ui, id, title, canvas, dock, collapsed, dock.width(), 0.0, true, |_| {}, add)
+    }
+
+    /// Preserve contextual-card spacing while allowing filled workspace columns to align
+    /// exactly with their neighbors. The same drag state and controls serve both layouts.
+    #[allow(clippy::too_many_arguments)]
+    fn show_card(
+        &mut self,
+        ui: &Ui,
+        id: Id,
+        title: &str,
+        canvas: Rect,
+        dock: Rect,
+        collapsed: bool,
+        width: f32,
+        toolbar_min_height: f32,
+        slot: bool,
+        toolbar: impl FnOnce(&mut Ui),
+        add: impl FnOnce(&mut Ui),
+    ) -> (Rect, bool) {
+        if !ui.is_enabled()
+            || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape) || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))))
+        {
             self.cancel_drag();
         }
         let floating = self.state.position == Position::Floating;
         let area = if floating { canvas } else { dock };
+        let fill_slot = slot && !floating;
+        let gap = if fill_slot { 0.0 } else { FLOATING_GAP };
         if area.height() < floating_card_min_height() || !area.is_positive() {
             return (Rect::NOTHING, false);
         }
-        let width = width.min((canvas.width() - 2.0 * FLOATING_GAP).max(1.0));
-        let height = if floating { 440.0_f32.min(area.height() - 2.0 * FLOATING_GAP) } else { area.height() - 2.0 * FLOATING_GAP };
+        let width = width.min((canvas.width() - 2.0 * gap).max(1.0));
+        let height = if floating { 440.0_f32.min(area.height() - 2.0 * gap) } else { area.height() - 2.0 * gap };
         let body_height = (height - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
-        let bounds = canvas.shrink(FLOATING_GAP);
+        let bounds = canvas.shrink(gap);
         let desired = if floating {
             self.state.at.map(|[x, y]| canvas.min + vec2(x, y)).unwrap_or(bounds.min + vec2(32.0, 32.0))
         } else {
-            pos2(
-                if self.state.position == Position::Left { area.left() + FLOATING_GAP } else { area.right() - width - FLOATING_GAP },
-                area.top() + FLOATING_GAP,
-            )
+            pos2(if self.state.position == Position::Left { area.left() + gap } else { area.right() - width - gap }, area.top() + gap)
         };
         let at = pos2(
             desired.x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())),
@@ -217,6 +254,9 @@ impl Panel {
                 floating_frame(ui.ctx())
                     .show(ui, |ui| {
                         ui.set_width(width - floating_frame(ui.ctx()).total_margin().sum().x);
+                        if fill_slot && !collapsed {
+                            ui.set_min_height((height - floating_frame(ui.ctx()).total_margin().sum().y).max(0.0));
+                        }
                         ui.spacing_mut().item_spacing.y = t.space_2;
                         let mut collapse = false;
                         ui.horizontal(|ui| {
@@ -253,7 +293,7 @@ impl Panel {
                         if !collapsed && body_height > 0.0 {
                             ui.separator();
                             if body_height < toolbar_min_height {
-                                egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(
+                                egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, !fill_slot]).show(
                                     ui,
                                     |ui| {
                                         toolbar(ui);
@@ -267,7 +307,7 @@ impl Panel {
                                 egui::ScrollArea::vertical()
                                     .max_height((body_height - toolbar_height).max(0.0))
                                     .min_scrolled_height(0.0)
-                                    .auto_shrink([false, true])
+                                    .auto_shrink([false, !fill_slot])
                                     .show(ui, add);
                             }
                         }

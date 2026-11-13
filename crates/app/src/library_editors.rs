@@ -673,9 +673,6 @@ impl PcbApp {
         } else if !matches!(self.dialog, Dialog::None) {
             ctx.send_viewport_cmd_to(crate::editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
         }
-        if integrated {
-            shell::resize_window_edges(ui);
-        }
     }
     /// Authoring uses the shared workspace picker and ribbon while keeping drawing state,
     /// file operations and contextual panels owned by the active definition document.

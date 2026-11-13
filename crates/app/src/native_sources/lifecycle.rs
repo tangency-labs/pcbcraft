@@ -31,29 +31,42 @@ impl PcbApp {
     pub(crate) fn library_mutation_busy(&self) -> bool {
         self.library_sources.mutation.is_some()
     }
-    /// Add library is one entry point; this focused chooser only selects folder or bundle input.
+    /// Command and ribbon-caption acquisition choices use the standard menu surface.
+    /// Pointer position is captured once so the menu remains anchored while it is open.
     pub(crate) fn add_library_dialog(&mut self, ctx: &egui::Context, source: Option<String>) {
-        let mut folder = false;
-        let mut bundle = false;
-        let mut cancel = false;
-        let closing = shell::dialog(ctx, "add_library", "Add library", |ui| {
-            (folder, bundle) = pcbcraft_chrome::library_workspace::add_choices(ui);
-            cancel = controls::button(ui, "Cancel").clicked();
-        });
-        if folder || bundle {
-            if self.library_sources.busy() || self.library_mutation_busy() || (source.is_none() && !self.library_sources.can_add(&self.session)) {
-                self.message = Some("Finish the current library operation before adding another library".into());
-                return;
-            }
-            let source = source.unwrap_or_else(|| self.library_sources.next_source(&self.session));
-            let result = if folder {
-                self.library_sources.pick_folder(source, ctx, self.session.libraries().generation())
-            } else {
-                self.library_sources.add_bundle(source, ctx, self.session.libraries().clone())
-            };
-            self.message = result.err();
-        } else if !closing && !cancel {
+        let id = egui::Id::unique("add_library_choices");
+        let pointer = ctx.pointer_latest_pos().unwrap_or(ctx.content_rect().center());
+        let at = ctx.data_mut(|data| *data.get_temp_mut_or_insert_with(id, || pointer));
+        let mut open = true;
+        let mut choice = None;
+        egui::Popup::new(id, ctx.clone(), at, egui::LayerId::background())
+            .kind(egui::PopupKind::Menu)
+            .frame(pcbcraft_chrome::menu::frame())
+            .open_bool(&mut open)
+            .show(|ui| {
+                let (folder, bundle) = pcbcraft_chrome::library_workspace::add_choices(ui);
+                if folder || bundle {
+                    choice = Some(folder);
+                }
+            });
+        if let Some(folder) = choice {
+            self.message = self.acquire_library(ctx, source, folder).err();
+        } else if open {
             self.dialog = Dialog::AddLibrary(source);
+            return;
+        }
+        ctx.data_mut(|data| data.remove::<egui::Pos2>(id));
+    }
+    /// Folder and bundle choices share availability validation before launching a picker.
+    pub(crate) fn acquire_library(&mut self, ctx: &egui::Context, source: Option<String>, folder: bool) -> Result<(), String> {
+        if self.library_sources.busy() || self.library_mutation_busy() || (source.is_none() && !self.library_sources.can_add(&self.session)) {
+            return Err("Finish the current library operation before adding another library".into());
+        }
+        let source = source.unwrap_or_else(|| self.library_sources.next_source(&self.session));
+        if folder {
+            self.library_sources.pick_folder(source, ctx, self.session.libraries().generation())
+        } else {
+            self.library_sources.add_bundle(source, ctx, self.session.libraries().clone())
         }
     }
     /// Inspect the writable folder on a worker before naming its path/count in confirmation.
