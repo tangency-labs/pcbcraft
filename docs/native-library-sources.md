@@ -7,44 +7,63 @@ Native footprints are available in the assignment chooser, and manufacturer
 records can be selected with their exact generic part and package. Registering, refreshing or removing a source
 does not change the project, its revision, dirty state or undo history.
 
-Open **Libraries → Sources**. On desktop, **Add folder…** selects a native
-library containing `library.json` and optional flat `symbols/`, `footprints/`,
-`categories/`, `parts/` and `manufacturer-parts/` directories. Registrations are saved in personal
-application settings, including
-their machine-specific folder paths. They are read in the background on startup.
-Each external source card's **⋯** menu contains **Refresh**, **Relocate…** and **Remove**
-(uploaded sources offer only Remove). **Refresh** reloads a source; **Relocate…**
-points its registration at a moved folder. Library and item identities come from their documents, so moving a folder
-does not change them. A missing or unreadable source remains listed with its
-error and stops supplying items until a successful refresh.
+Open the **Library** workspace from the workspace picker or **Libraries → Sources**.
+The Browser groups loaded sources under **Built-in** and **Libraries**, with
+Symbols, Footprints, Generic parts and Orderable parts under each library.
+The central list has search and a **Type** choice. Generic parts expand to their
+orderable records; Orderable parts shows the same records as a flat table.
+Select an item to inspect its native drawing or summary, license, available
+revisions and exact dependencies in Preview. File errors and quarantined
+conflicts stay with their source. Browsing does not change project state.
+Compact panes expose Browser, Items and Preview through a shared choice strip.
+Library supports the normal split, open-beside, detach, dock and window paths,
+including beside a Symbol Editor. Like definition editor panes, Library panes
+are runtime workspaces excluded from saved project arrangements.
 
-**Upload bundle…** works on desktop and in the browser. Uploaded sources last
-for the current session; the browser does not get access to arbitrary folders.
-To try the original, MIT OR Apache-2.0 example, select `examples/native-library`
-on desktop, or create a bundle for upload:
+**Add library** offers a library folder or a `pcbcraft-library-bundle/1` bundle.
+A folder contains `library.json` and optional flat `symbols/`, `footprints/`,
+`categories/`, `parts/` and `manufacturer-parts/` directories. On desktop its
+registration is saved in personal settings and reloaded in the background at
+startup. **Refresh** rereads the selected folder; **Relocate** chooses its new
+location. Missing sources remain listed with their names and errors.
+
+On desktop a bundle is validated and installed into a new folder chosen in the
+picker. Existing files/folders are never overwritten, and registration happens
+only after the complete installation succeeds. A bundle whose every included
+revision is already available with identical content is refused before writing.
+Conflicting definitions follow the ordinary quarantine rules. A failed publication
+cleans up its newly created folder where possible and reports any incomplete
+folder that remains. There is no temporary bundle-loading mode on desktop.
+
+In the browser, folder selection reads its native files once; bundle selection
+reads one file. The page retains no disk handle or ongoing folder access, and
+browser storage retains only registration IDs/names. After a reload each source
+is listed as **Needs reopening** and supplies no items until **Refresh** chooses
+its folder again. A saved project retains its pinned definitions and opens
+without reopening the library. There is no separate session-upload group or
+Upload bundle entry point.
+
+**Remove** forgets the registration/cache and leaves its files intact. **Delete**
+is desktop-only for writable registered folders. Its confirmation names the
+folder, counts native item revisions and explains that projects keep their
+pinned copies. Pending editor changes from that library block deletion. The
+host rechecks the source and folder before moving it to system trash; failure
+retains the registration and reports an error. Linux/FreeBSD use the desktop
+`gio trash` service, macOS uses Finder, and Windows uses the recycle-bin API
+through PowerShell. An unavailable service has no permanent-delete fallback.
+Built-in libraries cannot be refreshed, relocated, removed or deleted.
+
+To try the original MIT OR Apache-2.0 examples, add `examples/native-library`
+or `examples/native-parts`, or package one for transfer:
 
 ```sh
 python3 scripts/package-native-library.py examples/native-library /tmp/workshop.pclib.json
 ```
 
-The packager preserves an existing output file. Its JSON envelope has format
-`pcbcraft-library-bundle/1` and a `documents` object mapping relative paths to
-UTF-8 file contents. The engine validates the same native documents on both
-platforms. An uploaded source must be uploaded again after a restart, while any
-symbols already placed in a saved project reopen from their pinned copies.
-
-After loading the example, press **A**, search for **Workshop**, choose
-**Workshop resistor**, and place it. Search results retain library/item IDs,
-revision and license in their tooltips. Library sources can search all five
-native record kinds and filter by kind. Sources and the catalog appear side by side
-on wide windows and as **Sources** / **Catalog** tabs on compact windows, with
-independent scrolling and a fixed Close action. A bad item reports its filename
-and validation error without hiding other valid items; an invalid manifest prevents the source
-from loading. Default (`starter`) and Power are bundled native sources loaded
-through the same parser and catalog. Their registrations are marked **Built-in**
-and have no removal, refresh or relocation actions. Shared commands also refuse
-removing or replacing these registrations. Their identities can also be loaded from
-equivalent folders/bundles; conflicting content at one revision is quarantined.
+The packager preserves existing output. The bundle's `documents` object maps
+native relative paths to UTF-8 file contents, validated with the same engine
+rules on both platforms. Press **A** in Schematic to use the existing Parts
+Catalog placement picker; Library browsing itself never places an item.
 
 The source loader accepts at most 18 registrations including the bundled libraries, 256 files per
 source, 1 MiB per file and 8 MiB of decoded UTF-8 content per source. Bundles are
@@ -79,7 +98,7 @@ engine to read a path.
 | `library.load_source` | `source` is a personal portable ID; `documents` maps supported relative paths to file text. Returns source inspection. |
 | `library.list_sources` | No parameters. Returns source identities, trusted `builtin` status, licenses, counts and file/conflict diagnostics. |
 | `library.search` | Optional `query` and `kind` (`symbol`, `footprint`, `category` or `part`). Returns current unambiguous items, their exact keys, formats, provenance and content digests. |
-| `library.remove_source` | `source`. Removes an external session source without changing pinned definitions; bundled registrations are read-only. Desktop personal folder registrations are managed in the Sources dialog. |
+| `library.remove_source` | `source`. Removes an external catalog source without changing pinned definitions; bundled sources are read-only. Use `app.library_source` in the live editor to also forget a personal registration. |
 
 Use `execute` with normal inspection enabled to receive these results;
 `inspect: false` intentionally returns only the unchanged project revision.
@@ -130,3 +149,14 @@ manufacturer. A placed footprint must be removed before its package is cleared.
 Manufacturer search uses `kind: "manufacturer_part"`; item inspection includes
 the record and digest. A part's digest covers all its dependencies, so refreshing
 a category or footprint invalidates a pending placement too.
+
+## Live workspace commands
+
+`app.set_workspace` accepts `workspace: "library"`, an optional source `view`
+and `placement: "here"`, `"beside"` or `"window"`. `inspect_editor` reports
+`workspace: "library"` and a per-view `library_workspace` containing source,
+Type, query and selected exact key. `app.library_browse` changes those view-only
+choices; `type` is 0 All, 1 Symbol, 2 Footprint, 3 Generic part, 4 Orderable part.
+`app.library_source` uses the same source actions as the ribbon: `add`, `refresh`,
+`relocate`, `remove`, `delete`. Add/relocate open host pickers, and Delete retains
+the ordinary confirmation. Source folder I/O never runs on the editor thread.

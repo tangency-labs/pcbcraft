@@ -1,6 +1,14 @@
 # Shared Craft UI migration
 
-This local branch adopts SolidCraft's extracted interface crates at
+The current pin is SolidCraft **0.41.0**, revision
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, under @travle1's November 13, 2026
+update authorization. The UI kit, look, theme, registry, text and renderer/window
+patches move together. The original migration below records the earlier pin;
+current compatibility notes follow at the end.
+
+## Initial migration
+
+The initial migration adopted SolidCraft's extracted interface crates at
 `f56114219b2d7f6d16de8dd58700479646948f8a`. The migration began at PCBcraft
 `16e7bab` and was rebased onto upstream main `0e81115` on November 11, 2026.
 The first slice establishes dependencies, fonts and toolkit
@@ -150,10 +158,12 @@ left action slot, including when Place is disabled. The bounded browsing area
 hosts the catalog's toolbar and responsive panes, and the app handles Enter
 confirmation and switching between expanded and docked presentations.
 
-Library Sources uses the shared modal frame, named title close, footer, search
-field and import buttons. Its source cards, category filters and responsive
-panes carry the existing source diagnostics and catalog metadata. The manager
-handles an open source-action menu's Escape before dismissing the dialog.
+Library source management now lives in the Library workspace. Its Browser adapts
+the pinned tree rows, with qualified host electronics icons in reserved slots;
+its item tables use the pinned selectable table/cell primitives. Panel surfaces,
+search, Type, compact region choices and source-action confirmations retain the
+shared controls. PCBcraft supplies per-pane source navigation, exact native
+previews and background source lifecycle. The old management modal is removed.
 
 ## Shared property dialogs
 
@@ -489,3 +499,23 @@ The compact Board-group correction passed the focused app/chrome ribbon tests,
 formatting, Clippy and WebAssembly compilation. Native X11 captures checked
 1920×850 and 760×650 layouts. The wide-window regression verifies that Board's
 button positions remain unchanged as the viewport grows from 1700 to 2600 points.
+
+
+## November 13 compatibility update
+
+The 0.41.0 kit retains the chrome adapters' control APIs. Its host-installed text
+catalog is now installed explicitly, so shared menu/disclosure text renders as
+English rather than stable message IDs. The retained English subset and licence
+record are in `ATTRIBUTION.md`; source and licence checks accompany the new pin.
+The local eframe native-root lifetime patch remains in place. Although the git
+revision for egui-wgpu and winit advances with the kit, those patch directories
+are unchanged between the two pins.
+
+Inspected additions include the toast component and text-edit menu improvements.
+The documented universal panel runtime still belongs to SolidCraft's application
+and engine rather than these extracted libraries. PCBcraft retains its shared
+host layout, native window routing and ownership. The toolkit's workspace card
+supports side anchoring and an inner width rail; free floating in two dimensions,
+height resizing and full-host expansion remain composed in PCBcraft's existing
+shared Panel adapter using the toolkit's accessible sashes, surfaces and menus.
+This update does not import SolidCraft's application or modelling session.

@@ -9,7 +9,7 @@ fn board<'a>() -> Harness<'a, PcbApp> {
     h.state_mut().run("project.new", &json!({"create_board":true}));
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Activate layer Board Outline");
     h
 }

@@ -1,7 +1,9 @@
 use super::*;
+use crate::Dialog;
 use crate::tests::click;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use pcbcraft_engine::library::sources::Kind;
 use pcbcraft_engine::{
     Session,
     persistence::{decode_documents, encode_documents},
@@ -18,88 +20,28 @@ fn documents() -> sources::Documents {
     ])
 }
 
-/// New record filters remain usable in compact/wide forms and neither browse nor resolve edits a project.
+/// Source management opens the workspace and removing a registration preserves pinned data.
 #[test]
-fn native_part_and_category_filters_preserve_project_state() {
-    let documents: sources::Documents = [
-        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
-        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
-        ("footprints/resistor-0603.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
-        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
-        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
-    ]
-    .into_iter()
-    .map(|(path, text)| (path.into(), text.into()))
-    .collect();
-    for (width, dark) in [(1400., false), (420., false), (1400., true), (420., true)] {
-        let mut app = PcbApp::default();
-        app.preferences.theme = if dark { crate::ThemeChoice::Dark } else { crate::ThemeChoice::Light };
-        app.run("project.new", &json!({}));
-        app.session.execute(sources::LOAD, &json!({"source":"part-demo","documents":documents})).unwrap();
-        let before = app.session.inspect();
-        app.dialog = Dialog::LibrarySources;
-        let mut h = Harness::builder().with_size(egui::vec2(width, 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
-        h.run();
-        if width < 800. {
-            click(&mut h, "Catalog");
-        }
-        click(&mut h, "Show parts");
-        h.get_by_label("Generic resistor");
-        assert!(h.query_by_label("Part definition  ·  parts-demo/resistor  ·  r1").is_some());
-        click(&mut h, "Show categories");
-        h.get_by_label("Resistor");
-        assert_eq!(h.state().session.inspect(), before);
-    }
-}
-
-/// Source browsing and removal are inert to the project; external placement pins attribution
-/// and reopens offline through the normal production encoder, at normal and compact sizes.
-#[test]
-fn source_dialog_search_and_parts_placement_share_the_catalog() {
-    for width in [1400., 700.] {
-        let mut app = PcbApp::default();
-        app.run("project.new", &json!({}));
-        let mut h = Harness::builder().with_size(egui::vec2(width, 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
-        h.run();
-        h.state_mut().session.execute(sources::LOAD, &json!({"source":"workshop-source","documents":documents()})).unwrap();
-        let before = h.state().session.snapshot().unwrap();
-        let revision = h.state().session.revision();
-        click(&mut h, "Libraries");
-        click(&mut h, "Manage native library sources");
-        assert!(matches!(h.state().dialog, Dialog::LibrarySources));
-        h.step();
-        h.run();
-        h.get_by_label("Workshop");
-        assert!(h.query_by_label("Actions for Default").is_none());
-        assert!(h.query_by_label("Actions for Power").is_none());
-        assert!(h.query_by_label("Actions for Workshop").is_some());
-        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-        assert_eq!(h.state().session.revision(), revision);
-        click(&mut h, "Close");
-        h.run();
-        assert!(matches!(h.state().dialog, Dialog::None), "dialog did not close at width {width}");
-        h.key_press(egui::Key::A);
-        h.run();
-        h.get_by_label("Search parts").type_text("Workshop");
-        h.run();
-        click(&mut h, "Workshop resistor");
-        click(&mut h, "Place");
-        click(&mut h, "Schematic canvas");
-        assert_eq!(h.state().session.project().unwrap().symbols().len(), 1, "{:?}", h.state().message);
-        assert_eq!(h.state().session.project().unwrap().symbols()[0].definition.library, "workshop");
-        let pinned = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-        click(&mut h, "Manage native library sources");
-        h.step();
-        h.run();
-        click(&mut h, "Actions for Workshop");
-        click(&mut h, "Remove Workshop");
-        click(&mut h, "Close");
-        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), pinned);
-        assert_eq!(encode_documents(decode_documents(&pinned).unwrap()).unwrap(), pinned);
-        h.key_press(egui::Key::A);
-        h.run();
-        assert!(h.query_by_label("Workshop resistor").is_none());
-    }
+fn source_workspace_preserves_project_and_uses_real_catalog() {
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({}));
+    app.session.execute(sources::LOAD, &json!({"source":"workshop-source","documents":documents()})).unwrap();
+    let before = app.session.inspect();
+    let snapshot = app.session.snapshot().unwrap();
+    app.open_library_workspace(&egui::Context::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1600., 1000.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    click(&mut h, "Workshop");
+    h.get_by_label("Symbol workshop/resistor r2");
+    assert_eq!(h.state().workspace_key(), "library");
+    assert_eq!(h.state().session.inspect(), before);
+    let app = h.state_mut();
+    app.library_sources.remove("workshop-source", &mut app.session);
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    assert_eq!(
+        encode_documents(snapshot.clone()).unwrap(),
+        encode_documents(decode_documents(&encode_documents(snapshot).unwrap()).unwrap()).unwrap()
+    );
 }
 
 /// Removing a source during a blocked read retains the worker slot and discards its late result.
@@ -113,10 +55,11 @@ fn removed_and_disconnected_loads_cannot_restore_stale_catalog_entries() {
     let mut manager = Sources::default();
     let (send, receive) = mpsc::channel();
     manager.statuses.insert("loading".into(), "Loading…".into());
-    manager.job = Some(Job { source: "loading".into(), previous_status: None, receive, generation: session.libraries().generation() });
+    manager.job =
+        Some(Job { installing: false, source: "loading".into(), previous_status: None, receive, generation: session.libraries().generation() });
     manager.remove("loading", &mut session);
     assert!(manager.job.is_some());
-    send.send(Ok(Some((source.clone(), None)))).unwrap();
+    send.send(Ok(Some((source.clone(), None, false)))).unwrap();
     manager.poll(&mut session, &egui::Context::default());
     assert!(manager.job.is_none());
     assert!(session.libraries().search("Workshop", None).is_empty());
@@ -124,7 +67,8 @@ fn removed_and_disconnected_loads_cannot_restore_stale_catalog_entries() {
     let (send, receive) = mpsc::channel();
     drop(send);
     manager.statuses.insert("loading".into(), "Loading…".into());
-    manager.job = Some(Job { source: "loading".into(), previous_status: None, receive, generation: session.libraries().generation() });
+    manager.job =
+        Some(Job { installing: false, source: "loading".into(), previous_status: None, receive, generation: session.libraries().generation() });
     manager.poll(&mut session, &egui::Context::default());
     assert!(session.libraries().search("Workshop", None).is_empty());
     assert!(manager.statuses["loading"].contains("disconnected"));
@@ -138,9 +82,10 @@ fn newer_source_command_invalidates_an_inflight_folder_result() {
     let mut manager = Sources::default();
     let (send, receive) = mpsc::channel();
     manager.statuses.insert("loading".into(), "Loading…".into());
-    manager.job = Some(Job { source: "loading".into(), previous_status: None, generation: session.libraries().generation(), receive });
+    manager.job =
+        Some(Job { installing: false, source: "loading".into(), previous_status: None, generation: session.libraries().generation(), receive });
     session.execute(sources::LOAD, &json!({"source":"mcp","documents":documents()})).unwrap();
-    send.send(Ok(Some((Arc::new(NativeSource::load(&documents()).unwrap()), None)))).unwrap();
+    send.send(Ok(Some((Arc::new(NativeSource::load(&documents()).unwrap()), None, false)))).unwrap();
     manager.poll(&mut session, &egui::Context::default());
     assert!(manager.statuses["loading"].contains("changed during loading"));
     assert_eq!(session.libraries().inspect().as_array().unwrap().len(), 3);
@@ -157,7 +102,7 @@ fn cancelled_picker_restores_the_previous_source_status() {
         let mut manager = Sources::default();
         if let Some(status) = previous {
             session.install_library_source("folder", Arc::new(NativeSource::load(&documents()).unwrap())).unwrap();
-            manager.registered.push(Registration { source: "folder".into(), path: "/missing/workshop".into() });
+            manager.registered.push(Registration { source: "folder".into(), path: "/missing/workshop".into(), name: String::new(), writable: true });
             manager.statuses.insert("folder".into(), status.into());
             if status != "Available" {
                 session.mark_library_unavailable("folder");
@@ -170,7 +115,7 @@ fn cancelled_picker_restores_the_previous_source_status() {
         let registrations = manager.storage_text();
         let (send, receive) = mpsc::channel();
         let previous_status = manager.statuses.insert("folder".into(), "Loading…".into());
-        manager.job = Some(Job { source: "folder".into(), previous_status, receive, generation });
+        manager.job = Some(Job { installing: false, source: "folder".into(), previous_status, receive, generation });
         send.send(Ok(None)).unwrap();
         manager.poll(&mut session, &egui::Context::default());
         assert!(manager.job.is_none());
@@ -213,7 +158,7 @@ fn personal_folder_registration_restores_and_reports_missing_sources() {
     for (path, text) in documents() {
         std::fs::write(root.path().join(path), text).unwrap();
     }
-    let registered = vec![Registration { source: "folder".into(), path: root.path().to_str().unwrap().into() }];
+    let registered = vec![Registration { source: "folder".into(), path: root.path().to_str().unwrap().into(), name: String::new(), writable: true }];
     let mut manager = Sources::restore(Some(serde_json::to_string(&registered).unwrap()));
     let mut session = Session::default();
     let pump = |manager: &mut Sources, session: &mut Session| {
@@ -237,46 +182,6 @@ fn personal_folder_registration_restores_and_reports_missing_sources() {
     pump(&mut manager, &mut session);
     assert!(session.libraries().search("Workshop", None).is_empty());
     assert_ne!(manager.statuses["folder"], "Available");
-}
-
-/// Compact windows give source management and catalog search separate, usable viewports.
-/// Filtering and removing a source through its overflow menu preserve the authored document.
-#[test]
-fn compact_source_manager_tabs_keep_search_and_actions_reachable() {
-    let mut app = PcbApp::default();
-    app.run("project.new", &json!({}));
-    app.session.execute(sources::LOAD, &json!({"source":"workshop-source","documents":documents()})).unwrap();
-    let before = app.session.inspect();
-    app.dialog = Dialog::LibrarySources;
-    let mut h = Harness::builder().with_size(egui::vec2(420., 520.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
-    h.run();
-    click(&mut h, "Catalog");
-    click(&mut h, "Search libraries");
-    h.get_by_label("Search libraries").type_text("Workshop");
-    h.run();
-    assert_eq!(h.state().library_sources.query, "Workshop");
-    h.get_by_label("Workshop resistor");
-    click(&mut h, "Show footprints");
-    h.get_by_label("No matching items");
-    click(&mut h, "Show symbols");
-    h.get_by_label("Workshop resistor");
-    assert_eq!(h.state().session.inspect(), before);
-    click(&mut h, "Sources");
-    h.get_by_label("Actions for Workshop").scroll_to_me();
-    h.run();
-    click(&mut h, "Actions for Workshop");
-    h.key_press(egui::Key::Escape);
-    h.run();
-    assert!(matches!(h.state().dialog, Dialog::LibrarySources));
-    assert!(h.query_by_label("Remove Workshop").is_none());
-    click(&mut h, "Actions for Workshop");
-    click(&mut h, "Remove Workshop");
-    assert!(h.state().session.libraries().search("Workshop", None).is_empty());
-    assert_eq!(h.state().session.inspect(), before);
-    let close = h.get_by_label("Close").rect();
-    assert!(close.top() > 400. && close.bottom() <= 520. && close.right() <= 420.);
-    click(&mut h, "Close");
-    assert!(matches!(h.state().dialog, Dialog::None));
 }
 
 /// Load an actual desktop folder worker and drive the app until its bounded result is adopted.

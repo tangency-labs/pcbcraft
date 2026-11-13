@@ -341,27 +341,47 @@ fn window_click(h: &mut Harness<'_, PcbApp>, peer: Option<&Rc<RefCell<Peer>>>, p
 /// pointer serial. Both hosts use the same chrome, including when project controls are blocked.
 #[test]
 fn native_window_gestures_start_on_press_in_each_host() {
+    for workspace in [None, Some("library"), Some("symbol_editor")] {
+        native_window_gestures_for_workspace(workspace);
+    }
+}
+
+/// Service workspaces must not bypass native gestures, including disabled modal frames.
+fn native_window_gestures_for_workspace(workspace: Option<&str>) {
     use egui::ResizeDirection::*;
+    let auxiliary = workspace.is_some();
     for child in [false, true] {
         for modal in [false, true] {
             let (mut h, peer) = multi_window();
             h.state_mut().integrated_titlebar = true;
             detach(&mut h);
+            if let Some(workspace) = workspace {
+                let ctx = h.ctx.clone();
+                for id in h.state_mut().views.all_mut().map(|v| v.id()).collect::<Vec<_>>() {
+                    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":id.0,"workspace":workspace})).unwrap();
+                }
+            }
             h.run_steps(3);
             let host = if child { HostId(1) } else { HostId::ROOT };
             let target = child.then_some(&peer);
             let width = if child { 1100.0 } else { 1400.0 };
             let height = if child { 760.0 } else { 900.0 };
             let preferences = if child { child_rect(&peer, "Preferences") } else { h.get_by_label("Preferences").rect() };
-            let create = if child { child_rect(&peer, "New arrangement") } else { h.get_by_label("New arrangement").rect() };
+            let create = if auxiliary {
+                preferences
+            } else if child {
+                child_rect(&peer, "New arrangement")
+            } else {
+                h.get_by_label("New arrangement").rect()
+            };
             let t = pcbcraft_chrome::Tokens::get();
             let brand = pos2(t.space_8 + (t.space_16 + t.space_4) / 2.0, preferences.center().y);
-            let title = if child {
+            let title = if child || auxiliary {
                 None
             } else {
                 Some(h.query_all_by_label("Untitled").find(|node| node.rect().bottom() <= preferences.bottom()).unwrap().rect())
             };
-            let drag = pos2((create.right() + preferences.left()) / 2.0, preferences.center().y);
+            let drag = pos2(if auxiliary { width / 2.0 } else { (create.right() + preferences.left()) / 2.0 }, preferences.center().y);
             if modal {
                 h.state_mut().dialog = Dialog::About;
             }
@@ -765,7 +785,7 @@ fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
                 // egui 0.37 sizes a new popup in a hidden child pass. The harness only
                 // settles root repaints, so deliver the child's requested paint too.
                 h.run();
-                let at = child_rect(&peer, "PCB layout").center();
+                let at = child_rect(&peer, "PCB Layout").center();
                 child_click_at(&mut h, &peer, at);
             }
             let survivor = if close_original { child } else { HostId::ROOT };
@@ -1514,7 +1534,7 @@ fn board_windows_open_directly_and_share_counterpart_highlights() {
     let before = h.state().session.inspect();
     for _ in 0..2 {
         click(&mut h, "Choose workspace");
-        click(&mut h, "Open PCB layout in new window");
+        click(&mut h, "Open PCB Layout in new window");
         h.get_by_label("Schematic canvas");
         assert!(!h.state().views.is_split());
     }
@@ -1613,7 +1633,7 @@ fn child_tab_menu(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, label: 
 fn project_open_rebinds_detached_pcb_and_main_schematic() {
     let (mut h, peer) = multi_window();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout in new window");
+    click(&mut h, "Open PCB Layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let stale = h.state().views.view(child).unwrap().input(&h.state().session).unwrap();
     let (_copy, path) = dual_led_copy();
@@ -1698,7 +1718,7 @@ fn footprint_transforms_in_detached_windows_share_history_and_cancel_on_focus_lo
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout in new window");
+    click(&mut h, "Open PCB Layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let canvas = child_rect(&peer, "PCB canvas");
     let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
@@ -1749,7 +1769,7 @@ fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
     let (mut h, peer) = multi_window();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout in new window");
+    click(&mut h, "Open PCB Layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let layer = child_rect(&peer, "Activate layer Board Outline").center();
     child_click_at(&mut h, &peer, layer);
@@ -1787,6 +1807,25 @@ fn arrangement_dialog_stays_in_its_host_when_main_enters_a_library_workspace() {
     h.state_mut().new_library_item(pcbcraft_engine::authoring::Kind::Symbol);
     h.run();
     assert!(h.state().views.active.definition.is_some());
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    assert!(h.query_by_label("Arrangement name").is_none());
+    assert!(peer.borrow().nodes.values().any(|n| n.role() == egui::accesskit::Role::TextInput));
+}
+
+/// Parts Library obeys the same arrangement-form owner as project and definition hosts.
+#[test]
+fn review_arrangement_dialog_owner_in_parts_library() {
+    let (mut h, peer) = multi_window();
+    let source = h.state().views.active.id();
+    h.state_mut().views.open_window(source).unwrap();
+    h.run();
+    child_tab_menu(&mut h, &peer, "Arrangement Views");
+    let at = child_rect(&peer, "Rename…").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
+    let ctx = h.ctx.clone();
+    h.state_mut().place_library_workspace(&ctx, pcbcraft_chrome::workspace::Placement::Here).unwrap();
+    h.run();
     assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
     assert!(h.query_by_label("Arrangement name").is_none());
     assert!(peer.borrow().nodes.values().any(|n| n.role() == egui::accesskit::Role::TextInput));
@@ -1864,7 +1903,7 @@ fn detached_physical_footprint_click_then_delete_uses_its_own_input() {
         );
         h.run();
         click(&mut h, "Choose workspace");
-        click(&mut h, "Open PCB layout in new window");
+        click(&mut h, "Open PCB Layout in new window");
         let host = h.state().views.detached_hosts()[0];
         let peer = peers.borrow()[&editor_windows::viewport(host)].clone();
         let view = h.state().views.hosts[&host].focused;

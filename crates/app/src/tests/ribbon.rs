@@ -60,7 +60,7 @@ fn ribbon_grid_visibility_is_independent_between_workspaces() {
         h.key_press(Key::Escape);
         h.run();
         assert!(!h.state().preferences.grid_visible(false));
-        choose(&mut h, "Choose workspace", "PCB layout");
+        choose(&mut h, "Choose workspace", "PCB Layout");
         click(&mut h, "View");
         click(&mut h, "Show grid");
         assert!(!h.state().preferences.grid_visible(true));
@@ -180,7 +180,7 @@ fn clicks_reach_a_tool_scrolled_under_the_ribbon_edge() {
     h.set_size(egui::vec2(1100., 700.));
     resistor_with_board_at_origin(&mut h);
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Draw");
     h.set_size(egui::vec2(320., 850.));
     h.run();
@@ -198,7 +198,7 @@ fn pcb_tasks_are_grouped_on_separate_tabs() {
     h.set_size(egui::vec2(1400., 900.));
     resistor_with_board_at_origin(&mut h);
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let before = h.state().session.inspect();
     for group in ["Place", "Route", "Clipboard", "Modify", "Board"] {
         h.get_by_label(&format!("{group} menu"));

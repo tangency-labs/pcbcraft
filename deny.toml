@@ -36,34 +36,34 @@ allow = ["CDLA-Permissive-2.0"]
 # The external written-permission record is tracked in SolidCraft issue #14690.
 [[licenses.exceptions]]
 name = "solidcraft-ui-kit"
-version = "=0.40.0-rc.3"
+version = "=0.41.0"
 allow = ["LicenseRef-SolidCraft-Brand-and-Interface"]
 
 [[licenses.exceptions]]
 name = "solidcraft-theme"
-version = "=0.40.0-rc.3"
+version = "=0.41.0"
 allow = ["LicenseRef-SolidCraft-Brand-and-Interface"]
 
 [[licenses.exceptions]]
 name = "solidcraft-look"
-version = "=0.40.0-rc.3"
+version = "=0.41.0"
 allow = ["LicenseRef-SolidCraft-Brand-and-Interface"]
 
 [[licenses.clarify]]
 name = "solidcraft-ui-kit"
-version = "=0.40.0-rc.3"
+version = "=0.41.0"
 expression = "LicenseRef-SolidCraft-Brand-and-Interface"
 license-files = [{ path = "LICENSE", hash = 0x4b91093f }]
 
 [[licenses.clarify]]
 name = "solidcraft-theme"
-version = "=0.40.0-rc.3"
+version = "=0.41.0"
 expression = "LicenseRef-SolidCraft-Brand-and-Interface"
 license-files = [{ path = "LICENSE", hash = 0x4b91093f }]
 
 [[licenses.clarify]]
 name = "solidcraft-look"
-version = "=0.40.0-rc.3"
+version = "=0.41.0"
 expression = "LicenseRef-SolidCraft-Brand-and-Interface AND OFL-1.1"
 license-files = [{ path = "LICENSE", hash = 0x4b91093f }]
 

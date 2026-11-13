@@ -194,10 +194,23 @@ pub(crate) struct PartDrag {
 /// is drawn unrotated and without labels. A shared minimum preview extent keeps small symbols
 /// from growing disproportionately large across the catalog.
 pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
+    paint_preview_transformed(painter, definition, rect, color, 1.0, egui::Vec2::ZERO);
+}
+
+/// The same fitted native symbol can be inspected through a view-only zoom and pan.
+/// Geometry remains clipped by the caller; ordinary thumbnails retain the identity transform.
+pub(crate) fn paint_preview_transformed(
+    painter: &Painter,
+    definition: &SymbolDefinition,
+    rect: Rect,
+    color: egui::Color32,
+    zoom: f32,
+    pan: egui::Vec2,
+) {
     let bounds = grid_bounds(definition.default_unit(), 0, false);
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
-    let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
-    let center = rect.center() - bounds.center().to_vec2() * step;
+    let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
+    let center = rect.center() + pan - bounds.center().to_vec2() * step;
     paint_symbol(painter, definition.default_unit(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
 }
 

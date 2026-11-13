@@ -24,7 +24,7 @@ fn board() -> Harness<'static, PcbApp> {
     app.browser.open = false;
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.state_mut().views.active.board.layers_collapsed = true;
     h.state_mut().views.active.board.browser_collapsed = true;
     h.state_mut().views.active.board.properties_collapsed = true;

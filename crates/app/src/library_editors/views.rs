@@ -145,6 +145,9 @@ impl PcbApp {
     }
     /// Native titles and pane headers resolve the actual document instead of its parked project target.
     pub(crate) fn view_title(&self, view: ViewId) -> String {
+        if self.views.view(view).is_some_and(|view| view.library.is_some()) {
+            return "Parts Library".into();
+        }
         self.views
             .view(view)
             .and_then(|view| view.definition)
@@ -257,6 +260,7 @@ impl PcbApp {
         if let Some(target) = self.views.view_mut(view) {
             target.release_input();
             target.definition = Some(document);
+            target.library = None;
         }
         self.home = false;
         if host == self.views.host {
@@ -273,6 +277,11 @@ impl PcbApp {
     /// Render any definition pane in its scoped rectangle, including mixed project/library splits.
     pub(crate) fn library_pane(&mut self, ui: &mut Ui, view: ViewId) {
         let Some(id) = self.bind_library_view(view) else { return };
+        // Mixed hosts can be framed by a project or Library workspace rather than
+        // library_frame, so enforce the source mutation boundary here as well.
+        if self.library_mutation_busy() || self.library_sources.installing() {
+            ui.disable();
+        }
         if self.views.active.id() == view && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx()) {
             self.take_panel_escape(ui.ctx());
         }

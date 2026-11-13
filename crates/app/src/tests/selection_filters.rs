@@ -239,7 +239,7 @@ fn board_filters_prevent_footprint_selection_and_keep_graphics_independent() {
     );
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let before = document(&h);
     let origin = at(&h, 0, 0);
     click_canvas_at(&mut h, origin);

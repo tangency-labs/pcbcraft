@@ -41,6 +41,7 @@ mod home;
 mod inline_text;
 mod library_editors;
 mod library_preview;
+mod library_workspace;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
 mod native_part_properties;
@@ -169,7 +170,8 @@ enum Dialog {
     #[default]
     None,
     NoConnects(Box<no_connect::Inspection>),
-    LibrarySources,
+    AddLibrary(Option<String>),
+    DeleteLibrary(native_sources::lifecycle::DeleteDraft),
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
@@ -300,10 +302,19 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         workspace::Workspace {
             id: "board",
             multiple_views: true,
-            title: "PCB layout",
+            title: "PCB Layout",
             description: "Inspect footprint placements and linked schematic components",
             tabs: Some("Layout · Draw · Analyze · Manufacture · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "library",
+            title: "Parts Library",
+            description: "Browse and manage native libraries",
+            tabs: Some("Manage · View"),
+            icon: workspace::WorkspaceIcon::Library,
+            multiple_views: true,
             current: false,
         },
         workspace::Workspace {
@@ -2104,8 +2115,9 @@ impl PcbApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::NoConnects(inspection) => self.no_connect_dialog(ctx, inspection),
-            Dialog::LibrarySources => self.library_sources_dialog(ctx),
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
+            Dialog::AddLibrary(source) => self.add_library_dialog(ctx, source),
+            Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
@@ -2415,6 +2427,17 @@ impl PcbApp {
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
+        self.editor_host_contents(ui, integrated_titlebar);
+        // Native host gestures belong above every workspace and its dialogs.
+        if integrated_titlebar {
+            shell::resize_window_edges(ui);
+        }
+        self.editor_drag_cursor(&ctx);
+    }
+
+    /// Dispatch workspace content without bypassing the common native-host epilogue.
+    fn editor_host_contents(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
+        let ctx = ui.ctx().clone();
         self.observe_editor_drag(&ctx);
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
@@ -2423,9 +2446,12 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        if self.views.active.library.is_some() && !(main && self.home) {
+            self.library_workspace_frame(ui, integrated_titlebar);
+            return;
+        }
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
-            self.editor_drag_cursor(&ctx);
             return;
         }
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2491,9 +2517,6 @@ impl PcbApp {
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {
             ctx.send_viewport_cmd_to(editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
         }
-        if integrated_titlebar {
-            shell::resize_window_edges(ui);
-        }
         self.views.sync(&self.session);
         if ctx.viewport_id() != egui::ViewportId::ROOT && self.pointer != self.pointer_next {
             ctx.request_repaint();
@@ -2503,7 +2526,6 @@ impl PcbApp {
             self.repaint_editors(&ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
-        self.editor_drag_cursor(&ctx);
     }
 }
 
@@ -2548,29 +2570,29 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
-    list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
-    list.push(("PCB layout", "Move reference designator", "M or left drag over the reference".to_owned()));
-    list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
-    list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
-    list.push(("PCB layout", "Flip footprint to the other side", "F".to_owned()));
-    list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
-    list.push(("PCB layout", "Route track", "X".to_owned()));
-    list.push(("PCB layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
-    list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
-    list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
-    list.push(("PCB layout", "Select connected copper", "U".to_owned()));
-    list.push(("PCB layout", "Drag a track segment, keeping it attached", "D".to_owned()));
-    list.push(("PCB layout", "Highlight the net under the pointer", "`".to_owned()));
-    list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
-    list.push(("PCB layout", "Flip track posture", "/".to_owned()));
-    list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
-    list.push(("PCB layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
-    list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
-    list.push(("PCB layout", "Remove last track vertex", "Backspace".to_owned()));
-    list.push(("PCB layout", "Next layer", "+".to_owned()));
-    list.push(("PCB layout", "Previous layer", "−".to_owned()));
-    list.push(("PCB layout", "Front copper layer", "PgUp".to_owned()));
-    list.push(("PCB layout", "Back copper layer", "PgDn".to_owned()));
+    list.push(("PCB Layout", "Move footprint", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Move reference designator", "M or left drag over the reference".to_owned()));
+    list.push(("PCB Layout", "Rotate footprint counterclockwise", "R".to_owned()));
+    list.push(("PCB Layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
+    list.push(("PCB Layout", "Flip footprint to the other side", "F".to_owned()));
+    list.push(("PCB Layout", "Cancel placement", "Esc or right click".to_owned()));
+    list.push(("PCB Layout", "Route track", "X".to_owned()));
+    list.push(("PCB Layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
+    list.push(("PCB Layout", "Place via", key(&PLACE_VIA)));
+    list.push(("PCB Layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
+    list.push(("PCB Layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
+    list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
+    list.push(("PCB Layout", "Move selected tracks and vias", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Flip track posture", "/".to_owned()));
+    list.push(("PCB Layout", "Place via and switch layer while routing", "V".to_owned()));
+    list.push(("PCB Layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
+    list.push(("PCB Layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
+    list.push(("PCB Layout", "Remove last track vertex", "Backspace".to_owned()));
+    list.push(("PCB Layout", "Next layer", "+".to_owned()));
+    list.push(("PCB Layout", "Previous layer", "−".to_owned()));
+    list.push(("PCB Layout", "Front copper layer", "PgUp".to_owned()));
+    list.push(("PCB Layout", "Back copper layer", "PgDn".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));

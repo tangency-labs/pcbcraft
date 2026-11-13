@@ -54,6 +54,10 @@ struct Document {
     error: Option<String>,
 }
 impl Editors {
+    /// Unpublished geometry and unapplied fields both prevent deleting their origin library.
+    pub(crate) fn unpublished_in(&self, library: &str) -> bool {
+        self.documents.values().any(|doc| doc.session.snapshot().library == library && doc.unsaved())
+    }
     /// A bounded change stamp wakes all views when a definition edit or dirty-state transition occurs.
     pub(super) fn stamp(&self) -> Vec<(u64, u64, bool)> {
         self.documents.iter().map(|(id, doc)| (*id, doc.session.revision(), doc.unsaved())).collect()
@@ -482,7 +486,12 @@ impl PcbApp {
         let ctx = ui.ctx().clone();
         self.sync_library_focus();
         let main = self.views.host == self.views.main;
-        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending() && (main || !self.home);
+        let enabled = matches!(self.dialog, Dialog::None)
+            && !self.files.busy()
+            && !self.project_action_pending()
+            && !self.library_mutation_busy()
+            && !self.library_sources.installing()
+            && (main || !self.home);
         let active = self.library_editors.active;
         let available = active.and_then(|id| self.library_editors.documents.get(&id));
         let can_save = available.is_some_and(|doc| !doc.pending_any()) && !self.library_editors.busy();
@@ -668,9 +677,6 @@ impl PcbApp {
             self.project_dialogs(&ctx);
         } else if !matches!(self.dialog, Dialog::None) {
             ctx.send_viewport_cmd_to(crate::editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
-        }
-        if integrated {
-            shell::resize_window_edges(ui);
         }
     }
     /// Authoring uses the shared workspace picker and ribbon while keeping drawing state,

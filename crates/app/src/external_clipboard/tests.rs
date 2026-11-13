@@ -39,7 +39,7 @@ fn spreadsheet_coordinates_become_one_outline_after_explicit_conversion() {
     h.state_mut().run("project.new", &json!({"create_board":true}));
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let before = h.state().session.snapshot().unwrap();
     h.event(Event::Paste("x_mil\ty_mil\n100\t200\n1100\t200\n1100\t700\n100\t200".into()));
     h.run();

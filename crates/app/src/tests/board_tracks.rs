@@ -34,7 +34,7 @@ fn routable<'a>() -> Harness<'a, PcbApp> {
     assert_eq!(h.state().message, None);
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.query_all_by_label("Fit board").next().unwrap().click();
     h.run();
     click(&mut h, "Activate layer Top");

@@ -455,7 +455,7 @@ mod tests {
         assert!(h.state().message.is_none(), "{:?}", h.state().message);
         h.run();
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         click(&mut h, "Activate layer Top");
         h
     }
@@ -542,7 +542,7 @@ mod tests {
         h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
         h.run();
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         let layer = h
             .state()
             .session()

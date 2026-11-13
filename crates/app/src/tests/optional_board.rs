@@ -15,7 +15,7 @@ fn optional_board_is_created_explicitly_and_undo_restores_schematic_only_state()
     let revision = h.state().session.revision();
 
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.get_by_label("Create board");
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
@@ -155,7 +155,7 @@ fn pending_create_board_click_cannot_follow_project_replacement_or_reopen() {
         let mut h = harness();
         new_project(&mut h);
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         let point = h.get_by_label("Create board").rect().center();
         h.event(egui::Event::PointerMoved(point));
         h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -181,7 +181,7 @@ fn repeated_create_board_clicks_only_create_one_board() {
     let mut h = harness();
     new_project(&mut h);
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let point = h.get_by_label("Create board").rect().center();
     click(&mut h, "Create board");
     let created = h.state().session.snapshot().unwrap();

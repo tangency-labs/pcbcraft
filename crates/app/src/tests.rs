@@ -537,7 +537,7 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
 #[test]
 fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     let mut harness = harness();
-    let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB layout").is_some();
+    let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB Layout").is_some();
     click(&mut harness, "Choose workspace");
     assert!(picker_open(&harness));
     harness.get_by_label("Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.");
@@ -576,10 +576,10 @@ fn enter_on_the_workspace_tile_opens_the_picker() {
     harness.run();
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.query_by_label("PCB layout").is_some(), "the opening Enter keeps the picker open");
+    assert!(harness.query_by_label("PCB Layout").is_some(), "the opening Enter keeps the picker open");
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.query_by_label("PCB layout").is_none());
+    assert!(harness.query_by_label("PCB Layout").is_none());
 }
 
 /// The Wire tool reaches a multi-pin symbol's pins where the library draws them, so the
@@ -2030,7 +2030,7 @@ mod live_mcp {
             assert_eq!(payload(tool(&mut h, connection, "inspect_editor", json!({}))), before);
         }
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         for tab in ["layout", "route", "draw", "analyze", "manufacture", "libraries", "view"] {
             let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
             h.run();

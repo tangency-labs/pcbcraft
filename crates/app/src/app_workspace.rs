@@ -6,6 +6,9 @@ use pcbcraft_engine::authoring::Kind;
 impl PcbApp {
     /// Identify the visible workspace in the bound host, including definition authoring.
     pub(super) fn workspace_key(&self) -> &'static str {
+        if self.views.active.library.is_some() {
+            return "library";
+        }
         if let Some(kind) = self.views.active.definition.and_then(|id| self.library_kind(id)) {
             return if kind == Kind::Symbol { "symbol_editor" } else { "footprint_editor" };
         }
@@ -42,6 +45,7 @@ impl PcbApp {
             return Err("Finish the current project operation before switching workspaces.".into());
         }
         match key {
+            "library" => self.place_library_workspace(ctx, placement)?,
             "symbol_editor" | "footprint_editor" => {
                 if placement == Placement::Window && crate::IN_BROWSER {
                     return Err("Native windows are unavailable in the browser.".into());

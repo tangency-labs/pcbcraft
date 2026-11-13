@@ -190,8 +190,8 @@ fn catalog_reaches_existing_library_manager() {
     assert!(h.get_by_label("Place").accesskit_node().is_disabled());
     click(&mut h, "Manage libraries…");
     assert!(!h.state().parts.open);
-    assert!(matches!(h.state().dialog, crate::Dialog::LibrarySources));
-    h.get_by_label("Close Library sources");
+    assert_eq!(h.state().workspace_key(), "library");
+    h.get_by_label("Built-in");
 }
 
 /// Catalog selection does not use display text as identity, and source filters use library IDs.
@@ -783,7 +783,7 @@ fn retained_part_quantity_is_shared_by_board_properties_and_browser() {
     let symbol = h.state().session.project().unwrap().symbols()[0].id();
     edit(&mut h, pcbcraft_engine::DELETE_SYMBOL, json!({"symbol":symbol}));
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Footprint R1  100 mΩ");
     let snapshot = h.state().session.snapshot().unwrap();
     let saved = encode_documents(snapshot.clone()).unwrap();

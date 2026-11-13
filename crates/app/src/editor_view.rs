@@ -31,7 +31,7 @@ impl Workspace {
     pub(super) fn title(self) -> &'static str {
         match self {
             Self::Schematic => "Schematic",
-            Self::Board => "PCB layout",
+            Self::Board => "PCB Layout",
         }
     }
 
@@ -333,6 +333,8 @@ pub(super) struct EditorView {
     pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
+    /// Library browsing is a view-local service presentation, never a project target.
+    pub(super) library: Option<crate::library_workspace::State>,
     pub(super) camera: Camera,
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
@@ -351,9 +353,14 @@ impl Default for EditorView {
 }
 
 impl EditorView {
+    /// Service and definition panes own no project edit authority.
+    pub(super) fn auxiliary(&self) -> bool {
+        self.definition.is_some() || self.library.is_some()
+    }
+
     /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
     pub(super) fn target(&self) -> Option<DocumentTarget> {
-        if self.definition.is_some() { None } else { self.binding.map(|binding| binding.target) }
+        if self.auxiliary() { None } else { self.binding.map(|binding| binding.target) }
     }
 
     /// Start a successfully opened project's default document in this workspace. Runtime identity,
@@ -362,6 +369,7 @@ impl EditorView {
     /// Definition panes retain their document while refreshing the parked project presentation.
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
         let definition = self.definition.take();
+        let library = self.library.take();
         let workspace = self.workspace;
         let snap_nm = self.camera.snap_nm();
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
@@ -373,6 +381,7 @@ impl EditorView {
         self.camera.set_snap_nm(snap_nm);
         self.sync(session);
         self.definition = definition;
+        self.library = library;
     }
 
     /// Explicitly retarget a view after the host validates the document's existence.
@@ -400,7 +409,7 @@ impl EditorView {
     /// A cached immutable
     /// projection avoids rebuilding geometry caches on every frame; stale caches never authorize input.
     pub(super) fn snapshot(&self, session: &Session) -> Option<std::sync::Arc<pcbcraft_engine::Project>> {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return None;
         }
         let root = session.snapshot()?;
@@ -416,7 +425,7 @@ impl EditorView {
     /// Capture project presentation only; runtime definition views are excluded from project
     /// arrangements. Unresolved saved targets remain intact instead of being rebound.
     pub(super) fn saved_state(&self, session: &Session) -> Option<ViewState> {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return None;
         }
         if let Some(state) = &self.unavailable {
@@ -497,6 +506,7 @@ impl EditorView {
             filters_open: true,
             panels: crate::workspace_panels::defaults(),
             definition: None,
+            library: None,
             camera: Camera::default(),
             parked_camera: Camera::default(),
             schematic: SchematicState::default(),
@@ -522,6 +532,7 @@ impl EditorView {
             filters_open: self.filters_open,
             panels: self.panels.clone(),
             definition: self.definition,
+            library: self.library.clone(),
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
             unavailable: self.unavailable.clone(),
@@ -553,7 +564,8 @@ impl EditorView {
     /// Switch only this view and restore that workspace's navigation. Old input remains invalid
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
-        if self.definition.take().is_some() {
+        let library = self.library.take().is_some();
+        if self.definition.take().is_some() || library {
             self.release_input();
         }
         if self.unavailable.is_some() {
@@ -611,7 +623,7 @@ impl EditorView {
 
     /// Capture input only while this view is bound to its current document opening.
     pub(super) fn input(&self, session: &Session) -> Option<ViewInput> {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return None;
         }
         let binding = self.binding.filter(|binding| Some(*binding) == Binding::current(session, self.workspace, self.board.target, self.sheet))?;
@@ -621,6 +633,9 @@ impl EditorView {
     /// Permit layout controls for definition and unavailable views without granting project edit
     /// authority. Definition tokens include runtime document identity and the view's input epoch.
     pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
+        if self.library.is_some() {
+            return Some(ViewInput { view: self.id, target: None, definition: None, input_epoch: self.input_epoch, revision: 0 });
+        }
         if let Some(document) = self.definition {
             return Some(ViewInput { view: self.id, target: None, definition: Some(document), input_epoch: self.input_epoch, revision: 0 });
         }
@@ -683,7 +698,7 @@ impl EditorView {
     /// sheet/board targets that no longer resolve become unavailable, closeable placeholders;
     /// undo restores their address and navigation. Only omitted targets use compatibility defaults.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return false;
         }
         if let Some(state) = &self.unavailable {

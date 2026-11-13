@@ -172,11 +172,11 @@ to a new file. Keep the editor item as the provenance-bearing authoring master;
 the existing standalone symbol format does not carry its license or stable
 editor primitive IDs. Unknown symbol provenance requires recording its license
 before saving or exporting. Native source registration/search is available through
-**Libraries → Sources**, as described in the [source guide](native-library-sources.md).
+the **Library** workspace (also reached through **Libraries → Sources**), as described in the [source guide](native-library-sources.md).
 Deliberate application of an authored definition to a project remains follow-up
 work; these editors do not yet add their documents to the Parts Catalog or the package catalog.
 
-Live MCP switches the same four workspace types through `app.set_workspace`
+Live MCP switches the five available workspace types through `app.set_workspace`
 and discovers `app.library_new`, `app.library_fork_selected`,
 `app.library_edit`, `app.library_view`, `app.library_focus`, `app.library_open`, `app.library_save`
 and `app.library_close`. Forking addresses an explicit source view ID.
