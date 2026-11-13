@@ -258,6 +258,20 @@ fn container_three_inventory_and_breaking_layout_boundary() {
     }
 }
 
+/// Every `.pc` entry records Unix as its creator with a regular 0644 mode, whichever platform
+/// built PCBCraft, so archives match byte for byte across desktops and the browser and readers
+/// apply the stored mode instead of deriving one from MS-DOS attributes.
+#[test]
+fn packed_entries_are_unix_regular_files_on_every_platform() {
+    let packed = encode_packed_documents(documents(&session())).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(&packed)).unwrap();
+    for index in 0..zip.len() {
+        let entry = zip.by_index(index).unwrap();
+        assert_eq!(entry.system(), zip::System::Unix, "{:?}", entry.name());
+        assert_eq!(entry.unix_mode(), Some(0o100644), "{:?}", entry.name());
+    }
+}
+
 /// OS-created sidecars are ignored only after ZIP validation and never become project documents.
 #[test]
 fn manifestless_archives_ignore_os_metadata_before_root_discovery() {

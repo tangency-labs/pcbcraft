@@ -705,8 +705,9 @@ path, type, CRC and size checks. A present manifest disables these exceptions.
 All document schema and cross-document checks still apply. The open notice says
 that the next save or download will add a manifest. PCBcraft always writes one.
 
-Writers use Store, fixed timestamps, fixed permissions and a deterministic entry
-order (manifest first, then paths in lexical order). Readers accept Store and
+Writers use Store, fixed timestamps, fixed `0644` permissions recorded as made on
+Unix, and a deterministic entry order (manifest first, then paths in lexical
+order), so every platform writes the same archive bytes. Readers accept Store and
 Deflate. Traversal, absolute/drive paths, duplicate or overlapping entries,
 symlinks, special files, encryption, ZIP64 and split archives are refused. Reads
 are bounded by both declared and actual expanded size. An unchanged save of an already migrated,
