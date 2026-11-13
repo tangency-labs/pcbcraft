@@ -642,6 +642,7 @@ impl EditorView {
 
     /// Drop unfinished gestures without altering selection or the document.
     pub(super) fn cancel_gesture(&mut self) {
+        self.board.drc.cancel();
         self.schematic.clipboard = crate::clipboard::State::default();
         self.board.clipboard = crate::board_clipboard::State::default();
         self.board.drawing.cancel();

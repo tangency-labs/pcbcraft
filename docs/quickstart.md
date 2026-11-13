@@ -510,7 +510,12 @@ Clear **Use built-in defaults** to author values, then Apply; checking it restor
 the built-in values. New routes use those preferences, while existing copper
 keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
 
-Run **Analyze → DRC** to check the board. Pad clearance is measured against the
+Run **Analyze → DRC** to check the board. The check shows its current stage while
+pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops
+unfinished work; **Run again** replaces it with a check of the current revision.
+Edits and project reopening invalidate unfinished reports.
+
+Pad clearance is measured against the
 resolved circular, oval, rounded-rectangle or rectangular copper contour, including
 rotation and board side. A gap exactly equal to the selected clearance passes;
 clearance enforcement while routing remains separate. DRC also reports existing

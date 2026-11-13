@@ -161,7 +161,91 @@ impl LiveControl {
     }
 }
 
+/// One deferred read-only MCP check. The existing endpoint bounds additional peers;
+/// another check is refused while this slot is occupied, rather than growing a queue.
+#[derive(Debug, Default)]
+pub(super) struct RemoteCheck {
+    queue: crate::board_drc::jobs::Queue,
+    request: Option<(Request, bool, u16)>,
+}
+
+impl std::fmt::Debug for Request {
+    /// Diagnostic output omits request contents and response channels.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveRequest").field("generation", &self.generation).finish_non_exhaustive()
+    }
+}
+
 impl PcbApp {
+    /// Recognize the existing read-only command while preserving the live dispatcher's policy.
+    pub(super) fn defer_design_check(&mut self, _ctx: &egui::Context, body: &Value) -> bool {
+        body["method"] == "engine.execute" && body["params"]["command"] == pcbcraft_engine::CHECK_DESIGN
+    }
+
+    /// Validate through the shared command path, then hand only the captured job to the queue.
+    pub(super) fn start_remote_check(&mut self, ctx: &egui::Context, request: Request, chat: bool) {
+        use pcbcraft_mcp::live::Editor as _;
+        if request.expired() {
+            request.answer(Err("Design check request expired".into()));
+            return;
+        }
+        if self.remote_check.queue.busy() {
+            request.answer(Err("A design check is already running; retry after it completes".into()));
+            return;
+        }
+        if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(pcbcraft_engine::CHECK_DESIGN) {
+            request.answer(Err(reason));
+            return;
+        }
+        let params = &request.body()["params"]["params"];
+        let job = self.session.apply(pcbcraft_engine::CHECK_DESIGN, params).and_then(|_| self.session.design_check_job(params));
+        match job {
+            Ok(job) => {
+                let port = self.live_control.as_ref().map_or(0, LiveControl::port);
+                self.remote_check.queue.submit(crate::board_drc::jobs::Request { id: 0, job });
+                self.remote_check.request = Some((request, chat, port));
+                ctx.request_repaint();
+            }
+            Err(error) => request.answer(Err(error.to_string())),
+        }
+    }
+
+    /// Retire expired/revoked/stale checks without blocking other MCP edits or window input.
+    pub(super) fn poll_remote_check(&mut self, ctx: &egui::Context) {
+        let valid = self.remote_check.request.as_ref().is_some_and(|(request, chat, port)| {
+            !request.expired()
+                && if *chat {
+                    self.assistant.turn_open() && self.assistant.generation() == Some(request.generation())
+                } else {
+                    self.live_control.as_ref().is_some_and(|live| live.port() == *port && live.current() == request.generation())
+                }
+        });
+        // The captured source validates its own board; no focused-view dependency is imposed on MCP.
+        if !valid || !self.remote_check.queue.authority_current(&self.session) {
+            self.remote_check.queue.cancel();
+            if let Some((request, _, _)) = self.remote_check.request.take() {
+                request.answer(Err("Design check canceled or request expired".into()));
+            }
+        }
+        if let Some(completion) = self.remote_check.queue.poll()
+            && let Some((request, _, _)) = self.remote_check.request.take()
+        {
+            let result = if !completion.source.is_current(&self.session) {
+                Err("Project changed during design check; retry against the current revision".into())
+            } else {
+                completion.report.and_then(|report| {
+                    report
+                        .map(|report| json!({"revision":completion.source.revision(),"design_check":report}))
+                        .ok_or_else(|| "Design check canceled".into())
+                })
+            };
+            request.answer(result);
+        }
+        if self.remote_check.queue.busy() {
+            ctx.request_repaint_after(Duration::from_millis(8));
+        }
+    }
+
     /// Serve the in-app chat's endpoint on the editor thread while a message is being answered:
     /// run the tool calls the person answered, then gate the next request. Reading and allowed commands run through the same
     /// dispatcher as live MCP, with its refusals; the rest wait in the chat for Allow or Deny.
@@ -211,6 +295,10 @@ impl PcbApp {
     /// dropped unrun: its caller has already given up.
     fn run_chat_request(&mut self, ctx: &egui::Context, request: Request) {
         if request.expired() {
+            return;
+        }
+        if self.defer_design_check(ctx, request.body()) {
+            self.start_remote_check(ctx, request, true);
             return;
         }
         let revision = self.session.revision();
@@ -374,5 +462,61 @@ mod tests {
         let _client = Connection::connect(endpoint.port, &endpoint.token, request.clone(), timeout)?;
         assert_eq!(endpoint.requests.recv_timeout(timeout).unwrap().body, request);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod checker_tests {
+    use super::*;
+    /// Deferred MCP reports preserve the existing response shape and never block a later edit.
+    /// Revoked endpoints, deadlines and changed snapshots produce errors rather than stale passes.
+    #[test]
+    fn deferred_check_allows_edits_and_rejects_stale_expired_and_revoked_requests() {
+        let ctx = egui::Context::default();
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({"create_board":true})).unwrap();
+        app.live_control = Some(LiveControl::start(&ctx).unwrap());
+        let request = |app: &PcbApp, expired: bool| {
+            let (reply, receive) = mpsc::sync_channel(1);
+            let deadline = if expired { Instant::now() - Duration::from_secs(1) } else { Instant::now() + Duration::from_secs(10) };
+            (
+                Request {
+                    body: json!({"method":"engine.execute","params":{"command":pcbcraft_engine::CHECK_DESIGN,"params":{}}}),
+                    deadline,
+                    reply,
+                    generation: app.live_control.as_ref().unwrap().current(),
+                },
+                receive,
+            )
+        };
+        let (r, reply) = request(&app, false);
+        app.start_remote_check(&ctx, r, false);
+        for _ in 0..100 {
+            app.poll_remote_check(&ctx);
+        }
+        assert_eq!(reply.try_recv().unwrap()["result"]["design_check"]["total"], 0);
+        let (r, reply) = request(&app, false);
+        app.start_remote_check(&ctx, r, false);
+        let rev = app.session.revision();
+        app.session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":rev})).unwrap();
+        for _ in 0..100 {
+            app.poll_remote_check(&ctx);
+        }
+        assert!(reply.try_recv().unwrap()["error"].is_string());
+        assert_eq!(app.session.revision(), rev + 1);
+        let (r, reply) = request(&app, true);
+        app.start_remote_check(&ctx, r, false);
+        for _ in 0..100 {
+            app.poll_remote_check(&ctx);
+        }
+        assert!(reply.try_recv().unwrap()["error"].is_string());
+        let (r, reply) = request(&app, false);
+        app.start_remote_check(&ctx, r, false);
+        app.live_control = None;
+        for _ in 0..100 {
+            app.poll_remote_check(&ctx);
+        }
+        assert!(reply.try_recv().unwrap()["error"].is_string());
+        assert!(!app.remote_check.queue.busy());
     }
 }

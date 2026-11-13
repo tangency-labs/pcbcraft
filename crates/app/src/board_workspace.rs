@@ -467,11 +467,8 @@ impl PcbApp {
     /// Run the design rules check for the focused board view with the default rules, opening its
     /// results card. The check reads the current board and never edits it.
     pub(super) fn run_drc(&mut self) {
-        let revision = self.session.revision();
-        if let Some(project) = self.session.project()
-            && let Some(view) = self.views.active.board.target.and_then(|target| project.board_view(target))
-        {
-            self.views.active.board.drc.run(view, revision);
+        if let Some(target) = self.views.active.board.target {
+            self.message = self.views.active.board.drc.run(&self.session, target).err();
         }
     }
 

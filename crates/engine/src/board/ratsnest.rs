@@ -75,6 +75,15 @@ impl BoardView<'_> {
     /// beyond the first: N-1 edges with no tracks, none once copper joins every terminal.
     /// Unplaced or unmapped terminals are reported separately, without phantom endpoints.
     pub fn ratsnest(self) -> Option<Ratsnest> {
+        if !self.has_accepted_connectivity() {
+            return None;
+        }
+        let copper = if self.tracks().is_empty() && self.vias().is_empty() { super::track::Copper::default() } else { self.copper() };
+        self.ratsnest_with_copper(&copper)
+    }
+
+    /// Reuse completed copper connectivity when checking the same immutable snapshot.
+    pub(super) fn ratsnest_with_copper(self, copper: &super::track::Copper) -> Option<Ratsnest> {
         let board = &self.project().board;
         let baseline = board.baseline.as_ref().filter(|baseline| baseline.project == self.target.project && baseline.board == self.target.board)?;
         let mut result = Ratsnest {
@@ -85,7 +94,6 @@ impl BoardView<'_> {
             net_count: baseline.nets.len(),
             terminal_count: 0,
         };
-        let copper = if board.tracks.is_empty() && board.vias.is_empty() { super::track::Copper::default() } else { self.copper() };
         for (net, state) in baseline.nets.iter().enumerate() {
             let mut endpoints = Vec::with_capacity(state.terminals.len());
             result.terminal_count += state.terminals.len();

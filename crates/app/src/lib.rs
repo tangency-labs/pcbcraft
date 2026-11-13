@@ -239,6 +239,8 @@ pub struct PcbApp {
     library_editors: library_editors::Editors,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
+    #[cfg(not(target_arch = "wasm32"))]
+    remote_check: live_control::RemoteCheck,
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     preferences: Preferences,
@@ -2307,6 +2309,10 @@ impl PcbApp {
             }
             Some(Ok(Some(request))) => request,
         };
+        if self.defer_design_check(ctx, request.body()) {
+            self.start_remote_check(ctx, request, false);
+            return;
+        }
         let revision = self.session.revision();
         let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
         if self.session.revision() != revision {
@@ -2359,7 +2365,10 @@ impl PcbApp {
         self.views.sync(&self.session);
         self.sync_arrangements(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
-        self.poll_live_control(&ctx);
+        {
+            self.poll_remote_check(&ctx);
+            self.poll_live_control(&ctx);
+        }
         if self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             self.editor_host_frame(ui, self.integrated_titlebar);
         }
@@ -2369,6 +2378,11 @@ impl PcbApp {
         self.detached_editor(&ctx);
         self.finish_editor_drag(&ctx);
         self.finish_view_actions(&ctx);
+        for view in self.views.all_mut() {
+            if view.board.drc.poll(&self.session, view.board.target) {
+                ctx.request_repaint_after(std::time::Duration::from_millis(8));
+            }
+        }
         self.finish_arrangement_action(&ctx);
         self.checkpoint_arrangements();
         if let Some(notice) = self.arrangements.notice.take() {
@@ -2390,6 +2404,9 @@ impl PcbApp {
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
         self.editor_window_focus(&ctx);
+        if self.views.active.board.drc.pending() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.views.active.board.drc.cancel();
+        }
         self.views.sync(&self.session);
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();

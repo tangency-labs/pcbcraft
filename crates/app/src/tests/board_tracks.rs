@@ -648,6 +648,18 @@ fn properties_edit_the_selected_track_width() {
     assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 400_000);
 }
 
+/// Let the asynchronous checker finish through ordinary application frames.
+fn finish_drc(h: &mut Harness<'_, PcbApp>) {
+    for _ in 0..1000 {
+        h.step();
+        if !h.state().views.active.board.drc.pending() {
+            h.step();
+            return;
+        }
+    }
+    panic!("checker did not complete");
+}
+
 /// Inspect › DRC checks the board without editing it and lists its findings; clicking one
 /// centers the view there. An edit marks the result out of date until it is run again.
 #[test]
@@ -657,6 +669,7 @@ fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
     let revision = h.state().session.revision();
     click(&mut h, "Analyze");
     click(&mut h, "Run design rules check");
+    finish_drc(&mut h);
     assert_eq!(h.state().session.revision(), revision, "DRC edits nothing");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     assert!(h.query_by_label_contains("No outline · The board has no closed Board Outline").is_some());
@@ -676,6 +689,7 @@ fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
     add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
     assert!(h.query_by_label_contains("out of date").is_some());
     click(&mut h, "Run again");
+    finish_drc(&mut h);
     assert!(h.query_by_label_contains("out of date").is_none());
     let board = h.state().views.active.board.target;
     assert!(!h.state().views.active.board.drc.markers(board).is_empty(), "open findings mark the canvas");
@@ -730,6 +744,7 @@ fn drc_shows_and_focuses_an_existing_short() {
     let finding = report["violations"][0]["message"].as_str().unwrap();
     click(&mut h, "Analyze");
     click(&mut h, "Run design rules check");
+    finish_drc(&mut h);
     assert!(h.query_by_label_contains("1 short").is_some());
     let label = format!("Short · {finding}");
     h.get_by_label(&label).click();
@@ -1662,4 +1677,36 @@ fn segment_drag_cannot_move_a_locked_neighbor() {
     click_canvas_at(&mut h, target);
     assert!(h.state().message.as_ref().is_some_and(|message| message.contains("locked")));
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Escape cancels a pending check without a model edit; ordinary camera navigation remains
+/// available, while releasing the view's input prevents its delayed report from publishing.
+#[test]
+fn checker_escape_navigation_and_view_release_preserve_authored_state() {
+    let mut h = routable();
+    let snapshot = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run_drc();
+    assert!(h.state().views.active.board.drc.pending());
+    h.key_press(Key::Escape);
+    h.step();
+    assert!(!h.state().views.active.board.drc.pending());
+    h.state_mut().run_drc();
+    let rect = h.get_by_label("PCB canvas").rect();
+    let point = rect.center();
+    h.event(egui::Event::PointerMoved(point));
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        phase: egui::TouchPhase::Move,
+        delta: egui::vec2(0., 1.),
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.step();
+    assert!(h.state().views.active.board.drc.pending());
+    h.state_mut().views.active.release_input();
+    h.step();
+    assert!(!h.state().views.active.board.drc.pending());
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
 }

@@ -4,6 +4,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
+pub mod checker;
 mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
 mod remote;

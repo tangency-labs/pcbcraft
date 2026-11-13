@@ -217,6 +217,23 @@ impl BoardGeometry {
     pub(crate) fn new(view: BoardView<'_>) -> Self {
         let lands = lands(view);
         let (copper, members) = islands(&lands, view.tracks(), view.vias());
+        Self::from_islands(view, lands, copper, members)
+    }
+
+    /// Complete contour/membership projection from already evaluated legacy copper islands.
+    pub(super) fn from_islands(view: BoardView<'_>, lands: Vec<Land>, copper: super::track::Copper, members: Vec<Vec<usize>>) -> Self {
+        let merged = with_pad_contacts(&lands, &copper, members.clone());
+        Self::from_contacts(view, lands, copper, members, merged)
+    }
+
+    /// Project memberships after a resumable caller has completed direct-pad contacts.
+    pub(super) fn from_contacts(
+        view: BoardView<'_>,
+        lands: Vec<Land>,
+        copper: super::track::Copper,
+        members: Vec<Vec<usize>>,
+        merged: Vec<Vec<usize>>,
+    ) -> Self {
         let project = view.project();
         let baseline = project.board.baseline.as_ref();
         let accepted = baseline.map(|b| b.terminal_net_index());
@@ -234,7 +251,7 @@ impl BoardGeometry {
             })
             .collect();
         let names: Vec<Option<String>> = members.iter().map(|nodes| nodes.iter().find_map(|node| lands.get(*node)?.net.clone())).collect();
-        let members = with_pad_contacts(&lands, &copper, members);
+        let members = merged;
         let mut node_nets = vec![Vec::new(); lands.len() + view.tracks().len() + view.vias().len()];
         for nodes in &members {
             let nets: Vec<_> = nodes.iter().filter_map(|node| pad_nets.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
@@ -329,7 +346,7 @@ impl BoardGeometry {
             .filter_map(move |(i, j)| self.evaluate(i, j, clearance_nm))
     }
     /// Evaluate shape separation independently of the candidate-enumeration strategy.
-    fn evaluate(&self, i: usize, j: usize, clearance_nm: i64) -> Option<Decision> {
+    pub(super) fn evaluate(&self, i: usize, j: usize, clearance_nm: i64) -> Option<Decision> {
         let (a, b) = (&self.items[i], &self.items[j]);
         share_layers(&a.layers, &b.layers)
             .then(|| decision(Some(i), j, a.contour.gap(&b.contour), &a.intended_nets, &b.intended_nets, a.island == b.island, clearance_nm))

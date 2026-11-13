@@ -407,3 +407,38 @@ ERC progress and walkaround/shove commits must be instrumented with #243–#247,
 artifacts, comparisons, rendered replay and resource collection; it cannot
 measure implementations that do not exist. Record Windows/macOS coverage as
 available or unavailable instead of inventing cross-platform results.
+
+## Checker job measurements
+
+For #243's first checker slice, the CPU diagnostic also accepts `checks`:
+
+```sh
+target/release/examples/board_perf checks /tmp/channels-v1.json /tmp/environment.json 100 /tmp/checker-jobs.json
+```
+
+The browser CPU page selects the same diagnostic with `&checks=1`. The
+`pcbcraft-checker-performance/1` report records capture, stage/batch service costs,
+engine total time, queue polling and cancellation acknowledgement, with raw
+samples and report-equivalence assertions. A work batch considers at most 256
+contact/clearance/courtyard pairs or outline items. Footprint projection uses at
+most 32 placements per batch; remaining membership, dimension and finalization
+phases yield at phase boundaries and retain supported model/report bounds. Browser
+execution yields between batches after a nominal two-millisecond allowance;
+this is a cooperative scheduling target, not a hard upper bound on a linear
+phase or a geometric predicate. Retain measured overruns rather than reporting
+that allowance as achieved latency.
+
+Each view retains one running check and at most one replaceable pending snapshot.
+Native execution has a process-wide limit of two checker workers; excess starts
+fail with a capacity error. The live MCP endpoint retains at most one deferred
+check and refuses another until the slot retires. Canceling revokes publication
+immediately; worker acknowledgement occurs after the current batch. Neither
+closing a view nor application teardown joins a checker thread.
+
+These new metrics are checker CPU/queue boundaries, separate from the established
+CPU and rendered reports. Compare the existing reports with their existing
+comparators, and retain the new report separately. Its synchronous browser
+collector does not demonstrate a responsive window; real editor frames and the
+rendered replay remain required for interaction claims. ERC and route mutation
+preparation are subsequent #243 slices, and this checker implementation does not
+close the broader issue or qualify Wayland endurance/presentation latency.

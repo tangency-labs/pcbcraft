@@ -7,6 +7,12 @@ and removed through pin context menus. A focused check reports unmarked pins and
 connected, missing or incompatible marker targets. Marker-bearing projects use
 project/19; projects without markers retain their existing low-level encoding.
 
+DRC runs against an immutable snapshot while the editor remains interactive, with
+stage progress, cancellation and replacement by the latest rerun. Native workers
+and browser batches use the same checker. Edits, rule changes and project/view
+transitions discard unfinished reports; live MCP checks wait without blocking
+editor input. Completed findings retain their source revision.
+
 - Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
