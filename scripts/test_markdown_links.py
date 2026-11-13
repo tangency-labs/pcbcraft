@@ -169,6 +169,65 @@ class MarkdownLinkChecks(unittest.TestCase):
         (self.root / "docs" / "diagram)one.md").write_text("ok", encoding="utf-8")
         self.assertEqual(self.check(r'[ok](../diagram\)one.md)' + '\n'), [])
 
+    def test_heading_in_blockquote_does_not_lazy_continue(self):
+        self.assertEqual(self.check(
+            '> # Heading `\n[broken](../missing.md)`\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            '> ## Heading `\n[broken](../missing.md)`\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            '> Paragraph `\n[hidden](../missing.md)`\n'), [])
+
+    def test_inline_missing_link_title_on_next_line(self):
+        self.assertEqual(self.check(
+            '[broken](../missing.md\n  "Description")\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            '[broken](../missing.md\n)\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            '[broken](<../missing.md>\n  (Description))\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_multiline_valid_link_and_no_duplicate_reference(self):
+        self.assertEqual(self.check(
+            '[ok](../a.md\n  "Description") and [another](b.md)\n'), [])
+        self.assertEqual(self.check(
+            '[bad](../missing.md\n  "Label") [unrelated][guide]\n'
+            '[guide]: ../a.md\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_double_blank_line_does_not_form_inline_link(self):
+        self.assertEqual(self.check(
+            '[not a link](../missing.md\n\n "Title")\n'), [])
+
+    def test_heading_does_not_extend_link_into_next_block(self):
+        self.assertEqual(self.check(
+            '# [not a link](../missing.md\n  "Description")\n'), [])
+        self.assertEqual(self.check(
+            '> # [not a link](../missing.md\n  "Description")\n'), [])
+        self.assertEqual(self.check(
+            '[broken](../missing.md\n  "Description")\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_semicolonless_entities_in_markdown_destinations_are_literal(self):
+        (self.root / "docs" / "a&ampcopy.md").write_text("ok", encoding="utf-8")
+        self.assertEqual(self.check('[ok](../a&ampcopy.md)\n'), [])
+        self.assertEqual(self.check('[missing](../absent&ampcopy.md)\n'), [
+            'docs/sub/check.md:1: missing local link target: ../absent&ampcopy.md'])
+
+    def test_html_attributes_remain_html5_decoded(self):
+        (self.root / "docs" / "a&copy.md").write_text("ok", encoding="utf-8")
+        self.assertEqual(self.check('<a href="../a&amp;copy.md">link</a>\n'), [])
+
+    def test_multiple_multiline_links_preserve_line_numbers(self):
+        self.assertEqual(self.check(
+            '[first](../missing.md\n  "First")\n'
+            '[second](../absent.png\n  "Second")\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md',
+            'docs/sub/check.md:3: missing local link target: ../absent.png'])
+
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
             '[web](https://example.org/x) [email](mailto:help@example.org)\n'

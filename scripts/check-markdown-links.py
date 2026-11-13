@@ -8,6 +8,7 @@ This is not a general Markdown renderer or an anchor-heading validator.
 from __future__ import annotations
 
 import html
+from bisect import bisect_right
 import re
 import string
 import sys
@@ -20,6 +21,8 @@ INLINE_START = re.compile(r"!?\[[^]\n]*\]\(")
 REFERENCE_USAGE = re.compile(r"!?\[([^]\n]+)\]\[([^]\n]*)\]")
 SHORTCUT_USAGE = re.compile(r"!?\[([^]\n]+)\]")
 HTML_DEST = re.compile(r"\b(?:href|src)\s*=\s*([\"'])(.*?)\1", re.IGNORECASE)
+# Unlike forgiving HTML5 entity parsing, CommonMark only decodes entities with ';'.
+MARKDOWN_ENTITY = re.compile(r"&(?:#[0-9]+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]+;)")
 # These interrupt or delimit inline parsing even when no blank line precedes them.
 ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 THEMATIC_BREAK = re.compile(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$")
@@ -85,10 +88,18 @@ def _mask_blocks(lines: list[str]) -> list[str]:
             output.append(_masked(line))
             kind = "paragraph"
         elif BLOCKQUOTE.match(line):
-            if kind != "blockquote":
+            # Lazy unprefixed continuation applies only to an open paragraph
+            # inside the quote, never to a blockquote heading or thematic break.
+            content = re.sub(r"^(?: {0,3}>[ \t]?)+", "", line)
+            if ATX_HEADING.match(content) or THEMATIC_BREAK.match(content):
                 flush()
-            pending.append(line)
-            kind = "blockquote"
+                output.append(_masked(line))
+                kind = "quoted_nonparagraph"
+            else:
+                if kind != "blockquote":
+                    flush()
+                pending.append(line)
+                kind = "blockquote"
         elif (item := LIST_ITEM.match(line)):
             # In CommonMark a numbered list beginning with a value other
             # than 1 cannot interrupt a paragraph. It remains a continuation
@@ -135,32 +146,51 @@ def _normalized(label: str) -> str:
     return " ".join(label.split()).casefold()
 
 
-def _destination(line: str, index: int) -> tuple[str, int] | None:
-    """Read a single-line inline destination and optional link title."""
-    pos = index
-    while pos < len(line) and line[pos] in " \t":
+def _link_spaces(text: str, pos: int) -> int | None:
+    """Consume spaces/tabs and at most one line ending at a link boundary."""
+    while pos < len(text) and text[pos] in " \t":
         pos += 1
-    if pos >= len(line):
+    if pos < len(text) and text[pos] == "\n":
+        pos += 1
+        while pos < len(text) and text[pos] in " \t":
+            pos += 1
+        if pos < len(text) and text[pos] == "\n":
+            return None
+    return pos
+
+
+def _destination(text: str, index: int) -> tuple[str, int] | None:
+    """Read an inline destination and optional title across one line break.
+
+    The parser intentionally covers documentation links rather than all Markdown,
+    but a destination/title split across lines must still be checked.
+    """
+    pos = _link_spaces(text, index)
+    if pos is None or pos >= len(text):
         return None
-    if line[pos] == "<":
+    if text[pos] == "<":
         start = pos + 1
         pos = start
-        while pos < len(line):
-            if line[pos] == ">" and not _escaped(line, pos):
+        while pos < len(text):
+            if text[pos] == "\n":
+                return None
+            if text[pos] == ">" and not _escaped(text, pos):
                 break
             pos += 1
-        if pos == len(line):
+        if pos == len(text):
             return None
-        value = line[start:pos]
+        value = text[start:pos]
         pos += 1
     else:
         start = pos
         depth = 0
-        while pos < len(line):
-            char = line[pos]
-            if char in " \t" and depth == 0:
+        while pos < len(text):
+            char = text[pos]
+            if char in " \t\n" and depth == 0:
                 break
-            if char in "()" and not _escaped(line, pos):
+            if char == "\n":
+                return None
+            if char in "()" and not _escaped(text, pos):
                 if char == "(":
                     depth += 1
                 elif depth == 0:
@@ -168,30 +198,38 @@ def _destination(line: str, index: int) -> tuple[str, int] | None:
                 else:
                     depth -= 1
             pos += 1
-        if depth != 0:
+        if depth:
             return None
-        value = line[start:pos]
-    had_space = pos < len(line) and line[pos] in " \t"
-    while pos < len(line) and line[pos] in " \t":
-        pos += 1
-    if had_space and pos < len(line) and line[pos] in "\"' (":
-        opener = line[pos]
+        value = text[start:pos]
+    had_space = pos < len(text) and text[pos] in " \t\n"
+    new_pos = _link_spaces(text, pos)
+    if new_pos is None:
+        return None
+    pos = new_pos
+    if had_space and pos < len(text) and text[pos] in "\"' (":
+        opener = text[pos]
         closer = ")" if opener == "(" else opener
         pos += 1
-        while pos < len(line) and (line[pos] != closer or _escaped(line, pos)):
+        while pos < len(text) and (text[pos] != closer or _escaped(text, pos)):
+            if text[pos] == "\n" and text[pos + 1:].lstrip(" \t").startswith("\n"):
+                return None
             pos += 1
-        if pos >= len(line):
+        if pos >= len(text):
             return None
-        pos += 1
-        while pos < len(line) and line[pos] in " \t":
-            pos += 1
-    if pos >= len(line) or line[pos] != ")":
+        pos = _link_spaces(text, pos + 1)
+        if pos is None:
+            return None
+    if pos >= len(text) or text[pos] != ")":
         return None
     return value, pos + 1
 
 
-def _local_target(repo: Path, source: Path, target: str) -> bool:
-    target = html.unescape(target.strip())
+def _local_target(repo: Path, source: Path, target: str, *, html_attribute: bool = False) -> bool:
+    target = target.strip()
+    if html_attribute:
+        target = html.unescape(target)
+    else:
+        target = MARKDOWN_ENTITY.sub(lambda match: html.unescape(match.group()), target)
     # Markdown backslash escapes punctuation in destinations; URL escaping is
     # handled separately after the query/fragment have been stripped.
     target = re.sub(r"\\([" + re.escape(string.punctuation) + r"])", r"\1", target)
@@ -209,45 +247,57 @@ def _local_target(repo: Path, source: Path, target: str) -> bool:
 
 
 def find_broken_links(repo: Path, files: list[Path]) -> list[str]:
-    """Return actionable source:line diagnostics for missing local destinations."""
+    """Return source:line diagnostics, retaining the start of multiline links."""
     repo = repo.resolve()
     problems: list[str] = []
     for source in files:
         lines = _visible_lines(source.read_text(encoding="utf-8"))
         references: dict[str, str] = {}
+        scan_lines: list[str] = []
         for line in lines:
             match = REFERENCE_DEF.match(line)
             if match:
                 dest = match.group(2)
                 references.setdefault(_normalized(match.group(1)), dest[1:-1] if dest.startswith("<") else dest)
-        for number, line in enumerate(lines, 1):
-            if REFERENCE_DEF.match(line):
+                scan_lines.append("")
+            else:
+                scan_lines.append(line)
+        text = "\n".join(scan_lines)
+        newlines = [index for index, char in enumerate(text) if char == "\n"]
+        targets: list[tuple[int, str, bool]] = []
+        masked = list(text)
+        for match in INLINE_START.finditer(text):
+            found = _destination(text, match.end())
+            if not found:
                 continue
-            targets: list[str] = []
-            masked = list(line)
-            for match in INLINE_START.finditer(line):
-                found = _destination(line, match.end())
-                if not found:
-                    continue
-                target, end = found
-                targets.append(target)
-                masked[match.start():end] = " " * (end - match.start())
-            remainder = "".join(masked)
-            for match in REFERENCE_USAGE.finditer(remainder):
-                label = _normalized(match.group(2) or match.group(1))
-                if label in references:
-                    targets.append(references[label])
-                masked[match.start():match.end()] = " " * (match.end() - match.start())
-            remainder = "".join(masked)
-            for match in SHORTCUT_USAGE.finditer(remainder):
-                label = _normalized(match.group(1))
-                if label in references:
-                    targets.append(references[label])
-            for match in HTML_DEST.finditer(line):
-                targets.append(match.group(2))
-            for target in targets:
-                if not _local_target(repo, source, target):
-                    problems.append(f"{source.relative_to(repo)}:{number}: missing local link target: {target}")
+            target, end = found
+            # ATX headings have a single inline-content line. Do not join
+            # an incomplete heading link with the following paragraph.
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_end = text.find("\n", match.start())
+            opener_line = text[line_start:line_end if line_end >= 0 else len(text)]
+            quote_content = re.sub(r"^(?: {0,3}>[ \t]?)+", "", opener_line)
+            if "\n" in text[match.end():end] and ATX_HEADING.match(quote_content):
+                continue
+            targets.append((match.start(), target, False))
+            masked[match.start():end] = " " * (end - match.start())
+        remainder = "".join(masked)
+        for match in REFERENCE_USAGE.finditer(remainder):
+            label = _normalized(match.group(2) or match.group(1))
+            if label in references:
+                targets.append((match.start(), references[label], False))
+            masked[match.start():match.end()] = " " * (match.end() - match.start())
+        remainder = "".join(masked)
+        for match in SHORTCUT_USAGE.finditer(remainder):
+            label = _normalized(match.group(1))
+            if label in references:
+                targets.append((match.start(), references[label], False))
+        for match in HTML_DEST.finditer(text):
+            targets.append((match.start(), match.group(2), True))
+        for offset, target, html_attribute in sorted(targets):
+            if not _local_target(repo, source, target, html_attribute=html_attribute):
+                number = bisect_right(newlines, offset) + 1
+                problems.append(f"{source.relative_to(repo)}:{number}: missing local link target: {target}")
     return problems
 
 
