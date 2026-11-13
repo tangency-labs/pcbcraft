@@ -89,7 +89,9 @@ or rescales anything already drawn, and pins stay reachable at any spacing becau
 wires attach to them by clicking. When zooming out thins the dots, the button says
 how far apart the drawn dots are (for example *Grid 10 mil · dots 50 mil*). Each pane
 keeps its own spacing through focus changes, splitting and reopening files; the last
-one chosen is kept with your preferences, not in the project.
+one chosen is kept with your preferences, not in the project. Schematic and PCB panes
+remember their spacing separately, so changing the board grid does not replace the
+schematic's startup choice (and the reverse). Both start at 50 mil until changed.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays

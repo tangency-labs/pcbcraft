@@ -42,6 +42,22 @@ impl Workspace {
             Self::Board => MAX_BOARD_ZOOM,
         }
     }
+
+    /// The spacing presets offered by this workspace's grid control.
+    pub(super) fn grid_presets(self) -> &'static [i64] {
+        match self {
+            Self::Schematic => &pcbcraft_chrome::grid::SCHEMATIC_SPACING_PRESETS_NM,
+            Self::Board => &pcbcraft_chrome::grid::BOARD_SPACING_PRESETS_NM,
+        }
+    }
+
+    /// The spacing used when this workspace has no remembered choice.
+    pub(super) fn grid_default_nm(self) -> i64 {
+        match self {
+            Self::Schematic => pcbcraft_chrome::grid::SCHEMATIC_SPACING_DEFAULT_NM,
+            Self::Board => pcbcraft_chrome::grid::BOARD_SPACING_DEFAULT_NM,
+        }
+    }
 }
 
 /// Captured input expires across focus, workspace, project-opening and revision changes.
@@ -361,6 +377,17 @@ impl EditorView {
     /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
     pub(super) fn target(&self) -> Option<DocumentTarget> {
         if self.auxiliary() { None } else { self.binding.map(|binding| binding.target) }
+    }
+
+    /// Seed the active and parked workspace cameras from their remembered defaults. The workspace
+    /// currently showing takes its own spacing, so switching back later restores the other one.
+    pub(super) fn set_grid_defaults(&mut self, schematic_nm: i64, board_nm: i64) {
+        let (active, parked) = match self.workspace {
+            Workspace::Schematic => (schematic_nm, board_nm),
+            Workspace::Board => (board_nm, schematic_nm),
+        };
+        self.camera.set_snap_nm(active);
+        self.parked_camera.set_snap_nm(parked);
     }
 
     /// Start a successfully opened project's default document in this workspace. Runtime identity,

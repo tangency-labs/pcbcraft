@@ -5,7 +5,7 @@ use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
 
 /// Create a resolved starter placement through the same engine commands as MCP. Panels are
 /// closed so point clicks exercise the canvas instead of an overlaid card.
-fn board_harness<'a>() -> Harness<'a, PcbApp> {
+pub(super) fn board_harness<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400.0, 900.0));
     resistor_with_board_at_origin(&mut h);
@@ -690,6 +690,38 @@ fn footprint_drag_rotation_and_undo_share_one_command() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
     h.run();
     assert_eq!(placement(&h), changed);
+}
+
+/// Footprint drags snap to the board's 25 mil spacing at several zoom levels without changing
+/// the placement model or needing a different grid rule per scale.
+#[test]
+fn footprint_drag_snaps_to_board_grid_at_several_zoom_levels() {
+    let mut h = board_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_grid(id, 25 * pcbcraft_chrome::grid::NM_PER_MIL);
+    for zoom in [0.5, 1.0, 2.0] {
+        h.state_mut().views.active.camera.set_zoom_with_limit(zoom, crate::canvas_camera::MAX_BOARD_ZOOM);
+        h.run();
+        let before = placement(&h);
+        let start = Point { x_nm: before["x_nm"].as_i64().unwrap(), y_nm: before["y_nm"].as_i64().unwrap() };
+        let destination = board_point(&h, Point { x_nm: start.x_nm + 2_000_000, y_nm: start.y_nm + 1_000_000 });
+        let from = board_point(&h, start);
+        h.hover_at(from);
+        h.run();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(destination);
+        h.run();
+        h.drop_at(destination);
+        h.run();
+        let moved = placement(&h);
+        assert_ne!(moved, before, "zoom {zoom} moved the footprint");
+        for axis in ["x_nm", "y_nm"] {
+            assert_eq!(moved[axis].as_i64().unwrap() % (25 * pcbcraft_chrome::grid::NM_PER_MIL), 0, "zoom {zoom} {axis}");
+        }
+    }
 }
 
 /// Screen positions of a painted text label in the most recent frame only.

@@ -129,6 +129,27 @@ fn x_routes_between_pads_in_one_undoable_command() {
     assert_eq!(airwires(&h).len(), 1);
 }
 
+/// Pads keep their exact copper contacts when the board uses a coarser or uneven grid. A route
+/// started and finished on the two pads connects the same terminals regardless of snap spacing.
+#[test]
+fn pads_stay_reachable_on_coarse_and_uneven_board_grids() {
+    const MIL: i64 = pcbcraft_chrome::grid::NM_PER_MIL;
+    for spacing in [100 * MIL, 30 * MIL, 330_000] {
+        let mut h = routable();
+        let line = airwires(&h)[0].clone();
+        let view = h.state().views.active.id();
+        h.state_mut().set_view_grid(view, spacing);
+        h.run();
+        h.key_press(Key::X);
+        h.run();
+        route_airwire(&mut h, &line);
+        assert_eq!(h.state().message, None, "{spacing}");
+        assert!(airwires(&h).is_empty(), "{spacing}: the pads still connect");
+        let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
+        assert!(ends.contains(&line.from.position) && ends.contains(&line.to.position), "{spacing}: both pad centers are route endpoints");
+    }
+}
+
 /// The crosshair follows the mouse while the preview and click target snap only within reach.
 /// The preview's clearance extends past the track by the design-rule distance.
 #[test]

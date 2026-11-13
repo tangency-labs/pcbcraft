@@ -2,6 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
+PCB views now remember their own snap spacing and presets separately from
+schematic views. Choosing a board grid no longer replaces the schematic startup
+spacing, and switching workspaces restores each editor's choice. Both default to
+50 mil, so existing projects open on the same grid.
+
 Intentional no-connect crosses can be placed on schematic pins with Q or Capture
 and removed through pin context menus. A focused check reports unmarked pins and
 connected, missing or incompatible marker targets. Marker-bearing projects use
