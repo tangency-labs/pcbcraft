@@ -161,7 +161,7 @@ impl ParamKind {
         match self {
             Self::Flag => json!({"type":"boolean"}),
             Self::PartTerminal => {
-                json!({"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false})
+                json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
             }
             Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
@@ -306,10 +306,10 @@ impl ParamKind {
                 }
             }
             Self::PartTerminal => {
-                if no_connect::Target::parse(value).is_some() {
+                if no_connect::Attachment::parse(value).is_some() {
                     Ok(())
                 } else {
-                    Err("must identify a part and its exact terminal token")
+                    Err("must identify a part terminal or a dangling wire endpoint")
                 }
             }
             Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
@@ -752,14 +752,14 @@ const CATALOG: &[Command] = &[
     Command {
         id: no_connect::SET,
         title: "Set No Connect",
-        summary: "Set/remove intentional disconnection on one logical part terminal. Marking connected pins retains a checkable conflict; wiring is unchanged. Undoable.",
+        summary: "Set/remove intentional disconnection on a logical pin or dangling wire end. Wiring remains unchanged; incompatible connections remain checkable conflicts. Undoable.",
         params: &[
             EXPECTED_REVISION,
             Param {
                 name: "target",
                 kind: ParamKind::PartTerminal,
                 required: true,
-                summary: "Logical part/terminal address, independent of its placed unit",
+                summary: "Logical {part, terminal} address or {junction} wire-end identity",
             },
             Param {
                 name: "marked",
@@ -772,7 +772,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: no_connect::CHECK,
         title: "Check No Connects",
-        summary: "Read-only focused check for unmarked unconnected pins and connected, missing or incompatible no-connect intent. Full power/type ERC remains separate.",
+        summary: "Read-only focused check for unmarked unconnected pins, dangling wire ends and connected, missing or incompatible no-connect intent. Full power/type ERC remains separate.",
         params: &[],
     },
     Command {
@@ -2101,7 +2101,11 @@ impl Project {
                 inspected["path"] = json!(self.wire_path(wire));
                 inspected
             }).collect::<Vec<_>>(),
-            "junctions": self.junctions().map(|(id, point)| json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm})).collect::<Vec<_>>(),
+            "junctions": self.junctions().map(|(id, point)| {
+                let mut value = json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm});
+                if self.no_connect_ends.contains(&id) { value["no_connect"] = json!(true); }
+                value
+            }).collect::<Vec<_>>(),
             "net_labels": self.net_labels.iter().map(|label| label.inspect()).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
             "sheet_symbols": self.subsheets.iter().map(|block| json!({"id":format!("sheet-symbol-{}",block.id), "child":block.child,"name":self.child_name(block),"at":block.at,"size":self.sheet_symbol_size(block),"pins":self.sheet_pins(block).map(|pin| json!({"endpoint":WireEndpoint::SheetPin(pin.label.id).inspect(),"name":pin.label.name,"direction":pin.label.direction,"at":pin.at})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
@@ -3198,7 +3202,7 @@ impl Session {
     /// Net allocation and reconciliation validate before any session/history state is changed.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         project.validate_no_connects().map_err(CommandError::InvalidParams)?;
-        if project.components.values().any(|part| !part.no_connects.is_empty()) {
+        if project.no_connect_count() != 0 {
             if project.layout.is_none() {
                 project = project.with_board_folders(".").map_err(CommandError::InvalidParams)?;
             }

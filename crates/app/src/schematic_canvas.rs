@@ -126,7 +126,8 @@ impl Tool {
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
     BeginNoConnect,
-    NoConnect(pcbcraft_engine::no_connect::Target, bool),
+    NoConnect(pcbcraft_engine::no_connect::Attachment, bool),
+    InvalidNoConnect,
     CancelNoConnect,
     ToolAction(ToolAction, egui::Context),
     GrabField(fields::Drag),
@@ -684,19 +685,28 @@ pub(crate) fn show(
         let choices = captured_choices.as_ref().map_or(&[][..], |choices| choices.entries.as_slice());
         let pin_key = response.id.with("no_connect_pin");
         if let Some(pointer) = pressed {
-            let pin = filters.symbols.then(|| crate::no_connect::pin_at(project, camera, rect, pointer, selected)).flatten();
+            let pin = crate::no_connect::target_at(project, camera, rect, pointer, selected).filter(|pick| match pick.target {
+                pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
+                pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+            });
             ui.data_mut(|data| {
-                data.remove::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Target, bool)>(pin_key);
-                if let Some(pin) = pin
-                    && let Some(target) = project.no_connect_target(pin)
-                {
-                    data.insert_temp(pin_key, (project.sheet_target(), revision, target, project.has_no_connect(pin)));
+                data.remove::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Attachment, bool)>(pin_key);
+                if let Some(pick) = pin {
+                    let marked = project.has_no_connect_attachment(&pick.target);
+                    data.insert_temp(pin_key, (project.sheet_target(), revision, pick.target, marked));
                 }
             });
         }
         let pin = ui
-            .data(|data| data.get_temp::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Target, bool)>(pin_key))
-            .filter(|(sheet, captured_revision, _, _)| *sheet == project.sheet_target() && *captured_revision == revision && filters.symbols);
+            .data(|data| data.get_temp::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Attachment, bool)>(pin_key))
+            .filter(|(sheet, captured_revision, target, _)| {
+                *sheet == project.sheet_target()
+                    && *captured_revision == revision
+                    && match target {
+                        pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
+                        pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+                    }
+            });
         let mut target = match pressed {
             Some(pointer) => filters.symbols.then(|| symbol_at(project, camera, rect, pointer)).flatten().map(|(symbol, _)| symbol.id()),
             None => selected.single_symbol().filter(|_| filters.symbols).map(str::to_owned),
@@ -839,10 +849,8 @@ pub(crate) fn show(
         && tool.is_none()
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Q))
     {
-        let target = response
-            .hover_pos()
-            .and_then(|pointer| crate::no_connect::pin_at(project, camera, rect, pointer, selected))
-            .and_then(|pin| project.no_connect_target(pin));
+        let target =
+            response.hover_pos().and_then(|pointer| crate::no_connect::target_at(project, camera, rect, pointer, selected)).map(|pick| pick.target);
         return Some(target.map_or(Click::BeginNoConnect, |target| Click::NoConnect(target, true)));
     }
     if matches!(tool, Some(Tool::NoConnect { .. })) {
@@ -854,9 +862,8 @@ pub(crate) fn show(
         let target = ui
             .input(|input| input.pointer.hover_pos())
             .filter(|_| ui.rect_contains_pointer(rect))
-            .and_then(|pointer| crate::no_connect::preview(&painter, project, camera, rect, pointer, selected))
-            .and_then(|pin| project.no_connect_target(pin));
-        return response.clicked().then_some(target).flatten().map(|target| Click::NoConnect(target, true));
+            .and_then(|pointer| crate::no_connect::preview(&painter, project, camera, rect, pointer, selected));
+        return response.clicked().then(|| target.map_or(Click::InvalidNoConnect, |target| Click::NoConnect(target, true)));
     }
     if tool.is_none()
         && response.hovered()

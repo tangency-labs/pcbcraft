@@ -164,6 +164,7 @@ impl Project {
             })
             .collect();
         Arc::make_mut(&mut self.sheet_mut().junctions).retain(|id, _| used.contains(id));
+        Arc::make_mut(&mut self.sheet_mut().no_connect_ends).retain(|id| used.contains(id));
     }
 }
 

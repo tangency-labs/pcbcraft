@@ -473,7 +473,7 @@ impl Encoder {
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
     /// drawings, rotation and occurrence IDs require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
-        if project.components.values().any(|c| !c.no_connects.is_empty()) {
+        if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
         }
         if project.components.values().any(|c| c.part.is_some()) {
@@ -990,6 +990,7 @@ fn validate_with_hierarchy(
             junctions: Arc::new(junctions),
             connectivity: Arc::default(),
             generated_legs: Arc::default(),
+            no_connect_ends: Arc::default(),
         }]),
         sheet_index: 0,
         name,

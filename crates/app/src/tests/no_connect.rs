@@ -67,7 +67,7 @@ fn no_connect_tool_cancel_and_empty_space_are_inert() {
     let mut h = editor(1400., true);
     let before = h.state().session.snapshot().unwrap();
     let bytes = encode_documents(before.clone()).unwrap();
-    click(&mut h, "Mark intentionally unused pins (Q)");
+    click(&mut h, "Mark unused pins or wire ends (Q)");
     assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NoConnect { .. })));
     let canvas = h.get_by_label("Schematic canvas").rect();
     click_canvas_at(&mut h, canvas.right_bottom() - egui::vec2(30., 30.));
@@ -84,7 +84,7 @@ fn no_connect_tool_cancel_and_empty_space_are_inert() {
 fn no_connect_ribbon_tool_marks_clicked_pins_repeatedly() {
     for (width, dark) in [(1400., true), (700., false)] {
         let mut h = editor(width, dark);
-        click(&mut h, "Mark intentionally unused pins (Q)");
+        click(&mut h, "Mark unused pins or wire ends (Q)");
         for index in 0..3 {
             let at = pin(&h, index);
             click_canvas_at(&mut h, at);
@@ -105,7 +105,7 @@ fn no_connect_ribbon_tool_marks_clicked_pins_repeatedly() {
 fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
     let mut h = editor(1400., true);
     let before = h.state().session.snapshot().unwrap();
-    click(&mut h, "Mark intentionally unused pins (Q)");
+    click(&mut h, "Mark unused pins or wire ends (Q)");
     let canvas = h.get_by_label("Schematic canvas").rect();
     let terminal = pin(&h, 0);
     for (pointer, target) in [
@@ -128,9 +128,9 @@ fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(lines.len(), 3, "the armed cursor needs a lead and two cross strokes");
+        assert_eq!(lines.len(), 2, "the armed cursor is a cross centered on its attachment point");
         let bounds = lines.iter().fold(egui::Rect::NOTHING, |bounds, points| bounds.union(egui::Rect::from_two_pos(points[0], points[1])));
-        assert!(bounds.width() >= 30. && bounds.height() >= 18., "the cursor must remain legible");
+        assert!(bounds.width() >= 32. && bounds.height() >= 32., "the cursor must remain legible");
         let diagonals = lines.iter().filter(|points| (points[1].x - points[0].x).abs() > 1. && (points[1].y - points[0].y).abs() > 1.);
         assert_eq!(diagonals.clone().count(), 2);
         for points in diagonals {
@@ -166,7 +166,7 @@ fn no_connect_report_and_stale_actions_keep_revision_authority() {
     let target = p.no_connect_target(p.symbols()[0].terminals()[1]).unwrap();
     h.state_mut().run("project.rename", &json!({"name":"Changed"}));
     let changed = h.state().session.snapshot().unwrap();
-    h.state_mut().view_click(source, Click::NoConnect(target, true));
+    h.state_mut().view_click(source, Click::NoConnect(target.into(), true));
     h.run();
     assert!(Arc::ptr_eq(&changed, &h.state().session.snapshot().unwrap()));
     let report = h.state_mut().session.execute(no_connect::CHECK, &json!({})).unwrap();
@@ -301,7 +301,7 @@ fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
                 .iter()
                 .filter(|shape| {
                     matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
-                    if stroke.width == 1.5 && stroke.color == expected && points[0].lerp(points[1], 0.5).distance(center) < 0.1)
+                    if stroke.width == 2. && stroke.color == expected && points[0].lerp(points[1], 0.5).distance(center) < 0.1)
                 })
                 .count();
             assert_eq!(crosses, 2, "connected={connected}, sheet={sheet:?}");
@@ -309,4 +309,143 @@ fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
             assert_eq!(report.markers[0].issues.contains(&"no_connect_connected"), connected);
         }
     }
+}
+
+/// Clicking the visible pin lead snaps to its terminal at every mirrored/rotated pose, rather
+/// than requiring a click on an invisible six-point target at the end of the lead.
+#[test]
+fn no_connect_clicks_the_drawn_pin_lead_at_every_pose() {
+    use pcbcraft_engine::schematic::{Point, place};
+    for turn in 0..4 {
+        for mirrored in [false, true] {
+            let mut h = editor(1400., true);
+            h.state_mut().browser.open = false;
+            let symbol = h.state().session.project().unwrap().symbols()[0].id();
+            let revision = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::SET_SYMBOL_FIELDS, &json!({"symbol":symbol,"rotation":turn*90,"expected_revision":revision}));
+            if mirrored {
+                let revision = h.state().session.revision();
+                h.state_mut().run(pcbcraft_engine::MIRROR_SYMBOL, &json!({"symbol":symbol,"axis":"horizontal","expected_revision":revision}));
+            }
+            h.run();
+            click(&mut h, "Mark unused pins or wire ends (Q)");
+            let p = h.state().session.project().unwrap();
+            let symbol = &p.symbols()[0];
+            let (x_nm, y_nm) = place(-4_445_000, -3_810_000, symbol.turns(), symbol.is_mirrored());
+            let canvas = h.get_by_label("Schematic canvas").rect();
+            let point = h.state().views.active.camera.screen(Point { x_nm: symbol.position.x_nm + x_nm, y_nm: symbol.position.y_nm + y_nm }, canvas);
+            assert!(point.distance(pin(&h, 0)) > 12.);
+            click_canvas_at(&mut h, point);
+            assert!(h.state().message.is_none(), "{:?}", h.state().message);
+            h.get_by_label("No connect J1 pin 1");
+            let report = h.state().session.project().unwrap().check_no_connects(h.state().session.revision());
+            assert_eq!(report.total_markers, 1);
+            assert_eq!(report.markers[0].target.terminal, "1");
+        }
+    }
+}
+
+/// The toolbar and Q both mark a real open wire end. Report navigation/removal share the same
+/// address, while an interior click gets feedback instead of silently doing nothing.
+#[test]
+fn no_connect_wire_end_placement_report_and_removal_work() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    for (width, dark) in [(1400., true), (700., false)] {
+        let mut h = editor(width, dark);
+        h.state_mut().browser.open = false;
+        let p = h.state().session.project().unwrap();
+        let terminal = p.symbols()[0].terminals()[1];
+        let at = Point { x_nm: -13 * GRID_NM, y_nm: -GRID_NM };
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::DRAW_WIRE, &json!({"from":terminal.inspect(),"to":at,"bends":[],"expected_revision":revision}));
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let graph = before.inspect_schematic()["netlist"].clone();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let end = h.state().views.active.camera.screen(at, canvas);
+        click(&mut h, "Mark unused pins or wire ends (Q)");
+        click_canvas_at(&mut h, end + egui::vec2(5., 3.));
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        h.get_by_label("No connect wire end");
+        let report = h.state().session.project().unwrap().check_no_connects(h.state().session.revision());
+        assert_eq!(report.wire_markers.len(), 1);
+        assert!(report.wire_findings.is_empty());
+        assert_eq!(report.wire_markers[0].appearance.at, at);
+        assert_eq!(h.state().session.project().unwrap().inspect_schematic()["netlist"], graph);
+        h.key_press(Key::Escape);
+        h.run();
+        h.state_mut().inspect_no_connects();
+        h.run();
+        click(&mut h, "Show wire end");
+        assert!(h.state().views.active.schematic.selection.single_wire().is_some());
+        h.state_mut().inspect_no_connects();
+        h.run();
+        click(&mut h, "Remove marker");
+        assert!(h.query_by_label("No connect wire end").is_none());
+        let current = h.get_by_label("Schematic canvas").rect();
+        let end = h.state().views.active.camera.screen(at, current);
+        h.hover_at(end);
+        h.key_press(Key::Q);
+        h.run();
+        h.get_by_label("No connect wire end");
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert!(h.query_by_label("No connect wire end").is_none());
+        click(&mut h, "Mark unused pins or wire ends (Q)");
+        let p = h.state().session.project().unwrap();
+        let midpoint = Point { x_nm: -9 * GRID_NM, y_nm: -GRID_NM };
+        let current = h.get_by_label("Schematic canvas").rect();
+        let middle = h.state().views.active.camera.screen(midpoint, current);
+        let revision = h.state().session.revision();
+        let snapshot = Arc::new(p.clone());
+        click_canvas_at(&mut h, middle);
+        assert!(h.state().message.as_ref().is_some_and(|message| message.contains("open wire end")));
+        assert_eq!(h.state().session.revision(), revision);
+        assert_same_content(&snapshot, &h.state().session.snapshot().unwrap());
+    }
+}
+
+/// A marker placed by GUI input survives the native Save and Open completion paths, with
+/// byte-identical repeat saves and a restored navigable ERC intent record.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn no_connect_wire_end_survives_native_save_and_reopen() {
+    use pcbcraft_engine::schematic::{GRID_NM, Point};
+    let mut h = editor(1400., true);
+    h.state_mut().browser.open = false;
+    let pin = h.state().session.project().unwrap().symbols()[0].terminals()[1];
+    let at = Point { x_nm: -13 * GRID_NM, y_nm: -GRID_NM };
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::DRAW_WIRE, &json!({"from":pin.inspect(),"to":at,"bends":[],"expected_revision":revision}));
+    h.run();
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    let end = h.state().views.active.camera.screen(at, canvas);
+    click(&mut h, "Mark unused pins or wire ends (Q)");
+    click_canvas_at(&mut h, end);
+    h.key_press(Key::Escape);
+    h.run();
+    h.get_by_label("No connect wire end");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("intentional-termination");
+    h.state_mut().files.use_stand_in();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run();
+    assert!(h.state().files.stand_in_waiting());
+    h.state_mut().files.finish_stand_in(path.clone());
+    h.run();
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let docs = pcbcraft_storage::load(&path).unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run();
+    h.state_mut().files.finish_stand_in(path.clone());
+    h.run();
+    assert_eq!(pcbcraft_storage::load(&path).unwrap(), docs);
+    let revision = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&path, revision);
+    h.run();
+    h.get_by_label("No connect wire end");
+    let report = h.state().session.project().unwrap().check_no_connects(h.state().session.revision());
+    assert_eq!(report.wire_markers.len(), 1);
+    assert!(report.wire_findings.is_empty());
+    assert_eq!(report.wire_markers[0].appearance.at, at);
 }

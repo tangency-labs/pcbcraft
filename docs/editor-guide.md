@@ -185,20 +185,23 @@ pins connects it to the preserved wire ends.
 
 ## Drawing and editing wires
 
-### Intentionally unused pins
+### Intentionally unused pins and wire ends
 
-Hover a pin endpoint and press **Q**, or choose **Capture → No connect** and
-click the pins to mark. The lead-and-cross cursor replaces the arrow and centers
-its cross on the target pin. Each placed mark follows its terminal through
-symbol movement and rotation. **Esc** or right-click cancels the placement tool;
-empty-space clicks do not create detached marks. Right-click a marked pin and
-choose **Remove no-connect marker** to clear its intent. These edits support
-Undo/Redo and travel with copied parts.
+Hover a pin lead or open wire endpoint and press **Q**, or choose
+**Capture → No connect** and click the targets to mark. A larger X replaces the
+arrow, snapping its center to the attachment. The placed X follows the pin or
+wire end as it moves. **Esc** or right-click cancels the placement tool;
+empty-space and wire-interior clicks cannot create detached marks. Right-click
+a marked target and choose **Remove no-connect marker** to clear its intent.
+These edits support Undo/Redo and travel with copied parts and wires.
 
 **Analyze → Electrical menu → No-connect check** lists intentional no-connects,
-unmarked unconnected pins and connected, missing or type-changed marker targets.
-Use **Show** to navigate to a current pin. Connected or incompatible markers use
-error ink; marking a pin never removes its wires or changes connectivity. This
+unmarked unconnected pins and open wire ends, plus connected, missing or
+type-changed marker targets. Use **Show** to navigate to a target. Error ink
+identifies conflicting intent. A marker suppresses only its own unconnected-pin
+or dangling-end warning; it never removes wires, changes the netlist or clears
+physical DRC violations. Extending through a marked end reports a conflict;
+remove its marker before joining it directly to a pin or named contact. This
 focused check does not implement the remaining type-conflict and power-driver
 ERC rules. See the [identity and storage contract](no-connect-markers.md).
 

@@ -1267,7 +1267,7 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
-                        Tool::NoConnect { .. } => dim("No connect · Click pins · Esc cancel"),
+                        Tool::NoConnect { .. } => dim("No connect · Esc cancel"),
                         Tool::Field { .. } => dim("Move symbol field · Esc to cancel"),
                         Tool::SheetGesture { drag, .. } => {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
@@ -1499,6 +1499,9 @@ impl PcbApp {
             (None, Click::BeginNoConnect) => self.begin_no_connect(),
             (None | Some(Tool::NoConnect { .. }), Click::NoConnect(target, marked)) => self.set_no_connect(source, target, marked),
             (Some(Tool::NoConnect { .. }), Click::CancelNoConnect) => self.views.active.schematic.tool = None,
+            (Some(Tool::NoConnect { .. }), Click::InvalidNoConnect) => {
+                self.message = Some("No-connect marks attach to a pin lead or an open wire end.".into())
+            }
             (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
@@ -2465,7 +2468,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Place power/ground", key(&ADD_POWER)));
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
-    list.push(("Schematic", "Mark no connect on a pin", "Q".to_owned()));
+    list.push(("Schematic", "Mark pin or wire end no connect", "Q".to_owned()));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Grab connected symbol or wire", "G".to_owned()));
     list.push(("Schematic", "Rotate symbol or hovered field", key(&ROTATE)));

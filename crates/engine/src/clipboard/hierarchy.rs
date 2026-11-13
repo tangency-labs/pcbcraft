@@ -118,6 +118,8 @@ impl Fragment {
             Arc::make_mut(&mut root.wires).push(copy);
         }
         let cut_sheets = cut && !root.subsheets.is_empty();
+        root.no_connect_ends =
+            Arc::new(project.no_connect_ends.iter().filter_map(|id| detached.get(&WireEndpoint::Junction(*id)).copied()).collect());
         let mut sheets = vec![root];
         sheets.extend(project.sheets.iter().filter(|s| included.contains(&s.sheet_id)).cloned());
         let fragment = Self::captured(project, sheets, cursor, cut_sheets, IntentScope::SelectedUnits)?;

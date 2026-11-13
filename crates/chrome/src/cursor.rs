@@ -24,7 +24,7 @@ pub fn track(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool) {
 pub fn no_connect(painter: &Painter, center: Pos2) {
     let t = Tokens::get();
     for stroke in [Stroke::new(4.5, t.canvas), Stroke::new(2., t.accent)] {
-        for (from, to) in [(vec2(-24., 0.), vec2(0., 0.)), (vec2(-9., -9.), vec2(9., 9.)), (vec2(-9., 9.), vec2(9., -9.))] {
+        for (from, to) in [(vec2(-16., -16.), vec2(16., 16.)), (vec2(-16., 16.), vec2(16., -16.))] {
             painter.line_segment([center + from, center + to], stroke);
         }
     }

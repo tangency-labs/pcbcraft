@@ -329,3 +329,14 @@ minimums/maximums but cannot weaken them or persist a change. It also reports vi
 diameter and drill bounds. Omitted dimensions on track/via creation use the same
 preferred sizes as the GUI. See [board-rules.md](board-rules.md) for the full
 property, precedence, compatibility and undo contract.
+
+## Intentional no-connect targets
+
+`schematic.set_no_connect` uses `target: {"part":"component-N","terminal":"1"}`
+for a logical pin, or `target: {"junction":"junction-N"}` for a physical open
+wire end, plus `marked` and `expected_revision`. Both forms use the same edits
+as Q and the Capture tool. `schematic.check_no_connects` returns a read-only,
+revision-qualified report even with `inspect:false`; its `markers`/`findings`
+arrays describe pins and `wire_markers`/`wire_findings` describe wire ends.
+Totals and truncation cover both. These markers record intent without changing
+the real netlist or physical DRC. See the [contract](no-connect-markers.md).

@@ -39,8 +39,8 @@ pub(super) struct Edit {
     pub project: Project,
     next: u64,
     budget: usize,
-    /// Pins, original free ends and real branches survive cleanup. Degree-two transit
-    /// junctions may disappear when a retrace makes their old location redundant.
+    /// Pins, original free ends, marked ends and real branches survive cleanup. Unmarked
+    /// degree-two transit junctions may disappear when a retrace makes them redundant.
     protected: BTreeSet<WireEndpoint>,
     /// The active drawing gesture wins over a redundant older route. Manual cleanup and
     /// geometry-only moves have no preferred path and retain their length-based policy.
@@ -269,8 +269,9 @@ impl Edit {
         for end in project.wires.iter().flat_map(|wire| wire.endpoints) {
             *degree.entry(end).or_insert(0) += 1;
         }
-        let protected =
+        let mut protected: BTreeSet<_> =
             degree.into_iter().filter_map(|(end, count)| (count != 2 || !matches!(end, WireEndpoint::Junction(_))).then_some(end)).collect();
+        protected.extend(project.no_connect_ends.iter().copied().map(WireEndpoint::Junction));
         let mut project = project.clone();
         project.named_graph = Arc::default();
         Self { project, next: highest.saturating_add(1), budget: 200_000, protected, preferred: BTreeSet::new(), touched: BTreeSet::new() }
@@ -407,6 +408,16 @@ impl Edit {
         if self.protected.remove(&remove) {
             self.protected.insert(keep);
         }
+        if let WireEndpoint::Junction(id) = remove
+            && self.project.no_connect_ends.contains(&id)
+        {
+            let WireEndpoint::Junction(kept) = keep else {
+                return Err(CommandError::InvalidParams("Remove the no-connect marker before joining this end to a pin or named contact.".into()));
+            };
+            let marks = Arc::make_mut(&mut self.project.sheet_mut().no_connect_ends);
+            marks.remove(&id);
+            marks.insert(kept);
+        }
         for wire in Arc::make_mut(&mut self.project.sheet_mut().wires) {
             if wire.endpoints.contains(&remove) {
                 for end in &mut wire.endpoints {
@@ -527,6 +538,9 @@ impl Edit {
                 }
             }
             for (id, edges) in adjacent {
+                if self.project.no_connect_ends.contains(&id) {
+                    continue;
+                }
                 let node = WireEndpoint::Junction(id);
                 if edges.len() != 2 || !edges.iter().any(|w| self.touched.contains(&w.ordinal)) {
                     continue;

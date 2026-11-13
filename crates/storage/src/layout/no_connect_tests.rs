@@ -24,12 +24,20 @@ fn no_connect_folder_and_archive_keep_both_instance_vocabularies() {
                 s.apply(nets::PROMOTE, &json!({"anchor":{"symbol":"symbol-2","terminal":"1"},"expected_revision":s.revision()})).unwrap();
             }
             let before = encode_documents(s.snapshot().unwrap()).unwrap();
+            let terminal = s.project().unwrap().symbols()[0].terminals()[1];
+            s.apply(
+                pcbcraft_engine::DRAW_WIRE,
+                &json!({"from":terminal.inspect(),"to":{"x_nm":-25_400_000,"y_nm":0},"bends":[],"expected_revision":s.revision()}),
+            )
+            .unwrap();
+            let end = s.project().unwrap().wire_end_targets().next().unwrap().0;
+            s.apply(no_connect::SET, &json!({"target":end,"marked":true,"expected_revision":s.revision()})).unwrap();
             let p = s.snapshot().unwrap();
-            let target = p.no_connect_target(p.symbols()[0].terminals()[1]).unwrap();
+            let target = p.no_connect_target(p.symbols()[1].terminals()[1]).unwrap();
             s.apply(no_connect::SET, &json!({"target":target,"marked":true,"expected_revision":s.revision()})).unwrap();
             let after = encode_documents(s.snapshot().unwrap()).unwrap();
             for (path, bytes) in &before {
-                if path != "project.json" {
+                if path != "project.json" && !path.starts_with("sheets/") {
                     assert_eq!(&after[path], bytes, "unrelated document {path}");
                 }
             }

@@ -143,6 +143,8 @@ impl Fragment {
             }
             Arc::make_mut(&mut sheet.wires).push(wire);
         }
+        sheet.no_connect_ends =
+            Arc::new(project.no_connect_ends.iter().filter_map(|id| detached.get(&WireEndpoint::Junction(*id)).copied()).collect());
         Self::captured(project, vec![sheet], cursor, false, intent_scope)
     }
 
@@ -452,6 +454,7 @@ impl Fragment {
         Arc::make_mut(&mut sheet.junctions).extend(new_junctions);
         Arc::make_mut(&mut sheet.net_labels).extend(new_labels);
         Arc::make_mut(&mut sheet.wires).extend(new_wires);
+        Arc::make_mut(&mut sheet.no_connect_ends).extend(self.project.no_connect_ends.iter().filter_map(|id| junctions.get(id).copied()));
         sheet.connectivity = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         next.named_graph = Arc::default();

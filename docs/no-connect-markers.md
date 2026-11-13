@@ -1,8 +1,8 @@
 # Intentional no-connect markers
 
-This work implements the terminal-intent slice of #285 and #82. A marker records
-that one actual part terminal is intentionally unused. It is independent of the
-library's `no_connect` electrical type, terminal-to-pad mappings, net identity
+This work implements intentional pin and wire-end termination for #285 and #82.
+A marker records that one actual part terminal or physical open wire end is
+intentionally unused. It is independent of the library's `no_connect` electrical type, terminal-to-pad mappings, net identity
 and physical board state. The electrical graph continues to come from wiring,
 named anchors and hierarchy; a marker never disconnects a wire or suppresses
 other checks.
@@ -34,10 +34,22 @@ including intent owned by later units and unresolved records in a whole-part cop
 If a partial copy contains intent for an unknown terminal, resolve that intent or
 copy all placed units; the engine refuses to guess which unit owns it.
 
-`schematic.set_no_connect` takes `target: {part, terminal}`, `marked` and
-`expected_revision`. `schematic.check_no_connects` is a read-only project query,
+Wire-end intent belongs to the live junction at a physical degree-one endpoint,
+using its project-unique `junction-N` identity. It follows moves and fresh-ID
+clipboard copies, including root routes and descendant sheets in a hierarchical
+copy. Deleting the last owning wire removes the marker; Undo restores both.
+Extending through a marked end preserves the marker and reports a conflict.
+Joining a marked end directly to a pin or named contact requires removing the
+marker first, so route healing cannot silently drop or retarget intent. A net
+name elsewhere on the net does not terminate its physical open end. An exact
+named contact at an unmarked endpoint already supplies an electrical termination.
+
+`schematic.set_no_connect` takes `target: {part, terminal}` or
+`target: {junction: "junction-N"}`, plus `marked` and `expected_revision`.
+`schematic.check_no_connects` is a read-only project query,
 including when MCP requests `inspect:false`; both commands use project-owned
-part/terminal addresses. GUI and MCP share the same engine edits and check implementation.
+terminal or junction addresses. GUI and MCP share the same engine edits and
+check implementation.
 
 ## Native format review
 
@@ -50,6 +62,11 @@ The first marker adopts the existing board-folder and single-use occurrence
 metadata, following the net registry's transaction precedent. Project/19 can
 carry either existing instance vocabulary, depending on whether a net registry
 exists. It adds no parallel instance home or derived connectivity records.
+Wire-end intent additionally uses `pcbcraft-sheet/8`, whose nonempty
+`no_connect_ends` array stores live junction IDs in ascending order. It composes
+with mirrored placements, field appearance and generated contact-leg provenance.
+Older sheet headers reject this field, and cross-sheet or unknown endpoint IDs
+are invalid. Removing the last wire flag lets the sheet use its previous header.
 
 Older headers must reject the new field, and the diagnostic single-document
 encoder must refuse to drop it. Explicit null, empty or duplicate records,
@@ -62,10 +79,12 @@ projects without markers retain their supported low-level no-op encoding.
 
 The intent check returns source revision, stable rule/address keys and navigable
 terminal/sheet positions. It distinguishes valid intentional disconnection,
-unmarked unconnected terminals, connected marked terminals, missing targets and
-incompatible electrical types. It does not claim the complete type-conflict or
+unmarked unconnected terminals and dangling wire ends, connected marked targets,
+missing targets and incompatible electrical types. It does not claim the complete type-conflict or
 power-driver checks tracked by #47, or incremental scheduling under #245/#243.
-Normal netlist inspection continues to describe the actual graph.
+Marking a wire end suppresses only that endpoint's `dangling_wire` warning;
+`no_connect_not_dangling` reports later connections. Normal netlist inspection
+and physical board DRC continue to describe the actual connectivity.
 There are at most 128 marker records per part and 4,096 per project. All
 transactions, including compound pastes, validate these limits before publication.
 Reports count every marker and finding but retain at most 256 detailed records
@@ -74,8 +93,11 @@ The UI shows that limit when reached. Marker-specific latency and large-design
 ERC scheduling budgets are unmeasured; this focused reference does not certify
 the responsiveness targets in the [performance guide](performance-testing.md).
 
-The schematic marker is original domain geometry. Controls and report surfaces
-reuse the pinned Craft toolkit through chrome. Interaction follows the published
+The placed mark is an X centered on the attachment, with no added lead. Q and
+the Capture tool use a larger X cursor in place of the arrow and snap to a pin
+endpoint, the drawn pin lead, or a nearby open wire endpoint. Empty-space and
+wire-interior clicks cannot author detached markers. The schematic marker is
+original domain geometry. Controls and report surfaces reuse the pinned Craft toolkit through chrome. Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html)
 for intentionally unused pins; no implementation source, artwork or external
 fixture is used.
@@ -90,3 +112,10 @@ unchanged legacy bytes, including projects with a net registry. Use real UI
 input and rendered wide/narrow views in both themes. Mirror regressions cover
 both axes at every quarter turn, marker drawing and picking, undo/redo and exact
 folder/archive reopen with project/19 and sheet/6 together.
+
+Wire-end regressions additionally exercise nearby GUI picks, every rotated and
+mirrored pin lead, report Show/Remove, invalid interior clicks, native Save/Open
+completion, repeated save bytes, named-net endpoints, endpoint moves, later
+connections, deletion, rotated flat copies and hierarchical copies. Native storage
+recovery tests combine pin and wire intent, with and without a board/net registry.
+Physical DRC findings and the actual netlist must remain unchanged by marker edits.

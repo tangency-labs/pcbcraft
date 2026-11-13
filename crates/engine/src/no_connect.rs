@@ -1,4 +1,4 @@
-//! Authored intent belongs to logical part terminals; visible marks follow their placed appearances.
+//! Authored intent belongs to logical part terminals or wire ends; visible marks follow their owners.
 
 use crate::{
     CommandError, Project, Session, SheetTarget,
@@ -11,13 +11,15 @@ use std::{
     sync::Arc,
 };
 
-/// Set or remove one logical terminal's intentional no-connect state.
+/// Set or remove one logical terminal or wire end's intentional no-connect state.
 pub const SET: &str = "schematic.set_no_connect";
-/// Inspect no-connect intent and its focused unconnected-pin/conflict diagnostics.
+/// Inspect no-connect intent and its focused unconnected-pin, dangling-end and conflict diagnostics.
 pub const CHECK: &str = "schematic.check_no_connects";
 /// Bound persisted intent and detailed query allocation independently of total pin count.
 pub const MAX_MARKERS: usize = 4096;
 const MAX_FINDINGS: usize = 256;
+mod wire_ends;
+pub use wire_ends::{Attachment, WireAppearance, WireFinding, WireMarker, WireTarget};
 
 /// A stable logical terminal address, independent of unit geometry and reference text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +108,8 @@ pub struct Report {
     pub findings: Vec<Finding>,
     pub total_findings: usize,
     pub truncated: bool,
+    pub wire_markers: Vec<WireMarker>,
+    pub wire_findings: Vec<WireFinding>,
 }
 
 impl Report {
@@ -129,7 +133,8 @@ impl Project {
     /// Enforce intent budgets at every publication/encoding boundary, including compound pastes.
     pub(crate) fn validate_no_connects(&self) -> Result<(), String> {
         if self.components.values().any(|part| part.no_connects.len() > 128 || part.no_connects.keys().any(|token| PinNumber::new(token).is_none()))
-            || self.components.values().map(|part| part.no_connects.len()).sum::<usize>() > MAX_MARKERS
+            || self.no_connect_count() > MAX_MARKERS
+            || self.sheets.iter().any(|sheet| sheet.no_connect_ends.iter().any(|id| !sheet.junctions.contains_key(id)))
         {
             return Err("No-connect intent exceeds its terminal or project limits.".into());
         }
@@ -176,8 +181,17 @@ impl Project {
                 .collect::<Vec<_>>()
         };
         let connected = |component, token: &str| self.component_terminals(component, token).any(|terminal| wired.contains(&terminal));
-        let mut report =
-            Report { project: self.id(), revision, markers: Vec::new(), total_markers: 0, findings: Vec::new(), total_findings: 0, truncated: false };
+        let mut report = Report {
+            project: self.id(),
+            revision,
+            markers: Vec::new(),
+            total_markers: 0,
+            findings: Vec::new(),
+            total_findings: 0,
+            truncated: false,
+            wire_markers: Vec::new(),
+            wire_findings: Vec::new(),
+        };
         for part in self.components.values() {
             for (token, &expected) in &part.no_connects {
                 let target = Target { part: part.id(), terminal: token.clone() };
@@ -216,16 +230,23 @@ impl Project {
                 }
             }
         }
-        report.truncated = report.total_findings > report.findings.len() || report.total_markers > report.markers.len();
+        self.check_wire_no_connects(&mut report);
+        report.truncated = report.total_findings > report.findings.len() + report.wire_findings.len()
+            || report.total_markers > report.markers.len() + report.wire_markers.len();
         report
     }
 }
 
 impl Session {
-    /// Author/remove only validated logical intent at the expected revision. An unchanged
+    /// Author/remove only validated terminal or wire-end intent at the expected revision. An unchanged
     /// request is a no-op; incompatible retained records can always be explicitly removed.
     pub(crate) fn set_no_connect(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
+        let attachment =
+            Attachment::parse(&params["target"]).ok_or_else(|| CommandError::InvalidParams("Expected a part terminal or wire-end target.".into()))?;
+        if let Attachment::WireEnd(target) = attachment {
+            return self.set_wire_no_connect(&target, params);
+        }
         let target = Target::parse(&params["target"]).ok_or_else(|| CommandError::InvalidParams("Expected a part terminal target.".into()))?;
         let id = target.ordinal().ok_or_else(|| CommandError::InvalidParams("Invalid part identity.".into()))?;
         let marked = params["marked"].as_bool().ok_or_else(|| CommandError::InvalidParams("marked must be a boolean.".into()))?;
@@ -254,7 +275,7 @@ impl Session {
         }
         if expected.is_some()
             && !part.no_connects.contains_key(&target.terminal)
-            && (part.no_connects.len() >= 128 || original.components.values().map(|part| part.no_connects.len()).sum::<usize>() >= MAX_MARKERS)
+            && (part.no_connects.len() >= 128 || original.no_connect_count() >= MAX_MARKERS)
         {
             return Err(CommandError::Unavailable("No-connect marker limit reached.".into()));
         }

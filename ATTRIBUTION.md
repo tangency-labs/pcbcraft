@@ -4,10 +4,11 @@ PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhe
 
 ## Intentional no-connect markers
 
-Logical terminal intent, captured electrical-type evidence, shared commands,
-bounded diagnostic inspection and project/19 storage are original MIT OR
-Apache-2.0 PCBcraft work for #285. The pin-centered cross and lead-and-cross tool
-glyph/cursor are original geometry; the pinned Craft kit has no electronics no-connect command glyph, so
+Logical terminal and wire-end intent, captured electrical-type evidence, shared
+commands, bounded diagnostic inspection and project/19 plus sheet/8 storage are original MIT OR
+Apache-2.0 PCBcraft work for #285. The attachment-centered X, larger X cursor and lead-and-cross ribbon
+glyph are original geometry; the pinned Craft kit has no electronics no-connect
+command glyph, so
 the host draws that mark while reusing its existing ribbon, menu, modal and
 control adapters. Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
