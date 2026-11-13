@@ -48,7 +48,7 @@ fn fixture() -> Session {
     apply(
         &mut s,
         crate::ASSIGN_FOOTPRINT,
-        json!({"component":format!("component-{component}"),"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
+        json!({"component":format!("component-{component}"),"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
     );
     s
 }
@@ -142,7 +142,7 @@ fn cut_tree_relocation_preserves_original_children_and_dangling_parent_routes() 
     apply(
         &mut s,
         crate::ASSIGN_FOOTPRINT,
-        json!({"component":format!("component-{component}"),"library":"starter",
+        json!({"component":format!("component-{component}"),"library":"basic-components",
         "definition":"resistor-0603","definition_revision":4,"mapping":{"1":"1","2":"2"}}),
     );
     let cut = s.snapshot().unwrap();

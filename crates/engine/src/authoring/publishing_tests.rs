@@ -75,7 +75,7 @@ fn older_base_requires_confirmation_and_allocation_is_bounded() {
 fn published_symbol_reconstruction_is_repeatable_and_preserves_terminal_geometry() {
     let documents = library::sources::Documents::from([
         ("library.json".into(), new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap()),
-        ("symbols/connector.json".into(), include_str!("../../../../libraries/starter/symbols/connector.json").into()),
+        ("symbols/connector.json".into(), include_str!("../../../../libraries/basic-components/symbols/connector.json").into()),
     ]);
     let source = library::sources::NativeSource::load(&documents).unwrap();
     let original = source.items()[0].symbol().unwrap();
@@ -92,7 +92,7 @@ fn published_symbol_reconstruction_is_repeatable_and_preserves_terminal_geometry
 #[test]
 fn reserved_destinations_and_external_project_manifests_are_refused() {
     let item = Arc::new(Item::new(Kind::Footprint).unwrap());
-    for id in ["user", "project-reserved", "starter", "power"] {
+    for id in ["user", "project-reserved", "basic-components", "starter", "power"] {
         let manifest = json!({"format":"pcbcraft-library/1","id":id,"name":"Reserved","license":"MIT"}).to_string();
         assert!(prepare(item.clone(), &manifest, 0, None, false).is_err());
         if id.starts_with("project-") {

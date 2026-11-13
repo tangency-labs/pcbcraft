@@ -132,7 +132,7 @@ mod tests {
             r#"{"format":"pcbcraft-library/1","id":"local-demo","name":"Local demo","license":"MIT OR Apache-2.0"}"#,
         )
         .unwrap();
-        fs::write(root.join("symbols/resistor.json"), include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
+        fs::write(root.join("symbols/resistor.json"), include_str!("../../../libraries/basic-components/symbols/resistor.json")).unwrap();
     }
 
     /// Folder moves retain identities; bad files don't hide good ones, and no source file is written.
@@ -262,7 +262,7 @@ mod installation_tests {
                 "library.json".into(),
                 r#"{"format":"pcbcraft-library/1","id":"install-demo","name":"Install demo","license":"MIT OR Apache-2.0"}"#.into(),
             ),
-            ("symbols/resistor.json".into(), include_str!("../../../libraries/starter/symbols/resistor.json").into()),
+            ("symbols/resistor.json".into(), include_str!("../../../libraries/basic-components/symbols/resistor.json").into()),
         ]);
         serde_json::to_vec(&serde_json::json!({"format":"pcbcraft-library-bundle/1","documents":documents})).unwrap()
     }

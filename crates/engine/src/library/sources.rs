@@ -629,16 +629,24 @@ impl Catalog {
             catalog.builtin.insert(source_id.clone());
             catalog.sources.insert(source_id, Arc::new(source));
         }
+        catalog.builtin.insert(super::compatibility::SOURCE.into());
+        if let Ok(legacy) = NativeSource::load(&super::compatibility::documents()) {
+            catalog.sources.insert(super::compatibility::SOURCE.into(), Arc::new(legacy));
+        }
         catalog.rebuild_conflicts();
         catalog.generation = 0;
         catalog
     }
     /// Resolve the latest unambiguous native symbol through the same index as an exact revision.
     pub fn latest_symbol(&self, library: &str, id: &str) -> Option<Arc<SymbolDefinition>> {
-        self.search("", Some(Kind::Symbol))
-            .into_iter()
-            .find(|(_, item)| item.key.library == library && item.key.id == id)
-            .and_then(|(_, item)| item.symbol())
+        self.sources
+            .iter()
+            .filter(|(source, _)| !self.unavailable.contains(*source))
+            .flat_map(|(_, source)| &source.items)
+            .filter(|item| item.key.kind == Kind::Symbol && item.key.library == library && item.key.id == id)
+            .max_by_key(|item| item.key.revision)
+            .filter(|item| !self.conflicts.contains(&item.key))
+            .and_then(Item::symbol)
     }
     /// A session-local load/removal generation for rejecting delayed background source results.
     pub fn generation(&self) -> u64 {
@@ -656,7 +664,8 @@ impl Catalog {
         if !crate::board::definition::valid_id(id) {
             return Err("Invalid or reserved source ID".into());
         }
-        if !self.sources.contains_key(id) && self.sources.len() >= MAX_SOURCES {
+        if !self.sources.contains_key(id) && self.sources.len() - usize::from(self.sources.contains_key(super::compatibility::SOURCE)) >= MAX_SOURCES
+        {
             return Err("At most 18 native sources may be loaded".into());
         }
         let mut changed = self.changed.get(id).cloned().unwrap_or_default();
@@ -743,7 +752,7 @@ impl Catalog {
         for (source, item) in self
             .sources
             .iter()
-            .filter(|(id, _)| !self.unavailable.contains(*id))
+            .filter(|(id, _)| !self.unavailable.contains(*id) && id.as_str() != super::compatibility::SOURCE)
             .flat_map(|(id, source)| source.items.iter().map(move |item| (id.as_str(), item)))
         {
             if kind.is_some_and(|kind| kind != item.key.kind) {
@@ -804,7 +813,7 @@ impl Catalog {
     pub fn inspect(&self) -> Value {
         let conflicts = &self.conflicts;
         let mut sources = Vec::new();
-        sources.extend(self.sources.iter().map(|(id,source)| {
+        sources.extend(self.sources.iter().filter(|(id, _)| id.as_str() != super::compatibility::SOURCE).map(|(id,source)| {
             let mut problems = source.problems.clone();
             for item in &source.items {
                 if conflicts.contains(&item.key) { problems.push(format!("{}: conflicting {:?} {}/{} revision {}; use a new revision",item.file,item.key.kind,item.key.library,item.key.id,item.key.revision)); }

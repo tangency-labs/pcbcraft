@@ -78,13 +78,13 @@ fn footprint_chooser_does_not_create_a_board_for_schematic_only_parts() {
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
     h.run();
     assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     assert!(h.query_by_label("Place on board").is_none());
     click(&mut h, "Close");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
     h.run();
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Terminal 1");
     click(&mut h, "Pad 2");
     click(&mut h, "Terminal 2");
@@ -127,7 +127,7 @@ fn live_boardless_assignment_shares_history_and_cannot_place() {
     let before = h.state().session.snapshot().unwrap();
     let component = h.state().session.project().unwrap().components().next().unwrap().id();
     let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::ASSIGN_FOOTPRINT,"params":{
-        "component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,
+        "component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,
         "mapping":{"1":"1","2":"2"},"expected_revision":h.state().session.revision()}}});
     let ctx = h.ctx.clone();
     h.state_mut().begin_footprint_assignment(Some(component.clone()));

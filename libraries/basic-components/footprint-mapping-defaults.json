@@ -1,0 +1,12 @@
+[
+  {
+    "symbol": {"library": "basic-components", "id": "led", "revision": 1},
+    "footprint": {"library": "basic-components", "id": "led-0402", "revision": 4},
+    "mapping": {"1": "2", "2": "1"}
+  },
+  {
+    "symbol": {"library": "basic-components", "id": "led", "revision": 2},
+    "footprint": {"library": "basic-components", "id": "led-0402", "revision": 4},
+    "mapping": {"1": "2", "2": "1"}
+  }
+]

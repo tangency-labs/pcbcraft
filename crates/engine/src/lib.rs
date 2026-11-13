@@ -262,7 +262,7 @@ impl ParamKind {
             Self::ResolveExistingFootprints => json!({"type":"boolean"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => {
-                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
+                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::BASIC_COMPONENT_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
                 json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
@@ -513,7 +513,7 @@ impl ParamKind {
             }
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition
-                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::STARTER_IDS.contains(&id)) =>
+                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::BASIC_COMPONENT_IDS.contains(&id)) =>
             {
                 Ok(())
             }
@@ -1098,7 +1098,7 @@ const CATALOG: &[Command] = &[
                 summary: "SHA-256 digest from library.search; required for explicit library selections",
                 kind: ParamKind::LibraryDigest,
             },
-            Param { required: false, name: "library", summary: "Native library ID; omit for the embedded starter", kind: ParamKind::LibrarySource },
+            Param { required: false, name: "library", summary: "Native library ID; omit for Basic components", kind: ParamKind::LibrarySource },
             Param {
                 required: false,
                 name: "definition_revision",
@@ -2715,8 +2715,8 @@ impl Session {
             PLACE_RESISTOR => {
                 let resistor = self
                     .libraries
-                    .latest_symbol("starter", "resistor")
-                    .ok_or_else(|| CommandError::Unavailable("the default library has no resistor symbol".to_owned()))?;
+                    .latest_symbol("basic-components", "resistor")
+                    .ok_or_else(|| CommandError::Unavailable("Basic components has no resistor symbol".to_owned()))?;
                 self.place_symbol(resistor, params)?;
             }
             part_instances::PLACE_PART => self.place_library_part(params)?,
@@ -2731,7 +2731,7 @@ impl Session {
                 self.place_symbol(component.definition.clone(), params)?;
             }
             PLACE_SYMBOL => {
-                let library = params["library"].as_str().unwrap_or("starter");
+                let library = params["library"].as_str().unwrap_or("basic-components");
                 let id = params["definition"].as_str().unwrap_or_default();
                 let revision = params.get("definition_revision").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
                 let legacy = ["library", "definition_revision", "definition_digest"].iter().all(|name| params.get(*name).is_none());
@@ -3136,7 +3136,8 @@ impl Session {
             };
             footprint.pin_1_pad = first;
         } else {
-            let definition = board::definition::starter(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
+            let definition =
+                board::definition::basic_components(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
             let key = definition.key();
             if project.board.definitions.get(&key).is_some_and(|pinned| pinned.as_ref() != definition.as_ref()) {
                 return Err(CommandError::InvalidParams("footprint identity/revision conflicts with its pinned copy".into()));
@@ -3668,7 +3669,7 @@ mod tests {
     /// named `main`. The placement command and saved unit record preserve that identity.
     #[test]
     fn placement_preserves_the_library_unit_identity() {
-        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
+        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/basic-components/symbols/resistor.json")).unwrap();
         file["units"][0]["id"] = json!("body");
         let mut definition = library::parse_symbol(&file.to_string()).unwrap();
         definition.library = "unit-identity-fixture".into();

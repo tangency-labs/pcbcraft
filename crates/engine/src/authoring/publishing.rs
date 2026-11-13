@@ -59,7 +59,7 @@ pub fn new_library(id: &str, name: &str, license: &str) -> Result<String, String
 /// Return manifest identity after applying normal source validation and reserved-name policy.
 pub fn destination(manifest: &str) -> Result<String, String> {
     let manifest = library::parse_manifest(manifest)?;
-    if manifest.id == "user" || manifest.id.starts_with("project-") || matches!(manifest.id.as_str(), "starter" | "power") {
+    if manifest.id == "user" || manifest.id.starts_with("project-") || matches!(manifest.id.as_str(), "basic-components" | "starter" | "power") {
         return Err("Choose a writable personal library; user, project- and bundled identities are reserved.".into());
     }
     Ok(manifest.id)

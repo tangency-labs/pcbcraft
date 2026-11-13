@@ -464,7 +464,7 @@ impl Item {
         item.objects.clear();
         item.name = format!("{} copy", definition.name).chars().take(64).collect();
         item.source = format!("Fork of {}/{} at revision {}", definition.library, definition.id, definition.revision());
-        let original = library::starter().symbol(&definition.id).cloned();
+        let original = library::basic_components().symbol(&definition.id).cloned();
         let known_original = original.as_ref().is_some_and(|original| {
             serde_json::to_value(library::saved_copy(definition))
                 .ok()
@@ -998,7 +998,7 @@ mod tests {
     /// Stable IDs and source preservation survive geometry edits, undo, redo and reopening.
     #[test]
     fn footprint_authoring_preserves_source_and_history() {
-        let original = footprint::starter("resistor-0402").unwrap();
+        let original = footprint::basic_components("resistor-0402").unwrap();
         let before = (*original).clone();
         let mut s = Session::new(Item::from_footprint(&original).unwrap(), false).unwrap();
         let first = s.snapshot();
@@ -1037,7 +1037,7 @@ mod tests {
     /// Native terminal checks and deterministic encoding apply to symbol authoring too.
     #[test]
     fn symbol_terminals_validate_and_save_deterministically() {
-        let definition = library::starter().symbol("connector").unwrap();
+        let definition = library::basic_components().symbol("connector").unwrap();
         let item = Item::from_symbol(definition).unwrap();
         let bytes = item.encode().unwrap();
         assert_eq!(Item::decode(&bytes).unwrap().encode().unwrap(), bytes);

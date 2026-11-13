@@ -26,13 +26,13 @@ fn large_catalog_selects_libraries_and_confirms_before_placement() {
     let mut h = editor(1400.);
     let before = h.state().session.inspect();
     let canvas = h.get_by_label("Schematic canvas").rect();
-    h.get_by_label("Default");
+    h.get_by_label("Basic components");
     h.get_by_label("All libraries");
     let close = h.get_by_label("Close Parts Catalog").rect();
     let place = h.get_by_label("Place").rect();
     assert!(close.right() - place.left() < 400.);
     assert!(close.top() + 300. < place.bottom());
-    click(&mut h, "Default");
+    click(&mut h, "Basic components");
     click(&mut h, "Capacitor");
     assert_eq!(h.state().session.inspect(), before);
     assert!(h.state().views.active.schematic.tool.is_none());
@@ -248,7 +248,7 @@ fn loaded_library_filters_and_removed_selection_do_not_alias_starter_parts() {
 #[test]
 fn switching_forms_keeps_library_query_selection_and_dock_position() {
     let mut h = editor(1400.);
-    click(&mut h, "Default");
+    click(&mut h, "Basic components");
     click(&mut h, "Search parts");
     h.get_by_label("Search parts").type_text("cap");
     h.run();
@@ -268,7 +268,7 @@ fn switching_forms_keeps_library_query_selection_and_dock_position() {
     click(&mut h, "Expand Parts Catalog");
     assert!(h.state().parts.is_modal());
     h.get_by_label("Preview Capacitor");
-    assert_eq!(h.state().parts.collection, Collection::Library("starter".into()));
+    assert_eq!(h.state().parts.collection, Collection::Library("basic-components".into()));
     assert_eq!(h.state().parts.selected, selected);
     assert_eq!(h.get_by_label("Search parts").value().as_deref(), Some("cap"));
     click(&mut h, "Dock Parts Catalog");
@@ -663,13 +663,13 @@ fn live_panel_commands_open_and_close_modal_catalog_without_switching_modes() {
 #[test]
 fn equivalent_source_registrations_do_not_duplicate_catalog_libraries() {
     let mut h = editor(1400.);
-    let (_, docs) = library::bundled_documents().find(|(id, _)| *id == "starter").unwrap();
+    let (_, docs) = library::bundled_documents().find(|(id, _)| *id == "basic-components").unwrap();
     h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"folder-copy","documents":docs})).unwrap();
     h.run();
     assert_eq!(collections(&h.state().session.libraries().inspect()).len(), 3);
     assert_eq!(entries("", h.state().session.libraries()).len(), 15);
-    h.get_by_label("Default");
-    click(&mut h, "Default");
+    h.get_by_label("Basic components");
+    click(&mut h, "Basic components");
     h.get_by_label("Capacitor");
 }
 

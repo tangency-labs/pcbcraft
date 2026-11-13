@@ -111,9 +111,9 @@ quick actions beside the tabs.
 
 Choose **Capture → Symbol** or press **A** to open the **Parts Catalog** and
 focus search. The large form has library navigation, searchable results and a
-selected-part preview. **Default** contains the resistor, LED,
+selected-part preview. **Basic components** contains the resistor, LED,
 capacitor, two-pin connector, four-pin header and NPN transistor from
-[`libraries/starter`](../libraries/starter); registered sources appear as
+[`libraries/basic-components`](../libraries/basic-components); registered sources appear as
 additional libraries. **Power** contains the built-in power and ground drawings.
 **Manage libraries…** opens the existing source manager. See the
 [native source guide](native-library-sources.md) for loading a library and

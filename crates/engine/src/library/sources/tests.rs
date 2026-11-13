@@ -1,8 +1,8 @@
 use super::*;
 use crate::persistence::{decode_documents, encode_documents};
 
-const SYMBOL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor-v2.json"));
-const FOOTPRINT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/footprints/resistor-0603.json"));
+const SYMBOL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components/symbols/resistor-v2.json"));
+const FOOTPRINT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components/footprints/resistor-0603.json"));
 
 /// Original project-owned definitions with a distinct native library identity and retained license.
 fn documents() -> Documents {
@@ -34,7 +34,7 @@ fn source_commands_place_and_pin_offline_through_the_existing_command_path() {
     session
         .apply(
             crate::PLACE_SYMBOL,
-            &json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision}),
+            &json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol)).into_iter().find(|(source,_)| *source == "personal").unwrap().1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision}),
         )
         .unwrap();
     let pinned = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -62,7 +62,7 @@ fn bundled_sources_are_read_only_without_changing_project_or_catalog() {
     let catalog = session.libraries().inspect();
     let generation = session.libraries().generation();
     let bytes = encode_documents(project.clone()).unwrap();
-    for source in ["bundled-starter", "bundled-power"] {
+    for source in ["bundled-basic-components", "bundled-power"] {
         assert!(session.execute(REMOVE, &json!({"source":source})).unwrap_err().to_string().contains("read-only"));
         assert!(session.execute(LOAD, &json!({"source":source,"documents":documents()})).unwrap_err().to_string().contains("read-only"));
         session.mark_library_unavailable(source);
@@ -140,7 +140,7 @@ fn source_refresh_cannot_replace_pinned_geometry_or_bypass_revision_checks() {
     let files = documents();
     session.execute(LOAD, &json!({"source":"source","documents":files})).unwrap();
     let revision = session.revision();
-    let mut params = json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision});
+    let mut params = json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol)).into_iter().find(|(source,_)| *source == "source").unwrap().1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision});
     session.apply(crate::PLACE_SYMBOL, &params).unwrap();
     let pinned = session.snapshot().unwrap();
     assert!(session.apply(crate::PLACE_SYMBOL, &params).is_err());
@@ -152,7 +152,8 @@ fn source_refresh_cannot_replace_pinned_geometry_or_bypass_revision_checks() {
     session.execute(LOAD, &json!({"source":"source","documents":files})).unwrap();
     params["expected_revision"] = json!(session.revision());
     assert!(session.apply(crate::PLACE_SYMBOL, &params).is_err());
-    params["definition_digest"] = session.libraries().search("", Some(Kind::Symbol))[0].1.inspect()["digest"].clone();
+    params["definition_digest"] =
+        session.libraries().search("", Some(Kind::Symbol)).into_iter().find(|(source, _)| *source == "source").unwrap().1.inspect()["digest"].clone();
     assert!(session.apply(crate::PLACE_SYMBOL, &params).unwrap_err().to_string().contains("pinned project copy"));
     assert!(Arc::ptr_eq(&pinned, &session.snapshot().unwrap()));
 }
@@ -168,7 +169,7 @@ fn external_symbol_placement_names_missing_revision_and_digest_parameters() {
     let state = session.inspect();
     let params = json!({
         "library":"local-demo", "definition":"resistor", "definition_revision":2,
-        "definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],
+        "definition_digest":session.libraries().search("",Some(Kind::Symbol)).into_iter().find(|(source,_)| *source == "personal").unwrap().1.inspect()["digest"],
         "x_nm":0, "y_nm":0, "expected_revision":session.revision()
     });
     for name in ["definition_revision", "definition_digest"] {

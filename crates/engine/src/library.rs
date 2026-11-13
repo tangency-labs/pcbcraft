@@ -4,7 +4,7 @@
 //! definitions in their own libraries, linked to a symbol by assignment, so nothing here names
 //! a footprint or a pad.
 //!
-//! The starter library in `libraries/starter` is embedded at build time, so the desktop and
+//! The starter library in `libraries/basic-components` is embedded at build time, so the desktop and
 //! browser builds offer the same parts without reading the file system.
 
 use std::{
@@ -21,19 +21,20 @@ use crate::schematic::{
 
 #[cfg(test)]
 mod bundled_tests;
+pub(crate) mod compatibility;
 pub mod parts;
 pub mod sources;
 #[cfg(test)]
 use crate::schematic::PIN_OFFSET_NM;
 
 #[cfg(test)]
-mod starter_files {
+mod basic_components_files {
     use std::sync::LazyLock;
-    pub const MANIFEST: &str = include_str!("../../../libraries/starter/library.json");
+    pub const MANIFEST: &str = include_str!("../../../libraries/basic-components/library.json");
     pub static SYMBOLS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
         super::bundled_files::LIBRARIES
             .iter()
-            .find(|(id, _)| *id == "starter")
+            .find(|(id, _)| *id == "basic-components")
             .into_iter()
             .flat_map(|(_, files)| files.iter())
             .filter_map(|(path, text)| path.strip_prefix("symbols/").map(|name| (name, *text)))
@@ -102,16 +103,16 @@ pub struct Library {
     problems: Vec<String>,
 }
 
-static STARTER: LazyLock<Library> = LazyLock::new(|| {
-    let files = bundled_files::LIBRARIES.iter().find(|(id, _)| *id == "starter").map(|(_, files)| *files).unwrap_or_default();
+static BASIC_COMPONENTS: LazyLock<Library> = LazyLock::new(|| {
+    let files = bundled_files::LIBRARIES.iter().find(|(id, _)| *id == "basic-components").map(|(_, files)| *files).unwrap_or_default();
     let manifest = files.iter().find(|(path, _)| *path == "library.json").map(|(_, text)| *text).unwrap_or_default();
     let symbols: Vec<_> = files.iter().filter_map(|(path, text)| path.strip_prefix("symbols/").map(|path| (path, *text))).collect();
     Library::load(manifest, &symbols)
 });
 
-/// The starter library shipped with PCBcraft.
-pub fn starter() -> &'static Library {
-    &STARTER
+/// The Basic components library shipped with PCBcraft.
+pub fn basic_components() -> &'static Library {
+    &BASIC_COMPONENTS
 }
 
 impl Library {
@@ -441,8 +442,8 @@ fn read_saved_mode(value: Value, draft: bool) -> Result<Arc<SymbolDefinition>, S
     let mut definition = parse_symbol_mode(Value::Object(fields), draft)?;
     definition.provenance = provenance;
     definition.library = library;
-    let starter = starter();
-    Ok(starter.symbols.iter().chain(&starter.revisions).find(|known| ***known == definition).cloned().unwrap_or_else(|| Arc::new(definition)))
+    let basic = if definition.library == "starter" { compatibility::starter() } else { basic_components() };
+    Ok(basic.symbols.iter().chain(&basic.revisions).find(|known| ***known == definition).cloned().unwrap_or_else(|| Arc::new(definition)))
 }
 
 /// Write a symbol's saved form into a project file, indented as one project record: the header
@@ -691,9 +692,9 @@ mod tests {
     /// Every starter file loads, in file-name order, with the manifest's identity and license.
     #[test]
     fn the_starter_library_loads_every_file() {
-        let library = starter();
+        let library = basic_components();
         assert_eq!(library.problems(), [] as [String; 0]);
-        assert_eq!((library.id.as_str(), library.license.as_str()), ("starter", "MIT OR Apache-2.0"));
+        assert_eq!((library.id.as_str(), library.license.as_str()), ("basic-components", "MIT OR Apache-2.0"));
         let ids: Vec<_> = library.symbols().iter().map(|symbol| symbol.id.as_str()).collect();
         assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "npn", "resistor"]);
         let led = library.symbol("led").unwrap();
@@ -705,17 +706,18 @@ mod tests {
     /// New placements use the latest revision; older pinned revisions retain their original pins and values.
     #[test]
     fn compact_revisions_preserve_old_projects_and_choose_newest_in_any_order() {
-        for symbol in starter().symbols().iter().filter(|symbol| ["capacitor", "connector", "led", "resistor"].contains(&symbol.id.as_str())) {
+        for symbol in basic_components().symbols().iter().filter(|symbol| ["capacitor", "connector", "led", "resistor"].contains(&symbol.id.as_str()))
+        {
             assert_eq!(symbol.revision(), if ["resistor", "capacitor"].contains(&symbol.id.as_str()) { 3 } else { 2 });
-            let old = starter().symbol_revision(&symbol.id, 1).unwrap();
+            let old = basic_components().symbol_revision(&symbol.id, 1).unwrap();
             for (new, old) in symbol.pins().iter().zip(old.pins()) {
                 assert_eq!(old.offset.x_nm.abs(), PIN_OFFSET_NM);
                 assert!(new.offset.x_nm.abs() < old.offset.x_nm.abs());
                 assert_eq!(new.offset.x_nm % GRID_NM, 0);
             }
         }
-        let files = starter_files::SYMBOLS.iter().rev().copied().collect::<Vec<_>>();
-        let reversed = Library::load(starter_files::MANIFEST, &files);
+        let files = basic_components_files::SYMBOLS.iter().rev().copied().collect::<Vec<_>>();
+        let reversed = Library::load(basic_components_files::MANIFEST, &files);
         assert!(reversed.problems().is_empty());
         assert_eq!(reversed.symbol("resistor").unwrap().revision(), 3);
         assert_eq!(reversed.symbol_revision("resistor", 1).unwrap().pins()[1].offset.x_nm, PIN_OFFSET_NM);
@@ -725,7 +727,7 @@ mod tests {
     }
 
     fn resistor() -> Value {
-        serde_json::from_str(starter_files::SYMBOLS.iter().find(|(file, _)| *file == "resistor.json").unwrap().1).unwrap()
+        serde_json::from_str(basic_components_files::SYMBOLS.iter().find(|(file, _)| *file == "resistor.json").unwrap().1).unwrap()
     }
 
     fn error(edit: impl FnOnce(&mut Value)) -> String {
@@ -768,27 +770,27 @@ mod tests {
     /// and text labels load as upright strokes.
     #[test]
     fn multi_pin_symbols_load_in_terminal_order() {
-        let header = starter().symbol("header-4").unwrap();
+        let header = basic_components().symbol("header-4").unwrap();
         let pins: Vec<_> = header.pins().iter().map(|pin| (pin.number.as_str(), pin.offset.y_nm, pin.electrical_type)).collect();
         let row = |number, y_nm| (number, y_nm, ElectricalType::Passive);
         assert_eq!(pins, [row("1", -3_810_000), row("2", -1_270_000), row("3", 1_270_000), row("4", 3_810_000)]);
         assert!(header.default_unit().drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
         assert!(!header.fits_two_pad_footprint());
-        assert!(starter().symbol("resistor").unwrap().fits_two_pad_footprint());
+        assert!(basic_components().symbol("resistor").unwrap().fits_two_pad_footprint());
     }
 
     /// Every starter symbol saves as a copy that reads back to the same shared starter
     /// definition. A copy that differs is its own definition, freed once nothing uses it.
     #[test]
     fn saved_copies_read_back_to_the_same_definition() {
-        for symbol in starter().symbols() {
+        for symbol in basic_components().symbols() {
             let copy = read_saved_copy(serde_json::to_value(saved_copy(symbol)).unwrap()).unwrap();
             assert!(Arc::ptr_eq(&copy, symbol), "{}", symbol.id);
         }
-        let mut changed = serde_json::to_value(saved_copy(starter().symbol("led").unwrap())).unwrap();
+        let mut changed = serde_json::to_value(saved_copy(basic_components().symbol("led").unwrap())).unwrap();
         changed["name"] = json!("LED, as saved");
         let copy = read_saved_copy(changed).unwrap();
-        assert_eq!((copy.library.as_str(), copy.name.as_str()), ("starter", "LED, as saved"));
+        assert_eq!((copy.library.as_str(), copy.name.as_str()), ("basic-components", "LED, as saved"));
         let weak = Arc::downgrade(&copy);
         drop(copy);
         assert!(weak.upgrade().is_none(), "nothing keeps a copy alive once it is dropped");
@@ -800,7 +802,7 @@ mod tests {
         let mut bad = resistor();
         bad["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0]);
         let good = resistor().to_string();
-        let library = Library::load(starter_files::MANIFEST, &[("bad.json", &bad.to_string()), ("good.json", &good)]);
+        let library = Library::load(basic_components_files::MANIFEST, &[("bad.json", &bad.to_string()), ("good.json", &good)]);
         assert_eq!(library.symbols().len(), 1);
         assert!(library.symbol("resistor").is_some());
         assert_eq!(library.problems(), ["bad.json: a drawing must stay within 100 mm of the symbol's center"]);
@@ -810,7 +812,7 @@ mod tests {
     #[test]
     fn a_bad_file_leaves_the_rest_of_the_library() {
         let good = resistor().to_string();
-        let library = Library::load(starter_files::MANIFEST, &[("a.json", &good), ("b.json", "{"), ("c.json", &good)]);
+        let library = Library::load(basic_components_files::MANIFEST, &[("a.json", &good), ("b.json", "{"), ("c.json", &good)]);
         assert_eq!(library.symbols().len(), 1);
         assert_eq!(library.problems().len(), 2);
         assert!(library.problems()[0].starts_with("b.json: invalid symbol JSON"));

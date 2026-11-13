@@ -116,7 +116,7 @@ the same `VCC` net name, which can be changed before placement.
    to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
    to the preserved wire ends.
 2. Press **A** to open the **Parts Catalog** and focus search. The bundled
-   **Default** and **Power** libraries load through the same native source path
+   **Basic components** and **Power** libraries load through the same native source path
    as added libraries. Sources marks them **Built-in** and keeps their registrations
    read-only; external sources remain removable. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose

@@ -277,7 +277,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
     let mut components = Vec::with_capacity(legacy.sheet.symbols.len());
     let mut symbols = Vec::with_capacity(legacy.sheet.symbols.len());
     for record in legacy.sheet.symbols {
-        let definition = crate::library::starter()
+        let definition = crate::library::compatibility::starter()
             .symbol_revision(&record.definition, record.definition_revision)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
         components.push(ComponentRecord2 {
@@ -358,7 +358,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
     let mut used = BTreeMap::new();
     let mut components = Vec::with_capacity(document.components.len());
     for record in document.components {
-        let definition = crate::library::starter()
+        let definition = crate::library::compatibility::starter()
             .symbol_revision(&record.definition, record.definition_revision)
             .cloned()
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
@@ -1108,7 +1108,7 @@ mod tests {
     fn every_library_symbol_places_and_round_trips() {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "All parts", "create_board":true})).unwrap();
-        for (index, definition) in crate::library::starter().symbols().iter().enumerate() {
+        for (index, definition) in crate::library::basic_components().symbols().iter().enumerate() {
             let x_nm = index as i64 * 25_400_000;
             session
                 .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
@@ -1250,7 +1250,7 @@ mod tests {
     fn projects_open_from_their_saved_symbol_copies() {
         let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
         // Save the copy at the starter library's current revision, so new placements match it.
-        let current = crate::library::starter().symbol("resistor").unwrap().revision();
+        let current = crate::library::basic_components().symbol("resistor").unwrap().revision();
         document["symbol_definitions"][0]["revision"] = json!(current);
         for component in document["components"].as_array_mut().unwrap() {
             component["definition_revision"] = json!(current);
@@ -1267,9 +1267,9 @@ mod tests {
         let place = json!({"definition": "resistor", "x_nm": 50_800_000, "y_nm": 0, "expected_revision": session.revision()});
         session.apply(PLACE_SYMBOL, &place).unwrap();
         let names: Vec<_> = session.project().unwrap().components().map(|component| component.definition.name.as_str()).collect();
-        assert_eq!(names, ["Resistor, as saved"; 3]);
+        assert_eq!(names, ["Resistor, as saved", "Resistor, as saved", "Resistor"]);
         let text = String::from_utf8(encode(session.snapshot().unwrap()).unwrap()).unwrap();
-        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 1, "one saved copy for all three resistors");
+        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 2, "the renamed selection does not rewrite historical pinned copies");
 
         // An older saved revision stays as it is, and a new placement saves the current one beside it.
         let mut session = Session::default();

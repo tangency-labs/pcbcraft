@@ -244,7 +244,7 @@ fn package_assignment_and_board_intent_use_complete_part_terminals() {
     apply(
         &mut session,
         ASSIGN_FOOTPRINT,
-        json!({"component":part,"library":"starter","definition":"sot23","definition_revision":4,
+        json!({"component":part,"library":"basic-components","definition":"sot23","definition_revision":4,
         "mapping":{"1":"1","2":"2","3":"3"}}),
     );
     apply(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":part,"x_nm":0,"y_nm":0}));

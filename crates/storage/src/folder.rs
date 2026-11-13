@@ -633,7 +633,8 @@ mod tests {
     /// The project behind [`pinning`], for checks that need it rather than its folder documents.
     fn pinned_project(library: &str, symbol: &str) -> std::sync::Arc<pcbcraft_engine::Project> {
         let mut definition: serde_json::Value =
-            serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor.json"))).unwrap();
+            serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components/symbols/resistor.json")))
+                .unwrap();
         definition["id"] = json!(symbol);
         let revision = u32::try_from(definition["revision"].as_u64().unwrap()).unwrap();
         let source = sources::Documents::from([

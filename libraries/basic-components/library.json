@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-library/1",
-  "id": "starter",
-  "name": "Default",
+  "id": "basic-components",
+  "name": "Basic components",
   "license": "MIT OR Apache-2.0"
 }

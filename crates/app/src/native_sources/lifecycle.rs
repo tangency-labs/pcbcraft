@@ -236,7 +236,7 @@ mod tests {
                 "library.json".into(),
                 json!({"format":"pcbcraft-library/1","id":"user","name":"Delete fixture","license":"MIT OR Apache-2.0"}).to_string(),
             ),
-            ("symbols/resistor.json".into(), include_str!("../../../../libraries/starter/symbols/resistor.json").into()),
+            ("symbols/resistor.json".into(), include_str!("../../../../libraries/basic-components/symbols/resistor.json").into()),
         ]);
         let bundle = serde_json::to_vec(&json!({"format":"pcbcraft-library-bundle/1","documents":documents})).unwrap();
         let source = pcbcraft_storage::library::install_bundle(&bundle, &path).unwrap();

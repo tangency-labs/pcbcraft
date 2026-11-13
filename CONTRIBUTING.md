@@ -52,7 +52,7 @@ If Trunk reports `invalid value '1' for '--no-color'`, the shell has supplied
 | `crates/craft-control` | Bounded framing and authenticated local transport |
 | `crates/storage` | Native folder/archive I/O and publication; encoding/decoding is in the engine |
 | `apps/` | Thin desktop, CLI and web launchers |
-| `libraries/starter` | Original, revisioned symbol definitions embedded in both builds |
+| `libraries/basic-components` | Original, revisioned symbol definitions embedded in both builds |
 
 An authored edit belongs in the engine and is called by the GUI through the same
 command path MCP uses. Adding a catalog command exposes it to headless discovery;

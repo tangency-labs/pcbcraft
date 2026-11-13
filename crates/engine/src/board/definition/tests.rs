@@ -28,7 +28,7 @@ fn assign(s: &mut Session, symbol: &str, definition: &str, mapping: Value) -> St
 #[test]
 fn library_and_board_reference_offsets_are_additive() {
     use crate::authoring::{Action, FootprintReferenceSettings, Item};
-    let original = starter("resistor-0402").unwrap();
+    let original = basic_components("resistor-0402").unwrap();
     let mut editor = crate::authoring::Session::new(Item::from_footprint(&original).unwrap(), false).unwrap();
     let before = editor.snapshot();
     let default = Point { x_nm: 2_000_000, y_nm: -1_000_000 };
@@ -68,8 +68,8 @@ fn library_and_board_reference_offsets_are_additive() {
 /// rotation, history and offline folder/archive decoding without changing schematic intent.
 #[test]
 fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
-    for id in STARTER_IDS {
-        starter(id).unwrap().validate().unwrap();
+    for id in BASIC_COMPONENT_IDS {
+        basic_components(id).unwrap().validate().unwrap();
     }
     let mut s = session();
     let r = symbol(&mut s, "resistor");
@@ -104,8 +104,8 @@ fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
         assert_eq!(snapshot.terminal_for_pad(pad), Some(pin));
     }
     let bytes = encode_documents(snapshot.clone()).unwrap();
-    assert!(bytes.contains_key("library/footprints/starter/resistor-0402.r4.json"));
-    assert!(bytes.contains_key("library/footprints/starter/sot23.r4.json"));
+    assert!(bytes.contains_key("library/footprints/basic-components/resistor-0402.r4.json"));
+    assert!(bytes.contains_key("library/footprints/basic-components/sot23.r4.json"));
     assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/5"));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(encode_documents(decode_packed(&encode_packed(snapshot.clone()).unwrap()).unwrap().project).unwrap(), bytes);
@@ -128,7 +128,7 @@ fn pinned_custom_footprints_reopen_without_a_catalog_source() {
     let r = symbol(&mut s, "resistor");
     assign(&mut s, &r, "resistor-0603", json!({"1":"1","2":"2"}));
     let mut docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    let original = "library/footprints/starter/resistor-0603.r4.json";
+    let original = "library/footprints/basic-components/resistor-0603.r4.json";
     let mut definition: Value = serde_json::from_slice(&docs.remove(original).unwrap()).unwrap();
     definition["library"] = json!("offline-fixture");
     definition["id"] = json!("custom-resistor");
@@ -144,7 +144,7 @@ fn pinned_custom_footprints_reopen_without_a_catalog_source() {
     assert_eq!(copper[1].x_nm - copper[0].x_nm, 900_000);
     let canonical = encode_documents(reopened.clone()).unwrap();
     assert_eq!(encode_documents(decode_documents(&canonical).unwrap()).unwrap(), canonical);
-    assert!(starter("custom-resistor").is_none());
+    assert!(basic_components("custom-resistor").is_none());
 }
 
 /// Invalid pad sets, malformed geometry, missing definitions and mismatched assignments
@@ -165,7 +165,7 @@ fn invalid_physical_footprints_and_mappings_are_atomic() {
     }
     assign(&mut s, &q, "sot23", json!({"1":"1","2":"2","3":"3"}));
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    let path = "library/footprints/starter/sot23.r4.json";
+    let path = "library/footprints/basic-components/sot23.r4.json";
     for (pointer, value) in [
         ("/pads/0/width_nm", json!(0)),
         ("/pads/1/number", json!("1")),
@@ -201,7 +201,7 @@ fn plated_drills_require_all_copper_and_a_positive_annulus() {
     let header = symbol(&mut s, "connector");
     assign(&mut s, &header, "header-1x02-254", json!({"1":"1","2":"2"}));
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    let path = "library/footprints/starter/header-1x02-254.r3.json";
+    let path = "library/footprints/basic-components/header-1x02-254.r3.json";
     for (field, value) in [
         ("drill_nm", json!(0)),
         ("drill_nm", json!(-1)),

@@ -19,9 +19,9 @@ manager's implementation details each get their own design (see
 
 ## What exists today
 
-- **Bundled native libraries.** Default (`libraries/starter`) and Power
+- **Bundled native libraries.** Basic components (`libraries/basic-components`) and Power
   (`libraries/power`) are embedded at build time (see
-  [symbol-library.md](symbol-library.md)). Default also holds a small set of
+  [symbol-library.md](symbol-library.md)). Basic components also holds a small set of
   original [SMD footprint definitions](footprint-library.md): 0402/0603
   resistors and capacitors, an 0402 LED, SOT-23 and a plated two-pin header.
 - **Exact copies pinned into projects.** A project keeps a full copy of every
@@ -198,7 +198,7 @@ them, and the records above leave room to add them later.
 
 ## Categories and parameters
 
-The default library defines standard categories with stable field IDs, value
+The bundled Basic components library defines standard categories with stable field IDs, value
 types and units: capacitance, tolerance and rated voltage for capacitors, for
 example. Search and comparison use field IDs and convert compatible units. They
 never match on display labels.
@@ -210,7 +210,7 @@ explicit mapping says otherwise.
 
 A value can be known, unknown or not supported by its source, and those are three
 different states. Unknown is never zero or a guessed default. Projects pin the
-category schemas they use, so a newer default library can't reinterpret saved
+category schemas they use, so a newer bundled library can't reinterpret saved
 values.
 
 ### Unit-aware input and stored values
@@ -309,7 +309,7 @@ above, so symbol-only and footprint-only libraries are normal.
 
 | Source | Status |
 | --- | --- |
-| Bundled Default and Power | Implemented, through the shared native loader |
+| Bundled Basic components and Power | Implemented, through the shared native loader |
 | Native folder | Personal sources implemented; the rest under [#92](https://github.com/tangency-labs/pcbcraft/issues/92) |
 | KiCad library (`.kicad_sym`, `.pretty`) | Proposed below |
 | Vendor download (zip of KiCad files) | Proposed below |
@@ -350,15 +350,16 @@ generator.
 A project opens even when none of its sources is available. Removing a
 registration never removes anything a project has pinned.
 
-## Default library
+## Basic components library
 
-Package the standard categories and the original Default data in a versioned
+Package the standard categories and the original Basic components data in a versioned
 Rust crate, pinned in the application build. Desktop and browser then get the
 same defaults with no download. The crate version names a distribution. Each item
 and schema in it keeps its own ID and revision, so changing an item means a new
-revision even inside an app update. Default keeps its `starter` library identity,
-and code uses it through the shared library contract, never by assuming
-particular starter items exist. Bundling third-party libraries is not part of
+revision even inside an app update. Basic components uses the `basic-components` identity. Historical `starter`
+references remain readable through a compatibility registration hidden from browsing;
+saved project copies retain their original addresses. Code uses the shared library
+contract rather than assuming particular bundled items exist. Bundling third-party libraries is not part of
 this proposal.
 
 ## Pinning into a project
@@ -589,7 +590,7 @@ These need their own documents and must respect the boundaries above:
 - **Category search:** compare capacitors from two libraries with compatible units
   converted. Keep a namespaced custom field separate. Report two schemas claiming
   one identity and revision with different content.
-- **Default library upgrade:** save with one default-library version and reopen
+- **Bundled library upgrade:** save with one default-library version and reopen
   with a newer one. Pinned meanings and no-op save bytes stay unchanged until an
   explicit update.
 - **Completeness rules:** check board transfer and assembly-BOM requirements

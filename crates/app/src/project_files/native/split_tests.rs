@@ -100,7 +100,7 @@ fn schematic_package_choices_open_and_save_through_native_paths() {
     apply(
         &mut s,
         pcbcraft_engine::ASSIGN_FOOTPRINT,
-        json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
+        json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
     );
     let snapshot = s.snapshot().unwrap();
     let documents = encode_documents(snapshot.clone()).unwrap();

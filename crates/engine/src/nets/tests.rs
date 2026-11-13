@@ -433,7 +433,7 @@ fn non_anchor_wire_edits_leave_registry_bytes_and_baseline_nets_derived() {
         apply(
             &mut session,
             crate::ASSIGN_FOOTPRINT,
-            json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"1","2":"2"}}),
+            json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"1","2":"2"}}),
         );
     }
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({}));

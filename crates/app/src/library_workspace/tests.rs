@@ -188,7 +188,7 @@ fn source_diagnostics_and_browser_collapse_use_real_source_state() {
             "library.json".into(),
             json!({"format":"pcbcraft-library/1","id":"test-diag","name":"Diagnostic fixture","license":"MIT OR Apache-2.0"}).to_string(),
         ),
-        ("symbols/resistor.json".into(), include_str!("../../../../libraries/starter/symbols/resistor.json").into()),
+        ("symbols/resistor.json".into(), include_str!("../../../../libraries/basic-components/symbols/resistor.json").into()),
         ("symbols/bad.json".into(), "invalid native fixture".into()),
     ]);
     let source = Arc::new(sources::NativeSource::load(&documents).unwrap());

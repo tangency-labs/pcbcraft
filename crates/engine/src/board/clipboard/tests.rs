@@ -21,7 +21,7 @@ fn fixture() -> Session {
     .unwrap();
     let components: Vec<_> = s.project().unwrap().components().map(|c| c.id()).collect();
     for id in &components {
-        s.apply(ASSIGN_FOOTPRINT,&json!({"component":id,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
+        s.apply(ASSIGN_FOOTPRINT,&json!({"component":id,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
     }
     s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
     s.apply(INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
@@ -383,7 +383,7 @@ fn multisheet_board_copy_keeps_explicit_schematic_destinations() {
     }
     let components: Vec<_> = s.project().unwrap().components().map(|c| c.id()).collect();
     for component in &components {
-        s.apply(ASSIGN_FOOTPRINT,&json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()})).unwrap();
+        s.apply(ASSIGN_FOOTPRINT,&json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()})).unwrap();
     }
     s.apply(INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
     for (index, component) in components.iter().enumerate() {
@@ -550,7 +550,7 @@ fn unsupported_internal_hierarchy_connections_refuse_copy_and_cut_without_loss()
         )
         .unwrap();
     }
-    s.apply(ASSIGN_FOOTPRINT,&json!({"component":format!("component-{component}"),"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
+    s.apply(ASSIGN_FOOTPRINT,&json!({"component":format!("component-{component}"),"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
     let report = s.execute(crate::PREVIEW_UPDATE, &json!({"expected_revision":s.revision()})).unwrap();
     s.apply(crate::APPLY_UPDATE, &json!({"plan_token":report["board_update_preview"]["plan_token"],"expected_revision":s.revision()})).unwrap();
     s.apply(
