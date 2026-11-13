@@ -207,7 +207,16 @@ mod native {
     impl WorkerSlot {
         /// Refuse excess work immediately rather than allocating another worker thread.
         fn acquire() -> Option<Self> {
-            ACTIVE_WORKERS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < 2).then_some(n + 1)).ok().map(|_| Self)
+            let mut active = ACTIVE_WORKERS.load(Ordering::Acquire);
+            loop {
+                if active >= 2 {
+                    return None;
+                }
+                match ACTIVE_WORKERS.compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => return Some(Self),
+                    Err(current) => active = current,
+                }
+            }
         }
     }
     impl Drop for WorkerSlot {
