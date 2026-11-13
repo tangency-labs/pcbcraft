@@ -538,6 +538,11 @@ impl Assistant {
         self.chat.generation()
     }
 
+    /// Retain endpoint revocation and reply ownership for queued ordinary UI input.
+    pub(super) fn automation_owner(&self, generation: u64) -> Option<crate::ui_automation::Owner> {
+        self.chat.automation_owner(generation)
+    }
+
     /// The approvals the person answered since the last frame, each once, for the editor to run
     /// or refuse. "Always allow" is remembered when the person answers.
     pub(super) fn take_answers(&mut self) -> Vec<(Approval, Answer)> {
@@ -572,8 +577,15 @@ impl Assistant {
     }
 
     /// Draw the agent row, conversation and questions for the active document context.
+    /// Synthetic passes disable these controls; consent handlers also check provenance.
     /// Document availability is separate from temporary edit refusals.
     fn panel(&mut self, ui: &mut Ui, session: &Session, can_edit: bool, has_document: bool) {
+        let human = pcbcraft_chrome::automation::human_input(ui.ctx());
+        ui.add_enabled_ui(human, |ui| self.panel_contents(ui, session, can_edit, has_document));
+    }
+
+    /// Render chat controls with the caller's input provenance retained through nested popups.
+    fn panel_contents(&mut self, ui: &mut Ui, session: &Session, can_edit: bool, has_document: bool) {
         let t = Tokens::get();
         if self.confirm_new {
             ui.label("Start a new chat? This clears the conversation and draft.");
@@ -645,7 +657,9 @@ impl Assistant {
                 });
             });
         }
-        if let Some((id, answer)) = answered {
+        if pcbcraft_chrome::automation::human_input(ui.ctx())
+            && let Some((id, answer)) = answered
+        {
             self.answer(id, answer);
         }
     }
@@ -753,7 +767,7 @@ impl Assistant {
     /// The agent's own options (model, effort, mode) as it lists them, as SolidCraft's chat header
     /// shows them. A chosen model is remembered for the agent.
     fn option_pickers(&mut self, ui: &mut Ui) {
-        let idle = self.chat.state == State::Ready;
+        let idle = self.chat.state == State::Ready && pcbcraft_chrome::automation::human_input(ui.ctx());
         let mut chosen: Option<(String, String, bool)> = None;
         let mut model = None;
         let mut mode = None;
@@ -810,6 +824,9 @@ impl Assistant {
                 }
             });
         });
+        if !pcbcraft_chrome::automation::human_input(ui.ctx()) {
+            return;
+        }
         if let Some((id, value, is_model)) = chosen {
             self.chat.set_option(&id, &value);
             if is_model {
@@ -826,12 +843,15 @@ impl Assistant {
     }
 
     /// Keep the prompt above Send/Stop, retaining typed input while edits are paused.
+    /// Raw Enter submission requires human provenance as well as focus and an editable document.
     /// A library document can provide context even when no project session is open.
     fn composer(&mut self, ui: &mut Ui, _session: &Session, can_edit: bool, has_document: bool) {
+        let human = pcbcraft_chrome::automation::human_input(ui.ctx());
         let running = self.chat.state == State::Running;
         let can_send = has_document && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
         let draft_id = egui::Id::unique("assistant_draft_input");
         let enter = can_send
+            && human
             && ui.memory(|memory| memory.has_focus(draft_id))
             && ui.input_mut(|input| input.modifiers == egui::Modifiers::NONE && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         ScrollArea::vertical().id_salt("assistant_draft").max_height(96.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -839,6 +859,7 @@ impl Assistant {
                 has_document,
                 TextEdit::multiline(&mut self.draft)
                     .id(draft_id)
+                    .interactive(human)
                     .hint_text("Ask about the document or request a change…")
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
@@ -1494,6 +1515,122 @@ mod chat_tests {
         call(&mut harness, &endpoint, "view.fit", fit, None)?;
         let inspected = call(&mut harness, &endpoint, "edit.undo", Value::Null, Some("Allow"));
         assert!(inspected.is_ok() || inspected.is_err_and(|error| error.contains("nothing to undo")));
+        Ok(())
+    }
+
+    /// Synthetic coordinate clicks and focused-key activation cannot answer or remember a held
+    /// tool request; an ordinary human answer still releases it through the existing gate.
+    #[test]
+    fn synthetic_input_cannot_grant_or_remember_tool_approval() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut h, _script, endpoint) = harness_with_agent()?;
+        open_turn(&mut h);
+        h.state_mut().assistant.settings.agents.ai_permissions = craft_agents::agents::Mode::Ask;
+        thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let mut remote = Remote::from_token_file(endpoint.0, &endpoint.1).unwrap().with_wait(10);
+                remote.call("engine.execute", json!({"command":"view.fit","params":{"view":0}}))
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while h.state().assistant.chat.approvals.is_empty() && Instant::now() < deadline {
+                h.run_steps(1);
+                thread::sleep(Duration::from_millis(2));
+            }
+            h.run_steps(2);
+            for label in ["Allow", "Always allow"] {
+                let at = h.get_by_label(label).rect().center();
+                pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+                h.input_mut().events.extend([
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+                    egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+                ]);
+                h.step();
+                assert_eq!(h.state().assistant.chat.approvals.len(), 1);
+                assert!(!h.state().assistant.always_allowed("view.fit"));
+                assert!(!worker.is_finished());
+                pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+                h.run_steps(2);
+            }
+            h.get_by_label("Always allow").focus();
+            h.run_steps(2);
+            pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+            h.key_press(egui::Key::Enter);
+            h.run_steps(2);
+            assert_eq!(h.state().assistant.chat.approvals.len(), 1);
+            assert!(!h.state().assistant.always_allowed("view.fit"));
+            pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+            h.run_steps(2);
+            h.get_by_label("Always allow").click();
+            h.run_steps(2);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !worker.is_finished() && Instant::now() < deadline {
+                h.step();
+                thread::sleep(Duration::from_millis(2));
+            }
+            assert!(worker.join().unwrap().is_ok());
+        });
+        assert!(h.state().assistant.always_allowed("view.fit"));
+        Ok(())
+    }
+
+    /// Agent-provided approval options use the same human-consent boundary as held MCP calls.
+    #[test]
+    fn synthetic_input_cannot_answer_an_agent_permission_question() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut h, script, _endpoint) = harness_with_agent()?;
+        open_turn(&mut h);
+        push(
+            &script,
+            Event::Permission {
+                key: 42,
+                title: "Run fixture operation".into(),
+                kind: Some("execute".into()),
+                options: vec![option("approve-once", "allow_once"), option("reject-once", "reject_once")],
+            },
+        );
+        h.run_steps(2);
+        h.get_by_label("approve-once").focus();
+        h.run_steps(2);
+        pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().assistant.chat.approvals.len(), 1);
+        assert!(script.lock().map_err(|_| "poisoned")?.answers.is_empty());
+        pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+        h.run_steps(2);
+        h.get_by_label("approve-once").click();
+        h.run_steps(2);
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.answers, [(42, Some("approve-once".to_owned()))]);
+        Ok(())
+    }
+
+    /// A focused draft survives synthetic Enter without a prompt, message or turn; ordinary
+    /// Enter still sends it through the existing chat path.
+    #[test]
+    fn synthetic_enter_cannot_send_a_focused_assistant_draft() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut h, script, _endpoint) = harness_with_agent()?;
+        let draft = "Explain this unsent draft";
+        h.state_mut().assistant.draft = draft.to_owned();
+        h.run();
+        let items = h.state().assistant.chat.items.len();
+        let generation = h.state().assistant.generation();
+        let draft_id = egui::Id::unique("assistant_draft_input");
+        h.ctx.memory_mut(|memory| memory.request_focus(draft_id));
+        pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert!(script.lock().map_err(|_| "poisoned")?.prompts.is_empty());
+        assert_eq!(h.state().assistant.draft, draft);
+        assert_eq!(h.state().assistant.chat.items.len(), items);
+        assert_eq!(h.state().assistant.generation(), generation);
+        assert!(!h.state().assistant.turn_open());
+        pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+        h.run();
+        h.ctx.memory_mut(|memory| memory.request_focus(draft_id));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.prompts, [draft]);
+        assert!(h.state().assistant.draft.is_empty());
+        assert!(h.state().assistant.turn_open());
         Ok(())
     }
 

@@ -84,10 +84,16 @@ view., window., arrangement., app. and file. commands change its views, windows,
 /// What an open editor provides to the live connection. The editor runs on its own thread
 /// and owns every policy: which commands may run now, and how window commands act.
 pub trait Editor {
+    /// Run opt-in UI automation through the live host, with native input lifecycle ownership.
+    /// Implementations without input automation retain an explicit refusal.
+    fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, String> {
+        Err("This editor does not support UI input automation".into())
+    }
     /// The editor's project session, which document commands edit directly.
     fn session(&mut self) -> &mut Session;
     /// Why `command` can't run now (a dialog or file operation, say), or `None` when it can.
-    /// Consulted before every command, document or window.
+    /// Consulted before document and presentation commands. UI input uses the host's separate
+    /// automation lifecycle so it can operate ordinary modal controls and focused fields.
     fn refusal(&self, command: &str) -> Option<String>;
     /// The window commands this editor offers, described like engine commands.
     fn window_commands(&self) -> Vec<Value>;
@@ -98,10 +104,11 @@ pub trait Editor {
     fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), String>;
 }
 
-/// Serve one live request against the open editor. The editor's refusal applies to every
-/// command, including callers that bypass the MCP CLI. Window commands answer with editor
-/// inspection (or only the unchanged revision when `inspect` is false); document commands
-/// answer as in a headless session.
+/// Serve one live request against the open editor, including callers that bypass the MCP CLI.
+/// Document/presentation commands obey the editor's refusal; UI automation uses its own input
+/// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
+/// inspection (or only the unchanged revision when `inspect` is false); document commands answer
+/// as in a headless session.
 pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, String> {
     let method = request["method"].as_str().ok_or("missing control method")?;
     let params = &request["params"];
@@ -115,6 +122,9 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, St
         "editor.inspect" => Ok(editor.inspect()),
         "engine.execute" => {
             let id = params["command"].as_str().ok_or("missing `command`")?;
+            if id.starts_with("ui.") {
+                return editor.ui_command(id, &params["params"]);
+            }
             if let Some(reason) = editor.refusal(id) {
                 return Err(reason);
             }

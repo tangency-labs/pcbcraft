@@ -9,6 +9,7 @@
 pub mod arrangements;
 pub mod assistant;
 pub mod authoring;
+pub mod automation;
 pub mod board;
 pub mod canvas_warning;
 pub mod catalog;

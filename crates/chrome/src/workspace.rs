@@ -694,6 +694,7 @@ fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response 
     let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.space_24);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| WidgetInfo::selected(Role::Tab, true, selected, title));
+    crate::automation::publish(ui, &response, format!("tab:{title}"));
     if ui.is_rect_visible(rect) {
         let shared = solidcraft_theme::Tokens::get();
         let style = solidcraft_ui_kit::ribbon::tab_style(
@@ -955,6 +956,7 @@ pub fn ribbon_group_with_popups(
     });
     for button in output.buttons {
         if let Some(tool) = tools.get(button.index) {
+            crate::automation::publish_enabled(&group_ui, &button.response, format!("toolbar:{title}:{}", tool.label), tool.enabled);
             paint_icon(ui.painter(), tool.icon, pos2(button.whole.center().x, button.whole.top() + 16.0), RIBBON_TOOL_ICON, t, tool.enabled);
             button.response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled && ui.is_enabled(), tool.active, tool.description));
             popup(ui, button.index, &button.response);

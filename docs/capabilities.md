@@ -101,6 +101,14 @@ because the browser cannot confirm a durable write, so the page's leave warning
 stays on until the project is replaced. The desktop Assistant and
 local MCP listener are not available in the browser build.
 
+Native live MCP also provides [named UI targets and queued input](ui-automation.md)
+for demonstrations and interaction automation. Common chrome adapters and project
+canvases publish targets; specialized widgets may still require coordinates.
+Pointer, key, text and scroll operations use normal UI handling and report
+completion or cancellation through a bounded ticket. Input supports the original
+native window and its split panes; detached windows currently support lookup
+only. This does not record video.
+
 The schematic ribbon's **Ground** action starts a GND placement directly. **P**
 opens the built-in Power collection, which includes both arrow-shaped **VCC** and
 flat-bar **VCC (bar)** choices with the same editable default net name.

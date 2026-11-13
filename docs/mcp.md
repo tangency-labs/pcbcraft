@@ -121,9 +121,10 @@ command waits while an inline text edit, dialog or file operation is open.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
 clients can identify the state holding command input.
 
-It also lists window commands, marked `"scope": "window"`, which run through the
-same handlers as the editor's own controls and never edit the project, its
-revision or undo history; only `file.save` changes the unsaved state. Call `inspect_editor` for the window,
+It also lists presentation commands, marked `"scope": "window"`, which run through
+the same handlers as the editor's own controls without editing the project, its
+revision or undo history; `file.save` changes the unsaved state. The separate
+`ui.` input commands described below can invoke authored edits. Call `inspect_editor` for the window,
 view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
 
 | Commands | Matching control |
@@ -150,6 +151,12 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window and choosing where to save an Untitled project stay in
 the editor, which asks about unsaved changes. Headless sessions refuse window
 commands with a reason.
+
+The native live connection also exposes `ui.handles`, `ui.at` and queued pointer,
+keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
+for named targets, window-local coordinates, completion tickets and cancellation.
+These calls interact with ordinary controls, including dialogs, and may author
+edits or reach file controls. Headless sessions cannot run them.
 
 ## Headless MCP
 

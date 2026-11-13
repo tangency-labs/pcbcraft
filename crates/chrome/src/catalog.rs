@@ -159,7 +159,9 @@ pub(crate) fn form_header(ui: &mut Ui, title: &str) -> (Rect, bool) {
     let t = Tokens::get();
     let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), kit::header_height()), Sense::hover());
     let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.0), vec2(t.control_height, t.control_height));
-    let closed = kit::icon_button_at(ui, close, "close", &format!("Close {title}")).clicked();
+    let close_response = kit::icon_button_at(ui, close, "close", &format!("Close {title}"));
+    crate::automation::publish(ui, &close_response, format!("button:Close {title}"));
+    let closed = close_response.clicked();
     let label = Rect::from_min_max(header.min + vec2(t.space_24, 0.0), pos2(close.left() - t.space_8, header.bottom()));
     kit::paint_text(ui, label, title, fonts::interface_heading(ui, t.font_button), t.text, false);
     ui.interact(label, ui.make_persistent_id("form_title"), Sense::hover())

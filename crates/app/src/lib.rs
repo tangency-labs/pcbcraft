@@ -62,6 +62,8 @@ mod ribbon;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
+#[cfg(not(target_arch = "wasm32"))]
+mod ui_automation;
 mod unsaved;
 mod window_commands;
 mod workspace_panels;
@@ -229,6 +231,8 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    automation: ui_automation::Automation,
     clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
     arrangements: arrangements::Arrangements,
@@ -2273,7 +2277,8 @@ impl PcbApp {
         }
     }
 
-    /// Enable or revoke a connection for this window and copy its client configuration on request.
+    /// Require human input to enable a connection or export its credential-bearing configuration.
+    /// Synthetic input may still revoke the endpoint or close this dialog.
     #[cfg(not(target_arch = "wasm32"))]
     fn local_mcp_dialog(&mut self, ctx: &egui::Context, mut error: Option<String>, mut copied: bool) {
         let mut close = false;
@@ -2282,7 +2287,14 @@ impl PcbApp {
                 ui.label("Clients with this configuration can inspect and edit this project and control its editor windows.");
                 let disable = ui
                     .horizontal(|ui| {
-                        if pcbcraft_chrome::controls::button(ui, if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
+                        if pcbcraft_chrome::controls::enabled_button(
+                            ui,
+                            pcbcraft_chrome::automation::human_input(ctx),
+                            if copied { "Configuration copied" } else { "Copy configuration" },
+                        )
+                        .clicked()
+                            && pcbcraft_chrome::automation::human_input(ctx)
+                        {
                             ctx.copy_text(control.client_configuration());
                             copied = true;
                         }
@@ -2295,7 +2307,9 @@ impl PcbApp {
                 }
             } else {
                 ui.label("Let a local MCP client inspect and edit this project and control its editor windows.");
-                if pcbcraft_chrome::controls::button(ui, "Enable local connection").clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, pcbcraft_chrome::automation::human_input(ctx), "Enable local connection").clicked()
+                    && pcbcraft_chrome::automation::human_input(ctx)
+                {
                     match live_control::LiveControl::start(ctx) {
                         Ok(control) => {
                             self.live_control = Some(control);
@@ -2340,6 +2354,9 @@ impl PcbApp {
         }
         let revision = self.session.revision();
         let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        if let Some(live) = &self.live_control {
+            self.automation.authorize(live.automation_owner(false, request.generation()));
+        }
         if self.session.revision() != revision {
             self.views.sync(&self.session);
             let title = request.body()["params"]["command"].as_str().and_then(command).map_or("Edit", |command| command.title);
@@ -2353,7 +2370,6 @@ impl PcbApp {
     /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
-        pcbcraft_chrome::begin_frame();
         let ctx = ui.ctx().clone();
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2427,12 +2443,20 @@ impl PcbApp {
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let observing = self.automation.observing;
+        #[cfg(target_arch = "wasm32")]
+        let observing = false;
+        pcbcraft_chrome::automation::begin(ui.ctx(), observing);
         self.editor_host_contents(ui, integrated_titlebar);
-        // Native host gestures belong above every workspace and its dialogs.
+        // Native host gestures remain outside every workspace's early return,
+        // while automation publishes only after the complete host pass.
         if integrated_titlebar {
             shell::resize_window_edges(ui);
         }
         self.editor_drag_cursor(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.automation_painted(ui.ctx());
     }
 
     /// Dispatch workspace content without bypassing the common native-host epilogue.
@@ -2603,6 +2627,11 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
 }
 
 impl eframe::App for PcbApp {
+    /// Deliver authenticated synthetic input before egui builds its pointer/keyboard state.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.automation_input(ctx, input);
+    }
     /// Run shared project logic and visible hosts, then release a dismissed native root and
     /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
