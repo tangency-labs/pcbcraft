@@ -110,6 +110,75 @@ fn mcp_browse_is_pane_local_and_rejects_missing_items_atomically() {
     assert_eq!(app.session.inspect(), before);
 }
 
+/// All resolves actual items with or without an explicit Type, while a specific
+/// incompatible Type still refuses without changing the pane or project.
+#[test]
+fn review_all_type_resolves_items() {
+    let mut h = fixture(1800.);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    let before = app.session.inspect();
+    let view = app.views.active.id().0;
+    for request in [
+        json!({"view":view,"source":"example-parts","item":"resistor-0603"}),
+        json!({"view":view,"source":"example-parts","type":0,"item":"test-resistor-100m"}),
+    ] {
+        app.run_window_command(&ctx, "app.library_browse", &request).unwrap();
+        assert_eq!(app.views.active.library.as_ref().unwrap().selected.as_ref().unwrap().id, request["item"]);
+    }
+    let state = app.views.active.library.as_ref().unwrap().inspect();
+    assert!(app.run_window_command(&ctx, "app.library_browse", &json!({"view":view,"type":1,"item":"resistor-0603"})).is_err());
+    assert_eq!(app.views.active.library.as_ref().unwrap().inspect(), state);
+    assert_eq!(app.session.inspect(), before);
+}
+
+/// An orderable record previews its chosen package even when another sorts first;
+/// generic browsing keeps its first-package default and missing choices stay explicit.
+#[test]
+fn review_orderable_preview_uses_selected_package() {
+    let mut documents = sources::Documents::from([
+        ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
+        ("symbols/resistor.json".into(), include_str!("../../../../examples/native-parts/symbols/resistor.json").into()),
+        ("categories/resistor.json".into(), include_str!("../../../../examples/native-parts/categories/resistor.json").into()),
+        ("footprints/resistor.json".into(), include_str!("../../../../examples/native-parts/footprints/resistor-0603.json").into()),
+    ]);
+    let mut part: Value = serde_json::from_str(include_str!("../../../../examples/native-parts/parts/resistor.json")).unwrap();
+    let mut package = part["packages"]["0603"].clone();
+    package["name"] = json!("Chosen package");
+    part["packages"]["zz-selected"] = package;
+    documents.insert("parts/resistor.json".into(), part.to_string());
+    let mut record: Value =
+        serde_json::from_str(include_str!("../../../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")).unwrap();
+    record["package"] = json!("zz-selected");
+    documents.insert("manufacturer-parts/resistor.json".into(), record.to_string());
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({}));
+    app.session.install_library_source("packages", Arc::new(sources::NativeSource::load(&documents).unwrap())).unwrap();
+    app.place_library_workspace(&egui::Context::default(), Placement::Here).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1800., 950.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let before = h.state().session.inspect();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    h.state_mut()
+        .run_window_command(&ctx, "app.library_browse", &json!({"view":view,"source":"packages","type":4,"item":"test-resistor-100m"}))
+        .unwrap();
+    h.run();
+    // One label is package metadata; the second is the footprint preview caption.
+    assert_eq!(h.query_all_by_label("Chosen package").count(), 2);
+    h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":view,"type":3,"item":"resistor"})).unwrap();
+    h.run();
+    assert_eq!(h.query_all_by_label("Chosen package").count(), 1);
+    let part = h.state().session.libraries().source_items("packages").iter().find_map(|item| item.part()).unwrap();
+    let mut state = State::default();
+    let mut missing = Harness::builder().with_size(egui::vec2(1000., 900.)).build_ui(|ui| {
+        h.state().generic_preview(ui, &part, Some("missing"), &mut Vec::new(), &mut state);
+    });
+    missing.run();
+    missing.get_by_label("Package missing is unavailable");
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// Invalid native files and quarantined revisions remain visible beside the selected source.
 #[test]
 fn source_diagnostics_and_browser_collapse_use_real_source_state() {
@@ -397,6 +466,26 @@ fn floating_preview_resizes_expands_and_restores() {
     click(&mut h, "Reset Preview size");
     assert!(h.state().views.active.panels[PROPERTIES].saved_state().size.is_none());
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Left-sash arrows move that edge in the named direction while anchoring the right edge.
+#[test]
+fn review_left_sash_keyboard_direction() {
+    let mut h = fixture(1800.);
+    click(&mut h, "Preview position");
+    click(&mut h, "Float");
+    h.get_by_label("Resize Preview width from left").click();
+    h.run();
+    let left = h.get_by_label("Resize Preview width from left").rect().left();
+    let right = h.get_by_label("Resize Preview width").rect().right();
+    h.key_press(egui::Key::ArrowLeft);
+    h.run();
+    assert!(h.get_by_label("Resize Preview width from left").rect().left() < left);
+    assert!((h.get_by_label("Resize Preview width").rect().right() - right).abs() < 1.);
+    h.key_press(egui::Key::ArrowRight);
+    h.run();
+    assert!((h.get_by_label("Resize Preview width from left").rect().left() - left).abs() < 1.);
+    assert!((h.get_by_label("Resize Preview width").rect().right() - right).abs() < 1.);
 }
 
 /// Existing local arrangements omit size; invalid dimensions must not grant a

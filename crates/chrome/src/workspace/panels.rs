@@ -185,7 +185,7 @@ impl Panel {
                     (i.consume_key(egui::Modifiers::NONE, more) as i8 - i.consume_key(egui::Modifiers::NONE, less) as i8) as f32 * t.space_16
                 });
                 if delta != 0.0 {
-                    next = Some(rect.size() + if horizontal { vec2(0.0, delta) } else { vec2(delta, 0.0) });
+                    next = Some(rect.size() + if horizontal { vec2(0.0, delta) } else { vec2(delta * if leading { -1.0 } else { 1.0 }, 0.0) });
                 }
             }
             if let Some(size) = next {

@@ -155,7 +155,8 @@ impl PcbApp {
             let area = ui.available_rect_before_wrap();
             self.editor_workspace(ui, area);
         });
-        if self.views.host == self.views.main {
+        let dialog_host = self.arrangement_dialog_host().unwrap_or(self.views.main);
+        if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         }
     }
@@ -431,7 +432,7 @@ impl PcbApp {
                     .libraries()
                     .source_items(source.as_deref().unwrap_or(""))
                     .iter()
-                    .filter(|i| i.key.id == item && kind_index(i.key.kind) == kind)
+                    .filter(|i| i.key.id == item && (kind == 0 || kind_index(i.key.kind) == kind))
                     .max_by_key(|i| i.key.revision)
                     .ok_or("Item is unavailable for this source and Type")?
                     .key
@@ -699,6 +700,13 @@ impl PcbApp {
             })
             .collect();
         items.sort_by_key(|item| (item.key.kind != Kind::Part, item.name.to_lowercase(), item.key.id.clone()));
+        let manufacturers = latest_manufacturers(all);
+        let mut counts = BTreeMap::<(String, String), usize>::new();
+        for item in &manufacturers {
+            if let Some(record) = item.manufacturer_part() {
+                *counts.entry((record.part.library.clone(), record.part.id.clone())).or_default() += 1;
+            }
+        }
         // Generic views nest exact MPN records under the generic revision they reference.
         if state.kind == 0 || state.kind == 3 {
             let mut nested = Vec::new();
@@ -715,21 +723,28 @@ impl PcbApp {
                 if state.expanded.contains(&item.key)
                     && let Some(part) = item.part()
                 {
-                    for child in latest_manufacturers(all) {
+                    for &child in &manufacturers {
                         if child.manufacturer_part().is_some_and(|m| m.part.library == part.library && m.part.id == part.id) {
                             nested.push((child, true));
                         }
                     }
                 }
             }
-            self.library_table(ui, state, &nested, false);
+            self.library_table(ui, state, &nested, false, &counts);
         } else {
             let rows: Vec<_> = items.iter().map(|i| (*i, false)).collect();
-            self.library_table(ui, state, &rows, state.kind == 4);
+            self.library_table(ui, state, &rows, state.kind == 4, &counts);
         }
     }
     /// Build domain columns while the chrome adapter owns selectable table rendering.
-    fn library_table(&self, ui: &mut egui::Ui, state: &mut State, items: &[(&Item, bool)], orderable: bool) {
+    fn library_table(
+        &self,
+        ui: &mut egui::Ui,
+        state: &mut State,
+        items: &[(&Item, bool)],
+        orderable: bool,
+        counts: &BTreeMap<(String, String), usize>,
+    ) {
         let rows: Vec<_> = items
             .iter()
             .map(|(item, nested)| {
@@ -749,15 +764,7 @@ impl PcbApp {
                         .unwrap_or_default()
                 } else {
                     let part = item.part();
-                    let count = part
-                        .as_ref()
-                        .map(|p| {
-                            latest_manufacturers(self.session.libraries().source_items(state.source.as_deref().unwrap_or("")))
-                                .into_iter()
-                                .filter(|i| i.manufacturer_part().is_some_and(|m| m.part.library == p.library && m.part.id == p.id))
-                                .count()
-                        })
-                        .unwrap_or(0);
+                    let count = part.as_ref().and_then(|p| counts.get(&(p.library.clone(), p.id.clone()))).copied().unwrap_or(0);
                     vec![
                         item.name.clone(),
                         kind_name(item.key.kind).into(),
@@ -813,7 +820,7 @@ impl PcbApp {
             chrome::detail(ui, "License", &item.license);
             let mut references = Vec::new();
             if let Some(part) = item.part() {
-                self.generic_preview(ui, &part, &mut references, state);
+                self.generic_preview(ui, &part, None, &mut references, state);
             }
             if let Some(record) = item.manufacturer_part() {
                 chrome::detail(ui, "Manufacturer", &record.manufacturer);
@@ -833,7 +840,7 @@ impl PcbApp {
                 references.push(record.part.clone());
                 match self.session.libraries().resolve_part(&record.part) {
                     Ok(part) => {
-                        self.generic_preview(ui, &part.definition, &mut references, state);
+                        self.generic_preview(ui, &part.definition, Some(&record.package), &mut references, state);
                     }
                     Err(error) => {
                         ui.label(egui::RichText::new(error).color(pcbcraft_chrome::Tokens::get().error));
@@ -865,8 +872,9 @@ impl PcbApp {
             }
         });
     }
-    /// Resolve geometry without creating placements; unresolved definitions retain inspectable metadata.
-    fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, references: &mut Vec<Reference>, state: &mut State) {
+    /// Resolve geometry without placements. Orderable records choose their exact package;
+    /// generic browsing uses the first package. Missing selections never fall back silently.
+    fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, package: Option<&str>, references: &mut Vec<Reference>, state: &mut State) {
         references.push(part.symbol.clone());
         if let Some(category) = &part.category {
             references.push(category.definition.clone());
@@ -876,7 +884,8 @@ impl PcbApp {
         match self.session.libraries().resolve_part(&part.reference()) {
             Ok(resolved) => {
                 chrome::detail(ui, "Units", &resolved.symbol.units().len().to_string());
-                if let Some(package) = part.packages.values().next() {
+                let selected = package.map_or_else(|| part.packages.values().next(), |id| part.packages.get(id));
+                if let Some(package) = selected {
                     let footprint = self.session.libraries().footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision);
                     ui.columns(2, |columns| {
                         chrome::detail(&mut columns[0], "Symbol", &resolved.symbol.name);
@@ -888,6 +897,9 @@ impl PcbApp {
                     });
                 } else {
                     crate::library_preview::workspace_symbol(ui, &resolved.symbol, &mut state.symbol_camera);
+                    if let Some(package) = package {
+                        ui.label(egui::RichText::new(format!("Package {package} is unavailable")).color(pcbcraft_chrome::Tokens::get().error));
+                    }
                 }
             }
             Err(error) => {

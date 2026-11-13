@@ -486,7 +486,12 @@ impl PcbApp {
         let ctx = ui.ctx().clone();
         self.sync_library_focus();
         let main = self.views.host == self.views.main;
-        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending() && (main || !self.home);
+        let enabled = matches!(self.dialog, Dialog::None)
+            && !self.files.busy()
+            && !self.project_action_pending()
+            && !self.library_mutation_busy()
+            && !self.library_sources.installing()
+            && (main || !self.home);
         let active = self.library_editors.active;
         let available = active.and_then(|id| self.library_editors.documents.get(&id));
         let can_save = available.is_some_and(|doc| !doc.pending_any()) && !self.library_editors.busy();

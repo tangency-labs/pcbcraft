@@ -702,7 +702,7 @@ describes the generated files and desktop save behavior.
 
 ### Browse libraries
 
-Choose **Library** in the workspace picker, or **Libraries → Sources**. Select a
+Choose **Parts Library** in the workspace picker, or **Libraries → Sources**. Select a
 library and Type in Browser, search its items, and select a row for Preview.
 **Add library** opens a folder or bundle; desktop bundles install into a new
 folder. Remove leaves files intact, while Delete moves an eligible folder to

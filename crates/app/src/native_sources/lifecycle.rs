@@ -13,6 +13,14 @@ pub(crate) struct DeleteDraft {
     generation: u64,
     fingerprints: Vec<Value>,
 }
+#[cfg(not(target_arch = "wasm32"))]
+impl DeleteDraft {
+    /// Recheck manifest identity as well as items, since empty libraries have no
+    /// item fingerprints that could reveal a replacement before the trash call.
+    fn matches_snapshot(&self, snapshot: &NativeSource) -> bool {
+        snapshot.library() == self.library && snapshot.items().iter().map(|i| i.inspect()).collect::<Vec<_>>() == self.fingerprints
+    }
+}
 /// One bounded operation slot covers inspection and trash, including disconnected workers.
 #[derive(Debug)]
 pub(super) struct Job {
@@ -99,14 +107,17 @@ impl PcbApp {
             std::thread::Builder::new()
                 .name("pcbcraft-library-delete-check".into())
                 .spawn(move || {
-                    let result = pcbcraft_storage::library::deletion_snapshot(std::path::Path::new(&registration.path)).map(|snapshot| {
-                        Outcome::Prepared(DeleteDraft {
+                    let result = pcbcraft_storage::library::deletion_snapshot(std::path::Path::new(&registration.path)).and_then(|snapshot| {
+                        if snapshot.library() != library {
+                            return Err("Library folder identity changed; refresh it before deleting".into());
+                        }
+                        Ok(Outcome::Prepared(DeleteDraft {
                             source: registration.source,
                             path: registration.path,
                             library,
                             generation,
                             fingerprints: snapshot.items().iter().map(|i| i.inspect()).collect(),
-                        })
+                        }))
                     });
                     let _ = send.send(result);
                     ctx.request_repaint();
@@ -163,7 +174,7 @@ impl PcbApp {
                     let result = (|| {
                         let path = std::path::Path::new(&draft.path);
                         let current = pcbcraft_storage::library::deletion_snapshot(path)?;
-                        if current.items().iter().map(|i| i.inspect()).collect::<Vec<_>>() != draft.fingerprints {
+                        if !draft.matches_snapshot(&current) {
                             return Err("Library folder changed; review deletion again".into());
                         }
                         pcbcraft_storage::library::trash_library(path)?;
@@ -271,6 +282,73 @@ mod tests {
         assert!(!app.library_mutation_busy());
         assert_eq!(app.library_sources.registered.len(), 1);
         assert_eq!(app.session.inspect(), before);
+    }
+    /// A replaced manifest cannot borrow the cached library's editor-protection identity,
+    /// including when the newly read library has no valid item documents.
+    #[test]
+    fn review_deletion_rejects_replaced_manifest_identity() {
+        let (_root, mut app) = fixture();
+        let path = std::path::Path::new(&app.library_sources.registered[0].path).join("library.json");
+        std::fs::write(path, json!({"format":"pcbcraft-library/1","id":"replacement","name":"Replacement","license":"MIT"}).to_string()).unwrap();
+        let ctx = egui::Context::default();
+        let before = app.session.inspect();
+        app.begin_library_delete(&ctx, Some("deletable")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.library_mutation_busy() {
+            app.poll_library_mutation(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(matches!(app.dialog, Dialog::None));
+        assert!(app.message.as_deref().unwrap().contains("identity changed"));
+        assert_eq!(app.session.inspect(), before);
+        assert_eq!(app.library_sources.registered.len(), 1);
+        assert!(std::path::Path::new(&app.library_sources.registered[0].path).exists());
+    }
+
+    /// An empty folder still has a manifest identity at the final pre-trash check.
+    #[test]
+    fn review_empty_deletion_snapshot_keeps_manifest_identity() {
+        let empty = |id| {
+            NativeSource::load(&sources::Documents::from([(
+                "library.json".into(),
+                json!({"format":"pcbcraft-library/1","id":id,"name":"Empty","license":"MIT"}).to_string(),
+            )]))
+            .unwrap()
+        };
+        let draft = DeleteDraft { source: "test".into(), path: "unused".into(), library: "original".into(), generation: 0, fingerprints: Vec::new() };
+        assert!(draft.matches_snapshot(&empty("original")));
+        assert!(!draft.matches_snapshot(&empty("replacement")));
+    }
+
+    /// A held mutation slot disables definition fields in editor and mixed Library
+    /// hosts until completion; a local worker failure restores ordinary editing.
+    #[test]
+    fn review_mutation_blocks_gui_definition_edits() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for mixed in [false, true] {
+            let (_root, mut app) = fixture();
+            app.new_library_item(pcbcraft_engine::authoring::Kind::Footprint);
+            if mixed {
+                app.place_library_workspace(&egui::Context::default(), pcbcraft_chrome::workspace::Placement::Beside).unwrap();
+            }
+            let (send, receive) = mpsc::channel();
+            app.library_sources.mutation = Some(Job { receive });
+            let mut h = Harness::builder().with_size(egui::vec2(2000., 1000.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            assert!(h.get_by_role_and_label(egui::Role::TextInput, "Name").accesskit_node().is_disabled());
+            let before = h.state().library_editors.inspect();
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+            h.run();
+            assert_eq!(h.state().library_editors.inspect(), before);
+            send.send(Err("Synthetic trash failure".into())).unwrap();
+            h.run();
+            assert!(!h.state().library_mutation_busy());
+            assert!(!h.get_by_role_and_label(egui::Role::TextInput, "Name").accesskit_node().is_disabled());
+        }
     }
     /// Opt-in platform test: trash only an owned synthetic folder while project pinning stays exact.
     #[test]

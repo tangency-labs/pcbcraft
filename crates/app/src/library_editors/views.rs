@@ -277,6 +277,11 @@ impl PcbApp {
     /// Render any definition pane in its scoped rectangle, including mixed project/library splits.
     pub(crate) fn library_pane(&mut self, ui: &mut Ui, view: ViewId) {
         let Some(id) = self.bind_library_view(view) else { return };
+        // Mixed hosts can be framed by a project or Library workspace rather than
+        // library_frame, so enforce the source mutation boundary here as well.
+        if self.library_mutation_busy() || self.library_sources.installing() {
+            ui.disable();
+        }
         if self.views.active.id() == view && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx()) {
             self.take_panel_escape(ui.ctx());
         }

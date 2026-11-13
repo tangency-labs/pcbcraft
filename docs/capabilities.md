@@ -118,7 +118,7 @@ in PCB Properties and Browser after schematic deletion, until reviewed footprint
 removal. Older and untyped history retains its stored text; see the
 [native storage contract](native-project-storage.md).
 
-The **Library** workspace browses native libraries with search/Type, nested and
+The **Parts Library** workspace browses native libraries with search/Type, nested and
 flat orderable parts, native previews, revisions and dependencies. Desktop source
 actions include remembered folders, refresh/relocate, bundle installation into
 unused folders, removal and confirmed system-trash deletion. Browser folder/bundle

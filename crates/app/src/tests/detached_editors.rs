@@ -1812,6 +1812,25 @@ fn arrangement_dialog_stays_in_its_host_when_main_enters_a_library_workspace() {
     assert!(peer.borrow().nodes.values().any(|n| n.role() == egui::accesskit::Role::TextInput));
 }
 
+/// Parts Library obeys the same arrangement-form owner as project and definition hosts.
+#[test]
+fn review_arrangement_dialog_owner_in_parts_library() {
+    let (mut h, peer) = multi_window();
+    let source = h.state().views.active.id();
+    h.state_mut().views.open_window(source).unwrap();
+    h.run();
+    child_tab_menu(&mut h, &peer, "Arrangement Views");
+    let at = child_rect(&peer, "Rename…").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
+    let ctx = h.ctx.clone();
+    h.state_mut().place_library_workspace(&ctx, pcbcraft_chrome::workspace::Placement::Here).unwrap();
+    h.run();
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    assert!(h.query_by_label("Arrangement name").is_none());
+    assert!(peer.borrow().nodes.values().any(|n| n.role() == egui::accesskit::Role::TextInput));
+}
+
 /// A detached host switches only its own catalog, preserving its query and the shared
 /// document while the main host retains its independent catalog presentation.
 #[test]

@@ -266,6 +266,10 @@ pub struct NativeSource {
     problems: Vec<String>,
 }
 impl NativeSource {
+    /// Stable manifest identity, including for sources with no valid item documents.
+    pub fn library(&self) -> &str {
+        &self.library
+    }
     /// Validated native items, retaining exact revisions and source-relative diagnostic paths.
     pub fn items(&self) -> &[Item] {
         &self.items
