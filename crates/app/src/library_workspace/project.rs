@@ -11,6 +11,32 @@ pub(crate) struct Cache {
 }
 
 impl PcbApp {
+    /// Expand/collapse changes navigation only and preserves the selected pinned/source record.
+    pub(super) fn library_tree_action(&self, state: &mut State, action: chrome::TreeAction) {
+        match action {
+            chrome::TreeAction::CollapseAll => {
+                state.opened.clear();
+                state.closed.extend(["Project".into(), "Built-in".into(), "Sources".into()]);
+            }
+            chrome::TreeAction::ExpandAll => {
+                state.closed.clear();
+                state.opened.extend(
+                    self.session
+                        .libraries()
+                        .inspect()
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|source| source["source"].as_str().map(str::to_owned)),
+                );
+                state.opened.extend(self.library_sources.registered.iter().map(|registration| registration.source.clone()));
+                state.opened.extend(self.library_sources.statuses.keys().cloned());
+                if let Ok(inventory) = self.project_library_inventory() {
+                    state.opened.extend(inventory.entries().map(|entry| format!("project/{}", project_group(&entry.item.key.library))));
+                }
+            }
+        }
+    }
     /// Live clients inspect the same pinned rows and usage as the Project table, without host paths.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn inspect_library_workspace(&self, state: &State) -> Value {
@@ -169,13 +195,11 @@ impl PcbApp {
             );
             return;
         };
-        let mut libraries: BTreeSet<String> = inventory
+        let libraries: BTreeSet<String> = inventory
             .entries()
             .filter(|entry| entry.item.key.kind != Kind::Category)
             .map(|entry| project_group(&entry.item.key.library).to_owned())
             .collect();
-        // Keep the deliberate local destination visible even before the first variant exists.
-        libraries.insert("project-only".into());
         for library in libraries {
             let name = self.project_collection_name(&inventory, &library, loaded);
             let entries: Vec<_> = inventory
@@ -183,7 +207,7 @@ impl PcbApp {
                 .filter(|entry| project_group(&entry.item.key.library) == library && entry.item.key.kind != Kind::Category)
                 .collect();
             let id = format!("project/{library}");
-            let open = !entries.is_empty() && !state.closed.contains(&id);
+            let open = state.opened.contains(&id);
             let (clicked, fold) = chrome::tree(
                 ui,
                 ui.make_persistent_id(&id),
@@ -200,7 +224,7 @@ impl PcbApp {
                 },
             );
             if fold {
-                toggle(&mut state.closed, id.clone());
+                toggle(&mut state.opened, id.clone());
             }
             if clicked {
                 state.select_project(project, Some(library.clone()), 0);
@@ -212,7 +236,11 @@ impl PcbApp {
                     (3, "Generic parts", ToolIcon::Bom),
                     (4, "Orderable parts", ToolIcon::Shared("library")),
                 ] {
-                    let count = entries.iter().filter(|entry| kind_index(entry.item.key.kind) == kind).count().to_string();
+                    let count = entries.iter().filter(|entry| kind_index(entry.item.key.kind) == kind).count();
+                    if count == 0 {
+                        continue;
+                    }
+                    let count = count.to_string();
                     if chrome::tree(
                         ui,
                         ui.make_persistent_id((&id, kind)),
@@ -332,13 +360,30 @@ impl State {
         self.selected = None;
         self.compact = 1;
     }
-    /// A Project-only aggregate can contain several deliberate native variant namespaces.
+    /// Exact project-local IDs remain addressable alongside the Project-only aggregate.
     fn includes_project(&self, key: &Key) -> bool {
-        self.project_library.as_deref().is_none_or(|library| project_group(&key.library) == library)
+        self.project_library.as_deref().is_none_or(|library| key.library == library || project_group(&key.library) == library)
     }
 }
 
 /// The reserved native namespace, rather than source availability, identifies deliberate variants.
 fn project_group(library: &str) -> &str {
     if library.starts_with("project-") { "project-only" } else { library }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+    /// Explicit native variant IDs select one namespace; the tree aggregate includes both.
+    #[test]
+    fn exact_project_local_filters_do_not_become_empty_aggregates() {
+        let key = |library: &str| Key { library: library.into(), kind: Kind::Symbol, id: "connector".into(), revision: 1 };
+        let mut state = State { project_library: Some("project-abc".into()), ..Default::default() };
+        assert!(state.includes_project(&key("project-abc")));
+        assert!(!state.includes_project(&key("project-def")));
+        state.project_library = Some("project-only".into());
+        assert!(state.includes_project(&key("project-abc")));
+        assert!(state.includes_project(&key("project-def")));
+        assert!(!state.includes_project(&key("workshop")));
+    }
 }

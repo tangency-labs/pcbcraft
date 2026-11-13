@@ -404,6 +404,18 @@ mod live {
                     kind: Kind::Query,
                 },
                 Param { name: "source", summary: "Registration ID", required: false, kind: Kind::Name },
+                Param {
+                    name: "tree_action",
+                    summary: "Expand or collapse all Browser branches without changing selection",
+                    required: false,
+                    kind: Kind::Choice(&["expand_all", "collapse_all"]),
+                },
+                Param {
+                    name: "browser_width",
+                    summary: "Requested Browser width in logical points; compact hosts retain it for wider layouts",
+                    required: false,
+                    kind: Kind::Integer { min: 180, max: 640, step: 1 },
+                },
                 Param { name: "query", summary: "Search text; empty clears it", required: false, kind: Kind::Query },
                 Param {
                     name: "type",

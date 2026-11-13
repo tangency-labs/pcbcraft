@@ -16,6 +16,7 @@ fn project_tree_browses_pins_without_mutating_or_requiring_a_source() {
         h.state_mut().preferences.theme = theme;
         place(h.state_mut());
         h.state_mut().session.execute(sources::REMOVE, &json!({"source":"example-parts"})).unwrap();
+        h.state_mut().views.active.library.as_mut().unwrap().opened.insert("project/parts-demo".into());
         h.run();
         let before = h.state().session.inspect();
         let snapshot = h.state().session.snapshot().unwrap();
@@ -29,6 +30,7 @@ fn project_tree_browses_pins_without_mutating_or_requiring_a_source() {
             click(&mut h, "Preview");
         }
         h.get_by_label("Depends on");
+        assert!(h.query_all_by_label("Project Orderable parts in Native Parts Demo").next().is_none());
         assert!(h.query_all_by_label("Source unavailable").next().is_some());
         assert_eq!(h.state().session.inspect(), before);
         assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));

@@ -27,10 +27,11 @@ pub(super) struct State {
     selected: Option<Key>,
     expanded: BTreeSet<Key>,
     closed: BTreeSet<String>,
+    opened: BTreeSet<String>,
     compact: usize,
     tab: usize,
     preview_collapsed: bool,
-    browser_collapsed: bool,
+    browser: chrome::Browser,
     preview_key: Option<Key>,
     symbol_camera: crate::library_preview::Camera,
     footprint_camera: crate::library_preview::Camera,
@@ -57,7 +58,7 @@ impl State {
     /// Inspect stable source/item identities without granting project edit authority.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
+        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"browser_collapsed":self.browser.collapsed,"browser_width":self.browser.width(),"tree_open":self.opened,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
     }
 }
 
@@ -465,6 +466,19 @@ impl PcbApp {
             return result;
         }
         let mut state = self.library_navigation(view, params)?;
+        if let Some(width) = params["browser_width"].as_f64() {
+            state.browser.set_width(width as f32)?;
+        }
+        if let Some(action) = params["tree_action"].as_str() {
+            self.library_tree_action(
+                &mut state,
+                match action {
+                    "expand_all" => chrome::TreeAction::ExpandAll,
+                    "collapse_all" => chrome::TreeAction::CollapseAll,
+                    _ => return Err("Choose expand_all or collapse_all".into()),
+                },
+            );
+        }
         state.sync_preview();
         let camera = match params["preview"].as_str() {
             Some("symbol") => Some(&mut state.symbol_camera),
@@ -517,19 +531,22 @@ impl PcbApp {
         // Move the runtime panel out temporarily: Clone intentionally drops live drags.
         let mut preview = self.views.view_mut(view).map(|v| std::mem::take(&mut v.panels[crate::workspace_panels::PROPERTIES])).unwrap_or_default();
         let mut preview_collapsed = state.preview_collapsed;
-        let mut browser_collapsed = state.browser_collapsed;
+        let mut browser = std::mem::take(&mut state.browser);
         let previous_compact = state.compact;
         let mut compact = state.compact;
-        chrome::workspace(ui, &mut compact, &mut preview, &mut preview_collapsed, &mut browser_collapsed, |ui, region| match region {
+        let action = chrome::workspace(ui, &mut compact, &mut preview, &mut preview_collapsed, &mut browser, |ui, region| match region {
             chrome::Region::Browser => self.library_tree(ui, &mut state, &ids, &loaded),
             chrome::Region::Items => self.library_items(ui, &mut state, &loaded),
             chrome::Region::Preview => self.library_item_preview(ui, &mut state),
         });
+        if let Some(action) = action {
+            self.library_tree_action(&mut state, action);
+        }
         if state.compact == previous_compact {
             state.compact = compact;
         }
         state.preview_collapsed = preview_collapsed;
-        state.browser_collapsed = browser_collapsed;
+        state.browser = browser;
         if let Some(target) = self.views.view_mut(view) {
             target.panels[crate::workspace_panels::PROPERTIES] = preview;
             target.library = Some(state);
@@ -579,14 +596,14 @@ impl PcbApp {
                         .map(|s| ["symbols", "footprints", "parts", "manufacturer_parts"].iter().map(|k| s[*k].as_u64().unwrap_or(0)).sum::<u64>())
                         .unwrap_or(0)
                         .to_string();
-                    let open = !state.closed.contains(id);
+                    let open = state.opened.contains(id);
                     let (clicked, fold) = chrome::tree(
                         ui,
                         ui.make_persistent_id(id),
                         chrome::Node {
                             label: name,
                             depth: 1,
-                            fold: Some(open),
+                            fold: (count != "0").then_some(open),
                             selected: state.source.as_ref() == Some(id) && state.kind == 0,
                             count: &count,
                             readonly: builtin || registration.is_some_and(|r| !r.writable && !crate::IN_BROWSER),
@@ -596,7 +613,7 @@ impl PcbApp {
                         },
                     );
                     if fold {
-                        toggle(&mut state.closed, id.clone());
+                        toggle(&mut state.opened, id.clone());
                     }
                     if clicked {
                         state.project = None;
@@ -613,7 +630,11 @@ impl PcbApp {
                             (3, "Generic parts", "parts"),
                             (4, "Orderable parts", "manufacturer_parts"),
                         ] {
-                            let count = data.and_then(|s| s[field].as_u64()).unwrap_or(0).to_string();
+                            let count = data.and_then(|s| s[field].as_u64()).unwrap_or(0);
+                            if count == 0 {
+                                continue;
+                            }
+                            let count = count.to_string();
                             if chrome::tree(
                                 ui,
                                 ui.make_persistent_id((id, kind)),

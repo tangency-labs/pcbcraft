@@ -6,6 +6,7 @@ use egui_kittest::{
 };
 use pcbcraft_engine::library::sources;
 use std::sync::Arc;
+mod browser;
 mod project;
 
 /// Real native records exercise browsing independently of starter identities.
@@ -30,6 +31,8 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
 fn browse_select_expand_and_flat_view_preserve_project_state() {
     for width in [1800., 620.] {
         let mut h = fixture(width);
+        h.state_mut().views.active.library.as_mut().unwrap().opened.insert("example-parts".into());
+        h.run();
         let before = h.state().session.inspect();
         let project = h.state().session.snapshot().unwrap();
         click(&mut h, "Native Parts Demo");
@@ -217,9 +220,9 @@ fn source_diagnostics_and_browser_collapse_use_real_source_state() {
         h.get_by_label(problem.as_str().unwrap());
     }
     click(&mut h, "Collapse Browser");
-    assert!(h.state().views.active.library.as_ref().unwrap().browser_collapsed);
+    assert!(h.state().views.active.library.as_ref().unwrap().browser.collapsed);
     click(&mut h, "Expand Browser");
-    assert!(!h.state().views.active.library.as_ref().unwrap().browser_collapsed);
+    assert!(!h.state().views.active.library.as_ref().unwrap().browser.collapsed);
 }
 
 /// A short empty preview still owns a full-height column, and a live header drag
