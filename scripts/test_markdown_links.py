@@ -228,6 +228,55 @@ class MarkdownLinkChecks(unittest.TestCase):
             'docs/sub/check.md:1: missing local link target: ../missing.md',
             'docs/sub/check.md:3: missing local link target: ../absent.png'])
 
+    def test_block_boundary_inside_multiline_link_title(self):
+        # CommonMark headings and list items terminate the inline block, even
+        # when an open quotation-marked link title preceded them.
+        self.assertEqual(self.check(
+            '[text](../missing.md "Title\n# Heading\nend")\n'), [])
+        self.assertEqual(self.check(
+            '[text](../missing.md "Title\n- next item\nend")\n'), [])
+        self.assertEqual(self.check(
+            '[text](../missing.md "Title\n> next quote\nend")\n'), [])
+
+    def test_multiline_link_inside_blockquote(self):
+        self.assertEqual(self.check(
+            '> [broken](../missing.md\n>   "Description")\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+        self.assertEqual(self.check(
+            '> [valid](../a.md\n>   "Description")\n'), [])
+        self.assertEqual(self.check(
+            '> First [broken](../missing.md\n> )\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_multiline_quoted_link_after_unquoted_paragraph(self):
+        self.assertEqual(self.check(
+            '[first](../missing.md "title\n> [second](../missing.md\n> "ok")\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md'])
+
+    def test_multiline_link_inside_list_item(self):
+        self.assertEqual(self.check(
+            '- [broken](../missing.md\n  "Description")\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_nested_or_escaped_brackets_inside_inline_link_label(self):
+        self.assertEqual(self.check(
+            '[link [nested]](../missing.md)\n'
+            r'[link \[bracket\]](../absent.md)' + '\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md',
+            'docs/sub/check.md:2: missing local link target: ../absent.md'])
+        self.assertEqual(self.check(
+            r'\[not a link](../missing.md)' + '\n'), [])
+        self.assertEqual(self.check(
+            '[nested [deeper [value]]](../missing.md)'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
+    def test_markdown_like_text_inside_html_tag_attributes_is_not_a_link(self):
+        self.assertEqual(self.check(
+            '<span title="[not a link](../missing.md)">ok</span>\n'), [])
+        self.assertEqual(self.check(
+            '<a href="../missing.md" title="[not a link](../also-missing.md)">x</a>\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md'])
+
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
             '[web](https://example.org/x) [email](mailto:help@example.org)\n'

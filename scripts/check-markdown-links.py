@@ -17,10 +17,10 @@ from urllib.parse import unquote, urlsplit
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 REFERENCE_DEF = re.compile(r"^ {0,3}\[([^]\n]+)\]:\s*(<[^>\n]+>|\S+)")
-INLINE_START = re.compile(r"!?\[[^]\n]*\]\(")
 REFERENCE_USAGE = re.compile(r"!?\[([^]\n]+)\]\[([^]\n]*)\]")
 SHORTCUT_USAGE = re.compile(r"!?\[([^]\n]+)\]")
 HTML_DEST = re.compile(r"\b(?:href|src)\s*=\s*([\"'])(.*?)\1", re.IGNORECASE)
+HTML_TAG = re.compile(r"<[A-Za-z][^>\n]*>")
 # Unlike forgiving HTML5 entity parsing, CommonMark only decodes entities with ';'.
 MARKDOWN_ENTITY = re.compile(r"&(?:#[0-9]+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]+;)")
 # These interrupt or delimit inline parsing even when no blank line precedes them.
@@ -67,83 +67,122 @@ def _masked(text: str) -> str:
     return "".join(out)
 
 
-def _mask_blocks(lines: list[str]) -> list[str]:
-    """Keep code spans inside Markdown blocks, never across separate blocks."""
-    output: list[str] = []
+def _mask_blocks(lines: list[str]) -> list[tuple[int, str]]:
+    """Mask inline code separately for each block, retaining source line numbers.
+
+    Every returned text represents one inline Markdown block. In particular,
+    an inline link cannot finish in a following heading or list item. Prefixes
+    of quoted lines become spaces so link destinations can continue on later
+    quoted lines without changing diagnostics.
+    """
+    blocks: list[tuple[int, str]] = []
     pending: list[str] = []
+    first_line = 1
     kind = "paragraph"
+
+    def add(line: str, number: int) -> None:
+        nonlocal first_line
+        if not pending:
+            first_line = number
+        pending.append(line)
 
     def flush() -> None:
         if pending:
-            output.extend(_masked("\n".join(pending)).split("\n"))
+            blocks.append((first_line, _masked("\n".join(pending))))
             pending.clear()
 
-    for line in lines:
+    for number, line in enumerate(lines, 1):
         if not line.strip():
             flush()
-            output.append(line)
             kind = "paragraph"
         elif ATX_HEADING.match(line) or THEMATIC_BREAK.match(line):
             flush()
-            output.append(_masked(line))
+            blocks.append((number, _masked(line)))
             kind = "paragraph"
-        elif BLOCKQUOTE.match(line):
-            # Lazy unprefixed continuation applies only to an open paragraph
-            # inside the quote, never to a blockquote heading or thematic break.
-            content = re.sub(r"^(?: {0,3}>[ \t]?)+", "", line)
+        elif (prefix := re.match(r"^(?: {0,3}>[ \t]?)+", line)):
+            # Strip the container marker but preserve column offsets in-place.
+            content = line[prefix.end():]
+            visible = " " * prefix.end() + content
             if ATX_HEADING.match(content) or THEMATIC_BREAK.match(content):
                 flush()
-                output.append(_masked(line))
+                blocks.append((number, _masked(visible)))
                 kind = "quoted_nonparagraph"
             else:
                 if kind != "blockquote":
                     flush()
-                pending.append(line)
+                add(visible, number)
                 kind = "blockquote"
         elif (item := LIST_ITEM.match(line)):
-            # In CommonMark a numbered list beginning with a value other
-            # than 1 cannot interrupt a paragraph. It remains a continuation
-            # of that paragraph, including any multiline code span.
+            # Only ordered lists starting at 1 can interrupt a paragraph.
             ordered = re.match(r"[0-9]{1,9}[.)]", item.group().lstrip())
             if pending and kind == "paragraph" and ordered and int(ordered.group()[:-1]) != 1:
-                pending.append(line)
+                add(line, number)
             else:
-                flush()  # each list item starts a new inline block
-                pending.append(line)
+                flush()
+                add(line, number)
                 kind = "list"
         else:
-            # A paragraph inside a blockquote may have a lazy continuation
-            # without a '>' prefix. Do not split the inline block here.
-            pending.append(line)
-            if kind != "list" and kind != "blockquote":
+            # Lazy continuations of paragraph content in a blockquote, or of
+            # an existing list-item paragraph, remain in the same block.
+            add(line, number)
+            if kind not in ("list", "blockquote"):
                 kind = "paragraph"
     flush()
-    return output
+    return blocks
 
 
-def _visible_lines(text: str) -> list[str]:
-    """Ignore fenced blocks and comments, preserving diagnostic line numbers."""
+def _visible_blocks(text: str) -> list[tuple[int, str]]:
+    """Skip fenced code and comments, keeping one block per inline scope."""
     fence_char = ""
     fence_len = 0
-    result: list[str] = []
+    visible: list[str] = []
     without_comments = re.sub(r"<!--[\s\S]*?-->",
                               lambda m: re.sub(r"[^\n]", " ", m.group()), text)
     for line in without_comments.splitlines():
         match = FENCE.match(line)
         if fence_char:
-            if match and match.group(1)[0] == fence_char and len(match.group(1)) >= fence_len and not line[match.end():].strip():
+            if (match and match.group(1)[0] == fence_char
+                    and len(match.group(1)) >= fence_len
+                    and not line[match.end():].strip()):
                 fence_char = ""
-            result.append("")
+            visible.append("")
         elif match:
             fence_char, fence_len = match.group(1)[0], len(match.group(1))
-            result.append("")
+            visible.append("")
         else:
-            result.append(line)
-    return _mask_blocks(result)
+            visible.append(line)
+    return _mask_blocks(visible)
 
 
 def _normalized(label: str) -> str:
     return " ".join(label.split()).casefold()
+
+
+def _inline_starts(text: str):
+    """Find inline links, including balanced or escaped brackets in labels.
+
+    The helper only identifies a potential link's opening parenthesis; the
+    destination parser validates the remainder. Escaped opening brackets are
+    ordinary text, not a link.
+    """
+    for marker in re.finditer(r"!?\[", text):
+        start = marker.start()
+        opener = marker.end() - 1
+        if _escaped(text, opener):
+            continue
+        depth = 1
+        position = marker.end()
+        while position < len(text) and text[position] != "\n":
+            if not _escaped(text, position):
+                if text[position] == "[":
+                    depth += 1
+                elif text[position] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        if position + 1 < len(text) and text[position + 1] == "(":
+                            yield start, position + 2
+                        break
+            position += 1
 
 
 def _link_spaces(text: str, pos: int) -> int | None:
@@ -251,53 +290,55 @@ def find_broken_links(repo: Path, files: list[Path]) -> list[str]:
     repo = repo.resolve()
     problems: list[str] = []
     for source in files:
-        lines = _visible_lines(source.read_text(encoding="utf-8"))
+        blocks = _visible_blocks(source.read_text(encoding="utf-8"))
         references: dict[str, str] = {}
-        scan_lines: list[str] = []
-        for line in lines:
-            match = REFERENCE_DEF.match(line)
-            if match:
-                dest = match.group(2)
-                references.setdefault(_normalized(match.group(1)), dest[1:-1] if dest.startswith("<") else dest)
-                scan_lines.append("")
-            else:
-                scan_lines.append(line)
-        text = "\n".join(scan_lines)
-        newlines = [index for index, char in enumerate(text) if char == "\n"]
-        targets: list[tuple[int, str, bool]] = []
-        masked = list(text)
-        for match in INLINE_START.finditer(text):
-            found = _destination(text, match.end())
-            if not found:
-                continue
-            target, end = found
-            # ATX headings have a single inline-content line. Do not join
-            # an incomplete heading link with the following paragraph.
-            line_start = text.rfind("\n", 0, match.start()) + 1
-            line_end = text.find("\n", match.start())
-            opener_line = text[line_start:line_end if line_end >= 0 else len(text)]
-            quote_content = re.sub(r"^(?: {0,3}>[ \t]?)+", "", opener_line)
-            if "\n" in text[match.end():end] and ATX_HEADING.match(quote_content):
-                continue
-            targets.append((match.start(), target, False))
-            masked[match.start():end] = " " * (end - match.start())
-        remainder = "".join(masked)
-        for match in REFERENCE_USAGE.finditer(remainder):
-            label = _normalized(match.group(2) or match.group(1))
-            if label in references:
-                targets.append((match.start(), references[label], False))
-            masked[match.start():match.end()] = " " * (match.end() - match.start())
-        remainder = "".join(masked)
-        for match in SHORTCUT_USAGE.finditer(remainder):
-            label = _normalized(match.group(1))
-            if label in references:
-                targets.append((match.start(), references[label], False))
-        for match in HTML_DEST.finditer(text):
-            targets.append((match.start(), match.group(2), True))
-        for offset, target, html_attribute in sorted(targets):
-            if not _local_target(repo, source, target, html_attribute=html_attribute):
-                number = bisect_right(newlines, offset) + 1
-                problems.append(f"{source.relative_to(repo)}:{number}: missing local link target: {target}")
+        scan_blocks: list[tuple[int, str]] = []
+        for first_line, block in blocks:
+            scan_lines: list[str] = []
+            for line in block.split("\n"):
+                match = REFERENCE_DEF.match(line)
+                if match:
+                    dest = match.group(2)
+                    references.setdefault(_normalized(match.group(1)),
+                                          dest[1:-1] if dest.startswith("<") else dest)
+                    scan_lines.append("")
+                else:
+                    scan_lines.append(line)
+            scan_blocks.append((first_line, "\n".join(scan_lines)))
+        for first_line, text in scan_blocks:
+            newlines = [index for index, char in enumerate(text) if char == "\n"]
+            targets: list[tuple[int, str, bool]] = []
+            masked = list(text)
+            # Markdown punctuation inside an HTML attribute is not a Markdown
+            # link. Collect actual href/src destinations first, then mask tags
+            # so their quoted attributes cannot produce spurious diagnostics.
+            for tag in HTML_TAG.finditer(text):
+                for attr in HTML_DEST.finditer(tag.group()):
+                    targets.append((tag.start() + attr.start(), attr.group(2), True))
+                masked[tag.start():tag.end()] = " " * (tag.end() - tag.start())
+            inline_text = "".join(masked)
+            for start, destination_start in _inline_starts(inline_text):
+                found = _destination(inline_text, destination_start)
+                if not found:
+                    continue
+                target, end = found
+                targets.append((start, target, False))
+                masked[start:end] = " " * (end - start)
+            remainder = "".join(masked)
+            for match in REFERENCE_USAGE.finditer(remainder):
+                label = _normalized(match.group(2) or match.group(1))
+                if label in references:
+                    targets.append((match.start(), references[label], False))
+                masked[match.start():match.end()] = " " * (match.end() - match.start())
+            remainder = "".join(masked)
+            for match in SHORTCUT_USAGE.finditer(remainder):
+                label = _normalized(match.group(1))
+                if label in references:
+                    targets.append((match.start(), references[label], False))
+            for offset, target, html_attribute in sorted(targets):
+                if not _local_target(repo, source, target, html_attribute=html_attribute):
+                    number = first_line + bisect_right(newlines, offset)
+                    problems.append(f"{source.relative_to(repo)}:{number}: missing local link target: {target}")
     return problems
 
 
