@@ -42,8 +42,11 @@ still needs to work before the first collaboration-ready preview.
 DRC and the engine's [snapshot copper query](copper-clearance-query.md) share
 supported pad/track/via contours, contact and clearance predicates. Queries retain
 board, snapshot, revision and effective-clearance authority, with conservative
-candidates and an exhaustive reference. Routing clearance enforcement, spatial
-indexing and native circular arcs remain separate work.
+candidates and an exhaustive reference. Routing clearance enforcement and native
+circular arcs remain separate work. Captured local queries
+now reuse a layer-aware packed index and support disposable geometry overlays;
+see the [query contract](copper-clearance-query.md) and
+[measurement limits](../tools/performance/baselines/issue244/README.md).
 
 The engine [sparse net registry](net-registry-storage.md) preserves independent
 UUIDs for named or explicitly promoted nets, with bounded anchors, split/merge

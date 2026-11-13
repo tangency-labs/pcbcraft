@@ -6,8 +6,30 @@ use super::{
     view::{BoardTarget, BoardView},
 };
 use crate::{CommandError, Project, Session, schematic::Point};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, OnceLock, Weak},
+};
 use uuid::Uuid;
+
+mod index;
+mod overlay;
+pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
+
+/// At most one prepared geometry per session, shared across its views without retaining history
+/// snapshots. A contended/poisoned cache is a miss; no geometry is built while holding its lock.
+pub(crate) struct Cached {
+    snapshot: Weak<Project>,
+    target: BoardTarget,
+    geometry: Arc<BoardGeometry>,
+}
+
+impl std::fmt::Debug for Cached {
+    /// Show cache size without traversing model data or exposing a stale snapshot as current.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cached").field("target", &self.target).field("objects", &self.geometry.items.len()).finish()
+    }
+}
 
 /// Runtime source authority. Snapshot-local object/net indices have meaning only under this
 /// authority; neither these indices nor this token are persisted as net bindings.
@@ -84,11 +106,12 @@ pub struct Results {
     pub decisions: Vec<Decision>,
 }
 
-/// A prepared query over one immutable board snapshot and one effective clearance. This simple
-/// implementation retains a sweep for board pairs and a linear scan for disposable probes.
+/// A prepared query over one immutable board snapshot and one effective clearance. Local queries
+/// reuse a packed index (or a small-board scan); all-board pair enumeration retains its sweep.
 pub struct ClearanceQuery {
     authority: Authority,
-    geometry: BoardGeometry,
+    geometry: Arc<BoardGeometry>,
+    copper_layers: Vec<Uuid>,
 }
 
 impl Session {
@@ -105,7 +128,19 @@ impl Session {
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
         let rules = view.resolve_rules(overrides)?;
         let clearance_nm = rules.values.clearance_nm;
-        let geometry = BoardGeometry::new(view);
+        let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();
+        let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
+            cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())
+        });
+        let geometry = geometry.unwrap_or_else(|| {
+            let geometry = Arc::new(BoardGeometry::new(view));
+            if let Ok(mut cache) = self.clearance_cache.try_lock() {
+                *cache = Some(Cached { snapshot: Arc::downgrade(&snapshot), target, geometry: geometry.clone() });
+            }
+            geometry
+        });
+        // Charge the cold index build to preparation, keeping the first local lookup ready.
+        let _ = geometry.index();
         Ok(ClearanceQuery {
             authority: Authority {
                 snapshot,
@@ -117,6 +152,7 @@ impl Session {
                 rules,
             },
             geometry,
+            copper_layers,
         })
     }
 }
@@ -153,22 +189,17 @@ impl ClearanceQuery {
     /// Enumerate conservative obstacle indices for a contour on explicit copper layers.
     /// Equality is retained so tangency participates in zero-clearance contact checks.
     pub fn candidates(&self, contour: &Contour, layers: &[Uuid]) -> Result<Vec<usize>, CommandError> {
-        let view = self.authority.snapshot.board_view(self.authority.target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        if layers.is_empty() || layers.iter().any(|id| !view.layers().iter().any(|l| l.id == *id && l.purpose == super::setup::LayerPurpose::Copper))
-        {
+        self.validate_layers(layers)?;
+        let mut ids = self.geometry.index().candidates(contour.bounds(), self.authority.clearance_nm as f64, layers);
+        ids.retain(|i| share_layers(layers, &self.geometry.items[*i].layers));
+        Ok(ids)
+    }
+    /// Reject absent, technical or foreign layers before any overlay/query state changes.
+    fn validate_layers(&self, layers: &[Uuid]) -> Result<(), CommandError> {
+        if layers.is_empty() || layers.iter().any(|id| !self.copper_layers.contains(id)) {
             return Err(CommandError::InvalidParams("explicit copper layers of the query board are required".into()));
         }
-        let bounds = contour.bounds();
-        Ok(self
-            .geometry
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                (share_layers(layers, &item.layers) && near_bounds(bounds, item.contour.bounds(), self.authority.clearance_nm as f64))
-                    .then_some(index)
-            })
-            .collect())
+        Ok(())
     }
     /// Evaluate a disposable contour using an existing source object's intended membership, or
     /// unknown membership when absent. `intended_from` is an index from this query, never a saved
@@ -209,9 +240,20 @@ pub(super) struct BoardGeometry {
     pub(crate) items: Vec<Object>,
     pub(super) lands: Vec<Land>,
     pub(crate) members: Vec<Vec<usize>>,
+    index: OnceLock<Arc<index::Index>>,
 }
 
 impl BoardGeometry {
+    /// Publish a lazily built immutable index without making another query wait for a builder.
+    /// Concurrent first queries may duplicate a bounded build; subsequent queries share one tree.
+    fn index(&self) -> Arc<index::Index> {
+        if let Some(index) = self.index.get() {
+            return index.clone();
+        }
+        let index = Arc::new(index::Index::new(&self.items));
+        let _ = self.index.set(index.clone());
+        self.index.get().cloned().unwrap_or(index)
+    }
     /// Resolve supported contours and the complete intended membership of every routed island.
     /// Keep legacy clearance islands separate from direct-pad contact traversal used for shorts.
     pub(crate) fn new(view: BoardView<'_>) -> Self {
@@ -298,7 +340,7 @@ impl BoardGeometry {
                 at: via.at,
             });
         }
-        Self { items, lands, members }
+        Self { items, lands, members, index: OnceLock::new() }
     }
     /// Stream conservative shared-layer bound candidates independently of narrow-phase tests.
     /// Equality stays in the candidate set; neither names nor physical connectivity prune it.

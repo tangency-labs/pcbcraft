@@ -18,6 +18,110 @@ fn p(x_nm: i64, y_nm: i64) -> Point {
     Point { x_nm, y_nm }
 }
 
+/// Repeated views share one immutable geometry/index; source changes and reopen cannot adopt
+/// stale data. Diagnostic clearances can reuse geometry without reusing result authority.
+#[test]
+fn query_cache_reuses_unchanged_source_and_rejects_changed_snapshots() {
+    let mut s = routed_fixture();
+    let a = query(&s, 200_000);
+    let b = query(&s, 0);
+    assert!(Arc::ptr_eq(&a.geometry, &b.geometry));
+    assert!(Arc::ptr_eq(&a.geometry.index(), &b.geometry.index()));
+    let layer = copper_layers(&s)[0];
+    s.apply(
+        crate::ADD_TRACKS,
+        &json!({"board":view(&s).target.board,"layer":layer,"width_nm":250_000,
+        "points":[p(50_000_000,50_000_000),p(51_000_000,50_000_000)],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let changed = query(&s, 200_000);
+    assert!(!Arc::ptr_eq(&a.geometry, &changed.geometry));
+    assert!(!a.authority.is_current(&s));
+    s.apply("edit.undo", &json!({})).unwrap();
+    let undone = query(&s, 200_000);
+    assert_eq!(undone.objects().len(), a.objects().len());
+    assert!(!changed.authority.is_current(&s));
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(query(&s, 200_000).objects().len(), changed.objects().len());
+    let snapshot = s.snapshot().unwrap();
+    s.open_snapshot(snapshot);
+    assert!(!changed.authority.is_current(&s));
+    assert!(!Arc::ptr_eq(&changed.geometry, &query(&s, 200_000).geometry));
+}
+
+/// Contention affects only cache reuse; a reader must not wait behind another cache holder.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn query_cache_contention_does_not_block_a_valid_query() {
+    let s = routed_fixture();
+    let guard = s.clearance_cache.lock().unwrap();
+    std::thread::scope(|scope| {
+        let (send, receive) = std::sync::mpsc::channel();
+        let session = &s;
+        scope.spawn(move || {
+            let _ = send.send(query(session, 200_000).objects().len());
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(5));
+        drop(guard);
+        assert!(result.is_ok(), "query waited on a cache lock");
+    });
+}
+
+/// Source replacements, additions and deletions keep stable identities and exhaustive neighbors,
+/// preserve the base index, and cancel by dropping disposable data without document edits.
+#[test]
+fn overlay_changes_are_atomic_disposable_and_keep_all_exact_neighbors() {
+    let s = routed_fixture();
+    let bytes = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let q = query(&s, 200_000);
+    let base_index = q.geometry.index();
+    let layer = copper_layers(&s)[0];
+    let original = q.objects()[0].contour.clone();
+    let moved = Contour::segment(p(70_000_000, 80_000_000), p(80_000_000, 90_000_000), 60_001).unwrap();
+    let id = Uuid::from_u128(100_001);
+    let mut overlay = q.overlay();
+    overlay.replace(0, moved.clone(), vec![layer]).unwrap();
+    assert!(!overlay.candidates(&original, &[layer]).unwrap().contains(&ObstacleId::Source(0)));
+    assert!(overlay.candidates(&moved, &[layer]).unwrap().contains(&ObstacleId::Source(0)));
+    overlay.add(id, original.clone(), vec![layer], Some(0)).unwrap();
+    let before = overlay.candidates(&original, &[layer]).unwrap();
+    let result = overlay.probe(&original, &[layer], None).unwrap();
+    assert!(result.is_current(&overlay, &s));
+    assert!(before.contains(&ObstacleId::Added(id)));
+    assert!(overlay.add(id, moved.clone(), vec![layer], None).is_err());
+    assert!(overlay.replace(0, original.clone(), vec![Uuid::from_u128(999)]).is_err());
+    assert!(overlay.remove(q.objects().len()).is_err());
+    assert_eq!(before, overlay.candidates(&original, &[layer]).unwrap());
+    assert!(result.is_current(&overlay, &s), "rejection preserves overlay authority");
+    for contour in [&original, &moved] {
+        let actual = overlay.probe(contour, &[layer], None).unwrap();
+        let decisions: std::collections::BTreeMap<_, _> = actual.decisions.iter().map(|d| (d.obstacle, d)).collect();
+        for obstacle in (0..q.objects().len()).map(ObstacleId::Source).chain([ObstacleId::Added(id)]) {
+            if let Some(item) = overlay.object(obstacle).filter(|i| i.layers.contains(&layer)) {
+                let gap = contour.gap(&item.contour);
+                if gap <= 200_000. {
+                    let decision = decisions[&obstacle];
+                    assert_eq!(decision.gap_nm, gap);
+                    assert_eq!(decision.touches, gap <= 0.);
+                }
+            }
+        }
+        assert!(actual.authority.is_current(&s));
+    }
+    overlay.remove(0).unwrap();
+    assert!(!result.is_current(&overlay, &s));
+    assert!(!result.is_current(&q.overlay(), &s), "a replacement gesture has different authority");
+    assert!(!overlay.candidates(&moved, &[layer]).unwrap().contains(&ObstacleId::Source(0)));
+    overlay.remove_added(id).unwrap();
+    assert!(overlay.object(ObstacleId::Added(id)).is_none());
+    drop(overlay);
+    assert!(Arc::ptr_eq(&base_index, &q.geometry.index()));
+    assert_eq!(q.objects()[0].contour.bounds(), original.bounds());
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+}
+
 fn query(s: &Session, clearance_nm: i64) -> ClearanceQuery {
     s.clearance_query(view(s).target, clearance_nm).unwrap()
 }
@@ -225,7 +329,8 @@ fn equal_display_names_do_not_exempt_unresolved_membership() {
     let s = fixture(PadShape::Circle, 600_000, 600_000, p(0, 349_999), 60_000);
     let mut q = query(&s, 20_000);
     assert!(q.objects().iter().all(|item| item.intended_nets.is_empty()));
-    for item in &mut q.geometry.items {
+    q.geometry = Arc::new(BoardGeometry::new(view(&s)));
+    for item in &mut Arc::get_mut(&mut q.geometry).unwrap().items {
         item.net = Some("DISPLAY_ONLY".into());
     }
     let decisions: Vec<_> = q.geometry.clearance_pairs(20_000).collect();

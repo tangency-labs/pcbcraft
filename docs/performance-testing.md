@@ -50,6 +50,27 @@ CI and unrelated/documentation-only changes do not collect them.
 
 ## What the harness measures
 
+For the #244 candidate comparison, run the engine-only example against a saved
+fixture, or generate separate synthetic bounds stress cases:
+
+```sh
+cargo run --locked --release -p pcbcraft-engine --example spatial_index -- tools/performance/fixtures/reference-v1.json 100 /tmp/index-reference-new.json
+python3 scripts/simulate-spatial-obstacles.py /tmp/index-simulations-new
+target/release/examples/spatial_index /tmp/index-simulations-new/mixed.json 20 /tmp/index-mixed-new.json
+```
+
+The simulator covers 64 copper layers, 4,096 tracks, 2,048 through vias, 8,192 pads
+and 4,000 synthetic intent tags. Analytic circular arcs and long diagonals stress
+conservative envelopes, including crowded curves and optional eight-piece bounds.
+Reports retain construction, query and replacement-query samples, candidate counts
+and payload sizes where available. Strategy order rotates per iteration and reverses
+per full cycle; `execution_order` records the order associated with raw sample
+indices. Native fixture envelopes and default probes preserve actual copper-layer
+membership. These measure indexing with layer filtering
+and deduplication, not routing, connectivity, ERC or physical presentation. Intent
+tags describe the fixture; the bounds lookup does not solve the electrical graph.
+See the [retained comparison](../tools/performance/baselines/issue244/README.md).
+
 Enable `pcbcraft-app/performance-harness` to build the diagnostics. Ordinary
 application builds exclude them. Both native and browser CPU runners execute the same
 engine operations and `PcbApp::frame`, using the existing Craft chrome and board

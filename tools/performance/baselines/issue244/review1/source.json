@@ -1,0 +1,82 @@
+{
+  "base_revision": "36fdaf7cb33ba7138ff3255a401a3393de4c531d",
+  "scope": "One serial pass of the eight unchanged synthetic inputs at 20 iterations; two native extraction smokes at one iteration. No production, browser or whole-editor timing rerun.",
+  "profile": "release (workspace defaults)",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\n",
+  "platform": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "power": "AC/thermal conditions unmeasured; other development activity may be present",
+  "files": {
+    "crates/engine/examples/spatial_index.rs": "3ed14c7a5221c7b3770279fd359f9e775d3976fa20220b48950ed1ce16bec15e",
+    "crates/engine/examples/spatial_index/alternatives.rs": "f140d03c6d8112d06a70ddc58966f4340c5faef4e94594348cb5479461b120ff",
+    "crates/engine/examples/spatial_index/bvh.rs": "143198b915c74feafcdd0164484a9dd7ec02cf118b48e87a4124dfad5f297f2b",
+    "crates/engine/examples/spatial_index/grid.rs": "7ba0983890823e7a5084998da5a825a5cf3fde4e83f1a491974d4be81777adf6",
+    "crates/engine/examples/spatial_index/hash_grid.rs": "10df9801f0fb5b0295e6fe82801c5bd17109e9086a1a2c897ec0fc7e67e35e33",
+    "Cargo.lock": "f32b017a46a211c29298040dcfc5ef6752f621b9f7173501bbca53224b856c80",
+    "crates/engine/Cargo.toml": "781576145ff563b604615829eafa7aac1fb8ccb20f5226f9fc3e15c2030445d4"
+  },
+  "executable_sha256": "ac3c26eb4dbe4719b53ea6a64be618220a6a906a7311fbf68a07152080abd01e",
+  "started_at": "2026-11-13T07:39:47.306155+00:00",
+  "runs": [
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/straight.json",
+      "input_sha256": "526adf3b1512f795b5aa53d4143c7f0840324cde16db366c476522effead27d3",
+      "report": "straight.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/diagonal.json",
+      "input_sha256": "2f0254dc0b84232097c8f1a3c3576becfb055e41eab92312469036eaeed50c9d",
+      "report": "diagonal.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/curves.json",
+      "input_sha256": "22f48e5b9fea28043051f346985a4829a5673ea33339c81ecb399524af58b4aa",
+      "report": "curves.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/crowded_curves.json",
+      "input_sha256": "a629a7c0ce9220294d753a60a23ba0f5cf08f4fb6bd2cefcb0a9b1f46617ac66",
+      "report": "crowded_curves.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/mixed.json",
+      "input_sha256": "e0614bc7124f08f5a12385567606b6f825db8e5280fb05fa76936b1c36959d10",
+      "report": "mixed.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/diagonal-split8.json",
+      "input_sha256": "54acb9c6ce58df2c27b1885b9496ba46ed1b4fa52aab3cdf661931f02c1c18b8",
+      "report": "diagonal-split8.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/curves-split8.json",
+      "input_sha256": "d1edb2ca84e4d7f645e764e9d1c7e500418983dcb369550cd7080af51fc52646",
+      "report": "curves-split8.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/simulations/crowded_curves-split8.json",
+      "input_sha256": "0d745370e1c686feaa6af5379c5f716a6fc7eb5108c82acbeb05aa46e6b2be04",
+      "report": "crowded_curves-split8.json",
+      "iterations": 20
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/reference-v1.json",
+      "input_sha256": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+      "report": "reference-v1.json",
+      "iterations": 1
+    },
+    {
+      "input": "/home/travisl/projects/PCBcraft/setup/issue244/channels-v1.json",
+      "input_sha256": "2bcba0154913f8e396b975f470040edc649342e4ed40bbe77af107c5ae2f0efa",
+      "report": "channels-v1.json",
+      "iterations": 1
+    }
+  ],
+  "completed_at": "2026-11-13T07:40:18.948351+00:00"
+}

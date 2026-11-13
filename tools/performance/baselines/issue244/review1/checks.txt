@@ -1,0 +1,8 @@
+Diagnostic-only follow-up to PR #326. Runtime, dependencies and CI workflows unchanged.
+Passed: cargo test --locked -p pcbcraft-engine --example spatial_index (5 tests).
+Passed: cargo clippy --locked -p pcbcraft-engine --example spatial_index -- -D warnings.
+Passed: cargo build --locked --release -p pcbcraft-engine --example spatial_index.
+Passed: eight unchanged synthetic inputs, 20 iterations each, executed serially once.
+Passed: reference-v1 and channels-v1 native extraction smokes, one iteration each.
+Every run enforces exhaustive inclusive candidate equality; synthetic runs also enforce analytic-neighbor retention.
+Required workspace/runtime/browser results from 36fdaf7 remain applicable to unchanged code.

@@ -2176,6 +2176,8 @@ impl Project {
 pub struct Session {
     /// Runtime authority shared only by clearance captures from this session, never persisted.
     clearance_identity: Arc<()>,
+    /// One disposable captured-board query cache; history snapshots never retain this cache.
+    clearance_cache: std::sync::Mutex<Option<board::clearance::Cached>>,
     libraries: Arc<library::sources::Catalog>,
     project: Option<Arc<Project>>,
     undo: Vec<Option<Arc<Project>>>,
@@ -2196,6 +2198,7 @@ impl Default for Session {
     fn default() -> Self {
         Self {
             clearance_identity: Arc::new(()),
+            clearance_cache: std::sync::Mutex::new(None),
             libraries: Arc::new(library::sources::Catalog::bundled()),
             project: None,
             undo: Vec::new(),
@@ -2224,6 +2227,7 @@ impl Session {
     /// A sheet projection is normalized to the first sheet without changing authored documents.
     /// Restoring this live project's older content retains its adopted allocation watermark.
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
+        self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
