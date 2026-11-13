@@ -843,12 +843,15 @@ impl Assistant {
     }
 
     /// Keep the prompt above Send/Stop, retaining typed input while edits are paused.
+    /// Raw Enter submission requires human provenance as well as focus and an editable document.
     /// A library document can provide context even when no project session is open.
     fn composer(&mut self, ui: &mut Ui, _session: &Session, can_edit: bool, has_document: bool) {
+        let human = pcbcraft_chrome::automation::human_input(ui.ctx());
         let running = self.chat.state == State::Running;
         let can_send = has_document && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
         let draft_id = egui::Id::unique("assistant_draft_input");
         let enter = can_send
+            && human
             && ui.memory(|memory| memory.has_focus(draft_id))
             && ui.input_mut(|input| input.modifiers == egui::Modifiers::NONE && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         ScrollArea::vertical().id_salt("assistant_draft").max_height(96.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -856,6 +859,7 @@ impl Assistant {
                 has_document,
                 TextEdit::multiline(&mut self.draft)
                     .id(draft_id)
+                    .interactive(human)
                     .hint_text("Ask about the document or request a change…")
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
@@ -1596,6 +1600,37 @@ mod chat_tests {
         h.get_by_label("approve-once").click();
         h.run_steps(2);
         assert_eq!(script.lock().map_err(|_| "poisoned")?.answers, [(42, Some("approve-once".to_owned()))]);
+        Ok(())
+    }
+
+    /// A focused draft survives synthetic Enter without a prompt, message or turn; ordinary
+    /// Enter still sends it through the existing chat path.
+    #[test]
+    fn synthetic_enter_cannot_send_a_focused_assistant_draft() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut h, script, _endpoint) = harness_with_agent()?;
+        let draft = "Explain this unsent draft";
+        h.state_mut().assistant.draft = draft.to_owned();
+        h.run();
+        let items = h.state().assistant.chat.items.len();
+        let generation = h.state().assistant.generation();
+        let draft_id = egui::Id::unique("assistant_draft_input");
+        h.ctx.memory_mut(|memory| memory.request_focus(draft_id));
+        pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, true);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert!(script.lock().map_err(|_| "poisoned")?.prompts.is_empty());
+        assert_eq!(h.state().assistant.draft, draft);
+        assert_eq!(h.state().assistant.chat.items.len(), items);
+        assert_eq!(h.state().assistant.generation(), generation);
+        assert!(!h.state().assistant.turn_open());
+        pcbcraft_chrome::automation::mark_synthetic_input(&h.ctx, false);
+        h.run();
+        h.ctx.memory_mut(|memory| memory.request_focus(draft_id));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.prompts, [draft]);
+        assert!(h.state().assistant.draft.is_empty());
+        assert!(h.state().assistant.turn_open());
         Ok(())
     }
 

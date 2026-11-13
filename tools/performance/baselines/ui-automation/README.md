@@ -40,3 +40,10 @@ regressions for detached Assistant lookup, synthetic approval clicks/Enter, glob
 permission settings and a pre-opened agent permission popup. Clippy with warnings
 denied, formatting and the WebAssembly check passed. No performance or presentation
 measurements were repeated.
+
+The subsequent `review-enter*` records cover the outside-diff focused-draft
+submission finding on base `870057c`. The new regression fails before the guard
+and passes after it, checking that synthetic Enter leaves the draft, prompts,
+messages and turn unchanged while human Enter still sends. All six focused
+synthetic-input tests and app Clippy passed; these are functional checks without
+new performance or presentation measurements.
