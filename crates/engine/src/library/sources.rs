@@ -610,7 +610,7 @@ impl Catalog {
             package.validate_definitions(&symbol, &footprint).map_err(|error| format!("Package {id}: {error}"))?;
             footprints.insert(id.clone(), footprint);
         }
-        Ok(ResolvedPart { definition: part, symbol, category, footprints })
+        super::compatibility::migration::resolved_part(ResolvedPart { definition: part, symbol, category, footprints }, self)
     }
     /// Install read-only embedded registrations through the ordinary validator and conflict index.
     /// Broken bundled manifests remain visible as unavailable registrations rather than hiding

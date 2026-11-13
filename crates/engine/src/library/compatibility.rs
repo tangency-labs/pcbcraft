@@ -1,4 +1,5 @@
 //! Preserve the former bundled identity for saved projects and explicit legacy commands.
+pub(crate) mod migration;
 use super::{Library, sources::Documents};
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -67,9 +68,9 @@ mod tests {
     use serde_json::json;
 
     /// Canonical browsing does not duplicate old identities, while exact legacy selections,
-    /// pinned definitions, mixed-address mappings and offline reopen retain their addresses.
+    /// pinned definitions and mixed-address mappings remain valid while native reopen upgrades known pins.
     #[test]
-    fn renamed_bundle_preserves_legacy_addresses_without_duplicate_browsing() {
+    fn renamed_bundle_reads_legacy_addresses_and_migrates_native_reopen() {
         let mut session = Session::default();
         let catalog = session.libraries();
         let visible = catalog.inspect();
@@ -96,7 +97,11 @@ mod tests {
             assert!(saved.contains_key(&format!("library/symbols/{library}/led.r2.json")));
             assert!(saved.contains_key(&format!("library/footprints/{library}/led-0402.r4.json")));
         }
-        assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+        let opened = migration::project(decode_documents(&saved).unwrap()).unwrap();
+        assert!(opened.components().all(|component| component.definition.library == "basic-components"));
+        let canonical = encode_documents(opened).unwrap();
+        assert!(!canonical.keys().any(|path| path.contains("/starter/")));
+        assert_eq!(encode_documents(decode_documents(&canonical).unwrap()).unwrap(), canonical);
         assert!(session.execute(sources::REMOVE, &json!({"source":SOURCE})).unwrap_err().to_string().contains("read-only"));
     }
 

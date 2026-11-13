@@ -9,7 +9,12 @@ Basic components uses the identity `basic-components`. Its folder is
 `libraries/basic-components`, and the visible bundled registrations are
 `bundled-basic-components` and `bundled-power`. A hidden read-only `bundled-starter`
 registration preserves historical `starter` references without duplicating browsing
-results. Existing pinned project copies keep their identities and bytes. These are session source IDs, not
+results. Opening a native project upgrades recognized, unchanged bundled pins and
+their references to `basic-components` in memory. Ordinary Save publishes that
+migration; opening does not write files. Customized symbol/footprint pins and
+conflicting target addresses retain their exact content and identities. Raw
+codecs still preserve historical bytes for journal checks and other migrations.
+These are session source IDs, not
 component identities, and removing a registration leaves pinned instances intact.
 Source limits include bundled registrations.
 

@@ -29,7 +29,7 @@ impl Fixture {
     fn open() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("two-resistors.pc");
-        let original = decode(TWO_RESISTORS).unwrap();
+        let original = pcbcraft_engine::persistence::migrate_bundled_libraries(decode(TWO_RESISTORS).unwrap()).unwrap();
         save_new(original, None, SaveFormat::Archive, path.clone()).unwrap();
         let mut session = Session::default();
         let mut files = ProjectFiles::default();

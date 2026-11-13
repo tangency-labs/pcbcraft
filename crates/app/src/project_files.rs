@@ -78,6 +78,8 @@ struct StandInSave {
 #[derive(Debug)]
 struct Saved {
     snapshot: Arc<Project>,
+    /// Worker-prepared opening upgrade; snapshot remains the original on-disk save baseline.
+    opened: Option<Arc<Project>>,
     #[cfg(not(target_arch = "wasm32"))]
     target: native::Target,
     #[cfg(target_arch = "wasm32")]
@@ -88,6 +90,17 @@ struct Saved {
     needs_manifest: bool,
     #[cfg(target_arch = "wasm32")]
     documents: Option<Arc<pcbcraft_engine::persistence::Documents>>,
+}
+
+impl Saved {
+    /// Prepare an in-memory migration after full validation; failed work is never adopted.
+    /// Keeping the original snapshot makes the next Save encode changed references and preserves
+    /// raw-byte comparison for unrelated documents and external-change detection.
+    fn prepare_open(mut self) -> Result<Self, String> {
+        let opened = pcbcraft_engine::persistence::migrate_bundled_libraries(self.snapshot.clone())?;
+        self.opened = (!Arc::ptr_eq(&opened, &self.snapshot)).then_some(opened);
+        Ok(self)
+    }
 }
 
 #[derive(Debug)]
@@ -164,7 +177,11 @@ impl ProjectFiles {
 
     /// Whether replacing the current project would discard edits since its last known saved snapshot.
     pub(super) fn dirty(&self, session: &Session) -> bool {
-        session.snapshot().is_some_and(|project| !self.saved.as_ref().is_some_and(|saved| Arc::ptr_eq(&saved.snapshot, &project)))
+        session.snapshot().is_some_and(|project| {
+            !self.saved.as_ref().is_some_and(|saved| {
+                Arc::ptr_eq(&saved.snapshot, &project) || saved.opened.as_ref().is_some_and(|opened| Arc::ptr_eq(opened, &project))
+            })
+        })
     }
 
     /// Whether a plain Save of the open project would write in place, without asking where: the
@@ -262,6 +279,14 @@ impl ProjectFiles {
 
     /// Describe migration or manifest generation where it affects the next save.
     pub(super) fn open_notice(&self) -> String {
+        if self.saved.as_ref().is_some_and(|saved| saved.opened.is_some()) {
+            return if crate::IN_BROWSER {
+                "Project opened · Download will migrate bundled library references"
+            } else {
+                "Project opened · Save will migrate bundled library references"
+            }
+            .into();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.saved.as_ref().map_or_else(|| "Project opened".to_owned(), |saved| saved.target.open_notice())
@@ -298,9 +323,10 @@ impl ProjectFiles {
         match result {
             Ok(Outcome::Cancelled) => None,
             Ok(Outcome::Opened(saved)) if session.revision() == revision => {
+                let opened = saved.opened.as_ref().unwrap_or(&saved.snapshot);
                 #[cfg(not(target_arch = "wasm32"))]
-                self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
-                session.open_snapshot(Arc::clone(&saved.snapshot));
+                self.recent.remember_project(Arc::clone(opened), saved.target.path().to_owned());
+                session.open_snapshot(Arc::clone(opened));
                 self.saved = Some(saved);
                 Some(Update::Opened)
             }

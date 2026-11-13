@@ -28,6 +28,13 @@ mod packed;
 mod power_migration;
 pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
 pub use power_migration::migrate_power_markers;
+
+/// Prepare an opened native project for current bundled addresses without touching source bytes.
+/// Raw codecs remain byte-preserving for journal validation and other migrations. Hosts retain
+/// the original saved snapshot until ordinary Save durably publishes this upgraded candidate.
+pub fn migrate_bundled_libraries(project: Arc<Project>) -> Result<Arc<Project>, String> {
+    crate::library::compatibility::migration::project(project)
+}
 #[cfg(test)]
 mod split_tests;
 

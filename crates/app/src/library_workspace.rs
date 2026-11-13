@@ -32,6 +32,7 @@ pub(super) struct State {
     tab: usize,
     preview_collapsed: bool,
     browser: chrome::Browser,
+    preview_width: chrome::ColumnWidth,
     preview_key: Option<Key>,
     symbol_camera: crate::library_preview::Camera,
     footprint_camera: crate::library_preview::Camera,
@@ -58,7 +59,7 @@ impl State {
     /// Inspect stable source/item identities without granting project edit authority.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"browser_collapsed":self.browser.collapsed,"browser_width":self.browser.width(),"tree_open":self.opened,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
+        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"browser_collapsed":self.browser.collapsed,"browser_width":self.browser.width(),"preview_width":self.preview_width.preferred(),"tree_open":self.opened,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
     }
 }
 
@@ -469,6 +470,9 @@ impl PcbApp {
         if let Some(width) = params["browser_width"].as_f64() {
             state.browser.set_width(width as f32)?;
         }
+        if let Some(width) = params["preview_width"].as_f64() {
+            state.preview_width.set_width(width as f32)?;
+        }
         if let Some(action) = params["tree_action"].as_str() {
             self.library_tree_action(
                 &mut state,
@@ -532,13 +536,15 @@ impl PcbApp {
         let mut preview = self.views.view_mut(view).map(|v| std::mem::take(&mut v.panels[crate::workspace_panels::PROPERTIES])).unwrap_or_default();
         let mut preview_collapsed = state.preview_collapsed;
         let mut browser = std::mem::take(&mut state.browser);
+        let mut preview_width = std::mem::take(&mut state.preview_width);
         let previous_compact = state.compact;
         let mut compact = state.compact;
-        let action = chrome::workspace(ui, &mut compact, &mut preview, &mut preview_collapsed, &mut browser, |ui, region| match region {
-            chrome::Region::Browser => self.library_tree(ui, &mut state, &ids, &loaded),
-            chrome::Region::Items => self.library_items(ui, &mut state, &loaded),
-            chrome::Region::Preview => self.library_item_preview(ui, &mut state),
-        });
+        let action =
+            chrome::workspace(ui, &mut compact, &mut preview, &mut preview_collapsed, &mut browser, &mut preview_width, |ui, region| match region {
+                chrome::Region::Browser => self.library_tree(ui, &mut state, &ids, &loaded),
+                chrome::Region::Items => self.library_items(ui, &mut state, &loaded),
+                chrome::Region::Preview => self.library_item_preview(ui, &mut state),
+            });
         if let Some(action) = action {
             self.library_tree_action(&mut state, action);
         }
@@ -547,6 +553,7 @@ impl PcbApp {
         }
         state.preview_collapsed = preview_collapsed;
         state.browser = browser;
+        state.preview_width = preview_width;
         if let Some(target) = self.views.view_mut(view) {
             target.panels[crate::workspace_panels::PROPERTIES] = preview;
             target.library = Some(state);

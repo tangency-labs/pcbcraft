@@ -92,7 +92,7 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
     }
     let packed = decode_packed(&bytes)?;
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
-    Ok(Outcome::Opened(Saved { snapshot, bytes, encoding, needs_manifest, documents }))
+    Saved { snapshot, opened: None, bytes, encoding, needs_manifest, documents }.prepare_open().map(Outcome::Opened)
 }
 
 pub(super) struct Download {

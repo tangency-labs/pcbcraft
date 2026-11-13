@@ -418,6 +418,12 @@ mod live {
                 },
                 Param { name: "query", summary: "Search text; empty clears it", required: false, kind: Kind::Query },
                 Param {
+                    name: "preview_width",
+                    summary: "Preferred docked Preview column width in logical points",
+                    required: false,
+                    kind: Kind::Integer { min: 240, max: 640, step: 1 },
+                },
+                Param {
                     name: "type",
                     summary: "0 all, 1 symbols, 2 footprints, 3 generic parts, 4 orderable parts",
                     required: false,

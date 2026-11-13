@@ -19,7 +19,8 @@ existing instances remains separate work. Refresh, Relocate, Remove and Delete
 operate on source registrations, not Project rows.
 Library folders start collapsed, and item types with no entries are hidden.
 The Browser header menu offers **Expand all** and **Collapse all**. Drag the
-Browser's right edge to change its width; compact hosts use the full pane and
+Browser's right edge or the divider beside docked Preview to change their
+widths; both use the shared splitter and support Escape cancellation. Compact hosts use the full pane and
 retain that width for wider layouts. The tree does not scroll horizontally.
 The central list has search and a **Type** choice. Generic parts expand to their
 orderable records; Orderable parts shows the same records as a flat table.

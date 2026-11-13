@@ -1,7 +1,9 @@
 //! Library workspace adapters over the pinned Craft tree, table and panel primitives.
 mod browser;
+mod column;
 use crate::{Tokens, controls};
 pub use browser::Browser;
+pub use column::ColumnWidth;
 use egui::{Align, Layout, Rect, RichText, Ui, UiBuilder, pos2, vec2};
 use solidcraft_ui_kit as kit;
 
@@ -28,6 +30,7 @@ pub fn workspace(
     preview: &mut crate::workspace::panels::Panel,
     collapsed: &mut bool,
     browser: &mut Browser,
+    preview_width: &mut ColumnWidth,
     mut draw: impl FnMut(&mut Ui, Region),
 ) -> Option<TreeAction> {
     let mut action = None;
@@ -35,6 +38,7 @@ pub fn workspace(
     let mut area = ui.available_rect_before_wrap().shrink(t.space_8);
     if area.width() < 1050.0 {
         browser.cancel_resize();
+        preview_width.cancel_resize();
         kit::segmented(ui, compact, &["Browser", "Items", "Preview"], kit::Segments { small: true, ..Default::default() });
         area.min.y = ui.cursor().min.y + t.space_8;
         let region = [Region::Browser, Region::Items, Region::Preview][(*compact).min(2)];
@@ -50,11 +54,30 @@ pub fn workspace(
         }
     } else {
         let gap = t.space_12;
-        let right = (area.width() * 0.29).clamp(300.0, 440.0);
+        let default_right = (area.width() * 0.29).clamp(300.0, 440.0);
+        let mut right = preview_width.width(default_right).clamp(240.0, (area.width() - 180.0 - gap * 2.0 - 360.0).clamp(240.0, 640.0));
         let floating = preview.position() == crate::workspace::panels::Position::Floating;
         let left = browser.resize(ui, area, area.width() - if floating { 0.0 } else { right + gap } - gap - 360.0);
         let browser_rect = Rect::from_min_max(area.min, pos2(area.left() + left, area.bottom()));
         let on_left = preview.position() == crate::workspace::panels::Position::Left;
+        if floating {
+            preview_width.cancel_resize();
+        } else {
+            let x = if on_left { browser_rect.right() + gap + right + gap / 2.0 } else { area.right() - right - gap / 2.0 };
+            let bounds = Rect::from_min_max(pos2(x - t.space_6 / 2.0, area.top()), pos2(x + t.space_6 / 2.0, area.bottom()));
+            right = preview_width.resize(
+                ui,
+                ui.make_persistent_id("library_preview_width"),
+                default_right,
+                column::Sash {
+                    bounds,
+                    name: "Resize Preview column width",
+                    min: 240.0,
+                    max: (area.width() - left - gap * 2.0 - 360.0).clamp(240.0, 640.0),
+                    leading: !on_left,
+                },
+            );
+        }
         let preview_rect = if on_left {
             Rect::from_min_max(pos2(browser_rect.right() + gap, area.top()), pos2(browser_rect.right() + gap + right, area.bottom()))
         } else {

@@ -121,6 +121,9 @@ impl Inventory {
         if let Some(candidate) = exact {
             let matches = match (&item.definition, &candidate.definition) {
                 (Definition::Symbol(pinned), Definition::Symbol(source)) => matches_pinned(pinned, source),
+                (Definition::Part(pinned), Definition::Part(source)) => {
+                    pinned == source || catalog.resolve_part(&source.reference()).is_ok_and(|resolved| &resolved.definition == pinned)
+                }
                 _ => item.canonical == candidate.canonical,
             };
             if !matches {
