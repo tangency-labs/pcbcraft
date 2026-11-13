@@ -3,6 +3,7 @@ name = "craft-control"
 description = "Local control transport and bounded message framing for Craft applications"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

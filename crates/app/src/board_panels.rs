@@ -119,6 +119,9 @@ impl PcbApp {
                         );
                     }
                     [] if !state.tracks.selected.is_empty() => {
+                        if state.tracks.committing() {
+                            ui.disable();
+                        }
                         copper_edit = copper_properties(ui, target, &state.tracks.selected, unit);
                     }
                     [] => {
@@ -163,7 +166,13 @@ impl PcbApp {
         if let Some((command, mut params)) = copper_edit {
             params["board"] = serde_json::json!(target.target.board);
             params["expected_revision"] = serde_json::json!(self.session.revision());
-            self.run(command, &params);
+            if pcbcraft_engine::board::track::preparation::is_copper_edit(command) {
+                if let Some(input) = input {
+                    self.prepare_canvas_copper(crate::board_drawing::Command::new(input, command, params));
+                }
+            } else {
+                self.run(command, &params);
+            }
             self.repaint_editors(ui.ctx());
         }
         if let Some(action) = pick {

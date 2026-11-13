@@ -4,7 +4,7 @@ This extends the [initial CPU baseline](performance-baseline.md) for
 [#240](https://github.com/tangency-labs/pcbcraft/issues/240). The implementation
 adds command-generated capacity/channel/hierarchy fixtures, real-window replay,
 authenticated native MCP edits, GPU/canvas readback, process resources and strict
-rendered comparisons. It does not implement ERC, asynchronous checking, an index,
+rendered comparisons. The later #243 work adds asynchronous DRC and copper preparation. The infrastructure itself does not implement ERC, an index,
 walkaround, shove, BGA capacity or curved routing. Their measurements must accompany
 their owning features rather than appear as fabricated baseline values here.
 
@@ -28,7 +28,7 @@ to collect matched evidence for a change.
 | Painting/latency | Real eframe native and browser renderers; app UI, synthetic injection-to-UI, injection-to-readback and readback-delivery distributions | Physical input receipt, compositor presentation and input-to-photon latency remain **unmeasured** |
 | Memory/allocations | Raw Linux process RSS/VmHWM samples and separate Valgrind whole-process allocation totals | Isolated index/query allocations need instrumentation in #244; profiler timings are not baselines |
 | Comparisons | CPU and rendered comparators reject changed fixture, trace, environment, sample boundaries, renderer, viewport or window-state sequence | Keep native/browser and software/hardware series separate |
-| Jobs/queues | Bounded diagnostic callbacks/socket clients, timeout/cancel/cleanup paths | Engine queue length, replacement/coalescing, stale completion and publication metrics belong with jobs #243 and index #244 |
+| Jobs/queues | #243 adds shared bounded native/browser checker and copper jobs, separate `checks`/`routes` CPU diagnostics, replacement/cancellation counters and publication timings; regression tests cover stale source/view/request authority | Physical cancellation-to-visible latency and isolated allocation attribution remain unmeasured; later index metrics belong with #244 |
 | Later feature evidence | Reusable fixtures, raw distributions, query oracle, trace driver, resource collector and documented commands | ERC progress/cancel #47; walkaround/shove #245–#247; BGA and curves as above |
 
 GPU readback proves that pixels were produced after a checked app pass. Its transfer,

@@ -99,3 +99,28 @@ impl RenderedHandle {
         self.runner.destroy();
     }
 }
+
+/// Measure captured checker batches and cancellation service costs on the browser target.
+/// This synchronous diagnostic is separate from rendered/presentation measurements.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn run_checker(artifact: &str, environment: &str, iterations: u32) -> Result<String, wasm_bindgen::JsValue> {
+    let execute = || {
+        let environment = serde_json::from_str(environment).map_err(|e| e.to_string())?;
+        let report = pcbcraft_app::performance::checker::run(artifact, environment, iterations as usize)?;
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
+    };
+    execute().map_err(|error: String| wasm_bindgen::JsValue::from_str(&error))
+}
+/// Measure captured routing batches and cancellation service costs on the browser target.
+/// This synchronous diagnostic is separate from rendered/presentation measurements.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn run_routes(artifact: &str, environment: &str, iterations: u32) -> Result<String, wasm_bindgen::JsValue> {
+    let execute = || {
+        let environment = serde_json::from_str(environment).map_err(|e| e.to_string())?;
+        let report = pcbcraft_app::performance::routing::run(artifact, environment, iterations as usize)?;
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
+    };
+    execute().map_err(|error: String| wasm_bindgen::JsValue::from_str(&error))
+}

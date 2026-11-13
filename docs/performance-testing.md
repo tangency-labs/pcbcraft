@@ -17,6 +17,21 @@ environments. The [AGENTS.md rule](../AGENTS.md#performance-evidence) and
 [contribution guide](../CONTRIBUTING.md#build-and-find-your-way-around) make this
 part of the development workflow even after #240 closes.
 
+Before collecting evidence, apply the [verification stopping rule](../AGENTS.md#keep-verification-bounded).
+State which decision the measurement will inform, the boundary it must isolate,
+the smallest suitable workload and the stopping condition. For example, routing
+job capture, cancellation and publication need measurements of those operations;
+a whole-editor replay supplies integration context but cannot alone attribute a
+slowdown to the job scheduler.
+
+Run the selected before/after pair, then assess whether it answered that question.
+Noise or a comparison rejected for differing environment or window state is a
+limitation to preserve, rather than a reason to repeat the broad run until it
+passes. Further measurement needs a specific hypothesis and a test shaped to
+resolve it. Scope extensive statistical baselines, allocation profiles and
+endurance runs as qualification work instead of automatically adding them to
+routine feature verification.
+
 | Changed path or question | Tool and instructions |
 | --- | --- |
 | Geometry queries, connectivity, DRC or validated engine commands | `board_perf` with the [CPU collection and comparison commands](#record-native-evidence); the CPU example also has a [browser runner](#record-browser-evidence) |
@@ -62,8 +77,11 @@ and warms fonts/layout for eight frames before measuring the trace. Logical inpu
 time advances at 60 Hz without sleeping; this measures CPU service cost and does
 not measure event-loop scheduling, dropped frames or actual refresh cadence.
 Each boundary retains all samples in milliseconds and nearest-rank p50/p95/p99/max.
-Use at least 100 samples for baseline evidence and preferably 1,000 for a useful
-p99 tail. One-sample runs are correctness/build smoke tests.
+For a statistical latency baseline, use at least 100 samples and preferably
+1,000 for a useful p99 tail. That sample guidance does not make a full statistical
+baseline mandatory for every change. A smaller targeted run can verify correctness
+and expose service costs; label its scope and avoid tail-latency conclusions that
+its sample count cannot support. One-sample runs are correctness/build smoke tests.
 
 ## Generate and retain fixtures
 
@@ -407,3 +425,70 @@ ERC progress and walkaround/shove commits must be instrumented with #243–#247,
 artifacts, comparisons, rendered replay and resource collection; it cannot
 measure implementations that do not exist. Record Windows/macOS coverage as
 available or unavailable instead of inventing cross-platform results.
+
+## Checker job measurements
+
+For #243's first checker slice, the CPU diagnostic also accepts `checks`:
+
+```sh
+target/release/examples/board_perf checks /tmp/channels-v1.json /tmp/environment.json 100 /tmp/checker-jobs.json
+```
+
+The browser CPU page selects the same diagnostic with `&checks=1`. The
+`pcbcraft-checker-performance/1` report records capture, stage/batch service costs,
+engine total time, queue polling and cancellation acknowledgement, with raw
+samples and report-equivalence assertions. A work batch considers at most 256
+contact/clearance/courtyard pairs or outline items. Footprint projection uses at
+most 32 placements per batch; remaining membership, dimension and finalization
+phases yield at phase boundaries and retain supported model/report bounds. Browser
+execution yields between batches after a nominal two-millisecond allowance;
+this is a cooperative scheduling target, not a hard upper bound on a linear
+phase or a geometric predicate. Retain measured overruns rather than reporting
+that allowance as achieved latency.
+
+Each view retains one running check and at most one replaceable pending snapshot.
+Native execution has a process-wide limit of two snapshot workers shared by checking and copper preparation; excess starts
+fail with a capacity error. The live MCP endpoint retains at most one deferred
+check and refuses another until the slot retires. Canceling revokes publication
+immediately; worker acknowledgement occurs after the current batch. Neither
+closing a view nor application teardown joins a checker thread.
+
+These new metrics are checker CPU/queue boundaries, separate from the established
+CPU and rendered reports. Compare the existing reports with their existing
+comparators, and retain the new report separately. Its synchronous browser
+collector does not demonstrate a responsive window; real editor frames and the
+rendered replay remain required for interaction claims. The routing continuation adds `board_perf routes ARTIFACT ENVIRONMENT ITERATIONS REPORT`
+and `&routes=1` on the browser CPU page. Its separate
+`pcbcraft-route-preparation-performance/1` report measures source/request capture,
+resumable stages, publication, replacement and cancellation acknowledgement. It
+asserts exact saved-byte equivalence with the synchronous shared command, one
+revision per commit and stale-source rejection. The ordinary replay remains the
+matched before/after measure for pointer reversals, layer transitions, cancellation
+and concurrent MCP edits; these diagnostics do not establish presentation latency.
+
+Copper preparation uses the same two-worker process limit and incremental browser
+logic as checking. Each view retains one running job, one coalesced desired input,
+one ready candidate and one immutable source context. Pad projection survives
+pointer replacement while the source remains current. Capturing does not encode
+project files. Candidate construction and final shared history publication remain
+linear phases with supported model bounds; their measured costs are reported
+separately rather than hidden by the browser polling allowance.
+
+The route's source covers session identity, project opening, physical board,
+revision and immutable rules/geometry. The host additionally checks view/input
+epoch, request generation, active layer and local dimensions. An opaque prepared
+edit can publish only once through `Session::commit_copper_edit`; stale edits,
+reopening and Undo/Redo revoke it. GUI copper gestures and size properties defer
+preparation. Headless callers drain the same engine job synchronously. Live MCP
+retains one deferred copper request, rechecks its deadline, endpoint/Assistant
+turn and modal ownership before publication, and cancels observed disconnects.
+The socket worker samples disconnects at up to 20 ms intervals; no distributed
+check can eliminate a disconnect racing an already authorized transaction.
+
+Pending route geometry uses the existing chrome adapter's ghost styling and
+progress appears in the board status. Escape and right-click cancel final
+preparation; navigation runs before the gesture input gate. Prepared status means
+the existing command's contact/lock checks passed, with clearance enforcement
+and walkaround/shove still owned by their subsequent issues. ERC jobs remain
+with the ERC feature. These checks do not qualify Wayland endurance/presentation
+latency.

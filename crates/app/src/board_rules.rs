@@ -286,6 +286,13 @@ mod tests {
     fn board_rules_live_mcp_and_gui_have_one_authority() {
         let mut h = harness(1200.);
         h.state_mut().run_drc();
+        for _ in 0..100 {
+            h.step();
+            if !h.state().views.active.board.drc.pending() {
+                break;
+            }
+        }
+        assert!(!h.state().views.active.board.drc.pending());
         let before = h.state().session.revision();
         let board = h.state().session.project().unwrap().board_target().unwrap().board;
         let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::SET_RULES,"params":{"board":board,"expected_revision":before,"rules":Values{clearance_nm:400_000,..Default::default()}}}});

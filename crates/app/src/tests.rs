@@ -71,14 +71,15 @@ pub(super) fn harness<'a>() -> Harness<'a, PcbApp> {
     for view in app.views.all_mut() {
         view.filters_open = false;
     }
-    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    let mut harness =
+        Harness::builder().with_max_steps(64).with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
     harness.run();
     harness
 }
 
 /// Exercise the same constructor used by both launchers, with no saved application settings.
 pub(super) fn startup_harness<'a>() -> Harness<'a, PcbApp> {
-    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc));
+    let mut harness = Harness::builder().with_max_steps(64).with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc));
     harness.run();
     harness
 }

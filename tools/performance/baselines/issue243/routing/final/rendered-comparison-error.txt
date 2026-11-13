@@ -1,0 +1,1 @@
+incomparable rendered reports: comparison mismatch: observed window visibility/focus transitions

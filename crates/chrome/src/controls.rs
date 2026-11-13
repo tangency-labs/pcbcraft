@@ -179,3 +179,8 @@ impl Choice {
         egui::InnerResponse { inner, response }
     }
 }
+
+/// Determinate operation progress using the pinned toolkit's accessible meter and tokens.
+pub fn progress(ui: &mut Ui, key: &str, fraction: f32) -> Response {
+    kit::progress(ui, key, fraction)
+}

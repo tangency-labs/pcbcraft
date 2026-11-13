@@ -3,6 +3,7 @@ name = "pcbcraft-units"
 description = "PCBCraft's shared quantity/unit model, exact decimal formatting and geometry length input"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

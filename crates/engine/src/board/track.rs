@@ -38,6 +38,7 @@ pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
 mod locks;
+pub mod preparation;
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
 mod lock_tests;
@@ -290,7 +291,12 @@ impl<'a> BoardView<'a> {
 /// Resolve each physical pad's land, layers and net once per snapshot. Markers without
 /// physical copper and pads on an unconfigured board are omitted.
 pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
-    view.footprints()
+    lands_from_footprints(view.footprints())
+}
+
+/// Reuse already projected footprints, including bounded checker preparation batches.
+pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::view::FootprintView<'a>>) -> Vec<Land> {
+    footprints
         .flat_map(|footprint| {
             let id = footprint.id.clone();
             footprint.pads.into_iter().filter_map(move |pad| {
@@ -356,78 +362,128 @@ fn join(parent: &mut [usize], a: usize, b: usize) {
 
 /// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
 fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
-    let contours: Vec<_> = lands.iter().map(Land::contour).collect();
-    let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
-    let overlaps_pad = |i: usize, a: Point, b: Point, radius: f64| {
-        let [left, top, right, bottom] = bounds[i];
-        a.x_nm.min(b.x_nm) as f64 - radius <= right
-            && a.x_nm.max(b.x_nm) as f64 + radius >= left
-            && a.y_nm.min(b.y_nm) as f64 - radius <= bottom
-            && a.y_nm.max(b.y_nm) as f64 + radius >= top
-            && contours[i].overlaps_segment(a, b, radius)
-    };
-    let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
+    let mut builder = IslandBuilder::new(lands, tracks, vias);
+    while !builder.step(usize::MAX) {}
     if join_pad_pairs {
-        for_each_pad_contact(lands, &contours, &bounds, |i, j| join(&mut parent, i, j));
+        for_each_pad_contact(lands, &builder.contours[..lands.len()], &builder.bounds[..lands.len()], |i, j| join(&mut builder.parent, i, j));
     }
-    for (t, track) in tracks.iter().enumerate() {
-        let node = lands.len() + t;
-        for (l, land) in lands.iter().enumerate() {
-            if land.layers.contains(&track.layer) && overlaps_pad(l, track.start, track.end, track.width_nm as f64 / 2.) {
-                join(&mut parent, node, l);
+    builder.finish(lands, tracks, vias)
+}
+
+/// Resumable pair enumeration for the existing copper-island predicates. Each work unit
+/// considers one pair; pad-to-pad contacts stay separate from legacy clearance islands.
+pub(super) struct IslandBuilder {
+    parent: Vec<usize>,
+    contours: Vec<PadContour>,
+    bounds: Vec<[f64; 4]>,
+    layers: Vec<Vec<Uuid>>,
+    pair: (usize, usize),
+}
+
+impl IslandBuilder {
+    /// Capture bounded primitive contours once, without evaluating any contact pairs.
+    pub(super) fn new(lands: &[Land], tracks: &[Track], vias: &[Via]) -> Self {
+        let contours: Vec<_> = lands
+            .iter()
+            .map(Land::contour)
+            .chain(tracks.iter().map(|t| PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.)))
+            .chain(vias.iter().map(|v| PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.)))
+            .collect();
+        let bounds = contours.iter().map(PadContour::bounds).collect();
+        let layers: Vec<_> = lands.iter().map(|l| l.layers.clone()).chain(tracks.iter().map(|t| vec![t.layer])).collect();
+        Self { parent: (0..contours.len()).collect(), contours, bounds, layers, pair: (lands.len(), 0) }
+    }
+
+    /// Resume direct pad contacts from legacy roots, preserving the separate clearance map.
+    pub(super) fn pad_contacts(lands: &[Land], tracks: &[Track], vias: &[Via], members: &[Vec<usize>]) -> Self {
+        let mut builder = Self::new(lands, tracks, vias);
+        for nodes in members {
+            if let Some(first) = nodes.first() {
+                for &node in nodes {
+                    builder.parent[node] = *first;
+                }
             }
         }
-        for (o, other) in tracks.iter().enumerate().take(t) {
-            if other.layer == track.layer
-                && PadContour::capsule(track.start, track.end, track.width_nm as f64 / 2.).touches(&PadContour::capsule(
-                    other.start,
-                    other.end,
-                    other.width_nm as f64 / 2.,
-                ))
+        builder.pair = (0, 0);
+        builder
+    }
+
+    /// Evaluate at most `budget` direct pad pairs, without rechecking track/via contacts.
+    pub(super) fn step_pads(&mut self, pads: usize, budget: usize) -> bool {
+        for _ in 0..budget {
+            let (i, j) = self.pair;
+            if i >= pads {
+                return true;
+            }
+            if j >= i {
+                self.pair = (i + 1, 0);
+                continue;
+            }
+            self.pair.1 += 1;
+            let (a, b) = (self.bounds[i], self.bounds[j]);
+            if self.layers[i].iter().any(|layer| self.layers[j].contains(layer))
+                && a[0] <= b[2]
+                && b[0] <= a[2]
+                && a[1] <= b[3]
+                && b[1] <= a[3]
+                && self.contours[i].touches(&self.contours[j])
             {
-                join(&mut parent, node, lands.len() + o);
+                join(&mut self.parent, i, j);
             }
         }
+        self.pair.0 >= pads
     }
-    for (v, via) in vias.iter().enumerate() {
-        let node = lands.len() + tracks.len() + v;
-        let radius = via.diameter_nm as f64 / 2.;
-        for (l, land) in lands.iter().enumerate() {
-            if !land.layers.is_empty() && overlaps_pad(l, via.at, via.at, radius) {
-                join(&mut parent, node, l);
+
+    /// Evaluate at most `budget` pairs. Vias span the configured copper stack, as in
+    /// ordinary connectivity. A zero budget does no work and never claims completion early.
+    pub(super) fn step(&mut self, budget: usize) -> bool {
+        for _ in 0..budget {
+            let (i, j) = self.pair;
+            if i >= self.parent.len() {
+                return true;
+            }
+            if j >= i {
+                self.pair = (i + 1, 0);
+                continue;
+            }
+            self.pair.1 += 1;
+            let layers = match (self.layers.get(i), self.layers.get(j)) {
+                (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
+                (None, Some(b)) => !b.is_empty(),
+                _ => true,
+            };
+            let (a, b) = (self.bounds[i], self.bounds[j]);
+            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
+                join(&mut self.parent, i, j);
             }
         }
-        for (t, track) in tracks.iter().enumerate() {
-            if PadContour::capsule(via.at, via.at, radius).touches(&PadContour::capsule(track.start, track.end, track.width_nm as f64 / 2.)) {
-                join(&mut parent, node, lands.len() + t);
-            }
-        }
-        for (o, other) in vias.iter().enumerate().take(v) {
-            if PadContour::capsule(via.at, via.at, radius).touches(&PadContour::capsule(other.at, other.at, other.diameter_nm as f64 / 2.)) {
-                join(&mut parent, node, lands.len() + tracks.len() + o);
-            }
-        }
+        self.pair.0 >= self.parent.len()
     }
-    let mut roots = BTreeMap::new();
-    let mut members: Vec<Vec<usize>> = Vec::new();
-    let mut copper = Copper::default();
-    for node in 0..parent.len() {
-        let root = find(&mut parent, node);
-        let next = roots.len();
-        let island = *roots.entry(root).or_insert(next);
-        if island == members.len() {
-            members.push(Vec::new());
+
+    /// Canonicalize completed roots to the existing pad/track/via identity maps.
+    pub(super) fn finish(mut self, lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+        let parent = &mut self.parent;
+        let mut roots = BTreeMap::new();
+        let mut members: Vec<Vec<usize>> = Vec::new();
+        let mut copper = Copper::default();
+        for node in 0..parent.len() {
+            let root = find(parent, node);
+            let next = roots.len();
+            let island = *roots.entry(root).or_insert(next);
+            if island == members.len() {
+                members.push(Vec::new());
+            }
+            members[island].push(node);
+            if let Some(land) = lands.get(node) {
+                copper.pads.insert(land.key.clone(), island);
+            } else if let Some(track) = tracks.get(node - lands.len()) {
+                copper.tracks.insert(track.id, island);
+            } else {
+                copper.vias.insert(vias[node - lands.len() - tracks.len()].id, island);
+            }
         }
-        members[island].push(node);
-        if let Some(land) = lands.get(node) {
-            copper.pads.insert(land.key.clone(), island);
-        } else if let Some(track) = tracks.get(node - lands.len()) {
-            copper.tracks.insert(track.id, island);
-        } else {
-            copper.vias.insert(vias[node - lands.len() - tracks.len()].id, island);
-        }
+        (copper, members)
     }
-    (copper, members)
 }
 
 /// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
@@ -455,6 +511,7 @@ fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], bounds: &[[f64;
 /// Name the first two distinct nets joined by an island that contains one of the `added`
 /// tracks or vias, if any. Islands without new copper are ignored so pre-existing shorts
 /// do not block unrelated routes.
+#[cfg(test)]
 fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
     short_for_copper_edit(project, added, &BTreeSet::new())
 }
@@ -467,6 +524,18 @@ pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, f
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
     let (_, members) = build_islands(&lands, tracks, vias, !footprints.is_empty());
+    short_from_members(&lands, tracks, vias, &members, added, footprints)
+}
+
+/// Apply the existing short policy to completed contact groups, without recomputing islands.
+fn short_from_members(
+    lands: &[Land],
+    tracks: &[Track],
+    vias: &[Via],
+    members: &[Vec<usize>],
+    added: &BTreeSet<Uuid>,
+    footprints: &BTreeSet<String>,
+) -> Option<(String, String)> {
     let is_added = |node: usize| {
         if let Some(land) = lands.get(node) {
             return footprints.contains(&land.key.0);
@@ -609,171 +678,175 @@ impl Session {
     /// board, revision and undo history unchanged. Omitted creation dimensions use the shared
     /// board preferences; explicit dimensions remain authored geometry checked by DRC.
     pub(crate) fn edit_tracks(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
-        self.check_revision(params)?;
-        let project = self.open_project()?;
-        let effective = project.board.rules.as_ref().map_or_else(super::rules::Values::default, |rules| rules.values);
-        let mut tracks = project.board.tracks.clone();
-        let mut vias = project.board.vias.clone();
-        let mut added = BTreeSet::new();
-        if command == ADD_TRACKS {
-            let mut layer: Uuid = param(params, "layer")?;
-            let width_nm: i64 = if params.get("width_nm").is_none() { effective.preferred_track_width_nm } else { param(params, "width_nm")? };
-            let points: Vec<Point> = param(params, "points")?;
-            if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
-                return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
+        let mut job = self.prepare_copper_edit(command, params)?;
+        while !job.step(usize::MAX) {}
+        let prepared = job.take_result()?.ok_or_else(|| CommandError::Unavailable("copper preparation returned no result".into()))?;
+        self.commit_copper_edit(prepared).map(drop)
+    }
+}
+
+/// Construct and validate authored copper records without connectivity traversal or publication.
+/// Every command edits a private candidate; omitted dimensions use captured board preferences.
+fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+    let effective = project.board.rules.as_ref().map_or_else(super::rules::Values::default, |rules| rules.values);
+    let mut tracks = project.board.tracks.clone();
+    let mut vias = project.board.vias.clone();
+    let mut added = BTreeSet::new();
+    if command == ADD_TRACKS {
+        let mut layer: Uuid = param(params, "layer")?;
+        let width_nm: i64 = if params.get("width_nm").is_none() { effective.preferred_track_width_nm } else { param(params, "width_nm")? };
+        let points: Vec<Point> = param(params, "points")?;
+        if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
+        }
+        let changes: Vec<LayerChange> = if params.get("layer_changes").is_some() { param(params, "layer_changes")? } else { Vec::new() };
+        let copper: BTreeSet<_> = project
+            .board
+            .setup
+            .iter()
+            .flat_map(|setup| setup.layers())
+            .filter(|record| record.purpose == LayerPurpose::Copper)
+            .map(|record| record.id)
+            .collect();
+        let mut previous = 0;
+        for change in &changes {
+            if change.at <= previous || change.at >= points.len() {
+                return Err(CommandError::InvalidParams("layer changes need strictly increasing vertex indices after the first".into()));
             }
-            let changes: Vec<LayerChange> = if params.get("layer_changes").is_some() { param(params, "layer_changes")? } else { Vec::new() };
-            let copper: BTreeSet<_> = project
-                .board
-                .setup
-                .iter()
-                .flat_map(|setup| setup.layers())
-                .filter(|record| record.purpose == LayerPurpose::Copper)
-                .map(|record| record.id)
-                .collect();
-            let mut previous = 0;
-            for change in &changes {
-                if change.at <= previous || change.at >= points.len() {
-                    return Err(CommandError::InvalidParams("layer changes need strictly increasing vertex indices after the first".into()));
-                }
-                if !copper.contains(&change.layer) {
-                    return Err(CommandError::InvalidParams("a layer change must move to a copper layer of the board setup".into()));
-                }
-                previous = change.at;
+            if !copper.contains(&change.layer) {
+                return Err(CommandError::InvalidParams("a layer change must move to a copper layer of the board setup".into()));
             }
-            let size = |name| -> Result<i64, CommandError> {
-                if params.get(name).is_none() {
-                    Ok(match name {
-                        "via_diameter_nm" => effective.preferred_via_diameter_nm,
-                        _ => effective.preferred_via_drill_nm,
-                    })
-                } else {
-                    param(params, name)
-                }
-            };
-            let (diameter_nm, drill_nm) = (size("via_diameter_nm")?, size("via_drill_nm")?);
-            let mut changes = changes.iter().peekable();
-            for (index, pair) in points.windows(2).enumerate() {
-                if let Some(change) = changes.next_if(|change| change.at == index) {
-                    if change.layer == layer {
-                        return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
-                    }
-                    layer = change.layer;
-                    let id = crate::fresh_id()?;
-                    added.insert(id);
-                    vias.push(Via { id, locked: false, at: pair[0], diameter_nm, drill_nm });
-                }
-                let id = crate::fresh_id()?;
-                added.insert(id);
-                tracks.push(Track { id, locked: false, layer, width_nm, start: pair[0], end: pair[1] });
+            previous = change.at;
+        }
+        let size = |name| -> Result<i64, CommandError> {
+            if params.get(name).is_none() {
+                Ok(match name {
+                    "via_diameter_nm" => effective.preferred_via_diameter_nm,
+                    _ => effective.preferred_via_drill_nm,
+                })
+            } else {
+                param(params, name)
             }
-            // A change at the final vertex ends the route on a via, ready to continue on that layer.
-            if let Some(change) = changes.next() {
+        };
+        let (diameter_nm, drill_nm) = (size("via_diameter_nm")?, size("via_drill_nm")?);
+        let mut changes = changes.iter().peekable();
+        for (index, pair) in points.windows(2).enumerate() {
+            if let Some(change) = changes.next_if(|change| change.at == index) {
                 if change.layer == layer {
                     return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
                 }
+                layer = change.layer;
                 let id = crate::fresh_id()?;
                 added.insert(id);
-                vias.push(Via { id, locked: false, at: points[change.at], diameter_nm, drill_nm });
-            }
-        } else if command == ADD_VIA {
-            let at: Point = param(params, "at")?;
-            if !crate::wire::valid_point(&at) {
-                return Err(CommandError::InvalidParams("the via position is out of range".into()));
-            }
-            if vias.iter().any(|via| via.at == at) {
-                return Err(CommandError::InvalidParams("a via already sits at this position".into()));
+                vias.push(Via { id, locked: false, at: pair[0], diameter_nm, drill_nm });
             }
             let id = crate::fresh_id()?;
             added.insert(id);
-            vias.push(Via {
-                id,
-                locked: false,
-                at,
-                diameter_nm: params
-                    .get("via_diameter_nm")
-                    .map(|_| param(params, "via_diameter_nm"))
-                    .transpose()?
-                    .unwrap_or(effective.preferred_via_diameter_nm),
-                drill_nm: params.get("via_drill_nm").map(|_| param(params, "via_drill_nm")).transpose()?.unwrap_or(effective.preferred_via_drill_nm),
-            });
-        } else if command == MOVE_TRACKS {
-            let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-            let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
-            let (dx, dy): (i64, i64) = (param(params, "dx_nm")?, param(params, "dy_nm")?);
-            if moved_tracks.is_empty() && moved_vias.is_empty() {
-                return Err(CommandError::InvalidParams("name at least one track or via to move".into()));
-            }
-            let shift = |point: Point| Point { x_nm: point.x_nm.saturating_add(dx), y_nm: point.y_nm.saturating_add(dy) };
-            for track in tracks.iter_mut().filter(|track| moved_tracks.contains(&track.id)) {
-                (track.start, track.end) = (shift(track.start), shift(track.end));
-            }
-            for via in vias.iter_mut().filter(|via| moved_vias.contains(&via.id)) {
-                via.at = shift(via.at);
-            }
-            added.extend(moved_tracks.into_iter().chain(moved_vias));
-        } else if command == RESHAPE_TRACKS {
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Ends {
-                track: Uuid,
-                start: Point,
-                end: Point,
-            }
-            let ends: Vec<Ends> = param(params, "tracks")?;
-            let unique: BTreeSet<_> = ends.iter().map(|ends| ends.track).collect();
-            if ends.is_empty() || unique.len() != ends.len() {
-                return Err(CommandError::InvalidParams("name each track to reshape once".into()));
-            }
-            for ends in &ends {
-                let track =
-                    tracks.iter_mut().find(|track| track.id == ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
-                (track.start, track.end) = (ends.start, ends.end);
-            }
-            added.extend(unique);
-        } else if command == SET_TRACK_WIDTH {
-            let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-            if changed.is_empty() {
-                return Err(CommandError::InvalidParams("name at least one track".into()));
-            }
-            let width_nm: i64 = param(params, "width_nm")?;
-            for track in tracks.iter_mut().filter(|track| changed.contains(&track.id)) {
-                track.width_nm = width_nm;
-            }
-            added.extend(changed);
-        } else if command == SET_VIA_SIZE {
-            let changed = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
-            if changed.is_empty() {
-                return Err(CommandError::InvalidParams("name at least one via".into()));
-            }
-            let (diameter_nm, drill_nm): (i64, i64) = (param(params, "via_diameter_nm")?, param(params, "via_drill_nm")?);
-            for via in vias.iter_mut().filter(|via| changed.contains(&via.id)) {
-                (via.diameter_nm, via.drill_nm) = (diameter_nm, drill_nm);
-            }
-            added.extend(changed);
-        } else {
-            let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-            let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
-            if gone_tracks.is_empty() && gone_vias.is_empty() {
-                return Err(CommandError::InvalidParams("name at least one track or via to delete".into()));
-            }
-            tracks.retain(|track| !gone_tracks.contains(&track.id));
-            vias.retain(|via| !gone_vias.contains(&via.id));
+            tracks.push(Track { id, locked: false, layer, width_nm, start: pair[0], end: pair[1] });
         }
-        validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
-        if tracks == project.board.tracks && vias == project.board.vias {
-            return Ok(());
+        // A change at the final vertex ends the route on a via, ready to continue on that layer.
+        if let Some(change) = changes.next() {
+            if change.layer == layer {
+                return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
+            }
+            let id = crate::fresh_id()?;
+            added.insert(id);
+            vias.push(Via { id, locked: false, at: points[change.at], diameter_nm, drill_nm });
         }
-        let mut next = project.clone();
-        let board = std::sync::Arc::make_mut(&mut next.board);
-        board.tracks = tracks;
-        board.vias = vias;
-        if let Some((a, b)) = short(&next, &added) {
-            return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
+    } else if command == ADD_VIA {
+        let at: Point = param(params, "at")?;
+        if !crate::wire::valid_point(&at) {
+            return Err(CommandError::InvalidParams("the via position is out of range".into()));
         }
-        self.change(next)?;
-        Ok(())
+        if vias.iter().any(|via| via.at == at) {
+            return Err(CommandError::InvalidParams("a via already sits at this position".into()));
+        }
+        let id = crate::fresh_id()?;
+        added.insert(id);
+        vias.push(Via {
+            id,
+            locked: false,
+            at,
+            diameter_nm: params
+                .get("via_diameter_nm")
+                .map(|_| param(params, "via_diameter_nm"))
+                .transpose()?
+                .unwrap_or(effective.preferred_via_diameter_nm),
+            drill_nm: params.get("via_drill_nm").map(|_| param(params, "via_drill_nm")).transpose()?.unwrap_or(effective.preferred_via_drill_nm),
+        });
+    } else if command == MOVE_TRACKS {
+        let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+        let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let (dx, dy): (i64, i64) = (param(params, "dx_nm")?, param(params, "dy_nm")?);
+        if moved_tracks.is_empty() && moved_vias.is_empty() {
+            return Err(CommandError::InvalidParams("name at least one track or via to move".into()));
+        }
+        let shift = |point: Point| Point { x_nm: point.x_nm.saturating_add(dx), y_nm: point.y_nm.saturating_add(dy) };
+        for track in tracks.iter_mut().filter(|track| moved_tracks.contains(&track.id)) {
+            (track.start, track.end) = (shift(track.start), shift(track.end));
+        }
+        for via in vias.iter_mut().filter(|via| moved_vias.contains(&via.id)) {
+            via.at = shift(via.at);
+        }
+        added.extend(moved_tracks.into_iter().chain(moved_vias));
+    } else if command == RESHAPE_TRACKS {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Ends {
+            track: Uuid,
+            start: Point,
+            end: Point,
+        }
+        let ends: Vec<Ends> = param(params, "tracks")?;
+        let unique: BTreeSet<_> = ends.iter().map(|ends| ends.track).collect();
+        if ends.is_empty() || unique.len() != ends.len() {
+            return Err(CommandError::InvalidParams("name each track to reshape once".into()));
+        }
+        let positions: BTreeMap<Uuid, usize> = tracks.iter().enumerate().map(|(position, track)| (track.id, position)).collect();
+        for ends in &ends {
+            let &position = positions.get(&ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
+            (tracks[position].start, tracks[position].end) = (ends.start, ends.end);
+        }
+        added.extend(unique);
+    } else if command == SET_TRACK_WIDTH {
+        let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+        if changed.is_empty() {
+            return Err(CommandError::InvalidParams("name at least one track".into()));
+        }
+        let width_nm: i64 = param(params, "width_nm")?;
+        for track in tracks.iter_mut().filter(|track| changed.contains(&track.id)) {
+            track.width_nm = width_nm;
+        }
+        added.extend(changed);
+    } else if command == SET_VIA_SIZE {
+        let changed = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        if changed.is_empty() {
+            return Err(CommandError::InvalidParams("name at least one via".into()));
+        }
+        let (diameter_nm, drill_nm): (i64, i64) = (param(params, "via_diameter_nm")?, param(params, "via_drill_nm")?);
+        for via in vias.iter_mut().filter(|via| changed.contains(&via.id)) {
+            (via.diameter_nm, via.drill_nm) = (diameter_nm, drill_nm);
+        }
+        added.extend(changed);
+    } else {
+        let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+        let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        if gone_tracks.is_empty() && gone_vias.is_empty() {
+            return Err(CommandError::InvalidParams("name at least one track or via to delete".into()));
+        }
+        tracks.retain(|track| !gone_tracks.contains(&track.id));
+        vias.retain(|via| !gone_vias.contains(&via.id));
     }
+    validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
+    if tracks == project.board.tracks && vias == project.board.vias {
+        return Ok((None, added));
+    }
+    let mut next = project.clone();
+    let board = std::sync::Arc::make_mut(&mut next.board);
+    board.tracks = tracks;
+    board.vias = vias;
+    protect_locked(project, &next)?;
+    Ok((Some(next), added))
 }
 
 /// Describe a route's layer changes for command clients.

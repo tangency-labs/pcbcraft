@@ -213,8 +213,14 @@ impl<'a> BoardView<'a> {
     /// Accepted terminal membership is indexed once per traversal, rather than
     /// scanning every net for every pad. The index borrows only this snapshot.
     pub fn footprints(self) -> impl Iterator<Item = FootprintView<'a>> {
+        self.footprints_range(0, usize::MAX)
+    }
+
+    /// Resolve a bounded placement range without constructing skipped footprint graphics.
+    /// A resumable checker retains its stable range under one immutable snapshot.
+    pub(super) fn footprints_range(self, start: usize, count: usize) -> impl Iterator<Item = FootprintView<'a>> {
         let accepted = self.project.board.baseline.as_ref().map(|baseline| (baseline, baseline.terminal_net_index()));
-        self.project.board.footprints().iter().filter_map(move |footprint| {
+        self.project.board.footprints().iter().skip(start).take(count).filter_map(move |footprint| {
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;

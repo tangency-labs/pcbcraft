@@ -1189,3 +1189,13 @@ https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html). Fixtures use shared comman
 and production codecs; no external EDA implementation, asset or project data
 was introduced. Valgrind is an optional external diagnostic executable, not a
 linked or bundled dependency.
+
+## Bounded snapshot checker jobs
+
+The captured DRC authority, resumable copper contact/checker phases, bounded finding
+retention, native worker limits, browser cooperative runner and deferred live MCP
+completion are original MIT OR Apache-2.0 PCBcraft work for #243. The progress meter
+reuses the pinned Craft toolkit through `crates/chrome`, under its existing retained
+licence and notices. Checker diagnostics extend the original #240 fixtures and
+runner; no new dependency, external implementation, artwork, library data or saved
+project format was introduced.

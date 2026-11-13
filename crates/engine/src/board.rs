@@ -29,6 +29,7 @@ pub mod track;
 pub(crate) mod transform;
 pub mod update;
 pub mod view;
+pub mod work;
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;

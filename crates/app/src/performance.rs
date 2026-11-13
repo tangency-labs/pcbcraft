@@ -4,12 +4,14 @@
 
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
+pub mod checker;
 mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
 mod remote;
 pub mod rendered;
 mod replay;
 mod report;
+pub mod routing;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watchdog;
 pub use report::{Environment, Metric, Report};
@@ -280,6 +282,26 @@ mod tests {
             assert!(report.metrics.iter().any(|m| m.id == id), "missing boundary {id}");
         }
         assert!(!report.unmeasured.is_empty());
+    }
+
+    /// Route diagnostics retain raw lifecycle samples, exact command equivalence and bounded
+    /// replacement/cancellation evidence, rather than only timing job construction.
+    #[test]
+    fn routing_diagnostic_checks_publication_and_bounded_replacement() {
+        let artifact = generate("reference-v1", "test").unwrap();
+        let report = routing::run(&artifact, environment(), 2).unwrap();
+        assert_eq!(report["schema"], "pcbcraft-route-preparation-performance/1");
+        assert_eq!(report["iterations"], 2);
+        assert_eq!(report["queues"].as_array().unwrap().len(), 2);
+        for queue in report["queues"].as_array().unwrap() {
+            assert_eq!(queue["running_capacity"], 1);
+            assert_eq!(queue["pending_capacity"], 1);
+            assert_eq!(queue["replaced"], 30);
+            assert_eq!(queue["completed"], 1);
+        }
+        for id in ["route.context_capture", "route.request_capture", "route.atomic_publish", "route.cancel_acknowledgement", "route.queue_replace"] {
+            assert!(report["metrics"].as_array().unwrap().iter().any(|m| m["id"] == id));
+        }
     }
 
     /// A shortened idle-only trace must not produce successful evidence under the standard

@@ -3,6 +3,7 @@ name = "pcbcraft-engine"
 description = "PCBCraft's session and command set: every change a person or an agent makes goes through here"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

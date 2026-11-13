@@ -96,6 +96,37 @@ pub struct Report {
     pub total: usize,
 }
 
+/// Count every finding while retaining only the first canonical report page. The sequence
+/// breaks equal-key ties in discovery order, matching the synchronous stable sort.
+#[derive(Default)]
+struct Findings {
+    listed: BTreeMap<(Kind, i64, i64, Vec<String>, usize), Violation>,
+    counts: BTreeMap<Kind, usize>,
+    total: usize,
+}
+
+impl Findings {
+    /// Retain bounded detail without losing totals; a missing outline is one board finding.
+    fn push(&mut self, violation: Violation) {
+        if violation.kind == Kind::NoOutline && self.counts.contains_key(&Kind::NoOutline) {
+            return;
+        }
+        let key = (violation.kind, violation.at.x_nm, violation.at.y_nm, violation.items.clone(), self.total);
+        *self.counts.entry(violation.kind).or_default() += 1;
+        self.total += 1;
+        if self.listed.len() < MAX_LISTED || self.listed.last_key_value().is_some_and(|(last, _)| key < *last) {
+            self.listed.insert(key, violation);
+            if self.listed.len() > MAX_LISTED {
+                self.listed.pop_last();
+            }
+        }
+    }
+    /// Produce the deterministic capped report after every phase has completed.
+    fn finish(self, rules: Rules, sources: BTreeMap<String, super::rules::Source>) -> Report {
+        Report { rules, sources, violations: self.listed.into_values().collect(), counts: self.counts, total: self.total }
+    }
+}
+
 /// Ray-casting point-in-polygon for a closed outline; boundary points count as outside.
 fn in_polygon(point: Point, polygon: &[Point]) -> bool {
     let (x, y) = (point.x_nm as f64, point.y_nm as f64);
@@ -123,46 +154,10 @@ fn mm(nm: f64) -> String {
 impl BoardView<'_> {
     /// Check this board against `rules` and return every finding, sorted by kind and position.
     pub fn check_design(self, rules: Rules) -> Report {
-        let mut found = Vec::new();
+        let mut found = Findings::default();
         let geometry = BoardGeometry::new(self);
         let items = &geometry.items;
-        for track in self.tracks() {
-            if track.width_nm < rules.min_track_width_nm {
-                found.push(Violation {
-                    kind: Kind::TrackWidth,
-                    message: format!("Track is {} wide, below the {} minimum", mm(track.width_nm as f64), mm(rules.min_track_width_nm as f64)),
-                    at: midpoint(track.start, track.end),
-                    items: vec![track.id.to_string()],
-                    nets: Vec::new(),
-                });
-            }
-        }
-        for via in self.vias() {
-            for (kind, value, min, max, name) in [
-                (Kind::ViaDiameter, via.diameter_nm, rules.min_via_diameter_nm, rules.max_via_diameter_nm, "Via diameter"),
-                (Kind::ViaDrill, via.drill_nm, rules.min_via_drill_nm, rules.max_via_drill_nm, "Via drill"),
-            ] {
-                if !(min..=max).contains(&value) {
-                    found.push(Violation {
-                        kind,
-                        message: format!("{name} is {}, outside {} to {}", mm(value as f64), mm(min as f64), mm(max as f64)),
-                        at: via.at,
-                        items: vec![via.id.to_string()],
-                        nets: Vec::new(),
-                    });
-                }
-            }
-            let ring = (via.diameter_nm - via.drill_nm) / 2;
-            if ring < rules.min_annular_ring_nm {
-                found.push(Violation {
-                    kind: Kind::AnnularRing,
-                    message: format!("Via annular ring is {}, below the {} minimum", mm(ring as f64), mm(rules.min_annular_ring_nm as f64)),
-                    at: via.at,
-                    items: vec![via.id.to_string()],
-                    nets: Vec::new(),
-                });
-            }
-        }
+        self.check_dimensions(rules, &mut found);
 
         self.check_shorts(&geometry.lands, &geometry.members, items, &mut found);
 
@@ -208,13 +203,6 @@ impl BoardView<'_> {
         self.check_outline(items, rules, &mut found);
         self.check_courtyards(&mut found);
 
-        found.sort_by(|a, b| (a.kind, a.at.x_nm, a.at.y_nm, &a.items).cmp(&(b.kind, b.at.x_nm, b.at.y_nm, &b.items)));
-        let mut counts = BTreeMap::new();
-        for violation in &found {
-            *counts.entry(violation.kind).or_insert(0) += 1;
-        }
-        let total = found.len();
-        found.truncate(MAX_LISTED);
         let mut effective = self.effective_rules();
         let supplied = json!(rules);
         let base = json!(effective.values);
@@ -223,14 +211,55 @@ impl BoardView<'_> {
                 effective.sources.insert((*name).into(), super::rules::Source::Request);
             }
         }
-        Report { rules, sources: effective.sources, violations: found, counts, total }
+        found.finish(rules, effective.sources)
+    }
+
+    /// Check authored track/via dimensions without preparing connectivity or changing state.
+    fn check_dimensions(self, rules: Rules, found: &mut Findings) {
+        for track in self.tracks() {
+            if track.width_nm < rules.min_track_width_nm {
+                found.push(Violation {
+                    kind: Kind::TrackWidth,
+                    message: format!("Track is {} wide, below the {} minimum", mm(track.width_nm as f64), mm(rules.min_track_width_nm as f64)),
+                    at: midpoint(track.start, track.end),
+                    items: vec![track.id.to_string()],
+                    nets: Vec::new(),
+                });
+            }
+        }
+        for via in self.vias() {
+            for (kind, value, min, max, name) in [
+                (Kind::ViaDiameter, via.diameter_nm, rules.min_via_diameter_nm, rules.max_via_diameter_nm, "Via diameter"),
+                (Kind::ViaDrill, via.drill_nm, rules.min_via_drill_nm, rules.max_via_drill_nm, "Via drill"),
+            ] {
+                if !(min..=max).contains(&value) {
+                    found.push(Violation {
+                        kind,
+                        message: format!("{name} is {}, outside {} to {}", mm(value as f64), mm(min as f64), mm(max as f64)),
+                        at: via.at,
+                        items: vec![via.id.to_string()],
+                        nets: Vec::new(),
+                    });
+                }
+            }
+            let ring = (via.diameter_nm - via.drill_nm) / 2;
+            if ring < rules.min_annular_ring_nm {
+                found.push(Violation {
+                    kind: Kind::AnnularRing,
+                    message: format!("Via annular ring is {}, below the {} minimum", mm(ring as f64), mm(rules.min_annular_ring_nm as f64)),
+                    at: via.at,
+                    items: vec![via.id.to_string()],
+                    nets: Vec::new(),
+                });
+            }
+        }
     }
 
     /// Report one short per physical island containing pads from distinct intended nets.
     /// Resolve terminal-to-pad mappings against accepted history when present, including retained
     /// removals; otherwise use the project-wide graph. All indices and lookups stay snapshot-local.
     /// Every involved copper item and mapped terminal is retained, in canonical identity order.
-    fn check_shorts(self, lands: &[Land], members: &[Vec<usize>], items: &[Item], found: &mut Vec<Violation>) {
+    fn check_shorts(self, lands: &[Land], members: &[Vec<usize>], items: &[Item], found: &mut Findings) {
         let project = self.project();
         let baseline = project.board.baseline.as_ref();
         let accepted = baseline.map(|baseline| baseline.terminal_net_index());
@@ -286,7 +315,7 @@ impl BoardView<'_> {
     /// Require a closed Board Outline, every copper item inside it, and copper at least the edge
     /// clearance from every outline segment. Penetration remains a finding at zero required
     /// clearance. Open outline paths still count as edges.
-    fn check_outline(self, items: &[Item], rules: Rules, found: &mut Vec<Violation>) {
+    fn check_outline(self, items: &[Item], rules: Rules, found: &mut Findings) {
         let layers = self.layers();
         let outline: Vec<_> = self
             .drawings()
@@ -350,7 +379,7 @@ impl BoardView<'_> {
 
     /// Report footprints on the same side whose courtyard bounds overlap. Courtyards are compared
     /// by their axis-aligned bounds, so rotated or concave courtyards can be reported conservatively.
-    fn check_courtyards(self, found: &mut Vec<Violation>) {
+    fn check_courtyards(self, found: &mut Findings) {
         let courtyards: Vec<(String, bool, [i64; 4])> = self
             .footprints()
             .filter_map(|footprint| {
@@ -423,3 +452,6 @@ pub(crate) mod contour_tests;
 
 #[cfg(test)]
 pub(crate) mod short_tests;
+
+mod job;
+pub use job::{CheckJob, CheckProgress, CheckSource};
