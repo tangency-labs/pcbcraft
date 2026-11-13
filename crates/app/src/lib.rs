@@ -79,7 +79,9 @@ use pcbcraft_chrome::{
     theme, units, workspace,
 };
 use pcbcraft_engine::selection::Selection;
-use pcbcraft_engine::{CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, command, schematic::SymbolDefinition};
+use pcbcraft_engine::{
+    CONNECT_PINS, DELETE_SYMBOL, MIRROR_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, command, schematic::SymbolDefinition,
+};
 use serde_json::{Value, json};
 
 pub use editor_windows::APP_TITLE;
@@ -115,6 +117,8 @@ const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers
 const PLACE_VIA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
+const MIRROR_HORIZONTAL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::X);
+const MIRROR_VERTICAL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Y);
 /// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
 const FINER_GRID: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::N);
 const COARSER_GRID: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::N);
@@ -603,6 +607,7 @@ impl PcbApp {
                 }
             }
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
+            SymbolAction::Mirror(axis) => self.run(MIRROR_SYMBOL, &json!({"symbol": id, "axis": axis.as_str(), "expected_revision": revision})),
             SymbolAction::Delete => {
                 self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
                 if self.message.is_none() {
@@ -1375,6 +1380,7 @@ impl PcbApp {
                     }
                     let moving = std::mem::take(&mut self.views.active.schematic.move_requested);
                     let rotating = std::mem::take(&mut self.views.active.schematic.rotate_requested);
+                    let mirroring = self.views.active.schematic.mirror_requested.take();
                     let datasheet = std::mem::take(&mut self.views.active.schematic.datasheet_requested);
                     if datasheet
                         && input_enabled
@@ -1383,7 +1389,7 @@ impl PcbApp {
                     {
                         self.open_datasheet(ui, project);
                     }
-                    if (moving || rotating)
+                    if (moving || rotating || mirroring.is_some())
                         && input_enabled
                         && self.views.active.schematic.tool.is_none()
                         && self.views.active.filters.symbols
@@ -1414,7 +1420,12 @@ impl PcbApp {
                             let target = if moving { selected.or(hovered) } else { hovered.or(selected) };
                             if let Some(symbol) = target {
                                 self.select(Selection::one_symbol(symbol));
-                                self.edit_selected(if moving { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
+                                let action = match (moving, mirroring) {
+                                    (true, _) => SymbolAction::DisconnectMove,
+                                    (false, Some(axis)) => SymbolAction::Mirror(axis),
+                                    (false, None) => SymbolAction::Rotate,
+                                };
+                                self.edit_selected(action);
                             }
                         }
                     }
@@ -1734,6 +1745,7 @@ impl PcbApp {
             return;
         }
         self.views.active.schematic.rotate_requested = false;
+        self.views.active.schematic.mirror_requested = None;
         self.views.active.schematic.edit_requested = false;
         self.views.active.schematic.datasheet_requested = false;
         self.views.active.schematic.move_requested = false;
@@ -1908,7 +1920,7 @@ impl PcbApp {
             }
             let selected_net_label = self.views.active.schematic.selection.single_net_label().is_some();
             let hierarchy_hovered = self.views.active.schematic.selection.len() <= 1
-                && ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
+                && ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M, Key::X, Key::Y].into_iter().any(|key| i.key_pressed(key)))
                 && self.views.active.snapshot(&self.session).is_some_and(|project| {
                     selected_net_label
                         || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {
@@ -1963,6 +1975,15 @@ impl PcbApp {
                     *turns = (*turns + 1) % 4;
                 } else if self.views.active.schematic.tool.is_none() {
                     self.views.active.schematic.rotate_requested = true;
+                }
+            }
+            // X/Y reflect the hovered or selected symbol across its center without changing which
+            // pins are attached. Placement and move tools own orientation while they are active.
+            if !hierarchy_hovered && self.views.active.schematic.tool.is_none() {
+                if pressed(&MIRROR_HORIZONTAL) {
+                    self.views.active.schematic.mirror_requested = Some(pcbcraft_engine::schematic::MirrorAxis::Horizontal);
+                } else if pressed(&MIRROR_VERTICAL) {
+                    self.views.active.schematic.mirror_requested = Some(pcbcraft_engine::schematic::MirrorAxis::Vertical);
                 }
             }
             if !hierarchy_hovered && self.views.active.schematic.tool.is_none() && pressed(&EDIT_FIELDS) {

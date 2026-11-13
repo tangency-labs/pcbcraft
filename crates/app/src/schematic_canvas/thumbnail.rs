@@ -45,7 +45,8 @@ impl Thumbnail {
             if points > MAX_POINTS {
                 return None;
             }
-            bounds = bounds.union(grid_bounds(symbol.unit_definition(), symbol.turns()).translate(grid_pos(symbol.position).to_vec2()));
+            bounds = bounds
+                .union(grid_bounds(symbol.unit_definition(), symbol.turns(), symbol.is_mirrored()).translate(grid_pos(symbol.position).to_vec2()));
             let metadata = project.component(symbol)?.metadata.clone();
             points += metadata.fields.values().map(|f| f.value.len()).sum::<usize>();
             if points > MAX_POINTS {
@@ -135,6 +136,7 @@ impl Thumbnail {
                 screen(grid_pos(placement.position)),
                 step,
                 placement.turns(),
+                placement.is_mirrored(),
                 Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text),
             );
             fields::paint_labels(

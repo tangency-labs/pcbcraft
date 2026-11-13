@@ -182,6 +182,8 @@ pub(super) struct SchematicState {
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
+    /// A requested screen-axis reflection of the hovered or selected symbol.
+    pub(super) mirror_requested: Option<pcbcraft_engine::schematic::MirrorAxis>,
     pub(super) edit_requested: bool,
     pub(super) text_edit: Option<crate::inline_text::Edit>,
     pub(super) datasheet_requested: bool,
@@ -655,6 +657,7 @@ impl EditorView {
         self.schematic.tool = None;
         self.schematic.wire_draft = Draft::default();
         self.schematic.rotate_requested = false;
+        self.schematic.mirror_requested = None;
         self.schematic.edit_requested = false;
         self.schematic.text_edit = None;
         self.schematic.datasheet_requested = false;

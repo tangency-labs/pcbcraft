@@ -51,6 +51,8 @@ const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
 const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
+const GENERATED_SHEET_FORMAT: &str = "pcbcraft-sheet/7";
+const MIRROR_SHEET_FORMAT: &str = "pcbcraft-sheet/6";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
@@ -234,6 +236,26 @@ struct SheetDocument {
     symbols: Vec<Placement<'static>>,
     junctions: Vec<Junction>,
     wires: Vec<Connection<'static>>,
+    #[serde(default, deserialize_with = "present")]
+    generated_legs: Option<Vec<GeneratedLegRecord<'static>>>,
+}
+
+/// Persisted provenance for a leg drawn by a retained named-contact pose. The exact wire
+/// endpoints and bends are recorded so edits make the route authored again.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GeneratedLegRecord<'a> {
+    wire: u64,
+    end: Endpoint<'a>,
+    other: Endpoint<'a>,
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    bends: Option<Vec<Point>>,
+}
+
+impl From<&crate::wire::GeneratedLeg> for GeneratedLegRecord<'static> {
+    fn from(leg: &crate::wire::GeneratedLeg) -> Self {
+        Self { wire: leg.wire, end: leg.end.into(), other: leg.other.into(), bends: leg.bends.clone() }
+    }
 }
 
 #[derive(Deserialize)]
@@ -415,14 +437,44 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (HIERARCHY_FORMAT, true, true, false)
             | (NAMED_FORMAT, true, true, true)
             | (FIELDS_SHEET_FORMAT, true, true, true)
-            | (TEXT_LAYOUT_FORMAT, true, true, true) => {}
+            | (TEXT_LAYOUT_FORMAT, true, true, true)
+            | (MIRROR_SHEET_FORMAT, true, true, true)
+            | (GENERATED_SHEET_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
-        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT) && sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
+        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT)
+            && sheet.symbols.iter().any(|s| s.field_layout.is_some())
+        {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
         }
-        if sheet.format != TEXT_LAYOUT_FORMAT && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some())) {
+        if !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT) && sheet.symbols.iter().any(|s| s.mirrored.is_some()) {
+            return Err(format!("{}: mirrored placements require sheet format 6", reference.file));
+        }
+        if !matches!(sheet.format.as_str(), TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT)
+            && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
+        {
             return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
+        }
+        if sheet.format == GENERATED_SHEET_FORMAT && sheet.generated_legs.as_ref().is_none_or(|records| records.is_empty()) {
+            return Err(format!("{}: sheet format 7 requires generated contact legs", reference.file));
+        }
+        if sheet.format != GENERATED_SHEET_FORMAT && sheet.generated_legs.is_some() {
+            return Err(format!("{}: generated contact legs require sheet format 7", reference.file));
+        }
+        if let Some(records) = &sheet.generated_legs {
+            let mut generated_wires = BTreeSet::new();
+            for record in records {
+                if !(1..=MAX_OBJECT_ID).contains(&record.wire) || !generated_wires.insert(record.wire) {
+                    return Err(format!("{}: invalid or duplicate generated contact-leg wire", reference.file));
+                }
+                if record
+                    .bends
+                    .as_ref()
+                    .is_none_or(|bends| bends.len() > crate::wire::MAX_BENDS || bends.iter().any(|point| !crate::wire::valid_point(point)))
+                {
+                    return Err(format!("{}: invalid generated contact-leg bends", reference.file));
+                }
+            }
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         let mut named = sheet.net_labels.take().unwrap_or_default();
@@ -467,7 +519,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         anchors.extend(projection.hierarchy_endpoints().map(|(end, _)| end));
     }
     let mut combined = Sheet { id: project.sheets[0].id, symbols: Vec::new(), junctions: Some(Vec::new()), wires: Vec::new() };
-    for (reference, sheet) in project.sheets.iter().zip(parsed_sheets) {
+    for (reference, mut sheet) in project.sheets.iter().zip(parsed_sheets) {
         let sheet_path = format!("sheets/{}.json", reference.id);
         if reference.id.is_nil()
             || !sheet_ids.insert(reference.id)
@@ -480,8 +532,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT)
-            || sheet.id != reference.id
+        if !matches!(
+            sheet.format.as_str(),
+            SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT
+        ) || sheet.id != reference.id
         {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
         }
@@ -507,7 +561,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             }
         }
         used.insert(sheet_path);
-        layouts.push((reference, symbols, junctions, wires));
+        let generated = sheet.generated_legs.take().unwrap_or_default();
+        layouts.push((reference, symbols, junctions, wires, generated));
         combined.symbols.extend(sheet.symbols);
         combined.junctions.get_or_insert_with(Vec::new).extend(sheet.junctions);
         combined.wires.extend(sheet.wires);
@@ -849,7 +904,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     project_data.layout = storage_layout;
     let sheets = layouts
         .into_iter()
-        .map(|(reference, symbols, junctions, wires)| {
+        .map(|(reference, symbols, junctions, wires, generated)| {
+            let generated_legs = generated
+                .into_iter()
+                .filter_map(|record| {
+                    let GeneratedLegRecord { wire: wire_id, end, other, bends } = record;
+                    let bends = bends?;
+                    let wire = project_data.wires.iter().find(|wire| wire.ordinal() == wire_id)?;
+                    if !wires.contains(&wire_id) || wire.bends() != Some(bends.as_slice()) {
+                        return None;
+                    }
+                    let [from, to] = wire.endpoints();
+                    // Legs are drawn with the fixed contact first; any other order no longer
+                    // describes the recorded route and is treated as authored.
+                    if other != Endpoint::from(from) || end != Endpoint::from(to) {
+                        return None;
+                    }
+                    Some(crate::wire::GeneratedLeg { wire: wire_id, end: to, other: from, bends: Some(bends) })
+                })
+                .collect::<Vec<_>>();
             Ok(crate::sheets::SchematicSheet {
                 sheet_id: reference.id,
                 occurrence_id: None,
@@ -861,6 +934,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 labels: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.labels.clone(),
                 subsheets: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.subsheets.clone(),
                 connectivity: Arc::default(),
+                generated_legs: Arc::new(generated_legs),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -992,6 +1066,7 @@ pub struct DocumentsEncoder {
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
     footprint_definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
     instance_records: Option<crate::instances::Instances>,
+    generated_legs: Vec<GeneratedLegRecord<'static>>,
 }
 
 impl DocumentsEncoder {
@@ -1008,6 +1083,7 @@ impl DocumentsEncoder {
             definitions: BTreeMap::new(),
             footprint_definitions: BTreeMap::new(),
             instance_records: None,
+            generated_legs: Vec::new(),
         }
     }
 
@@ -1212,6 +1288,7 @@ impl DocumentsEncoder {
                                 x_nm: s.position.x_nm,
                                 y_nm: s.position.y_nm,
                                 rotation: u16::from(s.rotation) * 90,
+                                mirrored: s.mirrored.then_some(true),
                                 field_layout: (!s.field_layout.is_empty()).then(|| s.field_layout.clone()),
                             },
                         )?;
@@ -1244,20 +1321,32 @@ impl DocumentsEncoder {
                         )?;
                         self.cursor += 1;
                     } else {
-                        self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
-                        self.sheet_cursor += 1;
-                        if self.sheet_cursor < self.project.sheets.len() {
-                            self.cursor = 0;
-                            self.first = true;
-                            self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
-                        } else if self.project.board_target().is_some() {
-                            self.next();
-                            board_header(&mut self.bytes, &self.project)?;
+                        let generated = {
+                            let sheet = &self.project.sheets[self.sheet_cursor];
+                            sheet
+                                .generated_legs
+                                .iter()
+                                .filter(|leg| sheet.wires.iter().any(|wire| leg.matches(wire)))
+                                .map(GeneratedLegRecord::from)
+                                .collect::<Vec<_>>()
+                        };
+                        self.generated_legs = generated;
+                        if self.generated_legs.is_empty() {
+                            self.finish_sheet()?;
                         } else {
-                            self.phase = 9;
+                            self.bytes.extend_from_slice(b"  ],\n  \"generated_legs\": [\n");
                             self.cursor = 0;
                             self.first = true;
+                            self.phase = 17;
                         }
+                    }
+                }
+                17 => {
+                    if let Some(leg) = self.generated_legs.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, leg)?;
+                        self.cursor += 1;
+                    } else {
+                        self.finish_sheet()?;
                     }
                 }
                 7 => {
@@ -1382,6 +1471,28 @@ impl DocumentsEncoder {
         self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
         self.next();
         self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        Ok(())
+    }
+
+    /// Close the current sheet and start the next sheet or the board. The explicit phase keeps
+    /// the transition independent of whether the sheet ended after wires or generated legs.
+    fn finish_sheet(&mut self) -> Result<(), String> {
+        self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
+        self.sheet_cursor += 1;
+        if self.sheet_cursor < self.project.sheets.len() {
+            self.cursor = 0;
+            self.first = true;
+            self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        } else if self.project.board_target().is_some() {
+            self.phase = 7;
+            self.cursor = 0;
+            self.first = true;
+            board_header(&mut self.bytes, &self.project)?;
+        } else {
+            self.phase = 9;
+            self.cursor = 0;
+            self.first = true;
+        }
         Ok(())
     }
 
@@ -1620,13 +1731,21 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 
 /// Write the bounded sheet header and return its first incremental record phase. Flat
 /// sheets retain version 1 and bypass hierarchy lists; named anchors add a bounded phase
-/// before those lists in version 3. Explicit text appearance uses version 4 and retains all
-/// three hierarchy/named arrays, including when empty.
+/// before those lists in version 3. Explicit field appearance uses version 4, net-name
+/// appearance version 5, mirrored placements version 6, and live generated contact-leg
+/// provenance version 7. Versions 4 through 7 retain all three hierarchy/named arrays,
+/// including when empty.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
     let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
     let text = sheet.net_labels.iter().any(|l| l.text.is_some());
-    let format = if text {
+    let mirrored = sheet.symbols.iter().any(|s| s.mirrored);
+    let generated = sheet.has_live_generated_legs();
+    let format = if generated {
+        GENERATED_SHEET_FORMAT
+    } else if mirrored {
+        MIRROR_SHEET_FORMAT
+    } else if text {
         TEXT_LAYOUT_FORMAT
     } else if fields {
         FIELDS_SHEET_FORMAT
@@ -1638,7 +1757,7 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
         SHEET_FORMAT
     };
     write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
-    if text || fields || !sheet.net_labels.is_empty() {
+    if text || fields || mirrored || generated || !sheet.net_labels.is_empty() {
         bytes.extend_from_slice(b"  \"net_labels\": [\n");
         Ok(12)
     } else if hierarchy {

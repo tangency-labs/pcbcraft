@@ -182,12 +182,13 @@ impl SymbolUnit {
             }))
             .collect()
     }
-    /// Rotate this unit's pin anchors into absolute schematic coordinates.
-    pub fn pin_positions(&self, Point { x_nm, y_nm }: Point, turns: u8) -> Vec<Point> {
+    /// Transform this unit's pin anchors into absolute schematic coordinates. A mirrored unit is
+    /// reflected left-to-right about its center before it is turned.
+    pub fn pin_positions(&self, Point { x_nm, y_nm }: Point, turns: u8, mirrored: bool) -> Vec<Point> {
         self.pins
             .iter()
             .map(|pin| {
-                let (x, y) = rotate(pin.offset.x_nm, pin.offset.y_nm, turns);
+                let (x, y) = place(pin.offset.x_nm, pin.offset.y_nm, turns, mirrored);
                 Point { x_nm: x_nm + x, y_nm: y_nm + y }
             })
             .collect()
@@ -272,6 +273,57 @@ pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
         2 => (-x, -y),
         _ => (-y, x),
     }
+}
+
+/// Which screen-space axis a mirror action reflects a placed symbol across, about its center.
+/// Horizontal flips left and right; vertical flips top and bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MirrorAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl MirrorAxis {
+    /// The axis spelling accepted by the shared command and shown in inspection.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "horizontal" => Some(Self::Horizontal),
+            "vertical" => Some(Self::Vertical),
+            _ => None,
+        }
+    }
+
+    /// The native spelling used by command discovery and inspection.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+}
+
+/// Map a symbol-local offset to the screen: reflect horizontally first, then turn. This is the
+/// stored transform, so rotation always remains a counterclockwise screen turn of a possibly
+/// mirrored drawing and pressing Rotate never changes the mirror itself.
+pub fn place(x: i64, y: i64, turns: u8, mirrored: bool) -> (i64, i64) {
+    rotate(if mirrored { -x } else { x }, y, turns)
+}
+
+/// Invert [`place`], for dragging screen-space text back into symbol-local field offsets.
+pub fn unplace(x: i64, y: i64, turns: u8, mirrored: bool) -> (i64, i64) {
+    let (x, y) = rotate(x, y, (4 - turns % 4) % 4);
+    (if mirrored { -x } else { x }, y)
+}
+
+/// Compose a screen-space X or Y reflection with an existing orientation. Reflections do not
+/// commute with quarter turns, so the stored rotation changes as well as the mirror flag.
+/// Applying the same axis twice returns exactly the original pose.
+pub fn mirror_pose(turns: u8, mirrored: bool, axis: MirrorAxis) -> (u8, bool) {
+    let turns = match axis {
+        MirrorAxis::Horizontal => (4 - turns % 4) % 4,
+        MirrorAxis::Vertical => (2 + 4 - turns % 4) % 4,
+    };
+    (turns, !mirrored)
 }
 
 /// One placed part instance, independent of the position of its schematic unit.
@@ -364,8 +416,10 @@ pub struct SymbolPlacement {
     pub position: Point,
     /// Per-instance field appearance, independent of the drawing and pin geometry.
     pub field_layout: fields::Layouts,
-    /// Quarter turns counterclockwise, 0 to 3.
+    /// Quarter turns counterclockwise applied after the optional horizontal mirror, 0 to 3.
     pub(crate) rotation: u8,
+    /// Reflect the unit left-to-right about its center before rotation.
+    pub(crate) mirrored: bool,
 }
 
 impl SymbolPlacement {
@@ -381,6 +435,7 @@ impl SymbolPlacement {
             position: Point { x_nm: 0, y_nm: 0 },
             field_layout,
             rotation: turns % 4,
+            mirrored: false,
         }
     }
 
@@ -402,9 +457,14 @@ impl SymbolPlacement {
         &self.definition.units[self.unit_index]
     }
 
-    /// Quarter turns counterclockwise, 0 to 3.
+    /// Quarter turns counterclockwise, 0 to 3, applied after the optional horizontal mirror.
     pub fn turns(&self) -> u8 {
         self.rotation
+    }
+
+    /// Whether this unit is reflected left-to-right about its center before it is turned.
+    pub fn is_mirrored(&self) -> bool {
+        self.mirrored
     }
 
     /// Return the owning component's stable identity, independent of this placement's ID.
@@ -435,7 +495,7 @@ impl SymbolPlacement {
     /// Return every pin in absolute schematic coordinates, turned with the symbol, in the
     /// definition's pin order.
     pub fn pins(&self) -> Vec<Point> {
-        self.unit_definition().pin_positions(self.position, self.rotation)
+        self.unit_definition().pin_positions(self.position, self.rotation, self.mirrored)
     }
 
     /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
@@ -467,6 +527,7 @@ impl SymbolPlacement {
             "display_reference": self.display_reference(reference),
             "value": value,
             "rotation": u16::from(self.rotation) * 90,
+            "mirrored": self.mirrored,
             "x_nm": self.position.x_nm,
             "y_nm": self.position.y_nm,
             "pins": pins,

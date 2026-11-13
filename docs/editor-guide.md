@@ -365,9 +365,16 @@ Power symbols use these same properties and independent fields. Value supplies
 the global net name, while drawing and terminal behavior belong to the pinned
 definition. There is no separate power-marker form or glyph-style selector.
 
-Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
-**E** opens its expanded properties and **Delete** removes it with its wires.
-Right-click a symbol for the same actions, and press **Esc** to clear the selection.
+Press **R** over a symbol to rotate it, or select it first. Press **X** or **Y**
+to mirror the hovered or selected symbol about its center: **X** flips it left to
+right and **Y** flips it top to bottom. The same actions are in the symbol's
+right-click menu and in **Capture → Mirror X**/**Mirror Y**. Mirroring composes
+with the current rotation, rotating afterwards turns the mirrored drawing, and
+applying the same axis twice restores the original pose. Attached wires stay on
+their terminals, and reference/value text remains upright and editable. With a
+symbol selected, **E** opens its expanded properties and **Delete** removes it
+with its wires. Right-click a symbol for the same actions, and press **Esc** to
+clear the selection.
 New generic resistor and capacitor placements show neutral `R` and `C` values.
 Set their actual ratings in Properties; existing projects and pinned library
 revisions keep their original values.

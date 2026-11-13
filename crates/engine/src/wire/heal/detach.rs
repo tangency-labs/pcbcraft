@@ -70,16 +70,17 @@ impl Project {
     /// the same bounded allocator; invalid geometry fails without changing the snapshot.
     /// Moving to the same position is a no-op. Exact contacts at the destination still join.
     pub fn moved_symbol_disconnected(&self, symbol: &str, to: Point, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
-        self.transformed_symbol(symbol, to, None, true, revision, auto_heal)
+        self.transformed_symbol(symbol, to, None, None, true, revision, auto_heal)
     }
 
     /// Detach the validated symbol's old pin contacts before applying its new pose, so
-    /// preview and commit leave the original wire paths fixed even when only rotating.
+    /// preview and commit leave the original wire paths fixed even when only rotating or mirroring.
     pub(super) fn transformed_symbol_disconnected(
         &self,
         index: usize,
         to: Point,
         rotation: u8,
+        mirrored: bool,
         revision: u64,
         auto_heal: bool,
     ) -> Result<Project, CommandError> {
@@ -106,6 +107,7 @@ impl Project {
         let symbol = &mut Arc::make_mut(&mut moved.sheet_mut().symbols)[index];
         symbol.position = to;
         symbol.rotation = rotation;
+        symbol.mirrored = mirrored;
         moved.healed(&detached, revision, auto_heal)
     }
 }

@@ -83,6 +83,11 @@ until you save the project. The move command also accepts optional absolute
 `rotation` in degrees (0, 90, 180 or 270), applying movement and orientation in
 one undo step; omitting it preserves the current orientation. `disconnect: true`
 leaves the old wire paths in place while applying the new pose.
+`schematic.mirror_symbol` reflects the addressed symbol about its center across
+the screen's `horizontal` (left-to-right) or `vertical` (top-to-bottom) axis,
+composes with its quarter-turn rotation, keeps attached wires on their terminals,
+and is one undoable revision-checked edit. Applying the same axis twice restores
+the original pose; inspection publishes `mirrored` on each affected symbol.
 
 `schematic.set_symbol_fields` applies reference, value and optional `rotation`,
 `x_nm` and `y_nm` together as one revision-checked undo step, matching the schematic

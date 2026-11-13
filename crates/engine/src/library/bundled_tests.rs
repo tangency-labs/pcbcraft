@@ -103,7 +103,7 @@ fn native_power_contacts_follow_the_shared_move_command() {
             let end = sym.terminals()[0];
             let _ = p.electrical_connectivity();
             let to = Point { x_nm: 4 * GRID_NM, y_nm: 4 * GRID_NM };
-            let preview = p.transformed_symbol(&sym.id(), to, Some(1), disconnect, s.revision(), auto_heal).unwrap();
+            let preview = p.transformed_symbol(&sym.id(), to, Some(1), None, disconnect, s.revision(), auto_heal).unwrap();
             s.apply(MOVE_SYMBOL,&json!({"symbol":sym.id(),"x_nm":to.x_nm,"y_nm":to.y_nm,"rotation":90,"disconnect":disconnect,"auto_heal":auto_heal,"expected_revision":s.revision()})).unwrap();
             let after = s.snapshot().unwrap();
             assert_eq!(encode_documents(after.clone()).unwrap(), encode_documents(Arc::new(preview)).unwrap());

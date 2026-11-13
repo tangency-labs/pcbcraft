@@ -26,15 +26,20 @@ pub(super) fn paint(p: &Painter, graphic: &Graphic, at: impl Fn(Point) -> Pos2, 
     }
 }
 
-/// Keep native lettering readable after schematic placement rotation, retaining its interior
-/// alignment when a half turn would otherwise put labels upside down. No file geometry changes.
-pub(super) fn symbol_text(graphic: &Graphic, turns: u8) -> Graphic {
+/// Keep native lettering readable after schematic placement mirroring and rotation, retaining
+/// its interior alignment when a half turn would otherwise put labels upside down. No file
+/// geometry changes.
+pub(super) fn symbol_text(graphic: &Graphic, turns: u8, mirrored: bool) -> Graphic {
     use pcbcraft_engine::{
         library_graphics::Geometry,
         schematic::{TextAlign, rotate},
     };
     let mut copy = graphic.clone();
     if let Geometry::Text { at, rotation, align, .. } = &mut copy.geometry {
+        if mirrored {
+            at.x_nm = -at.x_nm;
+            *rotation = (180 - i32::from(*rotation)).rem_euclid(360) as u16;
+        }
         (at.x_nm, at.y_nm) = rotate(at.x_nm, at.y_nm, turns);
         let mut degrees = (i32::from(*rotation) - 90 * i32::from(turns % 4)).rem_euclid(360);
         if degrees > 90 && degrees <= 270 {
@@ -71,9 +76,9 @@ mod tests {
             stroke_nm: 100_000,
             fill: Fill::None,
         };
-        let rotated = symbol_text(&original, 2);
+        let rotated = symbol_text(&original, 2, false);
         assert!(matches!(rotated.geometry, Geometry::Text { at: Point { x_nm: -2_000_000, y_nm: 0 }, rotation: 0, align: TextAlign::End, .. }));
         assert!(matches!(original.geometry, Geometry::Text { rotation: 0, align: TextAlign::Start, .. }));
-        assert_eq!(symbol_text(&original, 4), original);
+        assert_eq!(symbol_text(&original, 4, false), original);
     }
 }

@@ -802,17 +802,20 @@ impl Project {
     /// Preview a symbol move together with pin contact and local wire healing.
     /// With automatic cleanup disabled, exact pin contact still connects without normalization.
     pub fn moved_symbol(&self, symbol: &str, to: Point, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
-        self.transformed_symbol(symbol, to, None, false, revision, auto_heal)
+        self.transformed_symbol(symbol, to, None, None, false, revision, auto_heal)
     }
 
     /// Preview one symbol's move and optional orientation together. Rotation is in quarter
-    /// turns (0..=3); None preserves it. Disconnection leaves old routes in place. Invalid
-    /// bounds, orientation or contacts fail atomically, and an unchanged pose is a no-op.
+    /// turns (0..=3); mirroring reflects left-to-right before that rotation. None preserves
+    /// either value. Disconnection leaves old routes in place. Invalid bounds, orientation or
+    /// contacts fail atomically, and an unchanged pose is a no-op.
+    #[allow(clippy::too_many_arguments)]
     pub fn transformed_symbol(
         &self,
         symbol: &str,
         to: Point,
         rotation: Option<u8>,
+        mirrored: Option<bool>,
         disconnect: bool,
         revision: u64,
         auto_heal: bool,
@@ -824,17 +827,18 @@ impl Project {
             return Err(CommandError::InvalidParams("symbol exceeds schematic bounds".into()));
         }
         let rotation = rotation.unwrap_or(self.symbols[index].rotation);
+        let mirrored = mirrored.unwrap_or(self.symbols[index].mirrored);
         if rotation > 3 {
             return Err(CommandError::InvalidParams("symbol orientation must be 0 through 3 quarter turns".into()));
         }
-        if self.symbols[index].position == to && self.symbols[index].rotation == rotation {
+        if self.symbols[index].position == to && self.symbols[index].rotation == rotation && self.symbols[index].mirrored == mirrored {
             return Ok(self.clone());
         }
         if disconnect {
-            return self.transformed_symbol_disconnected(index, to, rotation, revision, auto_heal);
+            return self.transformed_symbol_disconnected(index, to, rotation, mirrored, revision, auto_heal);
         }
         let mut edit = Edit::new(self, revision);
-        edit.pose_symbol(index, to, rotation)?;
+        edit.pose_symbol(index, to, rotation, mirrored)?;
         let moved = edit.finish(auto_heal)?;
         moved.healed(self, revision, auto_heal)
     }

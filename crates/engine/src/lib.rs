@@ -118,6 +118,7 @@ enum ParamKind {
     Revision,
     Terminal,
     Rotation,
+    MirrorAxis,
     WireAnchor,
     WireEndpoint,
     WireBends,
@@ -273,6 +274,7 @@ impl ParamKind {
             Self::WireBends => json!({"type": "array", "maxItems": wire::MAX_BENDS, "items": point_schema()}),
             Self::Point => point_schema(),
             Self::Rotation => json!({"type": "integer", "enum": [0, 90, 180, 270]}),
+            Self::MirrorAxis => json!({"type": "string", "enum": ["horizontal", "vertical"]}),
             Self::Revision => json!({"type": "integer", "minimum": 0}),
             Self::Terminal => json!({
                 "type": "object",
@@ -518,6 +520,7 @@ impl ParamKind {
             Self::WireBends if wire::parse_bends(value).is_some() => Ok(()),
             Self::Point if serde_json::from_value::<schematic::Point>(value.clone()).ok().is_some_and(|point| wire::valid_point(&point)) => Ok(()),
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
+            Self::MirrorAxis if value.as_str().and_then(schematic::MirrorAxis::parse).is_some() => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
             Self::HierarchyId => Err("must identify a sheet symbol or hierarchical label"),
@@ -554,6 +557,7 @@ impl ParamKind {
             Self::WireBends => Err("must contain at most 64 bounded points"),
             Self::Point => Err("must be a point with whole-nanometer x_nm and y_nm within the schematic bounds"),
             Self::Rotation => Err("must be 0, 90, 180 or 270 degrees"),
+            Self::MirrorAxis => Err("must be horizontal or vertical"),
             Self::Terminal => Err("must identify a symbol and one of its terminal numbers"),
         }
     }
@@ -651,6 +655,8 @@ pub const DELETE_WIRE_SEGMENT: &str = "schematic.delete_wire_segment";
 pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
 /// Turn a symbol a quarter turn counterclockwise.
 pub const ROTATE_SYMBOL: &str = "schematic.rotate_symbol";
+/// Reflect a symbol horizontally or vertically about its center, retaining attached wires.
+pub const MIRROR_SYMBOL: &str = "schematic.mirror_symbol";
 /// Remove a symbol and the wires attached to it.
 pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
 /// Set component fields and optional placed-symbol coordinates/orientation in one undo step.
@@ -1233,6 +1239,21 @@ const CATALOG: &[Command] = &[
         title: "Rotate Symbol",
         summary: "Turn a symbol 90 degrees counterclockwise. Its wires follow its pins. Undoable.",
         params: &[SYMBOL, EXPECTED_REVISION],
+    },
+    Command {
+        id: MIRROR_SYMBOL,
+        title: "Mirror Symbol",
+        summary: "Reflect a symbol about its center across the screen's horizontal or vertical axis, composing with its quarter-turn rotation. Attached wires follow its pins. Undoable.",
+        params: &[
+            SYMBOL,
+            Param {
+                required: true,
+                name: "axis",
+                summary: "horizontal flips left and right; vertical flips top and bottom",
+                kind: ParamKind::MirrorAxis,
+            },
+            EXPECTED_REVISION,
+        ],
     },
     Command {
         id: DELETE_SYMBOL,
@@ -2278,6 +2299,7 @@ impl Session {
             | CONNECT_PINS
             | MOVE_SYMBOL
             | ROTATE_SYMBOL
+            | MIRROR_SYMBOL
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT
@@ -2525,6 +2547,7 @@ impl Session {
                 | CONNECT_PINS
                 | MOVE_SYMBOL
                 | ROTATE_SYMBOL
+                | MIRROR_SYMBOL
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | PLACE_FOOTPRINT
@@ -2679,6 +2702,7 @@ impl Session {
             MOVE_ITEMS => self.move_items(params)?,
             DELETE_ITEMS => self.delete_items(params)?,
             ROTATE_SYMBOL => self.rotate_symbol(params)?,
+            MIRROR_SYMBOL => self.mirror_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
@@ -2803,6 +2827,7 @@ impl Session {
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
             field_layout: defaults.field_layout,
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
+            mirrored: false,
         });
         project.sheet_mut().connectivity = Arc::default();
         let project = project.healed(self.open_project()?, self.revision(), wire::auto_heal(params))?;
@@ -2828,6 +2853,7 @@ impl Session {
                 &project.symbols[index].id(),
                 position,
                 Some(rotation),
+                None,
                 params["disconnect"].as_bool().unwrap_or(false),
                 self.revision(),
                 wire::auto_heal(params),
@@ -2853,7 +2879,26 @@ impl Session {
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
         let symbol = &project.symbols[index];
-        let next = project.retained_symbol_pose(index, symbol.position, (symbol.rotation + 1) % 4, self.revision())?;
+        let next = project.retained_symbol_pose(index, symbol.position, (symbol.rotation + 1) % 4, symbol.mirrored, self.revision())?;
+        self.change(next)?;
+        Ok(())
+    }
+
+    /// Reflect a symbol about its center across one screen axis. The transform composes with the
+    /// current quarter-turn rotation and retains exact naming contacts; explicit wire endpoints
+    /// follow their terminal identities without rewriting authored route bends. Applying the same
+    /// axis twice restores the original pose.
+    fn mirror_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let index = Self::symbol_param(project, params)?;
+        let axis = params["axis"]
+            .as_str()
+            .and_then(schematic::MirrorAxis::parse)
+            .ok_or_else(|| CommandError::InvalidParams("mirror axis must be horizontal or vertical".into()))?;
+        let symbol = &project.symbols[index];
+        let (rotation, mirrored) = schematic::mirror_pose(symbol.rotation, symbol.mirrored, axis);
+        let next = project.retained_symbol_pose(index, symbol.position, rotation, mirrored, self.revision())?;
         self.change(next)?;
         Ok(())
     }
@@ -2952,9 +2997,17 @@ impl Session {
         component.part = part_selection;
         component.metadata = metadata;
         let mut next = if position != original_position {
-            project.transformed_symbol(&project.symbols[index].id(), position, Some(rotation), false, self.revision(), wire::auto_heal(params))?
+            project.transformed_symbol(
+                &project.symbols[index].id(),
+                position,
+                Some(rotation),
+                None,
+                false,
+                self.revision(),
+                wire::auto_heal(params),
+            )?
         } else if project.symbols[index].rotation != rotation {
-            project.retained_symbol_pose(index, position, rotation, self.revision())?
+            project.retained_symbol_pose(index, position, rotation, project.symbols[index].mirrored, self.revision())?
         } else {
             project.clone()
         };
@@ -3678,5 +3731,7 @@ mod wiring_tests {
     }
 }
 
+#[cfg(test)]
+mod mirror_tests;
 #[cfg(test)]
 mod multiunit_tests;

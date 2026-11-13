@@ -26,6 +26,24 @@ pub(crate) fn auto_heal(params: &Value) -> bool {
 /// Maximum intermediate points accepted in a single authored wire.
 pub const MAX_BENDS: usize = 64;
 
+/// A connecting leg created when a retained pose keeps a fixed named contact attached.
+/// The recorded endpoints and bends distinguish it from authored routes on a later return.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GeneratedLeg {
+    pub(crate) wire: u64,
+    pub(crate) end: WireEndpoint,
+    pub(crate) other: WireEndpoint,
+    pub(crate) bends: Option<Vec<Point>>,
+}
+
+impl GeneratedLeg {
+    /// Whether this record still describes the exact wire it was created from. Any later
+    /// endpoint or bend edit makes the route authored again and must preserve it.
+    pub(crate) fn matches(&self, wire: &Wire) -> bool {
+        wire.ordinal() == self.wire && wire.endpoints() == [self.other, self.end] && wire.bends() == self.bends.as_deref()
+    }
+}
+
 /// A wire gesture targets an existing electrical identity or creates a free endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {

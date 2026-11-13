@@ -67,7 +67,8 @@ enum Action {
     Label,
     Move,
     Rotate,
-    Mirror,
+    MirrorHorizontal,
+    MirrorVertical,
     Rules,
     Erc,
     Annotate,
@@ -144,7 +145,8 @@ const CAPTURE: &[Group] = &[
         tools: &[
             tool(Action::Move, "Move", Icon::Move, "Move selected object (M)", "M"),
             tool(Action::Rotate, "Rotate", Icon::Rotate, "Rotate selected object", "R"),
-            tool(Action::Mirror, "Mirror", Icon::Mirror, "Mirroring is not available yet.", ""),
+            tool(Action::MirrorHorizontal, "Mirror X", Icon::Mirror, "Mirror selected symbol left to right (X)", "X"),
+            tool(Action::MirrorVertical, "Mirror Y", Icon::Mirror, "Mirror selected symbol top to bottom (Y)", "Y"),
         ],
         extras: &[
             tool(Action::Delete, "Delete", Icon::Delete, "Delete selected items", "Del"),
@@ -215,6 +217,8 @@ impl Action {
                 | Self::Wire
                 | Self::Move
                 | Self::Rotate
+                | Self::MirrorHorizontal
+                | Self::MirrorVertical
                 | Self::Delete
                 | Self::Slice
                 | Self::Heal
@@ -270,6 +274,9 @@ impl Action {
                     && app.views.active.schematic.tool.is_none()
                     && (app.views.active.schematic.selection.single_symbol().is_some()
                         || app.views.active.schematic.selection.single_net_label().is_some())
+            }
+            Self::MirrorHorizontal | Self::MirrorVertical => {
+                schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some()
             }
             Self::Delete => {
                 schematic
@@ -390,6 +397,12 @@ impl PcbApp {
                 } else {
                     self.edit_selected(if action == Action::Move { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
                 }
+            }
+            Action::MirrorHorizontal => {
+                self.edit_selected(SymbolAction::Mirror(pcbcraft_engine::schematic::MirrorAxis::Horizontal));
+            }
+            Action::MirrorVertical => {
+                self.edit_selected(SymbolAction::Mirror(pcbcraft_engine::schematic::MirrorAxis::Vertical));
             }
             Action::Delete => {
                 if let Some(label) = self

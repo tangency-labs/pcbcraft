@@ -105,7 +105,8 @@ the same `VCC` net name, which can be changed before placement.
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then
    **Redo**, to check that the move is one edit. Select a resistor and press
-   **E** to change its reference or value, or **R** to rotate it. Hover and press
+   **E** to change its reference or value, **R** to rotate it, or **X**/**Y** to
+   mirror it horizontally/vertically about its center. Hover and press
    **G** to grab a symbol with its wires attached, then click to place it.
    **M** picks up
    the selected symbol while leaving its wiring in place; with nothing selected,

@@ -54,7 +54,11 @@ fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center
         return Vec::new();
     }
     let drawing = drawing_bounds(symbol.unit_definition());
-    let bounds = if drawing.is_positive() { turn_rect(drawing, symbol.turns()) } else { Rect::from_center_size(Pos2::ZERO, vec2(2., 2.)) };
+    let bounds = if drawing.is_positive() {
+        turn_rect(drawing, symbol.turns(), symbol.is_mirrored())
+    } else {
+        Rect::from_center_size(Pos2::ZERO, vec2(2., 2.))
+    };
     let t = Tokens::get();
     let metadata = content.metadata;
     let reference = symbol.display_reference(content.reference);
@@ -78,7 +82,7 @@ fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center
                 (center + vec2(0., (step * (bounds.max.y + 0.4)).max(t.space_12) + (index - 1) as f32 * step * 1.5), Align2::CENTER_TOP)
             };
             let anchor = layout.offset.map_or(automatic, |p| {
-                let (x, y) = turn(p.x_nm as f32 / GRID_NM as f32, p.y_nm as f32 / GRID_NM as f32, symbol.turns());
+                let (x, y) = turn(p.x_nm as f32 / GRID_NM as f32, p.y_nm as f32 / GRID_NM as f32, symbol.turns(), symbol.is_mirrored());
                 center + vec2(x, y) * step
             });
             let horizontal = match layout.align {
@@ -153,12 +157,7 @@ pub(super) fn destination(project: &Project, camera: &Camera, rect: Rect, drag: 
     let point = camera.snap(pointer + drag.offset, rect);
     let dx = point.x_nm.checked_sub(symbol.position.x_nm)?;
     let dy = point.y_nm.checked_sub(symbol.position.y_nm)?;
-    let (x_nm, y_nm) = match symbol.turns() % 4 {
-        0 => (dx, dy),
-        1 => (-dy, dx),
-        2 => (-dx, -dy),
-        _ => (dy, -dx),
-    };
+    let (x_nm, y_nm) = pcbcraft_engine::schematic::unplace(dx, dy, symbol.turns(), symbol.is_mirrored());
     let mut layouts = symbol.field_layout.clone();
     let layout = layouts.entry(drag.field.clone()).or_default();
     layout.offset = Some(Point { x_nm, y_nm });

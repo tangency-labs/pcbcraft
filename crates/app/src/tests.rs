@@ -24,6 +24,7 @@ mod footprint_assignment;
 mod grab;
 mod grid_spacing;
 mod hierarchy;
+mod mirror;
 mod multiple_sheets;
 mod multiunit;
 mod net_labels;

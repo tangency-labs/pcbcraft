@@ -36,6 +36,8 @@ pub struct SchematicSheet {
     pub(crate) net_labels: Arc<Vec<crate::net_labels::Label>>,
     pub(crate) subsheets: Arc<Vec<crate::hierarchy::SheetSymbol>>,
     pub(crate) connectivity: Arc<OnceLock<Connectivity>>,
+    /// Provenance for legs drawn by retained named-contact poses; live records persist in sheet/7.
+    pub(crate) generated_legs: Arc<Vec<crate::wire::GeneratedLeg>>,
 }
 
 impl SchematicSheet {
@@ -53,7 +55,13 @@ impl SchematicSheet {
             wires: Arc::default(),
             junctions: Arc::default(),
             connectivity: Arc::default(),
+            generated_legs: Arc::default(),
         }
+    }
+
+    /// Whether a recorded generated leg still exactly describes a wire on this sheet.
+    pub(crate) fn has_live_generated_legs(&self) -> bool {
+        self.generated_legs.iter().any(|leg| self.wires.iter().any(|wire| leg.matches(wire)))
     }
 }
 

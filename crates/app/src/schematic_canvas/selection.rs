@@ -57,7 +57,7 @@ pub(super) fn boxed(
     let crossing = end.x < start.x;
     let mut hits = Selection::default();
     for symbol in project.symbols().iter().filter(|_| filters.symbols) {
-        let body = super::body(symbol.unit_definition(), symbol.turns());
+        let body = super::body(symbol.unit_definition(), symbol.turns(), symbol.is_mirrored());
         let center = camera.screen(symbol.position, canvas);
         let body = Rect::from_min_max(center + body.min.to_vec2() * camera.unit_step(), center + body.max.to_vec2() * camera.unit_step());
         if if crossing { window.intersects(body) } else { window.contains_rect(body) } {
