@@ -362,7 +362,12 @@ fn desktop_native_part_relocation_and_offline_handoff() {
         assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
         load_desktop_source(&mut h, &moved);
         assert_eq!(h.state().session.libraries().search("", Some(Kind::Part)).len(), 1);
-        assert!(h.state().library_sources.storage_text().contains(moved.to_str().unwrap()));
+        // Compare the parsed path: the JSON text escapes the backslashes of a Windows path.
+        let registered: serde_json::Value = serde_json::from_str(&h.state().library_sources.storage_text()).unwrap();
+        assert!(
+            registered.as_array().unwrap().iter().any(|registration| registration["path"] == moved.to_str().unwrap()),
+            "the relocated folder is registered: {registered}"
+        );
         let app = h.state_mut();
         app.library_sources.remove("desktop-parts", &mut app.session);
         std::fs::remove_dir_all(&moved).unwrap();
