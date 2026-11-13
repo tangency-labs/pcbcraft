@@ -1285,6 +1285,7 @@ impl PcbApp {
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · R rotate · Esc cancel"),
                         Tool::Move { pickup: true, .. } => dim("Grab symbol · R rotate · Click to place · Esc cancel"),
                         Tool::Move { .. } => dim("Move symbol · R rotate · Esc cancel"),
+                        Tool::MoveItems { pickup: true, .. } => dim("Move wire · Click to place · Esc cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
                         Tool::Reshape { drag, .. } if drag.pickup => dim("Grab wire · Click to place · Esc cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
@@ -1338,8 +1339,8 @@ impl PcbApp {
     }
 
     /// Draw the schematic and send completed edits through the shared command catalog using each
-    /// gesture's starting revision to reject stale actions. M picks up the selected symbol or,
-    /// without a selection, the hovered symbol for disconnected movement. G picks up the hovered
+    /// gesture's starting revision to reject stale actions. M picks up a selected wire for whole-route
+    /// translation, or a selected/otherwise hovered symbol for disconnected movement. G picks up the hovered
     /// symbol with its wires attached, or a wire handle. Pickup stays view-only until a click commits it.
     /// Cancel clears only the local preview, and an unfinished tool cannot be replaced by a queued shortcut.
     /// R rotates an active symbol/field preview, otherwise targeting hovered text before its body.
@@ -1388,7 +1389,7 @@ impl PcbApp {
                             }
                         }
                     }
-                    let moving = std::mem::take(&mut self.views.active.schematic.move_requested);
+                    let mut moving = std::mem::take(&mut self.views.active.schematic.move_requested);
                     let rotating = std::mem::take(&mut self.views.active.schematic.rotate_requested);
                     let mirroring = self.views.active.schematic.mirror_requested.take();
                     let datasheet = std::mem::take(&mut self.views.active.schematic.datasheet_requested);
@@ -1398,6 +1399,24 @@ impl PcbApp {
                         && let Some(project) = snapshot.as_deref()
                     {
                         self.open_datasheet(ui, project);
+                    }
+                    // An explicit wire selection takes M before hovered symbol handling, including
+                    // when one of its segments was highlighted. Reuse the group translation tool.
+                    if moving
+                        && input_enabled
+                        && self.views.active.schematic.tool.is_none()
+                        && self.views.active.schematic.selection.single_wire().is_some()
+                    {
+                        moving = false;
+                        let rect = ui.available_rect_before_wrap();
+                        if self.views.active.filters.wires
+                            && let Some(source) = source
+                            && let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point))
+                        {
+                            let items = self.views.active.schematic.selection.clone();
+                            let origin = self.views.active.camera.snap(pointer, rect);
+                            self.view_click(source, Click::GrabItems(items, origin, true));
+                        }
                     }
                     if (moving || rotating || mirroring.is_some())
                         && input_enabled
@@ -1638,11 +1657,11 @@ impl PcbApp {
                 self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
             (None, Click::SelectLeg(leg)) => self.select_leg(leg),
-            (None, Click::GrabItems(items, origin)) => {
-                let whole_wire_drag = self.views.active.schematic.whole_wire_drag && items.single_wire().is_some();
+            (None, Click::GrabItems(items, origin, pickup)) => {
+                let whole_wire_drag = (pickup || self.views.active.schematic.whole_wire_drag) && items.single_wire().is_some();
                 self.select(items.clone());
                 self.views.active.schematic.whole_wire_drag = whole_wire_drag;
-                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision(), pickup });
             }
             (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
                 self.views.active.schematic.tool = None;

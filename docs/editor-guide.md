@@ -236,7 +236,10 @@ the wire first. Hover a handle and press **G**, or right-click the wire and choo
 **Grab**, to pick it up without holding a button, then click to place it. Moving a
 shared junction adjusts all its attached routes; terminal pins stay on their symbols.
 Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
-modifier selections continue to select whole wires. Crossings stay disconnected.
+modifier selections continue to select whole wires. With one wire or segment selected,
+**M** picks up its whole route, including its bends and free-end no-connect markers;
+click to place, or press **Esc** or right-click to cancel. Attached pins stay fixed.
+Crossings stay disconnected.
 Select a wire segment, then use Capture → **Modify** for **Slice**, **Heal**
 or **Delete** in the group caption menu.
 Right-click a wire for these edits and whole-wire selection/deletion:

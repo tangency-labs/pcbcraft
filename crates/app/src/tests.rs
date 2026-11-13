@@ -39,6 +39,7 @@ mod selection_filters;
 mod split_editors;
 mod symbol_overlap;
 mod tool_modes;
+mod wire_move;
 mod zoom;
 
 /// Compare restored authored state while preserving the allocation metadata retained by Undo.

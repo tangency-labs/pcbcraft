@@ -183,7 +183,9 @@ the same `VCC` net name, which can be changed before placement.
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
-   route for whole-wire movement or deletion. Capture → **Modify** menu offers
+   route for whole-wire movement or deletion. **M** with one wire or segment selected
+   picks up the whole route; click to place, or press **Esc** or right-click to cancel.
+   Capture → **Modify** menu offers
    **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
    **Break** to release the selected leg's attachments, including pins and shared junctions,
    whether one or both ends are connected. An already-free end stays free. The detached

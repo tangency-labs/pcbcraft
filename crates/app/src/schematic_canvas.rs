@@ -85,6 +85,8 @@ pub(crate) enum Tool {
         items: Selection,
         origin: Point,
         revision: u64,
+        /// Keyboard pickup follows hover and finishes on a click; held drags finish on release.
+        pickup: bool,
     },
     Move {
         symbol: SymbolPlacement,
@@ -150,7 +152,8 @@ pub(crate) enum Click {
     SelectItems(Selection),
     /// Select one leg for direct deletion and reshaping.
     SelectLeg(LegTarget),
-    GrabItems(Selection, Point),
+    /// Translate a selection from this model point; true selects click-to-place keyboard pickup.
+    GrabItems(Selection, Point, bool),
     FinishItems(Option<Point>),
     /// A drag started on a wire segment, corner or free end; the handler selects its target.
     GrabReshape(wires::ReshapeDrag),
@@ -249,6 +252,8 @@ pub(crate) enum SymbolAction {
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
+/// M picks up an explicitly selected wire for whole-route translation and commits on a valid
+/// primary click; Escape, right-click or focus loss cancels that preview.
 /// Symbol move previews also include their pending quarter turns; painted wire contacts use
 /// that transformed snapshot, and cancellation discards both position and orientation.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
@@ -316,10 +321,13 @@ pub(crate) fn show(
         None
     };
     let group_delta = match &tool {
-        Some(Tool::MoveItems { origin, .. }) => response.interact_pointer_pos().map(|pointer| {
-            let point = camera.snap(pointer, rect);
-            Point { x_nm: point.x_nm - origin.x_nm, y_nm: point.y_nm - origin.y_nm }
-        }),
+        Some(Tool::MoveItems { origin, pickup, .. }) => {
+            let pointer = if *pickup { response.hover_pos().or_else(|| response.interact_pointer_pos()) } else { response.interact_pointer_pos() };
+            pointer.map(|pointer| {
+                let point = camera.snap(pointer, rect);
+                Point { x_nm: point.x_nm - origin.x_nm, y_nm: point.y_nm - origin.y_nm }
+            })
+        }
         _ => None,
     };
     let reshape_target = match &tool {
@@ -581,11 +589,15 @@ pub(crate) fn show(
         }
         return None;
     }
-    if matches!(tool, Some(Tool::MoveItems { .. })) {
-        if lost_focus {
+    if let Some(Tool::MoveItems { pickup, .. }) = &tool {
+        if lost_focus || response.secondary_clicked() {
             return Some(Click::FinishItems(None));
         }
-        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+        if if *pickup {
+            response.clicked_by(egui::PointerButton::Primary)
+        } else {
+            ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+        } {
             return Some(Click::FinishItems(group_delta.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
         }
         return None;
@@ -672,7 +684,7 @@ pub(crate) fn show(
             return Some(Click::SelectItems(selected.combine(&hit, false, false)));
         }
         if hit.is_subset(selected) && (selected.len() > 1 || whole_wire_drag) {
-            return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect)));
+            return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect), false));
         }
         if let Some(wire) = hit.single_wire()
             && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
