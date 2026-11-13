@@ -646,6 +646,27 @@ fn properties_edit_the_selected_track_width() {
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 400_000);
+
+    // #281: a mil suffix overrides the millimetre display; a width outside the track limits is
+    // refused with the allowed range and leaves the model and history unchanged.
+    let type_width = |h: &mut Harness<'_, PcbApp>, text: &str| {
+        h.get_by_label("Selected track width").click();
+        h.run();
+        h.get_by_label("Selected track width").type_text(text);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+    };
+    type_width(&mut h, "20 mil");
+    assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 508_000);
+    assert_eq!(h.state().session.revision(), revision + 2);
+    type_width(&mut h, "0 mm");
+    use pcbcraft_chrome::units::{Unit, label};
+    use pcbcraft_engine::board::track::{MAX_WIDTH_NM, MIN_WIDTH_NM};
+    let range = format!("Enter {} to {}", label(MIN_WIDTH_NM, Unit::Mm), label(MAX_WIDTH_NM, Unit::Mm));
+    assert!(h.query_by_label(&range).is_some(), "{range}");
+    assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 508_000);
+    assert_eq!(h.state().session.revision(), revision + 2);
 }
 
 /// Accepted copper edits disable all properties until publication, then expose the new model
@@ -1072,15 +1093,89 @@ fn properties_set_exact_footprint_position_rotation_and_side() {
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 4, "one edit per field");
 
-    // Rotations wrap into 0–359°, and coordinates past the board range clamp to its edge.
+    // Rotations wrap into 0–359°.
     set(&mut h, "Footprint rotation", "-90");
     assert_eq!(placed(&h).1, 270);
     set(&mut h, "Footprint rotation", "360");
     assert_eq!(placed(&h).1, 0);
+    assert_eq!(h.state().message, None);
+
+    // #281: a coordinate past the board range or with an unknown unit is refused with an error
+    // instead of being clamped, leaving the model and history unchanged; Escape restores the value.
+    let revision = h.state().session.revision();
     set(&mut h, "Footprint X", "5000");
-    assert_eq!(placed(&h).0.x_nm, pcbcraft_engine::schematic::MAX_CENTER_NM);
-    set(&mut h, "Footprint Y", "-5000");
-    assert_eq!(placed(&h).0.y_nm, -pcbcraft_engine::schematic::MAX_CENTER_NM);
+    assert!(h.query_by_label("Enter -987.3 mm to 987.3 mm").is_some());
+    set(&mut h, "Footprint Y", "3 cm");
+    assert!(h.query_by_label("Unknown unit \"cm\". Use mil, mm or in").is_some());
+    for label in ["Footprint X", "Footprint Y"] {
+        h.get_by_label(label).click();
+        h.run();
+        h.key_press(Key::Escape);
+        h.run();
+    }
+    assert!(h.query_by_label("Enter -987.3 mm to 987.3 mm").is_none());
+    assert_eq!(h.get_by_label("Footprint X").value().as_deref(), Some("12.7 mm"));
+    assert_eq!((placed(&h).0, h.state().session.revision()), (Point { x_nm: 12_700_000, y_nm: -2_540_000 }, revision));
+}
+
+/// #281: footprint, track and via length fields accept either unit's suffix over the displayed
+/// default, and untouched nanometre-resolution values survive focus, unit switches and edits of
+/// other properties without rounding, an extra revision or changed saved bytes.
+#[test]
+fn properties_lengths_accept_either_unit_and_keep_untouched_nanometres() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let id = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().id.clone();
+    let placed = |h: &Harness<'_, PcbApp>| {
+        let project = h.state().session.project().unwrap();
+        let f = project.boards().next().unwrap().footprints().find(|f| f.id == id).unwrap();
+        (f.position, f.rotation)
+    };
+    let set = |h: &mut Harness<'_, PcbApp>, label: &str, text: &str| {
+        h.get_by_label(label).click();
+        h.run();
+        h.get_by_label(label).type_text(text);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+    };
+    let center = at(&h, placed(&h).0);
+    click_canvas_at(&mut h, center);
+    set(&mut h, "Footprint X", "100 mil");
+    assert_eq!(placed(&h).0.x_nm, 2_540_000);
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mil;
+    h.run();
+    assert_eq!(h.get_by_label("Footprint X").value().as_deref(), Some("100 mil"));
+    set(&mut h, "Footprint Y", "-2.54 mm");
+    assert_eq!(placed(&h).0, Point { x_nm: 2_540_000, y_nm: -2_540_000 });
+
+    // A nanometre-resolution coordinate is exact in both units and is never re-entered by
+    // focusing, confirming unchanged text, switching units or rotating the footprint.
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    h.run();
+    set(&mut h, "Footprint X", "1.234567");
+    set(&mut h, "Footprint Y", "-0.000007 mm");
+    let exact = Point { x_nm: 1_234_567, y_nm: -7 };
+    let saved = pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    for unit in [pcbcraft_chrome::units::Unit::Mil, pcbcraft_chrome::units::Unit::Mm, pcbcraft_chrome::units::Unit::Mil] {
+        h.state_mut().preferences.units = unit;
+        h.run();
+        for label in ["Footprint X", "Footprint Y"] {
+            h.get_by_label(label).click();
+            h.run();
+            h.key_press(Key::Enter);
+            h.run();
+        }
+    }
+    assert_eq!((placed(&h).0, h.state().session.revision()), (exact, revision));
+    assert_eq!(pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    set(&mut h, "Footprint rotation", "90");
+    assert_eq!(placed(&h), (exact, 90));
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(placed(&h), (exact, 0));
     assert_eq!(h.state().message, None);
 }
 
