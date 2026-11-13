@@ -19,6 +19,17 @@ pub fn track(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool) {
     drawing(painter, pointer, target, connected, t.accent, t.board_canvas);
 }
 
+/// Draw the no-connect cursor with the cross centered on the active placement point.
+/// The caller hides the system arrow; this geometry never creates an electrical connection.
+pub fn no_connect(painter: &Painter, center: Pos2) {
+    let t = Tokens::get();
+    for stroke in [Stroke::new(4.5, t.canvas), Stroke::new(2., t.accent)] {
+        for (from, to) in [(vec2(-16., -16.), vec2(16., 16.)), (vec2(-16., 16.), vec2(16., -16.))] {
+            painter.line_segment([center + from, center + to], stroke);
+        }
+    }
+}
+
 /// Paint the shared crosshair at the pointer and the ring or dot at the resolved target.
 fn drawing(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool, ink: Color32, canvas: Color32) {
     let arm = theme::WIRE_CURSOR_ARM;

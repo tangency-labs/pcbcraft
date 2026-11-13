@@ -15,6 +15,7 @@ pub(super) struct Filters {
     pub wires: bool,
     pub sheets: bool,
     pub labels: bool,
+    pub no_connects: bool,
     pub footprints: bool,
     pub tracks: bool,
     pub vias: bool,
@@ -23,7 +24,7 @@ pub(super) struct Filters {
 
 impl Default for Filters {
     fn default() -> Self {
-        Self { symbols: true, wires: true, sheets: true, labels: true, footprints: true, tracks: true, vias: true, graphics: true }
+        Self { symbols: true, wires: true, sheets: true, labels: true, no_connects: true, footprints: true, tracks: true, vias: true, graphics: true }
     }
 }
 
@@ -46,6 +47,9 @@ impl Filters {
         selection
             .net_labels
             .retain(|id| project.is_some_and(|p| p.net_labels().iter().any(|label| label.object_id() == *id && self.allows_net_label(label.style))));
+        if !self.no_connects {
+            selection.no_connects.clear();
+        }
         if !self.symbols {
             selection.symbols.clear();
         }
@@ -65,6 +69,7 @@ impl Filters {
                 planned("pins", "Pins"),
                 row("wires", "Wires", self.wires),
                 row("labels", "Labels", self.labels),
+                row("no_connects", "No connects", self.no_connects),
                 planned("graphics", "Graphics"),
                 planned("images", "Images"),
                 planned("text", "Text"),
@@ -97,6 +102,7 @@ impl PcbApp {
                 (Workspace::Schematic, "wires") => &mut next.wires,
                 (Workspace::Schematic, "sheets") => &mut next.sheets,
                 (Workspace::Schematic, "labels") => &mut next.labels,
+                (Workspace::Schematic, "no_connects") => &mut next.no_connects,
                 (Workspace::Board, "footprints") => &mut next.footprints,
                 (Workspace::Board, "tracks") => &mut next.tracks,
                 (Workspace::Board, "vias") => &mut next.vias,

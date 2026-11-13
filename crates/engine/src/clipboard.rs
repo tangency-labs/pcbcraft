@@ -48,6 +48,14 @@ pub struct Fragment {
     cut_sheets: bool,
 }
 
+/// Initial selection qualifies intent by captured units. Internal sheet remapping preserves
+/// the part intent already qualified by the enclosing hierarchy capture.
+#[derive(Clone, Copy)]
+enum IntentScope {
+    SelectedUnits,
+    CapturedParts,
+}
+
 /// Paste policy distinguishes independent duplication from explicit Cut relocation. Invalid
 /// references, names or ownership choices reject the whole batch.
 #[derive(Clone, Debug, Default)]
@@ -92,6 +100,13 @@ impl Fragment {
     /// selected wire routes retain their full geometry and shared endpoint identities.
     /// The captured root retains its occurrence identity; pasting objects does not create a sheet.
     pub fn capture(project: &Project, items: &Selection) -> Result<Self, CommandError> {
+        Self::capture_sheet(project, items, IntentScope::SelectedUnits)
+    }
+
+    /// Capture one sheet's geometry, either qualifying the user's initial selection or retaining
+    /// the enclosing fragment's part intent while a hierarchy is remapped sheet by sheet.
+    fn capture_sheet(project: &Project, items: &Selection, intent_scope: IntentScope) -> Result<Self, CommandError> {
+        items.validate_marker_owners(project)?;
         let mut found = items.clone();
         found.retain(project);
         if items.is_empty() || &found != items {
@@ -129,13 +144,22 @@ impl Fragment {
             }
             Arc::make_mut(&mut sheet.wires).push(wire);
         }
-        Self::captured(project, vec![sheet], cursor, false)
+        sheet.no_connect_ends =
+            Arc::new(project.no_connect_ends.iter().filter_map(|id| detached.get(&WireEndpoint::Junction(*id)).copied()).collect());
+        Self::captured(project, vec![sheet], cursor, false, intent_scope)
     }
 
     /// Keep only captured sheets, their live components and exact package intent. This shared
     /// boundary excludes board placements and unrelated project assets for flat/tree captures.
     /// Persistent net IDs stay with the source; pasted named networks receive destination IDs.
-    fn captured(project: &Project, sheets: Vec<crate::sheets::SchematicSheet>, cursor: u64, cut_sheets: bool) -> Result<Self, CommandError> {
+    /// Internal sheet remapping retains intent already qualified by the enclosing capture.
+    fn captured(
+        project: &Project,
+        sheets: Vec<crate::sheets::SchematicSheet>,
+        cursor: u64,
+        cut_sheets: bool,
+        intent_scope: IntentScope,
+    ) -> Result<Self, CommandError> {
         let components: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.component)).collect();
         let symbols: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.ordinal)).collect();
         let mut fragment = project.clone();
@@ -144,6 +168,22 @@ impl Fragment {
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
         Arc::make_mut(&mut fragment.units).retain(|_, id| symbols.contains(id));
+        // Whole-part captures retain unresolved intent too. Partial-unit copies carry only
+        // intent whose terminal appears in the captured units, excluding unrelated unit flags.
+        let terminals: BTreeSet<_> = fragment
+            .all_symbols()
+            .flat_map(|symbol| symbol.terminals().into_iter().map(move |pin| (symbol.component, pin.number().to_owned())))
+            .collect();
+        for (&id, part) in Arc::make_mut(&mut fragment.components) {
+            let complete = matches!(intent_scope, IntentScope::CapturedParts)
+                || project.units.range((id, String::new())..).take_while(|((owner, _), _)| *owner == id).all(|(_, symbol)| symbols.contains(symbol));
+            if !complete {
+                if part.no_connects.keys().any(|token| !part.definition.pins().iter().any(|pin| pin.number == *token)) {
+                    return Err(invalid("Resolve missing no-connect terminals or copy all placed units of this part."));
+                }
+                part.no_connects.retain(|token, _| terminals.contains(&(id, token.clone())));
+            }
+        }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
         let assignments = project
             .board
@@ -415,6 +455,7 @@ impl Fragment {
         Arc::make_mut(&mut sheet.junctions).extend(new_junctions);
         Arc::make_mut(&mut sheet.net_labels).extend(new_labels);
         Arc::make_mut(&mut sheet.wires).extend(new_wires);
+        Arc::make_mut(&mut sheet.no_connect_ends).extend(self.project.no_connect_ends.iter().filter_map(|id| junctions.get(id).copied()));
         sheet.connectivity = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         next.named_graph = Arc::default();
@@ -489,7 +530,7 @@ impl Session {
         }
         next.prune_junctions();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }
@@ -507,20 +548,22 @@ impl Session {
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }
 }
 
-/// Validate candidate geometry/assets before canonical net reconciliation. The previous registry
-/// can still name removed anchors here; the transaction validates its reconciled successor.
-pub(crate) fn validate_candidate(project: &Project) -> Result<(), CommandError> {
+/// Adopt required marker metadata and validate disposable geometry/assets before publication.
+/// Return the adopted candidate so the codec and transaction inspect the same occurrence IDs.
+/// The previous net registry can still name removed anchors; publication reconciles its successor.
+pub(crate) fn validate_candidate(mut project: Project) -> Result<Project, CommandError> {
+    project.prepare_no_connect_metadata().map_err(invalid)?;
     let mut geometry = project.clone();
     geometry.net_registry = Arc::default();
     let documents = crate::persistence::encode_documents(Arc::new(geometry)).map_err(invalid)?;
     crate::persistence::decode_documents(&documents).map_err(invalid)?;
-    Ok(())
+    Ok(project)
 }
 
 #[cfg(test)]

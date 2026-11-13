@@ -4,6 +4,7 @@ use super::*;
 impl Edit {
     /// Apply a validated pose while retaining exact contacts of an offset naming terminal.
     /// Capture against the old geometry, so fixed pins and unsplit interiors remain connected.
+    /// Refresh marker attachment restrictions for the returned pose before subsequent cleanup.
     pub(super) fn pose_symbol(&mut self, index: usize, to: Point, rotation: u8, mirrored: bool) -> Result<(), CommandError> {
         let symbol = self.project.symbols().get(index).ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
         let contact = self.project.power_terminals().find_map(|(end, _, from)| {
@@ -34,6 +35,7 @@ impl Edit {
             }
         }
         self.project.named_graph = Arc::default();
+        self.attachments = self.project.wire_attachment_policy();
         Ok(())
     }
 

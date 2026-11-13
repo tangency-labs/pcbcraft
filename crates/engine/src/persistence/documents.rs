@@ -45,6 +45,7 @@ pub const MAX_DOCUMENTS: usize = 4096;
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
+const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
@@ -52,6 +53,7 @@ const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
 const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
 const GENERATED_SHEET_FORMAT: &str = "pcbcraft-sheet/7";
+const WIRE_END_SHEET_FORMAT: &str = "pcbcraft-sheet/8";
 const MIRROR_SHEET_FORMAT: &str = "pcbcraft-sheet/6";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
@@ -143,10 +145,11 @@ struct FolderReference {
 impl ProjectDocument {
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
     fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
-        let foldered = matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT)
-            || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
+        let foldered =
+            matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT)
+                || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16 or 17"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17 or 19"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -216,7 +219,7 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
 /// Schematic-only records are embedded in the entry point and have no separate managed path.
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if !matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT) {
+    if !matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT) {
         return Ok(None);
     }
     Ok(project_board_path(entry)?.and_then(|path| path.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))))
@@ -238,6 +241,8 @@ struct SheetDocument {
     wires: Vec<Connection<'static>>,
     #[serde(default, deserialize_with = "present")]
     generated_legs: Option<Vec<GeneratedLegRecord<'static>>>,
+    #[serde(default, deserialize_with = "present")]
+    no_connect_ends: Option<Vec<u64>>,
 }
 
 /// Persisted provenance for a leg drawn by a retained named-contact pose. The exact wire
@@ -318,9 +323,14 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let occurrences = matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT);
+    let occurrences = matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT);
     let net_format = project.format == NET_PROJECT_FORMAT;
-    let part_format = matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT);
+    let no_connect_format = project.format == NO_CONNECT_PROJECT_FORMAT;
+    if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
+        return Err("No-connect intent requires project format 19.".into());
+    }
+    let part_format =
+        matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT);
     let foldered = project.layout_root.is_some();
     if !part_format
         && project
@@ -328,7 +338,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16 or 17.".into());
+        return Err("Extended package mappings require project format 15, 16, 17 or 19.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -356,24 +366,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PART_PROJECT_FORMAT
             | OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
+            | NO_CONNECT_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16 or 17".into());
+        return Err("schematic_instances requires project format 16, 17 or 19".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14, 15, 16 or 17, no board and a nonempty bounded list".into());
+        return Err("project footprint choices require format 13, 14, 15, 16, 17 or 19, no board and a nonempty bounded list".into());
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16 or 17.".into());
+        return Err("Pinned part selections require project format 15, 16, 17 or 19.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16 or 17".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17 or 19".into());
     }
     if matches!(
         project.format.as_str(),
@@ -386,9 +397,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PART_PROJECT_FORMAT
             | OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
+            | NO_CONNECT_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16 or 17"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17 or 19"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -404,7 +416,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let expected = if net_format { NET_INSTANCES_FORMAT } else { INSTANCES_FORMAT };
+                let expected =
+                    if net_format || (no_connect_format && instance.net_registry.is_some()) { NET_INSTANCES_FORMAT } else { INSTANCES_FORMAT };
                 if instance.format != expected || Some(instance.board) != registered {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
                 }
@@ -421,8 +434,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         None
     };
-    if net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err("Net registry records require project format 17 and the corresponding instance vocabulary.".into());
+    if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
+        return Err("Net registry records require project format 17 or 19 and the corresponding instance vocabulary.".into());
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -439,18 +452,23 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (FIELDS_SHEET_FORMAT, true, true, true)
             | (TEXT_LAYOUT_FORMAT, true, true, true)
             | (MIRROR_SHEET_FORMAT, true, true, true)
-            | (GENERATED_SHEET_FORMAT, true, true, true) => {}
+            | (GENERATED_SHEET_FORMAT, true, true, true)
+            | (WIRE_END_SHEET_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
-        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT)
-            && sheet.symbols.iter().any(|s| s.field_layout.is_some())
+        if !matches!(
+            sheet.format.as_str(),
+            FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT
+        ) && sheet.symbols.iter().any(|s| s.field_layout.is_some())
         {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
         }
-        if !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT) && sheet.symbols.iter().any(|s| s.mirrored.is_some()) {
+        if !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT)
+            && sheet.symbols.iter().any(|s| s.mirrored.is_some())
+        {
             return Err(format!("{}: mirrored placements require sheet format 6", reference.file));
         }
-        if !matches!(sheet.format.as_str(), TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT)
+        if !matches!(sheet.format.as_str(), TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT)
             && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
         {
             return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
@@ -458,10 +476,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         if sheet.format == GENERATED_SHEET_FORMAT && sheet.generated_legs.as_ref().is_none_or(|records| records.is_empty()) {
             return Err(format!("{}: sheet format 7 requires generated contact legs", reference.file));
         }
-        if sheet.format != GENERATED_SHEET_FORMAT && sheet.generated_legs.is_some() {
+        if !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT) && sheet.generated_legs.is_some() {
             return Err(format!("{}: generated contact legs require sheet format 7", reference.file));
         }
         if let Some(records) = &sheet.generated_legs {
+            if records.is_empty() {
+                return Err(format!("{}: generated contact legs must be nonempty when present", reference.file));
+            }
             let mut generated_wires = BTreeSet::new();
             for record in records {
                 if !(1..=MAX_OBJECT_ID).contains(&record.wire) || !generated_wires.insert(record.wire) {
@@ -475,6 +496,20 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     return Err(format!("{}: invalid generated contact-leg bends", reference.file));
                 }
             }
+        }
+        if sheet.format == WIRE_END_SHEET_FORMAT {
+            let records = sheet.no_connect_ends.as_ref().ok_or("Sheet format 8 requires no-connect wire ends.")?;
+            let unique: BTreeSet<_> = records.iter().copied().collect();
+            let junctions: BTreeSet<_> = sheet.junctions.iter().map(|junction| junction.id).collect();
+            if records.is_empty()
+                || records.len() > crate::no_connect::MAX_MARKERS
+                || unique.len() != records.len()
+                || records.iter().any(|id| !(1..=MAX_OBJECT_ID).contains(id) || !junctions.contains(id))
+            {
+                return Err("Invalid or duplicate no-connect wire-end record.".into());
+            }
+        } else if sheet.no_connect_ends.is_some() {
+            return Err("No-connect wire ends require sheet format 8.".into());
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         let mut named = sheet.net_labels.take().unwrap_or_default();
@@ -534,7 +569,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         if !matches!(
             sheet.format.as_str(),
-            SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT
+            SHEET_FORMAT
+                | HIERARCHY_FORMAT
+                | NAMED_FORMAT
+                | FIELDS_SHEET_FORMAT
+                | TEXT_LAYOUT_FORMAT
+                | MIRROR_SHEET_FORMAT
+                | GENERATED_SHEET_FORMAT
+                | WIRE_END_SHEET_FORMAT
         ) || sheet.id != reference.id
         {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
@@ -562,7 +604,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         used.insert(sheet_path);
         let generated = sheet.generated_legs.take().unwrap_or_default();
-        layouts.push((reference, symbols, junctions, wires, generated));
+        layouts.push((reference, symbols, junctions, wires, generated, sheet.no_connect_ends.take().unwrap_or_default()));
         combined.symbols.extend(sheet.symbols);
         combined.junctions.get_or_insert_with(Vec::new).extend(sheet.junctions);
         combined.wires.extend(sheet.wires);
@@ -868,7 +910,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let mut reader = crate::part_instances::storage::Reader::default();
     let mut selections = BTreeMap::new();
+    let mut no_connects = BTreeMap::new();
+    let mut marker_count = layouts.iter().map(|(_, _, _, _, _, ends)| ends.len()).sum::<usize>();
     for component in &mut project.components {
+        if let Some(records) = component.no_connects.take() {
+            let intents = crate::no_connect::read_intents(records)?;
+            marker_count += intents.len();
+            no_connects.insert(component.id, intents);
+        }
         if let Some(record) = component.part.take() {
             let symbol = symbol_copies
                 .get(&(component.library.to_string(), component.definition.to_string(), component.definition_revision))
@@ -876,6 +925,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 .ok_or("Part has no pinned symbol.")?;
             selections.insert(component.id, reader.selection(record, symbol, documents, &mut used)?);
         }
+    }
+    if no_connect_format != (marker_count != 0) || marker_count > crate::no_connect::MAX_MARKERS {
+        return Err("Project format 19 requires nonempty bounded no-connect intent.".into());
     }
     if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
         return Err(format!("{path}: unexpected or unused project document"));
@@ -904,7 +956,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     project_data.layout = storage_layout;
     let sheets = layouts
         .into_iter()
-        .map(|(reference, symbols, junctions, wires, generated)| {
+        .map(|(reference, symbols, junctions, wires, generated, ends)| {
             let generated_legs = generated
                 .into_iter()
                 .filter_map(|record| {
@@ -935,10 +987,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 subsheets: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.subsheets.clone(),
                 connectivity: Arc::default(),
                 generated_legs: Arc::new(generated_legs),
+                no_connect_ends: Arc::new(ends.into_iter().collect()),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
+    for (id, intents) in no_connects {
+        let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing no-connect part.")?;
+        part.no_connects = intents;
+    }
     for (id, selection) in selections {
         let component = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing part instance.")?;
         component.part = Some(selection);
@@ -1096,6 +1153,7 @@ impl DocumentsEncoder {
             match self.phase {
                 0 => {
                     let p = &self.project;
+                    p.validate_no_connects()?;
                     crate::part_instances::storage::validate_project(p)?;
                     if p.has_sheet_occurrences() {
                         let records = p.sheet_instances();
@@ -1127,7 +1185,13 @@ impl DocumentsEncoder {
                         .assignments
                         .values()
                         .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
-                    let format = if !p.net_registry.records.is_empty() {
+                    let has_no_connects = p.no_connect_count() != 0;
+                    if has_no_connects && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
+                        return Err("No-connect intent requires adopted storage/occurrence metadata.".into());
+                    }
+                    let format = if has_no_connects {
+                        NO_CONNECT_PROJECT_FORMAT
+                    } else if !p.net_registry.records.is_empty() {
                         NET_PROJECT_FORMAT
                     } else if p.has_sheet_occurrences() {
                         OCCURRENCE_PROJECT_FORMAT
@@ -1188,6 +1252,7 @@ impl DocumentsEncoder {
                                 value: c.value.as_str().into(),
                                 metadata: (!c.metadata.is_empty()).then(|| c.metadata.clone()),
                                 part: c.part.as_ref().map(|part| part.record()),
+                                no_connects: crate::no_connect::write_intents(&c.no_connects),
                             },
                         )?;
                         if let Some(part) = &c.part {
@@ -1332,7 +1397,7 @@ impl DocumentsEncoder {
                         };
                         self.generated_legs = generated;
                         if self.generated_legs.is_empty() {
-                            self.finish_sheet()?;
+                            self.finish_sheet_routes()?;
                         } else {
                             self.bytes.extend_from_slice(b"  ],\n  \"generated_legs\": [\n");
                             self.cursor = 0;
@@ -1345,6 +1410,18 @@ impl DocumentsEncoder {
                     if let Some(leg) = self.generated_legs.get(self.cursor as usize) {
                         record(&mut self.bytes, &mut self.first, leg)?;
                         self.cursor += 1;
+                    } else {
+                        self.finish_sheet_routes()?;
+                    }
+                }
+                18 => {
+                    if let Some(&id) = self.project.sheets[self.sheet_cursor]
+                        .no_connect_ends
+                        .range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded))
+                        .next()
+                    {
+                        record(&mut self.bytes, &mut self.first, &id)?;
+                        self.cursor = id;
                     } else {
                         self.finish_sheet()?;
                     }
@@ -1493,6 +1570,19 @@ impl DocumentsEncoder {
             self.cursor = 0;
             self.first = true;
         }
+        Ok(())
+    }
+
+    /// Append the sheet/8 endpoint intent array after wires and optional generated-leg records.
+    /// Records remain incremental, with the ordinary sheet close shared by all formats.
+    fn finish_sheet_routes(&mut self) -> Result<(), String> {
+        if self.project.sheets[self.sheet_cursor].no_connect_ends.is_empty() {
+            return self.finish_sheet();
+        }
+        self.bytes.extend_from_slice(b"  ],\n  \"no_connect_ends\": [\n");
+        self.cursor = 0;
+        self.first = true;
+        self.phase = 18;
         Ok(())
     }
 
@@ -1733,7 +1823,7 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 /// sheets retain version 1 and bypass hierarchy lists; named anchors add a bounded phase
 /// before those lists in version 3. Explicit field appearance uses version 4, net-name
 /// appearance version 5, mirrored placements version 6, and live generated contact-leg
-/// provenance version 7. Versions 4 through 7 retain all three hierarchy/named arrays,
+/// provenance version 7; wire-end intent uses version 8. Versions 4 through 8 retain all three hierarchy/named arrays,
 /// including when empty.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
@@ -1741,7 +1831,10 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     let text = sheet.net_labels.iter().any(|l| l.text.is_some());
     let mirrored = sheet.symbols.iter().any(|s| s.mirrored);
     let generated = sheet.has_live_generated_legs();
-    let format = if generated {
+    let ends = !sheet.no_connect_ends.is_empty();
+    let format = if ends {
+        WIRE_END_SHEET_FORMAT
+    } else if generated {
         GENERATED_SHEET_FORMAT
     } else if mirrored {
         MIRROR_SHEET_FORMAT
@@ -1757,7 +1850,7 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
         SHEET_FORMAT
     };
     write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
-    if text || fields || mirrored || generated || !sheet.net_labels.is_empty() {
+    if text || fields || mirrored || generated || ends || !sheet.net_labels.is_empty() {
         bytes.extend_from_slice(b"  \"net_labels\": [\n");
         Ok(12)
     } else if hierarchy {

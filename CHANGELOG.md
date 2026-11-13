@@ -2,6 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
+Intentional no-connect crosses can be placed on schematic pins with Q or Capture
+and removed through pin context menus. A focused check reports unmarked pins and
+connected, missing or incompatible marker targets. Marker-bearing projects use
+project/19; projects without markers retain their existing low-level encoding.
+
 - Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber

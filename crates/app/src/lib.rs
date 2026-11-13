@@ -47,6 +47,7 @@ mod native_part_properties;
 mod native_sources;
 mod net_inspector;
 mod net_labels;
+mod no_connect;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
@@ -167,6 +168,7 @@ enum Help {
 enum Dialog {
     #[default]
     None,
+    NoConnects(Box<no_connect::Inspection>),
     LibrarySources,
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
@@ -671,7 +673,8 @@ impl PcbApp {
 
     /// Commit a finished reshape drag through the matching shared command at the revision the
     /// drag began on, so an edit made meanwhile makes it fail visibly. Segments rebind to the
-    /// new geometry when unambiguous, otherwise clear; corner/junction edits keep the wire selected.
+    /// new geometry when unambiguous, otherwise clear; corner/junction edits retain the
+    /// grabbed wire or marker selection.
     /// Dropping a junction on an explicit endpoint attaches it; free positions only reshape it.
     fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::wire::Anchor, revision: u64) {
         use pcbcraft_engine::wire::{Anchor, Reshape};
@@ -1259,12 +1262,19 @@ impl PcbApp {
                     } else {
                         "Paste · Click to place · Esc cancel"
                     }));
+                } else if self.views.active.schematic.tool.is_none()
+                    && !self.views.active.schematic.selection.no_connects.is_empty()
+                    && self.views.active.schematic.selection.len() == self.views.active.schematic.selection.no_connects.len()
+                {
+                    let count = self.views.active.schematic.selection.len();
+                    ui.label(dim(format!("{count} no-connect marker{} selected · Del delete", if count == 1 { "" } else { "s" })));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::NoConnect { .. } => dim("No connect · Esc cancel"),
                         Tool::Field { .. } => dim("Move symbol field · Esc to cancel"),
                         Tool::SheetGesture { drag, .. } => {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
@@ -1275,7 +1285,9 @@ impl PcbApp {
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · R rotate · Esc cancel"),
                         Tool::Move { pickup: true, .. } => dim("Grab symbol · R rotate · Click to place · Esc cancel"),
                         Tool::Move { .. } => dim("Move symbol · R rotate · Esc cancel"),
-                        Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
+                        Tool::MoveItems { pickup: true, disconnect: true, .. } => dim("Move selection · Click to place · Esc cancel"),
+                        Tool::MoveItems { pickup: true, .. } => dim("Grab selection · Click to place · Esc cancel"),
+                        Tool::MoveItems { .. } => dim("Grab selection · Esc to cancel"),
                         Tool::Reshape { drag, .. } if drag.pickup => dim("Grab wire · Click to place · Esc cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
                         Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
@@ -1328,9 +1340,10 @@ impl PcbApp {
     }
 
     /// Draw the schematic and send completed edits through the shared command catalog using each
-    /// gesture's starting revision to reject stale actions. M picks up the selected symbol or,
-    /// without a selection, the hovered symbol for disconnected movement. G picks up the hovered
-    /// symbol with its wires attached, or a wire handle. Pickup stays view-only until a click commits it.
+    /// gesture's starting revision to reject stale actions. M picks up a multi-item selection or a
+    /// selected wire for disconnected translation, or a sole selected/otherwise hovered symbol
+    /// for disconnected movement. G grabs a multi-item selection, hovered symbol or wire handle
+    /// while retaining external attachments. Pickup stays view-only until a click commits it.
     /// Cancel clears only the local preview, and an unfinished tool cannot be replaced by a queued shortcut.
     /// R rotates an active symbol/field preview, otherwise targeting hovered text before its body.
     /// D opens a component's saved datasheet
@@ -1378,7 +1391,7 @@ impl PcbApp {
                             }
                         }
                     }
-                    let moving = std::mem::take(&mut self.views.active.schematic.move_requested);
+                    let mut moving = std::mem::take(&mut self.views.active.schematic.move_requested);
                     let rotating = std::mem::take(&mut self.views.active.schematic.rotate_requested);
                     let mirroring = self.views.active.schematic.mirror_requested.take();
                     let datasheet = std::mem::take(&mut self.views.active.schematic.datasheet_requested);
@@ -1388,6 +1401,25 @@ impl PcbApp {
                         && let Some(project) = snapshot.as_deref()
                     {
                         self.open_datasheet(ui, project);
+                    }
+                    // Group and wire selections take M before hovered symbol handling, including
+                    // when a wire segment was highlighted. Reuse the same group translation tool.
+                    if moving
+                        && input_enabled
+                        && self.views.active.schematic.tool.is_none()
+                        && (self.views.active.schematic.selection.len() > 1 || self.views.active.schematic.selection.single_wire().is_some())
+                    {
+                        moving = false;
+                        let rect = ui.available_rect_before_wrap();
+                        let mut items = self.views.active.schematic.selection.clone();
+                        self.views.active.filters.retain(&mut items, snapshot.as_deref());
+                        if items == self.views.active.schematic.selection
+                            && let Some(source) = source
+                            && let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point))
+                        {
+                            let origin = self.views.active.camera.snap(pointer, rect);
+                            self.view_click(source, Click::MoveItems { items, origin, pickup: true, disconnect: true });
+                        }
                     }
                     if (moving || rotating || mirroring.is_some())
                         && input_enabled
@@ -1492,7 +1524,21 @@ impl PcbApp {
         {
             return;
         }
+        if let Click::WirePoint(anchor, _) | Click::StartWire(anchor) = &click
+            && let Some(project) = self.views.active.snapshot(&self.session)
+            && let Some(at) = anchor.position(&project)
+            && let Err(error) = project.wire_attachment_policy().check(at)
+        {
+            self.message = Some(error.to_string());
+            return;
+        }
         match (self.views.active.schematic.tool.clone(), click) {
+            (None, Click::BeginNoConnect) => self.begin_no_connect(),
+            (None | Some(Tool::NoConnect { .. }), Click::NoConnect(target, marked)) => self.set_no_connect(source, target, marked),
+            (Some(Tool::NoConnect { .. }), Click::CancelNoConnect) => self.views.active.schematic.tool = None,
+            (Some(Tool::NoConnect { .. }), Click::InvalidNoConnect) => {
+                self.message = Some("No-connect marks attach to a pin lead or an open wire end.".into())
+            }
             (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
@@ -1614,20 +1660,25 @@ impl PcbApp {
                 self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
             (None, Click::SelectLeg(leg)) => self.select_leg(leg),
-            (None, Click::GrabItems(items, origin)) => {
-                let whole_wire_drag = self.views.active.schematic.whole_wire_drag && items.single_wire().is_some();
+            (None | Some(Tool::Wire { start: None, .. }), Click::MoveItems { items, origin, pickup, disconnect }) => {
+                let whole_wire_drag = (pickup || self.views.active.schematic.whole_wire_drag) && items.single_wire().is_some();
                 self.select(items.clone());
                 self.views.active.schematic.whole_wire_drag = whole_wire_drag;
-                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision(), pickup, disconnect });
             }
-            (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
+            (Some(Tool::MoveItems { items, revision, disconnect, .. }), Click::FinishItems(delta)) => {
                 self.views.active.schematic.tool = None;
                 if let Some(delta) = delta {
-                    self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
+                    self.run(
+                        pcbcraft_engine::MOVE_ITEMS,
+                        &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"disconnect":disconnect,"expected_revision":revision}),
+                    );
                 }
             }
             (None | Some(Tool::Wire { start: None, .. }), Click::GrabReshape(drag)) => {
-                if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
+                if let Some(marker) = &drag.marker {
+                    self.select(Selection::one_no_connect(pcbcraft_engine::no_connect::Attachment::WireEnd(marker.clone())));
+                } else if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
                     if let Some(leg) = self
                         .views
                         .active
@@ -1730,6 +1781,7 @@ impl PcbApp {
             symbols: project.symbols().iter().map(|symbol| symbol.id()).collect(),
             wires: project.wires().iter().map(|wire| wire.id()).collect(),
             net_labels: project.net_labels().iter().map(|label| label.object_id()).collect(),
+            no_connects: project.no_connect_appearances().map(|(target, _)| target).collect(),
         };
         self.views.active.filters.retain(&mut selected, Some(&project));
         self.select(selected);
@@ -2040,6 +2092,7 @@ impl PcbApp {
     /// Draw the open dialog and retain it until the person finishes or dismisses it.
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
+            Dialog::NoConnects(inspection) => self.no_connect_dialog(ctx, inspection),
             Dialog::LibrarySources => self.library_sources_dialog(ctx),
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
             Dialog::None => {}
@@ -2458,6 +2511,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Place power/ground", key(&ADD_POWER)));
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
+    list.push(("Schematic", "Mark pin or wire end no connect", "Q".to_owned()));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Grab connected symbol or wire", "G".to_owned()));
     list.push(("Schematic", "Rotate symbol or hovered field", key(&ROTATE)));

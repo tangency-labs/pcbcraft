@@ -329,3 +329,30 @@ minimums/maximums but cannot weaken them or persist a change. It also reports vi
 diameter and drill bounds. Omitted dimensions on track/via creation use the same
 preferred sizes as the GUI. See [board-rules.md](board-rules.md) for the full
 property, precedence, compatibility and undo contract.
+
+## Intentional no-connect targets
+
+`schematic.set_no_connect` uses `target: {"part":"component-N","terminal":"1"}`
+for a logical pin, or `target: {"junction":"junction-N"}` for a physical open
+wire end, plus `marked` and `expected_revision`. Both forms use the same edits
+as Q and the Capture tool. `schematic.check_no_connects` returns a read-only,
+revision-qualified report even with `inspect:false`; its `markers`/`findings`
+arrays describe pins and `wire_markers`/`wire_findings` describe wire ends.
+Totals and truncation cover both. These markers record intent without changing
+the real netlist or physical DRC. See the [contract](no-connect-markers.md).
+
+Schematic selections may include an optional `no_connects` array of the same
+pin/wire target objects. `view.select` exposes marker selection and
+`view.set_selection_filters` accepts `no_connects`. Passing these targets to
+`schematic.delete_items` removes only the selected markers, or combines them
+with ordinary owner deletion in one undoable transaction. Target validation is
+sheet-scoped and revision-checked. Copy/group-move selections must include each selected marker's owner; standalone
+marker geometry is not persisted. A direct wire-end X drag uses the existing
+`schematic.move_junction` command and preserves marker identity.
+
+A placed no-connect mark blocks new wire attachments at that point. Shared
+wire drawing, pin connection and endpoint attachment commands reject the edit
+atomically with “Remove the no-connect marker before connecting a wire.” This
+also covers coordinate and wire/at aliases. Remove the mark through the same
+commands or Delete before connecting; saved conflicts from older projects are
+preserved and remain reportable.

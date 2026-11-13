@@ -68,6 +68,8 @@ pub(crate) struct ReshapeDrag {
     pub(crate) wire: String,
     pub(crate) edit: Reshape,
     pub(crate) grabbed: Point,
+    /// A drag picked through an X retains marker selection rather than selecting its owner.
+    pub(crate) marker: Option<pcbcraft_engine::no_connect::WireTarget>,
     /// A connected segment's orientation constrains its travel. Detached straight pieces
     /// have no axis constraint, like corners and free-end handles.
     horizontal: Option<bool>,
@@ -82,7 +84,7 @@ impl ReshapeDrag {
     /// Capture geometry and the departure guard only after an unambiguous handle is picked.
     fn new(project: &Project, wire: &str, edit: Reshape, grabbed: Point, horizontal: Option<bool>, origin: Point) -> Self {
         let departure = std::rc::Rc::new(RefCell::new(departure::Departure::new(project, wire, &edit)));
-        Self { wire: wire.to_owned(), edit, grabbed, horizontal, origin, pickup: false, departure }
+        Self { wire: wire.to_owned(), edit, grabbed, marker: None, horizontal, origin, pickup: false, departure }
     }
 
     /// Resolve a drag destination using drawing's unambiguous pin/junction hit test for a
@@ -150,6 +152,23 @@ impl ReshapeDrag {
         }
         to
     }
+}
+
+/// A wire-end X is a handle for its owning junction. Capture the existing reshape operation,
+/// retaining exact identity and grab offset; unknown, unmarked or foreign-sheet targets fail.
+pub(super) fn marker_drag(project: &Project, marker: pcbcraft_engine::no_connect::WireTarget, origin: Point) -> Option<ReshapeDrag> {
+    let end = marker.endpoint()?;
+    if !project.has_no_connect_attachment(&pcbcraft_engine::no_connect::Attachment::WireEnd(marker.clone())) {
+        return None;
+    }
+    let WireEndpoint::Junction(id) = end else {
+        return None;
+    };
+    let point = project.endpoint_position(end)?;
+    let wire = project.wires().iter().find(|wire| wire.endpoints().contains(&end))?;
+    let mut drag = ReshapeDrag::new(project, &wire.id(), Reshape::Junction(id), point, None, origin);
+    drag.marker = Some(marker);
+    Some(drag)
 }
 
 /// What a press at `pointer` grabs on `wire`: one of its free ends or
@@ -447,9 +466,15 @@ pub(super) fn pick(
         let point = target.and_then(|anchor| anchor.position(project)).unwrap_or_else(|| {
             if painter.ctx().input(|input| input.modifiers.ctrl) { camera.unsnapped(pointer, rect) } else { camera.snap(pointer, rect) }
         });
-        painter.ctx().set_cursor_icon(egui::CursorIcon::None);
-        let connected = target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_)));
-        pcbcraft_chrome::cursor::wire(painter, pointer, camera.screen(point, rect), connected);
+        let allowed =
+            target.is_none_or(|anchor| draft.target_cache.borrow_mut().get(project, revision, camera, rect).connection_allowed(project, anchor));
+        if allowed {
+            painter.ctx().set_cursor_icon(egui::CursorIcon::None);
+            let connected = target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_)));
+            pcbcraft_chrome::cursor::wire(painter, pointer, camera.screen(point, rect), connected);
+        } else {
+            painter.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+        }
     }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
     target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))
@@ -478,10 +503,19 @@ pub(super) fn preview(
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
         && let Some(path) = draft.path(from, to, auto_heal)
     {
-        paint_route(painter, rect, camera, path, tokens.accent);
+        paint_route(
+            painter,
+            rect,
+            camera,
+            path,
+            if target.is_some_and(|anchor| targets.connection_allowed(project, anchor)) { tokens.accent } else { tokens.error },
+        );
     }
     for &(endpoint, pos) in &targets.endpoints {
         let anchor = Anchor::Existing(endpoint);
+        if !targets.connection_allowed(project, anchor) {
+            continue;
+        }
         let active = start == Some(anchor) || target == Some(anchor);
         paint_pin(painter, pos, if active { tokens.schematic_wire } else { tokens.canvas_ink });
     }
@@ -586,8 +620,9 @@ pub(super) fn symbol_position(
     if ambiguous { camera.snap(pointer, rect) } else { best.map_or_else(|| camera.snap(pointer, rect), |(at, _)| at) }
 }
 
-/// Resolve an unconnected pin or free wire end for automatic starts. Occupied pins and
-/// junctions keep normal selection behavior; W may still explicitly start at those targets.
+/// Resolve an unconnected pin or free wire end for automatic starts. Occupied or marked
+/// endpoints keep normal selection behavior. W can start at occupied contacts, while marked
+/// endpoints require removing their no-connect intent first.
 /// Equal-distance nodes are ambiguous and cannot start a connection.
 pub(super) fn node_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, draft: &Draft, revision: u64) -> Option<Anchor> {
     if !rect.contains(pointer) {

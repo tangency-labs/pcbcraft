@@ -2,6 +2,31 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Intentional no-connect markers
+
+Logical terminal and wire-end intent, captured electrical-type evidence, shared
+commands, bounded diagnostic inspection and project/19 plus sheet/8 storage are original MIT OR
+Apache-2.0 PCBcraft work for #285. The attachment-centered X, larger X cursor and lead-and-cross ribbon
+glyph are original geometry; the pinned Craft kit has no electronics no-connect
+command glyph, so
+the host draws that mark and its selection outline while reusing existing
+ribbon, menu, modal, filter checkbox and control adapters. Stable marker
+selection and atomic intent deletion are original PCBcraft work; the blue mark
+color is a separate host canvas token. The shared immutable no-connect attachment
+policy and magnetic-target suppression are original engine/view-cache changes;
+no external implementation or dependency was introduced. Wire-end X dragging
+reuses the existing junction reshape/departure path and shared move command;
+placement selection cleanup reuses view-owned selection/counterpart routing.
+Selected-wire and multi-item M pickup reuse the existing bounded group translation
+command, revision/filter guards and preview rather than adding another movement transaction.
+The explicit disconnected group candidate partitions only selection-boundary contacts
+through the existing wire allocator; G and held group dragging retain connected movement.
+Interaction follows the published
+[KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
+consulted November 12, 2026. Tests use shared commands, original starter/native
+example definitions and production codecs; no external EDA implementation,
+artwork, fixture, dependency or library data was incorporated.
+
 ## Schematic overlap visibility
 
 The drawing-bound warnings, view-owned candidate cache and stacked-symbol context

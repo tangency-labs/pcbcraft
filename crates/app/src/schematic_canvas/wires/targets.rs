@@ -3,7 +3,7 @@
 use super::{Anchor, Camera, Point, Project, WireEndpoint, distance_sq, endpoints, nearest_node};
 use egui::{Pos2, Rect};
 use pcbcraft_chrome::theme;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 mod tests;
@@ -33,6 +33,9 @@ pub(super) struct Targets {
     pub(super) endpoints: Vec<(WireEndpoint, Pos2)>,
     segments: Vec<Segment>,
     degree: BTreeMap<WireEndpoint, usize>,
+    /// Marked endpoints keep selection priority throughout their magnetic target area.
+    no_connects: BTreeSet<WireEndpoint>,
+    attachments: pcbcraft_engine::no_connect::WireAttachments,
 }
 
 /// Each view retains its own projected targets, including across ordinary pointer motion.
@@ -58,9 +61,18 @@ impl Cache {
 impl Targets {
     /// Resolve routes once, retaining screen-space bounds for fast rejection away from a
     /// wire. Connected pins/junctions and named markers contacting routes remain explicit targets,
-    /// although automatic starts exclude occupied contacts.
+    /// although automatic starts exclude occupied contacts and authored no-connects.
     pub(super) fn new(project: &Project, camera: &Camera, rect: Rect) -> Self {
         let mut result = Self { endpoints: endpoints(project, camera, rect), ..Self::default() };
+        result.attachments = project.wire_attachment_policy();
+        result.no_connects = result
+            .endpoints
+            .iter()
+            .filter_map(|(end, _)| {
+                let at = project.endpoint_position(*end)?;
+                result.attachments.check(at).is_err().then_some(*end)
+            })
+            .collect();
         for wire in project.wires() {
             for end in wire.endpoints() {
                 *result.degree.entry(end).or_default() += 1;
@@ -89,15 +101,25 @@ impl Targets {
     }
 
     /// An ordinary click may start only at an unconnected pin or a degree-one free end.
-    /// The nearest occupied node keeps selection priority instead of redirecting to another pin.
+    /// The nearest occupied or no-connect node keeps selection priority instead of redirecting
+    /// to another pin. Raw anchor queries retain identity so the UI can show a blocked target.
     pub(super) fn automatic_node(&self, pointer: Pos2) -> Option<Anchor> {
         let end = nearest_node(&self.endpoints, pointer).ok()??;
+        if self.no_connects.contains(&end) {
+            return None;
+        }
         let degree = self.degree.get(&end).copied().unwrap_or(0);
         let allowed = match end {
             WireEndpoint::NetLabel(_) | WireEndpoint::Terminal(_) | WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => degree == 0,
             WireEndpoint::Junction(_) => degree == 1,
         };
         allowed.then_some(Anchor::Existing(end))
+    }
+
+    /// Evaluate the model's no-connect attachment rule from this revision's cached positions.
+    /// Raw targets remain available for blocked-cursor feedback and the engine's final check.
+    pub(super) fn connection_allowed(&self, project: &Project, anchor: Anchor) -> bool {
+        anchor.position(project).is_some_and(|at| self.attachments.check(at).is_ok())
     }
 
     /// Resolve an unambiguous node, stroke or free point. Explicit connections retain their

@@ -116,3 +116,45 @@ fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
     assert_eq!(count(&visible, low), count(&hidden, low));
     assert!(count(&visible, theme::SCHEMATIC_MIN_GRID_SPACING) > count(&hidden, theme::SCHEMATIC_MIN_GRID_SPACING));
 }
+
+/// The canvas must return cancellation on a disabled focus-loss frame even when its caller
+/// does not proactively release tools; input suppression must not swallow cleanup actions.
+#[test]
+fn disabled_no_connect_canvas_returns_focus_loss_cancellation() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let project = session.snapshot().unwrap();
+    let ctx = egui::Context::default();
+    pcbcraft_chrome::fonts::install(&ctx);
+    let mut camera = Camera::default();
+    let mut overlaps = OverlapCache::default();
+    let mut result = None;
+    let mut output = ctx.run_ui(egui::RawInput { focused: false, events: vec![egui::Event::WindowFocused(false)], ..Default::default() }, |ui| {
+        result = show(
+            ui,
+            &project,
+            session.revision(),
+            &mut camera,
+            &mut overlaps,
+            Some(Tool::NoConnect { revision: session.revision() }),
+            &Selection::default(),
+            None,
+            false,
+            None,
+            &Selection::default(),
+            Default::default(),
+            false,
+            false,
+            Navigation::default(),
+            35,
+            true,
+            false,
+            pcbcraft_chrome::units::Unit::Mil,
+            &Draft::default(),
+            "Schematic canvas",
+            None,
+        );
+    });
+    output.textures_delta.clear();
+    assert!(matches!(result, Some(Click::CancelNoConnect)));
+}

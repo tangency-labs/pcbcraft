@@ -74,6 +74,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                 && !matches!(
                     id,
                     pcbcraft_engine::PREVIEW_UPDATE
+                        | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION
                         | pcbcraft_engine::clipboard::COPY

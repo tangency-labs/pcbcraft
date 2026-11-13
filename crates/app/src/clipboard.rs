@@ -535,6 +535,7 @@ impl PcbApp {
             symbols: project.symbols().iter().map(|s| s.id()).collect(),
             wires: project.wires().iter().map(|w| w.id()).collect(),
             net_labels: project.net_labels().iter().map(|l| l.object_id()).collect(),
+            ..Default::default()
         };
         let blocks: std::collections::BTreeSet<_> = project.sheet_symbols().iter().map(|s| s.id).collect();
         let params = json!({"text":placement.text,"x_nm":at.x_nm,"y_nm":at.y_nm,"sheet":project.sheet_target().id(),
@@ -548,6 +549,7 @@ impl PcbApp {
             symbols: project.symbols().iter().map(|s| s.id()).filter(|id| !before.symbols.contains(id)).collect(),
             wires: project.wires().iter().map(|w| w.id()).filter(|id| !before.wires.contains(id)).collect(),
             net_labels: project.net_labels().iter().map(|l| l.object_id()).filter(|id| !before.net_labels.contains(id)).collect(),
+            ..Default::default()
         };
         let block = project.sheet_symbols().iter().find(|s| !blocks.contains(&s.id)).map(|s| s.id);
         let flat = selected.is_empty();

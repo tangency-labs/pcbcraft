@@ -80,7 +80,7 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         reserved["format"] = json!("pcbcraft-project/14");
         reserved_format.insert(crate::persistence::ENTRY_POINT.into(), serde_json::to_vec(&reserved).unwrap());
         let error = decode_documents(&reserved_format).unwrap_err();
-        assert!(error.contains("Pinned part selections require project format 15, 16 or 17"), "unexpected rejection: {error}");
+        assert!(error.contains("Pinned part selections require project format 15, 16, 17 or 19"), "unexpected rejection: {error}");
         assert!(docs.keys().any(|path| path.starts_with("library/parts/")));
         assert!(docs.keys().any(|path| path.starts_with("library/categories/")));
         assert!(docs.keys().any(|path| path.starts_with("library/manufacturer-parts/")));

@@ -191,6 +191,8 @@ struct ComponentRecord<'a> {
     metadata: Option<crate::schematic::fields::Metadata>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     part: Option<crate::part_instances::Record>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    no_connects: Option<Vec<crate::no_connect::Intent>>,
 }
 
 /// A schematic unit stores only its identity, owner and geometry.
@@ -370,6 +372,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             value: record.value.into(),
             metadata: None,
             part: None,
+            no_connects: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
     }
@@ -470,6 +473,9 @@ impl Encoder {
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
     /// drawings, rotation and occurrence IDs require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.no_connect_count() != 0 {
+            return Err("No-connect intent requires split documents or a packed archive.".into());
+        }
         if project.components.values().any(|c| c.part.is_some()) {
             return Err("Native library part selections require split documents or a packed archive.".into());
         }
@@ -578,6 +584,7 @@ impl Encoder {
                     value: component.value.as_str().into(),
                     metadata: None,
                     part: None,
+                    no_connects: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
                 write_record(&mut self.bytes, &record, more)?;
@@ -778,6 +785,9 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.no_connects.is_some() {
+            return Err("No-connect intent requires the split marker format.".into());
+        }
         if record.part.is_some() {
             return Err("Pinned part references require the split native part format.".into());
         }
@@ -813,6 +823,7 @@ fn validate_with_hierarchy(
                 value: record.value.into_owned(),
                 metadata,
                 part: None,
+                no_connects: BTreeMap::new(),
             },
         );
     }
@@ -979,6 +990,7 @@ fn validate_with_hierarchy(
             junctions: Arc::new(junctions),
             connectivity: Arc::default(),
             generated_legs: Arc::default(),
+            no_connect_ends: Arc::default(),
         }]),
         sheet_index: 0,
         name,

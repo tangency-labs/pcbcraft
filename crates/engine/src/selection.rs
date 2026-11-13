@@ -18,9 +18,17 @@ pub struct Selection {
     pub wires: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub net_labels: BTreeSet<String>,
+    /// Independently selectable intent; deleting a marker never deletes its pin or wire.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub no_connects: BTreeSet<crate::no_connect::Attachment>,
 }
 
 impl Selection {
+    /// Shared additive selection schema for authored marker targets; legacy lists omit it.
+    pub fn marker_schema() -> Value {
+        serde_json::json!({"type":"array","maxItems":crate::no_connect::MAX_MARKERS,"uniqueItems":true,"items":crate::ParamKind::PartTerminal.schema()})
+    }
+
     /// Select exactly one symbol.
     pub fn one_symbol(id: String) -> Self {
         Self { symbols: [id].into(), ..Self::default() }
@@ -29,6 +37,11 @@ impl Selection {
     /// Select exactly one wire.
     pub fn one_wire(id: String) -> Self {
         Self { wires: [id].into(), ..Self::default() }
+    }
+
+    /// Select one authored no-connect marker by its stable attachment identity.
+    pub fn one_no_connect(target: crate::no_connect::Attachment) -> Self {
+        Self { no_connects: [target].into(), ..Self::default() }
     }
 
     /// Select exactly one named-net anchor, including power and ground symbols.
@@ -43,12 +56,15 @@ impl Selection {
 
     /// Whether every selected identity belongs to another selection.
     pub fn is_subset(&self, other: &Self) -> bool {
-        self.symbols.is_subset(&other.symbols) && self.wires.is_subset(&other.wires) && self.net_labels.is_subset(&other.net_labels)
+        self.symbols.is_subset(&other.symbols)
+            && self.wires.is_subset(&other.wires)
+            && self.net_labels.is_subset(&other.net_labels)
+            && self.no_connects.is_subset(&other.no_connects)
     }
 
-    /// Total number of selected components, wires and named-net anchors.
+    /// Total number of selected symbols, wires, named-net anchors and no-connect markers.
     pub fn len(&self) -> usize {
-        self.symbols.len() + self.wires.len() + self.net_labels.len()
+        self.symbols.len() + self.wires.len() + self.net_labels.len() + self.no_connects.len()
     }
 
     /// Whether no item is selected.
@@ -81,22 +97,33 @@ impl Selection {
                 }
             }
         }
+        for target in &hits.no_connects {
+            if toggle && result.no_connects.contains(target) {
+                result.no_connects.remove(target);
+            } else {
+                result.no_connects.insert(target.clone());
+            }
+        }
         result
     }
 
     /// Remove identities absent from the current snapshot, including after undo or deletion.
     pub fn retain(&mut self, project: &Project) {
+        if !self.no_connects.is_empty() {
+            let markers: BTreeSet<_> = project.no_connect_appearances().map(|(target, _)| target).collect();
+            self.no_connects.retain(|target| markers.contains(target));
+        }
         self.net_labels.retain(|id| project.net_labels().iter().any(|label| label.object_id() == *id));
         self.symbols.retain(|id| parse_id(id, "symbol-").and_then(|id| project.symbol_index(id)).is_some());
         self.wires.retain(|id| parse_id(id, "wire-").is_some_and(|id| project.wires.binary_search_by_key(&id, |wire| wire.ordinal).is_ok()));
     }
 
     /// Parse bounded canonical ID lists, rejecting extra fields and duplicate identities.
-    /// The optional `net_labels` list extends the original symbol/wire contract.
+    /// Optional `net_labels` and `no_connects` lists extend the original symbol/wire contract.
     /// Identities are checked for form only; [`Self::retain`] drops those absent from a project.
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        if object.keys().any(|key| !matches!(key.as_str(), "symbols" | "wires" | "net_labels")) {
+        if object.keys().any(|key| !matches!(key.as_str(), "symbols" | "wires" | "net_labels" | "no_connects")) {
             return None;
         }
         let read = |key: &str, prefix: &str, limit| -> Option<BTreeSet<String>> {
@@ -114,7 +141,20 @@ impl Selection {
             }
             Some(ids)
         };
+        let mut no_connects = BTreeSet::new();
+        if let Some(records) = object.get("no_connects") {
+            let records = records.as_array()?;
+            if records.len() > crate::no_connect::MAX_MARKERS {
+                return None;
+            }
+            for record in records {
+                if !no_connects.insert(crate::no_connect::Attachment::parse(record)?) {
+                    return None;
+                }
+            }
+        }
         Some(Self {
+            no_connects,
             symbols: read("symbols", "symbol-", MAX_SYMBOLS)?,
             wires: read("wires", "wire-", MAX_WIRES)?,
             net_labels: if object.contains_key("net_labels") {
@@ -130,10 +170,31 @@ impl Selection {
         let mut found = self.clone();
         found.retain(project);
         if self.is_empty() || &found != self {
-            Err(CommandError::InvalidParams("selection must contain existing symbols, wires or named-net anchors".to_owned()))
+            Err(CommandError::InvalidParams("selection must contain existing symbols, wires, named-net anchors or no-connect markers".to_owned()))
         } else {
             Ok(())
         }
+    }
+
+    /// Transform/copy a marker only with its selected pin or incident wire. This prevents
+    /// creating detached marks or silently ignoring selected intent during a group action.
+    pub(crate) fn validate_marker_owners(&self, project: &Project) -> Result<(), CommandError> {
+        for target in &self.no_connects {
+            let included = match target {
+                crate::no_connect::Attachment::Pin(pin) => project.symbols().iter().any(|symbol| {
+                    symbol.component_id() == pin.part
+                        && self.symbols.contains(&symbol.id())
+                        && symbol.terminals().iter().any(|terminal| terminal.number() == pin.terminal)
+                }),
+                crate::no_connect::Attachment::WireEnd(end) => end.ordinal().is_some_and(|id| {
+                    project.wires().iter().any(|wire| self.wires.contains(&wire.id()) && wire.endpoints().contains(&WireEndpoint::Junction(id)))
+                }),
+            };
+            if !included {
+                return Err(CommandError::InvalidParams("Move or copy a no-connect marker with its pin or wire end.".into()));
+            }
+        }
+        Ok(())
     }
 
     /// Build the same bounded move for a preview or command without changing the source snapshot.
@@ -142,6 +203,7 @@ impl Selection {
     /// with orthogonal end legs connecting them to the moved route. Any invalid item rejects all.
     pub fn moved(&self, project: &Project, delta: Point) -> Result<Project, CommandError> {
         self.validate(project)?;
+        self.validate_marker_owners(project)?;
         if delta == (Point { x_nm: 0, y_nm: 0 }) {
             return Ok(project.clone());
         }
@@ -188,6 +250,21 @@ impl Selection {
         }
         Ok(next)
     }
+
+    /// Preview or commit one bounded translation with the chosen attachment behavior.
+    /// Disconnected moves cut contacts at the selection boundary before translating, keeping
+    /// unselected routes fixed and contacts within the selection intact. Connected grabs retain
+    /// the existing stretching behavior. Zero displacement never detaches or allocates IDs.
+    /// Validation, attachment checks and optional healing finish before a candidate is returned.
+    pub fn transformed(&self, project: &Project, delta: Point, disconnect: bool, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
+        self.validate(project)?;
+        self.validate_marker_owners(project)?;
+        if delta == (Point { x_nm: 0, y_nm: 0 }) {
+            return Ok(project.clone());
+        }
+        let base = if disconnect { project.detached_selection(self, revision)? } else { project.clone() };
+        self.moved(&base, delta)?.healed(&base, revision, auto_heal)
+    }
 }
 
 /// Translate with checked arithmetic and the same coordinate bounds as individual edits.
@@ -197,14 +274,15 @@ fn translated(point: Point, delta: Point) -> Result<Point, CommandError> {
 }
 
 impl Session {
-    /// Validate the revision and selection, attach exact pin contacts and heal affected routes
-    /// before committing one undoable group move.
+    /// Validate and publish one group translation. `disconnect` cuts only contacts outside
+    /// the selection; its default false preserves connected grabs for existing command clients.
     pub(crate) fn move_items(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".to_owned()))?;
         let project = self.open_project()?;
         let delta = Point { x_nm: params["dx_nm"].as_i64().unwrap_or_default(), y_nm: params["dy_nm"].as_i64().unwrap_or_default() };
-        let next = items.moved(project, delta)?.healed(project, self.revision(), crate::wire::auto_heal(params))?;
+        let next =
+            items.transformed(project, delta, params["disconnect"].as_bool().unwrap_or(false), self.revision(), crate::wire::auto_heal(params))?;
         if next.symbols != project.symbols
             || next.wires != project.wires
             || next.junctions != project.junctions
@@ -225,6 +303,9 @@ impl Session {
         let project = self.open_project()?;
         items.validate(project)?;
         let mut next = project.clone();
+        for target in &items.no_connects {
+            next.remove_no_connect_attachment(target);
+        }
         let deleted: BTreeSet<_> = project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).map(|s| s.ordinal).collect();
         Arc::make_mut(&mut next.sheet_mut().symbols).retain(|s| !deleted.contains(&s.ordinal));
         Arc::make_mut(&mut next.sheet_mut().net_labels).retain(|label| !items.net_labels.contains(&label.object_id()));

@@ -189,6 +189,10 @@ impl Camera {
         for point in project.wires().iter().filter(|wire| selection.wires.contains(&wire.id())).flat_map(|wire| project.wire_path(wire)) {
             bounds = bounds.union(Rect::from_pos(self.screen(point, rect)));
         }
+        for (_, at) in project.no_connect_appearances().filter(|(target, _)| selection.no_connects.contains(target)) {
+            let radius = crate::no_connect::radius(self.unit_step());
+            bounds = bounds.union(Rect::from_center_size(self.screen(at, rect), Vec2::splat(2. * radius)));
+        }
         self.reveal_bounds(bounds);
     }
 

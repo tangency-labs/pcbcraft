@@ -156,6 +156,13 @@ the same `VCC` net name, which can be changed before placement.
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
    path when the old alternative has no intermediate pin or branch.
+   For an intentionally unused pin or open wire end, hover its lead or endpoint
+   and press **Q**, or use **Capture → No connect** and click several targets.
+   The X snaps to each attachment. Press **Esc**, select a placed X, then press
+   **Delete** to remove only the marker. Dragging a wire-end X stretches its wire;
+   **Esc** cancels the drag. Right-click **Delete** also removes the marker. **Analyze → Electrical menu → No-connect check** inspects
+   this intent and any saved wiring conflicts. Remove the X before adding a wire;
+   marked endpoints block new connections, including with **W**.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
@@ -176,7 +183,13 @@ the same `VCC` net name, which can be changed before placement.
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
-   route for whole-wire movement or deletion. Capture → **Modify** menu offers
+   route for whole-wire movement or deletion. **M** with one wire or segment selected
+   picks up the whole route; click to place, or press **Esc** or right-click to cancel.
+   **M** also moves a selection of several symbols, wires or labels together,
+   preserving their relative positions and attached no-connect markers.
+   M disconnects contacts to unselected objects and leaves their wiring in place;
+   **G** or dragging the group keeps those connections and stretches attached wires.
+   Capture → **Modify** menu offers
    **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
    **Break** to release the selected leg's attachments, including pins and shared junctions,
    whether one or both ends are connected. An already-free end stays free. The detached

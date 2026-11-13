@@ -1,6 +1,7 @@
 //! Sheet ownership, immutable schematic projections and atomic sheet transactions.
 
 use super::*;
+use std::collections::BTreeSet;
 use std::ops::Deref;
 
 /// Bound metadata and navigation as well as per-sheet geometry.
@@ -38,6 +39,8 @@ pub struct SchematicSheet {
     pub(crate) connectivity: Arc<OnceLock<Connectivity>>,
     /// Provenance for legs drawn by retained named-contact poses; live records persist in sheet/7.
     pub(crate) generated_legs: Arc<Vec<crate::wire::GeneratedLeg>>,
+    /// Explicit no-connect intent on project-unique wire-end junction identities.
+    pub(crate) no_connect_ends: Arc<BTreeSet<u64>>,
 }
 
 impl SchematicSheet {
@@ -56,6 +59,7 @@ impl SchematicSheet {
             junctions: Arc::default(),
             connectivity: Arc::default(),
             generated_legs: Arc::default(),
+            no_connect_ends: Arc::default(),
         }
     }
 
@@ -179,9 +183,11 @@ impl Project {
 }
 
 /// Authored schematic geometry takes a sheet target; portable text preparation is independent
-/// of any project/sheet. Sheet lifecycle and board setup remain project operations.
+/// of any project/sheet. Logical no-connect intent, sheet lifecycle and board setup remain
+/// project operations; their targets do not depend on the current sheet projection.
 pub fn scoped_command(id: &str) -> bool {
-    (id.starts_with("schematic.") && id != crate::clipboard_text::LABELS) || id == PLACE_FOOTPRINT
+    (id.starts_with("schematic.") && !matches!(id, crate::clipboard_text::LABELS | crate::no_connect::SET | crate::no_connect::CHECK))
+        || id == PLACE_FOOTPRINT
 }
 
 impl Session {

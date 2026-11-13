@@ -5,6 +5,86 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
 
+/// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
+#[test]
+fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let p = s.snapshot().unwrap();
+    let target = p.no_connect_target(p.symbols()[0].terminals()[0]).unwrap();
+    let revision = s.revision();
+    crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::no_connect::SET,"params":{"target":target,"marked":true,"expected_revision":revision},"inspect":false}),
+    )
+    .unwrap();
+    let revision = s.revision();
+    let before = s.snapshot().unwrap();
+    let report =
+        crate::backend::call_session(&mut s, "engine.execute", &json!({"command":pcbcraft_engine::no_connect::CHECK,"params":{},"inspect":false}))
+            .unwrap();
+    assert_eq!(report["revision"], revision);
+    assert_eq!(report["no_connect_check"]["markers"].as_array().unwrap().len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+}
+
+/// The same public command accepts wire-end identity and returns termination findings even
+/// when callers omit the general inspection payload. No private GUI-only edit is involved.
+#[test]
+fn no_connect_wire_end_commands_are_shared_with_mcp() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(
+        pcbcraft_engine::DRAW_WIRE,
+        &json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":25_400_000,"y_nm":0},"bends":[],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let target = s.project().unwrap().wire_end_targets().next().unwrap().0;
+    let revision = s.revision();
+    crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::no_connect::SET,"params":{"target":target,"marked":true,"expected_revision":revision},"inspect":false}),
+    )
+    .unwrap();
+    let report =
+        crate::backend::call_session(&mut s, "engine.execute", &json!({"command":pcbcraft_engine::no_connect::CHECK,"params":{},"inspect":false}))
+            .unwrap();
+    assert_eq!(report["no_connect_check"]["wire_markers"].as_array().unwrap().len(), 1);
+    assert_eq!(report["no_connect_check"]["wire_findings"].as_array().unwrap().len(), 1, "the other open end remains unmarked");
+    let inspected = s.inspect();
+    assert!(
+        inspected["project"]["schematic"]["junctions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|end| end["id"] == target.junction && end["no_connect"] == true)
+    );
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    let rejected = crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::DRAW_WIRE,
+        "params":{"from":{"junction":target.junction},"to":{"x_nm":-25_400_000,"y_nm":0},"bends":[],"expected_revision":revision},"inspect":false}),
+    );
+    assert!(rejected.unwrap_err().contains(pcbcraft_engine::no_connect::WIRE_BLOCKED));
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::backend::call_session(
+        &mut s,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::DELETE_ITEMS,
+        "params":{"items":{"symbols":[],"wires":[],"no_connects":[target]},"expected_revision":revision},"inspect":false}),
+    )
+    .unwrap();
+    assert_eq!(s.project().unwrap().check_no_connects(s.revision()).total_markers, 0);
+    assert_eq!(s.project().unwrap().wires(), before.wires());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.project().unwrap().check_no_connects(s.revision()).total_markers, 1);
+}
+
 fn server() -> Server {
     Server::new(Box::new(Headless::default()))
 }

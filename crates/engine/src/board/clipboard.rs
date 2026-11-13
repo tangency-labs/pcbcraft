@@ -490,6 +490,7 @@ impl BoardFragment {
                 symbols: circuit.fragment.project.symbols().iter().map(|s| s.id()).collect(),
                 wires: circuit.fragment.project.wires().iter().map(|w| w.id()).collect(),
                 net_labels: circuit.fragment.project.net_labels().iter().map(|l| l.object_id()).collect(),
+                ..Default::default()
             };
             if expected != actual {
                 return Err(invalid("copied circuit contains objects outside the selected footprint scope"));
@@ -871,7 +872,7 @@ impl Session {
             transaction.apply(crate::DELETE_DRAWING, &json!({"board":target.board,"drawing":drawing,"expected_revision":transaction.revision()}))?;
         }
         let next = transaction.open_project()?.clone();
-        crate::clipboard::validate_candidate(&next)?;
+        let next = crate::clipboard::validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }
@@ -900,7 +901,7 @@ impl Session {
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(project, at, self.next_object_id()?, &options)?;
-        crate::clipboard::validate_candidate(&next)?;
+        let next = crate::clipboard::validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }

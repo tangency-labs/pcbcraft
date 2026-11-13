@@ -338,6 +338,8 @@ pub struct PartInstance {
     pub metadata: fields::Metadata,
     /// Optional reusable part and manufacturer selection, shared by every schematic unit.
     pub part: Option<crate::part_instances::Selection>,
+    /// Sparse authored terminal intent; captured pin types expose later incompatible edits.
+    pub no_connects: std::collections::BTreeMap<String, ElectricalType>,
 }
 
 impl PartInstance {
@@ -371,6 +373,9 @@ impl PartInstance {
             "reference": self.reference, "value": self.value, "metadata": self.metadata});
         if let Some(part) = &self.part {
             value["part"] = part.inspect();
+        }
+        if !self.no_connects.is_empty() {
+            value["no_connects"] = json!(crate::no_connect::write_intents(&self.no_connects));
         }
         value
     }

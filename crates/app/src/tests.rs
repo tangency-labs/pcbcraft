@@ -28,6 +28,7 @@ mod mirror;
 mod multiple_sheets;
 mod multiunit;
 mod net_labels;
+mod no_connect;
 mod optional_board;
 mod panel_docking;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,6 +36,7 @@ mod recent_projects;
 mod ribbon;
 mod save_changes;
 mod selection_filters;
+mod selection_move;
 mod split_editors;
 mod symbol_overlap;
 mod tool_modes;

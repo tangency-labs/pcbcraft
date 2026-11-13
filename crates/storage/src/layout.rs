@@ -127,4 +127,6 @@ mod tests;
 #[cfg(test)]
 mod net_registry_tests;
 #[cfg(test)]
+mod no_connect_tests;
+#[cfg(test)]
 mod occurrence_tests;

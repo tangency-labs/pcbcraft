@@ -77,6 +77,7 @@ impl Fragment {
         }
         let (blocks, labels) = selected(project, objects)?;
         let included = descendants(project, &blocks)?;
+        items.validate_marker_owners(project)?;
         let mut root = SchematicSheet::empty(project.sheet_target().id(), project.sheet_name().into());
         root.occurrence_id = project.sheet_occurrence(project.sheet_target()).map(|record| record.id);
         root.symbols = Arc::new(project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).cloned().collect());
@@ -118,9 +119,11 @@ impl Fragment {
             Arc::make_mut(&mut root.wires).push(copy);
         }
         let cut_sheets = cut && !root.subsheets.is_empty();
+        root.no_connect_ends =
+            Arc::new(project.no_connect_ends.iter().filter_map(|id| detached.get(&WireEndpoint::Junction(*id)).copied()).collect());
         let mut sheets = vec![root];
         sheets.extend(project.sheets.iter().filter(|s| included.contains(&s.sheet_id)).cloned());
-        let fragment = Self::captured(project, sheets, cursor, cut_sheets)?;
+        let fragment = Self::captured(project, sheets, cursor, cut_sheets, IntentScope::SelectedUnits)?;
         fragment.validate_scope(true)?;
         Ok(fragment)
     }
@@ -250,11 +253,14 @@ impl Fragment {
                 symbols: projection.symbols().iter().map(|s| s.id()).collect(),
                 wires: projection.wires().iter().map(|w| w.id()).collect(),
                 net_labels: projection.net_labels().iter().map(|l| l.object_id()).collect(),
+                ..Default::default()
             };
             if items.is_empty() {
                 continue;
             }
-            let flat = Self::capture(&projection, &items)?;
+            // The enclosing fragment has already qualified intent against the complete subtree;
+            // filtering again per sheet would lose flags owned by later units of the same part.
+            let flat = Self::capture_sheet(&projection, &items, IntentScope::CapturedParts)?;
             let target = SheetTarget { project: next.id(), sheet: sheet_map[&source.sheet_id] };
             let destination = next.for_sheet(target).ok_or_else(|| invalid("destination sheet unavailable"))?;
             let before = destination.wires().len();
@@ -294,7 +300,7 @@ impl Fragment {
             sheet.connectivity = Arc::default();
         }
         next.validate_hierarchy().map_err(invalid)?;
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         Ok((next, selected))
     }
 }
@@ -384,7 +390,7 @@ impl Session {
         next.sheet_index = root;
         next.named_graph = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
-        validate_candidate(&next)?;
+        let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
     }

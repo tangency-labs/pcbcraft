@@ -23,6 +23,7 @@ fn all(s: &Session) -> Selection {
         symbols: p.symbols().iter().map(|s| s.id()).collect(),
         wires: p.wires().iter().map(|w| w.id()).collect(),
         net_labels: p.net_labels().iter().map(|l| l.object_id()).collect(),
+        ..Default::default()
     }
 }
 
@@ -214,4 +215,43 @@ fn copied_power_symbols_receive_the_net_name_suffix() {
     let pasted = project.symbols().last().unwrap();
     assert_eq!(project.value(pasted), "GND_B");
     assert_ne!(project.reference(&project.symbols()[0]), project.reference(pasted));
+}
+
+/// Marked fragments adopt storage/occurrence metadata on the candidate before codec validation,
+/// even when the destination is an unchanged project/14. Undo restores its old metadata.
+#[test]
+fn marked_paste_adopts_legacy_destination_before_validation() {
+    for kind in ["pin", "wire", "both"] {
+        let mut source = fixture();
+        if kind != "wire" {
+            let part = source.project().unwrap().symbols()[0].component_id();
+            source
+                .apply(crate::no_connect::SET, &json!({"target":{"part":part,"terminal":"1"},"marked":true,"expected_revision":source.revision()}))
+                .unwrap();
+        }
+        if kind != "pin" {
+            source.apply(DRAW_WIRE,&json!({"from":{"x_nm":-20*GRID_NM,"y_nm":20*GRID_NM},"to":{"x_nm":20*GRID_NM,"y_nm":20*GRID_NM},"bends":[],"expected_revision":source.revision()})).unwrap();
+            let target = source.project().unwrap().wire_end_targets().find(|(_, at)| at.y_nm == 20 * GRID_NM).unwrap().0;
+            source.apply(crate::no_connect::SET, &json!({"target":target,"marked":true,"expected_revision":source.revision()})).unwrap();
+        }
+        let copied = source.execute(COPY, &json!({"items":all(&source),"expected_revision":source.revision()})).unwrap();
+        let legacy = persistence::decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap().with_board_folders(".").unwrap();
+        let docs = persistence::encode_documents(Arc::new(legacy.clone())).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&docs["project.json"]).unwrap()["format"], "pcbcraft-project/14");
+        let mut target = Session::default();
+        target.open_snapshot(Arc::new(legacy));
+        let before = target.snapshot().unwrap();
+        target.apply(PASTE, &json!({"text":copied["clipboard"],"x_nm":0,"y_nm":40*GRID_NM,"expected_revision":target.revision()})).unwrap();
+        let after = target.snapshot().unwrap();
+        assert!(after.has_sheet_occurrences());
+        assert_eq!(after.no_connect_count(), if kind == "both" { 2 } else { 1 });
+        let saved = persistence::encode_documents(after.clone()).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&saved["project.json"]).unwrap()["format"], "pcbcraft-project/19");
+        assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
+        target.apply("edit.undo", &Value::Null).unwrap();
+        crate::assert_same_content(&before, &target.snapshot().unwrap());
+        assert!(!target.project().unwrap().has_sheet_occurrences());
+        target.apply("edit.redo", &Value::Null).unwrap();
+        crate::assert_same_content(&after, &target.snapshot().unwrap());
+    }
 }

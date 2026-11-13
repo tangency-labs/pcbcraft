@@ -17,6 +17,7 @@ pub mod library;
 pub mod library_graphics;
 pub mod net_labels;
 pub mod nets;
+pub mod no_connect;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -66,6 +67,8 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    PartTerminal,
+    Flag,
     /// A terminal, named label or hierarchical port, excluding junction/geometry anchors.
     NetTarget,
     /// A persistent registry UUID, distinct from a revision-scoped graph row.
@@ -156,6 +159,10 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::Flag => json!({"type":"boolean"}),
+            Self::PartTerminal => {
+                json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
+            }
             Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
@@ -236,7 +243,8 @@ impl ParamKind {
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()},
-                "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()}
+                "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()},
+                "no_connects": {"type":"array", "maxItems":no_connect::MAX_MARKERS, "uniqueItems":true, "items":Self::PartTerminal.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
             Self::NetLabelStyle => json!({"type":"string","enum":["local","global"]}),
             Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
@@ -291,6 +299,20 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::Flag => {
+                if value.is_boolean() {
+                    Ok(())
+                } else {
+                    Err("must be a boolean")
+                }
+            }
+            Self::PartTerminal => {
+                if no_connect::Attachment::parse(value).is_some() {
+                    Ok(())
+                } else {
+                    Err("must identify a part terminal or a dangling wire endpoint")
+                }
+            }
             Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
             Self::ClipboardUnits if serde_json::from_value::<clipboard_text::CoordinateUnits>(value.clone()).is_ok() => Ok(()),
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
@@ -728,6 +750,32 @@ const CLIPBOARD_OBJECTS: Param = Param {
     summary: "Selected root sheet symbols and hierarchical labels; sheet symbols include their complete child subtree",
 };
 const CATALOG: &[Command] = &[
+    Command {
+        id: no_connect::SET,
+        title: "Set No Connect",
+        summary: "Set/remove intentional disconnection on a logical pin or dangling wire end. Wiring remains unchanged; placed marks block new wires, while existing incompatible connections remain checkable conflicts. Undoable.",
+        params: &[
+            EXPECTED_REVISION,
+            Param {
+                name: "target",
+                kind: ParamKind::PartTerminal,
+                required: true,
+                summary: "Logical {part, terminal} address or {junction} wire-end identity",
+            },
+            Param {
+                name: "marked",
+                kind: ParamKind::Flag,
+                required: true,
+                summary: "True authors intent using the current pin type; false removes existing intent",
+            },
+        ],
+    },
+    Command {
+        id: no_connect::CHECK,
+        title: "Check No Connects",
+        summary: "Read-only focused check for unmarked unconnected pins, dangling wire ends and connected, missing or incompatible no-connect intent. Full power/type ERC remains separate.",
+        params: &[],
+    },
     Command {
         id: clipboard_text::LABELS,
         title: "Prepare net-name text paste",
@@ -1462,11 +1510,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_ITEMS,
         title: "Move Selected Items",
-        summary: "Move symbols, named-net anchors and wire routes together; retain attached pins, connect exact pin contacts and heal touched routes. One undoable edit.",
+        summary: "Translate symbols, named-net anchors and wire routes together. Retain connections by default; disconnect cuts contacts outside the selection and leaves unselected routes fixed. One undoable edit.",
         params: &[
             ITEMS,
             Param { required: true, name: "dx_nm", summary: "Horizontal displacement in nanometers", kind: ParamKind::Displacement },
             Param { required: true, name: "dy_nm", summary: "Vertical displacement in nanometers", kind: ParamKind::Displacement },
+            Param {
+                required: false,
+                name: "disconnect",
+                summary: "Disconnect from unselected objects before translating, preserving connections within the selection",
+                kind: ParamKind::Disconnect,
+            },
             EXPECTED_REVISION,
             AUTO_HEAL,
         ],
@@ -1474,7 +1528,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: DELETE_ITEMS,
         title: "Delete Selected Items",
-        summary: "Remove symbols, named-net anchors, selected and incident wires, and unused components. With an accepted baseline, retain their footprints pending review; otherwise remove them. One undoable edit.",
+        summary: "Remove selected no-connect markers without deleting their owners, or symbols, named-net anchors, selected and incident wires, and unused components. With an accepted baseline, retain their footprints pending review; otherwise remove them. One undoable edit.",
         params: &[ITEMS, EXPECTED_REVISION],
     },
     Command {
@@ -2054,7 +2108,11 @@ impl Project {
                 inspected["path"] = json!(self.wire_path(wire));
                 inspected
             }).collect::<Vec<_>>(),
-            "junctions": self.junctions().map(|(id, point)| json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm})).collect::<Vec<_>>(),
+            "junctions": self.junctions().map(|(id, point)| {
+                let mut value = json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm});
+                if self.no_connect_ends.contains(&id) { value["no_connect"] = json!(true); }
+                value
+            }).collect::<Vec<_>>(),
             "net_labels": self.net_labels.iter().map(|label| label.inspect()).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
             "sheet_symbols": self.subsheets.iter().map(|block| json!({"id":format!("sheet-symbol-{}",block.id), "child":block.child,"name":self.child_name(block),"at":block.at,"size":self.sheet_symbol_size(block),"pins":self.sheet_pins(block).map(|pin| json!({"endpoint":WireEndpoint::SheetPin(pin.label.id).inspect(),"name":pin.label.name,"direction":pin.label.direction,"at":pin.at})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
@@ -2289,6 +2347,8 @@ impl Session {
             | hierarchy::DELETE_LABEL
             | sheets::RENAME_SHEET
             | "project.rename"
+            | no_connect::SET
+            | no_connect::CHECK
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2461,6 +2521,9 @@ impl Session {
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
         self.apply(id, params)?;
+        if id == no_connect::CHECK {
+            return self.no_connect_report();
+        }
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
         }
@@ -2537,6 +2600,8 @@ impl Session {
                 | sheets::RENAME_SHEET
                 | sheets::DELETE_SHEET
                 | "project.rename"
+                | no_connect::SET
+                | no_connect::CHECK
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -2619,6 +2684,10 @@ impl Session {
                 }
             }
             board::identity::CREATE_BOARD => self.create_board(params)?,
+            no_connect::SET => self.set_no_connect(params)?,
+            no_connect::CHECK => {
+                self.open_project()?;
+            }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
@@ -2812,6 +2881,7 @@ impl Session {
                 value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
                 metadata: defaults.metadata,
                 part: None,
+                no_connects: BTreeMap::new(),
             }
         };
         let component_id = component.ordinal;
@@ -3091,6 +3161,12 @@ impl Session {
                 .ok_or_else(|| CommandError::InvalidParams(format!("`{name}` must reference an existing symbol terminal")))
         };
         let mut terminals = [endpoint("from")?, endpoint("to")?];
+        let attachments = project.wire_attachment_policy();
+        for terminal in terminals {
+            if let Some(at) = project.terminal_position(terminal) {
+                attachments.check(at)?;
+            }
+        }
         terminals.sort_unstable();
         if terminals[0] == terminals[1] {
             return Err(CommandError::InvalidParams("a wire needs two distinct terminals".to_owned()));
@@ -3138,6 +3214,7 @@ impl Session {
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
+        project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }

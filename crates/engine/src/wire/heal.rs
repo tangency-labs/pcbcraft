@@ -39,8 +39,9 @@ pub(super) struct Edit {
     pub project: Project,
     next: u64,
     budget: usize,
-    /// Pins, original free ends and real branches survive cleanup. Degree-two transit
-    /// junctions may disappear when a retrace makes their old location redundant.
+    attachments: crate::no_connect::WireAttachments,
+    /// Pins, original free ends, marked ends and real branches survive cleanup. Unmarked
+    /// degree-two transit junctions may disappear when a retrace makes them redundant.
     protected: BTreeSet<WireEndpoint>,
     /// The active drawing gesture wins over a redundant older route. Manual cleanup and
     /// geometry-only moves have no preferred path and retain their length-based policy.
@@ -269,11 +270,20 @@ impl Edit {
         for end in project.wires.iter().flat_map(|wire| wire.endpoints) {
             *degree.entry(end).or_insert(0) += 1;
         }
-        let protected =
+        let mut protected: BTreeSet<_> =
             degree.into_iter().filter_map(|(end, count)| (count != 2 || !matches!(end, WireEndpoint::Junction(_))).then_some(end)).collect();
+        protected.extend(project.no_connect_ends.iter().copied().map(WireEndpoint::Junction));
         let mut project = project.clone();
         project.named_graph = Arc::default();
-        Self { project, next: highest.saturating_add(1), budget: 200_000, protected, preferred: BTreeSet::new(), touched: BTreeSet::new() }
+        Self {
+            attachments: project.wire_attachment_policy(),
+            project,
+            next: highest.saturating_add(1),
+            budget: 200_000,
+            protected,
+            preferred: BTreeSet::new(),
+            touched: BTreeSet::new(),
+        }
     }
 
     /// Bound pair scans independently of the number of successful splits and merges.
@@ -307,6 +317,9 @@ impl Edit {
     /// Resolve explicit endpoints or split a targeted wire. Resolving a free point never uses
     /// coordinate coincidence to pick an electrical identity.
     pub fn resolve(&mut self, anchor: Anchor) -> Result<WireEndpoint, CommandError> {
+        if let Some(at) = anchor.position(&self.project) {
+            self.attachments.check(at)?;
+        }
         match anchor {
             Anchor::Existing(end) => {
                 self.project.endpoint_position(end).map(|_| end).ok_or_else(|| CommandError::InvalidParams("wire endpoint does not exist".into()))
@@ -324,6 +337,11 @@ impl Edit {
     /// a second route is represented through an explicit corner junction before optional loop
     /// cleanup. This also lets cleanup-off preserve intentional parallel paths on save/reopen.
     pub(super) fn draw(&mut self, endpoints: [WireEndpoint; 2], path: &[Point]) -> Result<(), CommandError> {
+        for end in endpoints {
+            if let Some(at) = self.project.endpoint_position(end) {
+                self.attachments.check(at)?;
+            }
+        }
         if let Some(existing) = self.project.wires.iter().find(|w| w.endpoints == endpoints || w.endpoints == [endpoints[1], endpoints[0]]).cloned() {
             let old = self.project.wire_path(&existing);
             if old == path || old.iter().rev().eq(path.iter()) {
@@ -388,7 +406,7 @@ impl Edit {
     }
 
     /// Merge coincident identities, retaining a pin over a junction and otherwise the older
-    /// junction. Distinct coincident fixed pins are refused rather than losing an identity.
+    /// junction. Marked contacts and distinct coincident fixed pins are refused rather than losing intent or identity.
     pub fn merge(&mut self, a: WireEndpoint, b: WireEndpoint) -> Result<WireEndpoint, CommandError> {
         if a == b {
             return Ok(a);
@@ -396,6 +414,10 @@ impl Edit {
         if self.project.endpoint_position(a) != self.project.endpoint_position(b) {
             return Err(CommandError::InvalidParams("wire attachment positions disagree".into()));
         }
+        if let Some(at) = self.project.endpoint_position(a) {
+            self.attachments.check(at)?;
+        }
+
         let (keep, remove) = match (a, b) {
             (a, b) if !matches!(a, WireEndpoint::Junction(_)) && !matches!(b, WireEndpoint::Junction(_)) => {
                 return Err(CommandError::InvalidParams("separate coincident fixed pins before joining wires".into()));
@@ -527,6 +549,9 @@ impl Edit {
                 }
             }
             for (id, edges) in adjacent {
+                if self.project.no_connect_ends.contains(&id) {
+                    continue;
+                }
                 let node = WireEndpoint::Junction(id);
                 if edges.len() != 2 || !edges.iter().any(|w| self.touched.contains(&w.ordinal)) {
                     continue;
@@ -783,6 +808,11 @@ impl Project {
             return Err(CommandError::InvalidParams("attachment requires a pin, endpoint or wire segment".into()));
         }
         let point = target.position(self).ok_or_else(|| CommandError::InvalidParams("attachment target does not exist".into()))?;
+        let attachments = self.wire_attachment_policy();
+        if let Some(source) = self.endpoint_position(WireEndpoint::Junction(junction)) {
+            attachments.check(source)?;
+        }
+        attachments.check(point)?;
         let moved = self.reshaped(&super::Reshape::Junction(junction), point)?;
         let mut edit = Edit::new(&moved, revision);
         let end = edit.resolve(target)?;

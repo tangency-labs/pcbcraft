@@ -183,7 +183,45 @@ movement and rotation commit together as one undo step, while cancellation chang
 The move and disconnection share one undo step; placing a replacement at the vacated
 pins connects it to the preserved wire ends.
 
+With multiple items selected, **M** moves the selection while disconnecting contacts
+to unselected objects. Selected symbols, wire routes and named-net labels move
+together; connections within the selection remain intact, and no-connect markers
+follow their selected owners. Unselected wires stay in place. **G** grabs the group
+while keeping external wires connected, as ordinary group dragging does. Click to
+place, or press **Esc** or right-click to cancel; placement is one undo step.
+
 ## Drawing and editing wires
+
+### Intentionally unused pins and wire ends
+
+Hover a pin lead or open wire endpoint and press **Q**, or choose
+**Capture → No connect** and click the targets to mark. A larger X replaces the
+arrow, snapping its center to the attachment. The placed X follows the pin or
+wire end as it moves. **Esc** or right-click cancels the placement tool;
+empty-space and wire-interior clicks cannot create detached marks. Right-click
+a marked target and choose **Delete**, or click the X and press **Delete** or
+**Backspace**. Marker selection takes precedence over starting a wire, and its
+outline identifies the selected X. Shift/Ctrl, window/crossing selection and
+Select All include markers; the **No connects** selection filter controls them
+independently. Deleting selected marks clears only their intent, preserving the
+pin or wire. Drag a wire-end X to stretch its attached wire; the X stays selected
+and follows the same endpoint. **Esc** cancels that drag, and dropping onto a
+connection is refused while the mark remains. Q/Capture clears the previous
+selection and highlights. These edits support Undo/Redo and travel with copied
+parts and wires. Normal marks use dedicated blue theme ink; conflicts remain red.
+
+**Analyze → Electrical menu → No-connect check** lists intentional no-connects,
+unmarked unconnected pins and open wire ends, plus connected, missing or
+type-changed marker targets. Use **Show** to navigate to a target. Error ink
+identifies conflicting intent. A marker suppresses only its own unconnected-pin
+or dangling-end warning; it never removes wires, changes the netlist or clears
+physical DRC violations. New wires and endpoint attachments at an X are blocked,
+including with **W**; remove the mark first. Hovering or quickly clicking near
+an X does not start a wire. Older saved conflicts remain visible in the check.
+This focused check does not implement the remaining type-conflict and power-driver
+ERC rules. See the [identity and storage contract](no-connect-markers.md).
+
+### Wires
 
 Click an unconnected symbol pin or free wire end to start directly. Press **W** to
 start immediately at the pointer, including on a connected pin, junction, wire segment
@@ -205,7 +243,11 @@ the wire first. Hover a handle and press **G**, or right-click the wire and choo
 **Grab**, to pick it up without holding a button, then click to place it. Moving a
 shared junction adjusts all its attached routes; terminal pins stay on their symbols.
 Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
-modifier selections continue to select whole wires. Crossings stay disconnected.
+modifier selections continue to select whole wires. With one wire or segment selected,
+**M** picks up its whole route, including its bends and free-end no-connect markers;
+click to place, or press **Esc** or right-click to cancel. Pins outside the selection
+stay fixed and disconnect from the moved wire.
+Crossings stay disconnected.
 Select a wire segment, then use Capture → **Modify** for **Slice**, **Heal**
 or **Delete** in the group caption menu.
 Right-click a wire for these edits and whole-wire selection/deletion:
@@ -277,8 +319,8 @@ local cleanup does not route around obstacles or resolve conflicting net names
 ## Symbol properties and selection
 
 The **Selection filters** card sits below Properties in schematic and PCB views.
-Its checkboxes control symbols (including power/ground), wires, local/global and hierarchical labels, and sheets in the
-schematic, and footprints and board graphics in PCB layout. **All items** toggles
+Its checkboxes control symbols (including power/ground), wires, no-connect
+markers, local/global and hierarchical labels, and sheets in the schematic, and footprints and board graphics in PCB layout. **All items** toggles
 the supported categories together; **Reset** enables them all. Categories without
 individual selection support are disabled. Filtering does not hide geometry or
 change connectivity. Turning a category off clears its edit selection and cancels

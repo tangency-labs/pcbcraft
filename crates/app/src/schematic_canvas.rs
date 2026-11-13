@@ -40,6 +40,9 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
+    NoConnect {
+        revision: u64,
+    },
     Field {
         drag: fields::Drag,
         revision: u64,
@@ -82,6 +85,10 @@ pub(crate) enum Tool {
         items: Selection,
         origin: Point,
         revision: u64,
+        /// Keyboard pickup follows hover and finishes on a click; held drags finish on release.
+        pickup: bool,
+        /// Move cuts selection-boundary contacts; Grab retains and stretches them.
+        disconnect: bool,
     },
     Move {
         symbol: SymbolPlacement,
@@ -105,7 +112,8 @@ impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::Field { revision, .. }
+            Self::NoConnect { revision, .. }
+            | Self::Field { revision, .. }
             | Self::NetLabel { revision, .. }
             | Self::SheetGesture { revision, .. }
             | Self::Hierarchy { revision, .. }
@@ -121,6 +129,10 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    BeginNoConnect,
+    NoConnect(pcbcraft_engine::no_connect::Attachment, bool),
+    InvalidNoConnect,
+    CancelNoConnect,
     ToolAction(ToolAction, egui::Context),
     GrabField(fields::Drag),
     RotateField(fields::Drag),
@@ -142,7 +154,13 @@ pub(crate) enum Click {
     SelectItems(Selection),
     /// Select one leg for direct deletion and reshaping.
     SelectLeg(LegTarget),
-    GrabItems(Selection, Point),
+    /// Translate from this model point with explicit gesture and attachment behavior.
+    MoveItems {
+        items: Selection,
+        origin: Point,
+        pickup: bool,
+        disconnect: bool,
+    },
     FinishItems(Option<Point>),
     /// A drag started on a wire segment, corner or free end; the handler selects its target.
     GrabReshape(wires::ReshapeDrag),
@@ -241,6 +259,10 @@ pub(crate) enum SymbolAction {
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
+/// M picks up a multi-item selection or an explicitly selected wire and commits on a valid
+/// primary click; Escape, right-click or focus loss cancels that preview.
+/// M cuts contacts to unselected objects; G grabs a group with its external contacts retained,
+/// matching held group dragging. Both preserve contacts within the selected group.
 /// Symbol move previews also include their pending quarter turns; painted wire contacts use
 /// that transformed snapshot, and cancellation discards both position and orientation.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
@@ -308,10 +330,13 @@ pub(crate) fn show(
         None
     };
     let group_delta = match &tool {
-        Some(Tool::MoveItems { origin, .. }) => response.interact_pointer_pos().map(|pointer| {
-            let point = camera.snap(pointer, rect);
-            Point { x_nm: point.x_nm - origin.x_nm, y_nm: point.y_nm - origin.y_nm }
-        }),
+        Some(Tool::MoveItems { origin, pickup, .. }) => {
+            let pointer = if *pickup { response.hover_pos().or_else(|| response.interact_pointer_pos()) } else { response.interact_pointer_pos() };
+            pointer.map(|pointer| {
+                let point = camera.snap(pointer, rect);
+                Point { x_nm: point.x_nm - origin.x_nm, y_nm: point.y_nm - origin.y_nm }
+            })
+        }
         _ => None,
     };
     let reshape_target = match &tool {
@@ -343,9 +368,7 @@ pub(crate) fn show(
                 )
                 .ok()
         }),
-        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => {
-            items.moved(project, delta).and_then(|next| next.healed(project, revision, auto_heal)).ok()
-        }
+        (Some(Tool::MoveItems { items, disconnect, .. }), Some(delta), _) => items.transformed(project, delta, *disconnect, revision, auto_heal).ok(),
         (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to, revision, auto_heal),
         _ => None,
     };
@@ -454,6 +477,7 @@ pub(crate) fn show(
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
     overlap_index.paint(ui, response.id, project, camera, rect);
+    crate::no_connect::paint(ui, &painter, project, camera, rect, selected, highlighted);
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
@@ -572,14 +596,33 @@ pub(crate) fn show(
         }
         return None;
     }
-    if matches!(tool, Some(Tool::MoveItems { .. })) {
-        if lost_focus {
+    if let Some(Tool::MoveItems { pickup, .. }) = &tool {
+        if lost_focus || response.secondary_clicked() {
             return Some(Click::FinishItems(None));
         }
-        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+        if if *pickup {
+            response.clicked_by(egui::PointerButton::Primary)
+        } else {
+            ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+        } {
             return Some(Click::FinishItems(group_delta.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
         }
         return None;
+    }
+    // Dragging a wire-end mark stretches its attached routes through the existing junction
+    // edit. A pin mark stays with its symbol; drawing tools retain their own input priority.
+    if input_enabled
+        && !lost_focus
+        && tool.is_none()
+        && filters.no_connects
+        && selected.len() <= 1
+        && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        && let Some(pcbcraft_engine::no_connect::Attachment::WireEnd(marker)) = crate::no_connect::marker_at(project, camera, rect, origin)
+        && let Some(drag) = wires::marker_drag(project, marker, camera.snap(origin, rect))
+    {
+        return Some(Click::GrabReshape(drag));
     }
     // Endpoint and corner handles use their own hit area before the narrow stroke picker.
     // A ready wire tool allows a deliberate handle drag; a plain click still starts a wire.
@@ -587,6 +630,8 @@ pub(crate) fn show(
         && !lost_focus
         && matches!(tool, None | Some(Tool::Wire { start: None, .. }))
         && selected.len() <= 1
+        && !(filters.no_connects
+            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| crate::no_connect::marker_at(project, camera, rect, p).is_some()))
         && !whole_wire_drag
         && filters.wires
         && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
@@ -642,8 +687,11 @@ pub(crate) fn show(
                 button: if right { egui::PointerButton::Secondary } else { egui::PointerButton::Primary },
             }));
         }
+        if !hit.no_connects.is_empty() && selected.symbols.is_empty() && selected.wires.is_empty() && selected.net_labels.is_empty() {
+            return Some(Click::SelectItems(selected.combine(&hit, false, false)));
+        }
         if hit.is_subset(selected) && (selected.len() > 1 || whole_wire_drag) {
-            return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect)));
+            return Some(Click::MoveItems { items: selected.clone(), origin: camera.snap(origin, rect), pickup: false, disconnect: false });
         }
         if let Some(wire) = hit.single_wire()
             && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
@@ -674,6 +722,39 @@ pub(crate) fn show(
             .data(|data| data.get_temp::<Arc<SymbolChoices>>(choices_key))
             .filter(|choices| choices.target == project.sheet_target() && choices.revision == revision && filters.symbols);
         let choices = captured_choices.as_ref().map_or(&[][..], |choices| choices.entries.as_slice());
+        let pin_key = response.id.with("no_connect_pin");
+        if let Some(pointer) = pressed {
+            let pin = crate::no_connect::target_at(project, camera, rect, pointer, selected).filter(|pick| {
+                if project.has_no_connect_attachment(&pick.target) {
+                    return filters.no_connects;
+                }
+                match pick.target {
+                    pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
+                    pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+                }
+            });
+            ui.data_mut(|data| {
+                data.remove::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Attachment, bool)>(pin_key);
+                if let Some(pick) = pin {
+                    let marked = project.has_no_connect_attachment(&pick.target);
+                    data.insert_temp(pin_key, (project.sheet_target(), revision, pick.target, marked));
+                }
+            });
+        }
+        let pin = ui
+            .data(|data| data.get_temp::<(pcbcraft_engine::SheetTarget, u64, pcbcraft_engine::no_connect::Attachment, bool)>(pin_key))
+            .filter(|(sheet, captured_revision, target, marked)| {
+                *sheet == project.sheet_target()
+                    && *captured_revision == revision
+                    && if *marked {
+                        filters.no_connects
+                    } else {
+                        match target {
+                            pcbcraft_engine::no_connect::Attachment::Pin(_) => filters.symbols,
+                            pcbcraft_engine::no_connect::Attachment::WireEnd(_) => filters.wires,
+                        }
+                    }
+            });
         let mut target = match pressed {
             Some(pointer) => filters.symbols.then(|| symbol_at(project, camera, rect, pointer)).flatten().map(|(symbol, _)| symbol.id()),
             None => selected.single_symbol().filter(|_| filters.symbols).map(str::to_owned),
@@ -718,6 +799,17 @@ pub(crate) fn show(
             Some(drag)
         });
         let picked = menu::context(&response, |ui| {
+            if let Some((_, _, target, marked)) = &pin {
+                if (!marked || !group)
+                    && MenuItem::new(if *marked { "Delete" } else { "Mark no connect" }).shortcut(if *marked { "Del" } else { "Q" }).show(ui)
+                {
+                    return Some(Click::NoConnect(target.clone(), !marked));
+                }
+                if *marked && !group {
+                    return None;
+                }
+                menu::separator(ui);
+            }
             if choices.len() > 1 {
                 if let Some(chosen) = MenuItem::new("Select symbol")
                     .submenu(ui, |ui| {
@@ -776,6 +868,9 @@ pub(crate) fn show(
             return Some(click);
         }
         if pressed.is_some() && !group {
+            if let Some((_, _, target, true)) = &pin {
+                return Some(Click::SelectItems(Selection::one_no_connect(target.clone())));
+            }
             if let Some(leg) = leg.filter(|_| target.is_none()) {
                 return Some(Click::SelectLeg(leg));
             }
@@ -798,14 +893,40 @@ pub(crate) fn show(
         ));
     }
 
+    if matches!(tool, Some(Tool::NoConnect { .. })) && lost_focus {
+        return Some(Click::CancelNoConnect);
+    }
     if !input_enabled || (response.dragged() && !matches!(tool, Some(Tool::PlaceSymbol { .. }))) {
         return None;
+    }
+
+    if !ui.ctx().egui_wants_keyboard_input()
+        && response.contains_pointer()
+        && tool.is_none()
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Q))
+    {
+        let target =
+            response.hover_pos().and_then(|pointer| crate::no_connect::target_at(project, camera, rect, pointer, selected)).map(|pick| pick.target);
+        return Some(target.map_or(Click::BeginNoConnect, |target| Click::NoConnect(target, true)));
+    }
+    if matches!(tool, Some(Tool::NoConnect { .. })) {
+        if response.secondary_clicked() {
+            return Some(Click::CancelNoConnect);
+        }
+        // Accessible marker labels may own hover without taking canvas editing input.
+        // Keep the tool cursor over those labels while respecting panels on higher layers.
+        let target = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|_| ui.rect_contains_pointer(rect))
+            .and_then(|pointer| crate::no_connect::preview(&painter, project, camera, rect, pointer, selected));
+        return response.clicked().then(|| target.map_or(Click::InvalidNoConnect, |target| Click::NoConnect(target, true)));
     }
     if tool.is_none()
         && response.hovered()
         && !ui.ctx().egui_wants_keyboard_input()
         && !ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command)
         && let Some(pointer) = response.hover_pos()
+        && !(filters.no_connects && crate::no_connect::marker_at(project, camera, rect, pointer).is_some())
         && (!filters.symbols || fields::at(ui, project, camera, rect, pointer).is_none())
         && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
         && let Some(point) = anchor.position(project)
@@ -822,6 +943,9 @@ pub(crate) fn show(
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
         && let Some(pointer) = response.hover_pos()
     {
+        if selected.len() > 1 {
+            return Some(Click::MoveItems { items: selected.clone(), origin: camera.snap(pointer, rect), pickup: true, disconnect: false });
+        }
         if filters.symbols && fields::at(ui, project, camera, rect, pointer).is_some() {
             return None;
         }
@@ -864,6 +988,14 @@ pub(crate) fn show(
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
+        if let Some(target) = filters.no_connects.then(|| crate::no_connect::marker_at(project, camera, rect, pointer)).flatten() {
+            let modifiers = ui.input(|i| i.modifiers);
+            return Some(Click::SelectItems(selected.combine(
+                &Selection::one_no_connect(target),
+                modifiers.shift,
+                modifiers.ctrl || modifiers.command,
+            )));
+        }
         if filters.symbols
             && let Some(field) = fields::at(ui, project, camera, rect, pointer)
         {
@@ -876,6 +1008,9 @@ pub(crate) fn show(
         }
         let hit = selection::at(ui, project, camera, rect, pointer, filters);
         let modifiers = ui.input(|i| i.modifiers);
+        if !hit.no_connects.is_empty() {
+            return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
+        }
         if !modifiers.shift
             && !modifiers.ctrl
             && !modifiers.command
@@ -889,6 +1024,7 @@ pub(crate) fn show(
         }
         if !modifiers.shift
             && !modifiers.ctrl
+            && !modifiers.command
             && hit.single_wire().is_some()
             && let Some(leg) = wires::leg_at(project, camera, rect, pointer, revision)
         {
@@ -903,7 +1039,8 @@ pub(crate) fn show(
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
-        Tool::Field { .. }
+        Tool::NoConnect { .. }
+        | Tool::Field { .. }
         | Tool::NetLabel { .. }
         | Tool::SheetGesture { .. }
         | Tool::Hierarchy { .. }
