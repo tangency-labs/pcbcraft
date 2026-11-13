@@ -183,6 +183,11 @@ movement and rotation commit together as one undo step, while cancellation chang
 The move and disconnection share one undo step; placing a replacement at the vacated
 pins connects it to the preserved wire ends.
 
+With multiple items selected, **M** picks up the whole selection using the same
+group movement as dragging it. Symbols, selected wire routes and named-net labels
+move together, and no-connect markers follow their selected owners. Click to place,
+or press **Esc** or right-click to cancel; placement is one undo step.
+
 ## Drawing and editing wires
 
 ### Intentionally unused pins and wire ends

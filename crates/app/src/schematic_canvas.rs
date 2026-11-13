@@ -252,7 +252,7 @@ pub(crate) enum SymbolAction {
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
-/// M picks up an explicitly selected wire for whole-route translation and commits on a valid
+/// M picks up a multi-item selection or an explicitly selected wire and commits on a valid
 /// primary click; Escape, right-click or focus loss cancels that preview.
 /// Symbol move previews also include their pending quarter turns; painted wire contacts use
 /// that transformed snapshot, and cancellation discards both position and orientation.
@@ -1011,6 +1011,7 @@ pub(crate) fn show(
         }
         if !modifiers.shift
             && !modifiers.ctrl
+            && !modifiers.command
             && hit.single_wire().is_some()
             && let Some(leg) = wires::leg_at(project, camera, rect, pointer, revision)
         {

@@ -368,8 +368,8 @@ fn symbol_move_hotkey_previews_and_commits_one_disconnected_move() {
     assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
 }
 
-/// With a selected symbol M uses it even while hovering another symbol; a multi-item selection
-/// is retained instead of being silently narrowed to one symbol.
+/// With a selected symbol M uses it even while hovering another symbol; multiple symbols
+/// use group pickup instead of being silently narrowed to one symbol.
 #[test]
 fn symbol_move_hotkey_respects_explicit_selection() {
     let mut h = symbol_harness();
@@ -394,8 +394,17 @@ fn symbol_move_hotkey_respects_explicit_selection() {
     h.state_mut().select(items.clone());
     h.key_press(egui::Key::M);
     h.run();
-    assert!(h.state().views.active.schematic.tool.is_none());
+    assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::MoveItems { items: captured, pickup: true, .. }) if *captured == items));
     assert_eq!(h.state().views.active.schematic.selection, items);
+    let before = h.state().session.snapshot().unwrap();
+    let to = screen(&h, grid(20, 18));
+    h.hover_at(to);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click_at(&mut h, grid(20, 18));
+    for (old, new) in before.symbols().iter().zip(h.state().session.project().unwrap().symbols()) {
+        assert_eq!(new.position, Point { x_nm: old.position.x_nm + grid(4, 6).x_nm, y_nm: old.position.y_nm + grid(4, 6).y_nm });
+    }
 }
 
 /// Escape, secondary click, focus loss and view/project changes cancel a keyboard pickup;

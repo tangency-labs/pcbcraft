@@ -17,8 +17,8 @@ policy and magnetic-target suppression are original engine/view-cache changes;
 no external implementation or dependency was introduced. Wire-end X dragging
 reuses the existing junction reshape/departure path and shared move command;
 placement selection cleanup reuses view-owned selection/counterpart routing.
-Selected-wire M pickup reuses the existing bounded group translation command,
-revision guard and preview rather than adding another movement transaction.
+Selected-wire and multi-item M pickup reuse the existing bounded group translation
+command, revision/filter guards and preview rather than adding another movement transaction.
 Interaction follows the published
 [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
 consulted November 12, 2026. Tests use shared commands, original starter/native
