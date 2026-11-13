@@ -1,0 +1,33 @@
+# UI automation verification
+
+These existing records cover runtime commit `d28a3ab` on base `de281fd`.
+Packaging adds no runtime changes and reruns no measurements. The manifest
+records the canonical fixture hash and the original bytes of each gzip record;
+`verification.json.gz` is the local checkpoint taken before publication, not
+current PR status. Its source hashes identify the code exercised by the checks.
+
+The workspace suite passed 1,642 tests with nine ignored. Formatting, workspace
+Clippy, the WebAssembly check, dependency policy and desktop/CLI builds passed.
+The opt-in native smoke passed separately on isolated X11/Xvnc with DRI3 disabled
+and an explicitly selected lavapipe adapter. It exercised the real Wire button,
+File menu, rename field and confirmation through authenticated MCP, and checked
+the resulting project name. The headless regressions also cover drag/Undo,
+interruption, stale geometry, queue bounds, cancellation during an in-flight
+button pass, disconnects and detached-window lookup. See `failure-review.json.gz`
+for the separate failure-path review and its test-versus-reading distinction.
+
+The Chrome WebGL/SwiftShader before and after replays each completed one reference
+iteration and 44 captures. Their raw reports and comparator output are retained;
+one iteration supplies integration context and cannot establish tail latency or
+attribute a performance regression. The native after replay failed during warmup
+and produced no after report, so no native comparison is available. It was not
+repeated. The earlier NVIDIA/DRI3 server crash and the corrected software baseline
+are both retained rather than relabeled as a successful hardware result.
+
+Native model/input checks passed, while a captured completion milestone still
+showed the typed modal after an accepted UI pass and a visual hold. This evidence
+does not qualify compositor presentation or recording reliability. No physical
+input-to-photon, Wayland endurance, Windows or macOS claim is made. Input is
+limited to the original native window and split panes; detached windows expose
+lookup only, and specialized widgets may lack names. The user-facing contract is
+in [UI automation](../../../../docs/ui-automation.md).
