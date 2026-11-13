@@ -63,7 +63,10 @@ The simulator covers 64 copper layers, 4,096 tracks, 2,048 through vias, 8,192 p
 and 4,000 synthetic intent tags. Analytic circular arcs and long diagonals stress
 conservative envelopes, including crowded curves and optional eight-piece bounds.
 Reports retain construction, query and replacement-query samples, candidate counts
-and payload sizes where available. These measure indexing with layer filtering
+and payload sizes where available. Strategy order rotates per iteration and reverses
+per full cycle; `execution_order` records the order associated with raw sample
+indices. Native fixture envelopes and default probes preserve actual copper-layer
+membership. These measure indexing with layer filtering
 and deduplication, not routing, connectivity, ERC or physical presentation. Intent
 tags describe the fixture; the bounds lookup does not solve the electrical graph.
 See the [retained comparison](../tools/performance/baselines/issue244/README.md).
