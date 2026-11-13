@@ -1,0 +1,27 @@
+{
+  "base_revision": "14bbda9ec1f8e4fc80b309010dae53f0b420447a",
+  "source_sha256": "c8e9c89f7326491b8817ca316e4592124bfd13aac023c9b02bc4fd272efec8f7",
+  "files": {
+    "Cargo.lock": "07c12e83ad3ecbd0f60a3f6bb53919406658f22721e3fffcb2ffdd759931d821",
+    "crates/app/Cargo.toml": "4cd1adcbb8ead7f5261c4868aa544077065a89df545f66a47b3e65d4ab88c255",
+    "crates/app/examples/board_perf_web.rs": "f358759ead77edbe42f1e72dd46fd1f8fe836583d4f8ca4b40e44c24be7da8d7",
+    "crates/app/examples/board_perf_window.rs": "a62fc32ab4221ab0643111ba1e9d4b67d9a24df5c2466635d4427a3b5f8afc69",
+    "crates/app/src/performance.rs": "65291813af240d202278fd8043019b83147472ddc34c5b2e94bb2e87c84e447e",
+    "crates/app/src/performance/browser_capture.rs": "8354aba3112aa14b0b6616e41a7dfe88b79073b224fc5f6e9a2d78236ebeb9fe",
+    "crates/app/src/performance/fixture.rs": "40ef9d6bece8352f56836120dedc6509683a3ce33474474d8fcf11dba4aa109c",
+    "crates/app/src/performance/remote.rs": "bb630c9f6be8b6a99e25d3d1517c91cc86d4ae5618bf9f5f871659b044dabb4b",
+    "crates/app/src/performance/rendered.rs": "23f3e96ae8684a9ef674d1105456a20d81b46733f9cb974c9605d083723ca192",
+    "crates/app/src/performance/replay.rs": "0cc373e18431f67b980c2c4c2c92e96b00d87a885f63604991a87d3f51b40e3b",
+    "scripts/collect-performance-resources.py": "56cee6fca5933052a9ded746f48d31d328c0ec9423d28f8de48a14bbd1a2d260",
+    "scripts/compare-rendered-performance.py": "05c3098c635347fe68091ea27257511af2b46faa4fa95ce5374996bed2a8f31a",
+    "scripts/test-rendered-performance-page.cjs": "5d29efde4be4229d401894adefc4031332c1200c88e5c36d1ac0821950a7818f",
+    "scripts/test_performance_resources.py": "6706890a4d388e915201253011bc1ecdb03f983ee52c17c610f6b77d7d089f34",
+    "scripts/test_rendered_performance.py": "0eb8272333d85a7c2d73464b51e98da1f3703a1685c92c15fbf08804f4fceaa4",
+    "tools/performance/rendered.html": "6874189cd7c2cc94a3272317f640a23c5c6ae190270755e4dab4750ef783a733"
+  },
+  "postprocessing": "wasm-bindgen 0.2.130 --target web; wasm-opt 123 -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+  "source_archive_sha256": "9b5df1b523abd0f89e3f7ef1a894b48811147ac0666bae7bb5663e95e5ca79da",
+  "raw_wasm_sha256": "1ef3e1cdd6b02ca613ab7ef92e007199082684d5902fa5a18d26a0cae6c396de",
+  "optimized_wasm_sha256": "8d0ad458dd76a28826008b59044135c84dc1268a4053d95d794d77180f9fe9ab",
+  "generated_glue_sha256": "8584130a5993faabe919d1e91e4e1163e6533cd3c99f903fecd610718f70da1e"
+}

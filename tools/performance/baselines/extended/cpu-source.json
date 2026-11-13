@@ -1,0 +1,14 @@
+{
+  "files": {
+    "crates/app/src/performance.rs": "65291813af240d202278fd8043019b83147472ddc34c5b2e94bb2e87c84e447e",
+    "crates/app/src/performance/fixture.rs": "40ef9d6bece8352f56836120dedc6509683a3ce33474474d8fcf11dba4aa109c",
+    "crates/app/src/performance/replay.rs": "0cc373e18431f67b980c2c4c2c92e96b00d87a885f63604991a87d3f51b40e3b",
+    "crates/app/src/performance/report.rs": "2b26da371d9a5ec60776913bdaf2c0fe0fc2799b5b970f2bb0d35e52c661cea2",
+    "crates/app/examples/board_perf.rs": "b7d10fb8ae1dc34cddd45644413526a50a9feef9246276ff411ef1387b238c65",
+    "scripts/collect-performance-resources.py": "56cee6fca5933052a9ded746f48d31d328c0ec9423d28f8de48a14bbd1a2d260"
+  },
+  "source_sha256": "cd4d7a3519f027eac9605e93c553e1daf55c8f53f8b98310154c763865bfce74",
+  "executable_sha256": "52102dae8fea886266b7631e8d85dba303d140433595ca0f4caedabe168a81fc",
+  "base_revision": "14bbda9ec1f8e4fc80b309010dae53f0b420447a",
+  "source_archive_sha256": "4011802c63fb80fab9fcbebe4124f3ae2eb7a699101d32701e9b01c4790325a6"
+}

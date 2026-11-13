@@ -1149,3 +1149,18 @@ commands, the production archive encoder and existing qualified bundled definiti
 Editor replay uses PCBcraft's production app and pinned Craft chrome. SHA-256
 reuses the already qualified sha2 dependency; no external EDA implementation,
 source-derived fixture, artwork or additional dependency version was introduced.
+
+## Rendered performance and resource diagnostics
+
+The native/browser rendered replay, authenticated MCP timing, supported-limit
+and branch/channel recipes, process-resource collector and evidence validators
+are original MIT OR Apache-2.0 PCBcraft work over the existing #240 harness and
+qualified eframe/wgpu renderer. The existing `web-sys` package is referenced
+directly only by the opt-in browser diagnostic; no package version or renderer
+patch is added. Native callback polling follows wgpu 30.0.1's published
+`Device::poll` / `Buffer::map_async` contracts
+(https://docs.rs/wgpu/30.0.1/wgpu/struct.Device.html and
+https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html). Fixtures use shared commands
+and production codecs; no external EDA implementation, asset or project data
+was introduced. Valgrind is an optional external diagnostic executable, not a
+linked or bundled dependency.

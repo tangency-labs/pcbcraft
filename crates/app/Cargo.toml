@@ -10,7 +10,7 @@ publish.workspace = true
 workspace = true
 
 [features]
-performance-harness = ["dep:sha2"]
+performance-harness = ["dep:sha2", "dep:web-sys"]
 
 [[example]]
 name = "board_perf"
@@ -19,6 +19,10 @@ required-features = ["performance-harness"]
 [[example]]
 name = "board_perf_web"
 crate-type = ["cdylib"]
+required-features = ["performance-harness"]
+
+[[example]]
+name = "board_perf_window"
 required-features = ["performance-harness"]
 
 [dependencies]
@@ -55,3 +59,4 @@ egui_kittest = { workspace = true, features = ["eframe"] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", optional = true, features = ["HtmlCanvasElement"] }

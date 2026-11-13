@@ -1,0 +1,194 @@
+[New LWP 474650 (id 2)]
+[New LWP 474210 (id 3)]
+[New LWP 474209 (id 4)]
+[New LWP 474208 (id 5)]
+[New LWP 474207 (id 6)]
+[New LWP 474206 (id 7)]
+[New LWP 474205 (id 8)]
+[New LWP 474203 (id 9)]
+[New LWP 474202 (id 10)]
+[New LWP 474200 (id 11)]
+[New LWP 474199 (id 12)]
+[New LWP 474196 (id 13)]
+[New LWP 474195 (id 14)]
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <ima:enforcing>
+  <https://debuginfod.fedoraproject.org/>
+  <ima:ignore>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib64/libthread_db.so.1".
+[Switching to thread 1 (Thread 0x7f4b42d6c900 (LWP 474191))]
+0x0000564f6c6d488b in <polling::epoll::Poller>::wait_deadline ()
+
+Thread 14 (Thread 0x7f4b1d3fc6c0 (LWP 474195) "board_p:disk$0"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de30ec in pthread_cond_wait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b243941dd in cnd_wait () from /usr/lib64/libvulkan_radeon.so
+#5  0x00007f4b2435decc in util_queue_thread_func () from /usr/lib64/libvulkan_radeon.so
+#6  0x00007f4b2439414c in impl_thrd_routine () from /usr/lib64/libvulkan_radeon.so
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 13 (Thread 0x7f4b1c9f86c0 (LWP 474196) "board_p:disk$0"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de30ec in pthread_cond_wait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b243941dd in cnd_wait () from /usr/lib64/libvulkan_radeon.so
+#5  0x00007f4b2435decc in util_queue_thread_func () from /usr/lib64/libvulkan_radeon.so
+#6  0x00007f4b2439414c in impl_thrd_routine () from /usr/lib64/libvulkan_radeon.so
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 12 (Thread 0x7f4b373876c0 (LWP 474199) "board_perf_wind"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de3302 in pthread_cond_timedwait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b40bf569c in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#5  0x00007f4b41035b61 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#6  0x00007f4b40bf5854 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 11 (Thread 0x7f4b35a906c0 (LWP 474200) "[vkcf] Analysis"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de30ec in pthread_cond_wait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b40bf563c in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#5  0x00007f4b41029e9e in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#6  0x00007f4b40bf5854 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 10 (Thread 0x7f4b34ad46c0 (LWP 474202) "[vkrt] Analysis"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de30ec in pthread_cond_wait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b40bf563c in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#5  0x00007f4b4104b697 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#6  0x00007f4b40bf5854 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 9 (Thread 0x7f4b342d36c0 (LWP 474203) "[vkps] Update"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de3302 in pthread_cond_timedwait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b40bf569c in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#5  0x00007f4b4101dbed in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#6  0x00007f4b40bf5854 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 8 (Thread 0x7f4b3379c6c0 (LWP 474205) "board_perf_wind"):
+#0  0x00007f4b42dec352 in __syscall_cancel_arch () from /lib64/libc.so.6
+#1  0x00007f4b42de054c in __internal_syscall_cancel () from /lib64/libc.so.6
+#2  0x00007f4b42de0897 in __futex_abstimed_wait_cancelable64 () from /lib64/libc.so.6
+#3  0x00007f4b42de3302 in pthread_cond_timedwait@@GLIBC_2.3.2 () from /lib64/libc.so.6
+#4  0x00007f4b40bf569c in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#5  0x00007f4b4115c139 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#6  0x00007f4b411538e6 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#7  0x00007f4b40bf5854 in ?? () from /lib64/libnvidia-glcore.so.615.78.08
+#8  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#9  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 7 (Thread 0x7f4b3528f6c0 (LWP 474206) "board_perf_wind"):
+#0  0x0000564f6cddc1a2 in <x11rb::rust_connection::stream::DefaultStream as x11rb::rust_connection::stream::Stream>::poll ()
+#1  0x0000564f6ba4b31e in <x11rb::rust_connection::RustConnection>::read_packet_and_enqueue ()
+#2  0x0000564f6ba4c426 in <x11rb::rust_connection::RustConnection as x11rb::connection::Connection>::wait_for_raw_event_with_sequence ()
+#3  0x0000564f6ba4c88a in <x11rb::rust_connection::RustConnection as x11rb::connection::Connection>::wait_for_event_with_sequence ()
+#4  0x0000564f6ba4c6d7 in <x11rb::rust_connection::RustConnection as x11rb::connection::Connection>::wait_for_event ()
+#5  0x0000564f6ba424eb in arboard::platform::linux::x11::serve_requests ()
+#6  0x0000564f6ba5d12f in std::sys::backtrace::__rust_begin_short_backtrace::<<arboard::platform::linux::x11::Clipboard>::new::{closure#0}, ()> ()
+#7  0x0000564f6ba5436f in <std::thread::lifecycle::spawn_unchecked<<arboard::platform::linux::x11::Clipboard>::new::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#8  0x0000564f6c946fde in <std::sys::thread::unix::Thread>::new::thread_start ()
+#9  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#10 0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 6 (Thread 0x7f4b3508e6c0 (LWP 474207) "smithay-clipboa"):
+#0  0x0000564f6c6d488b in <polling::epoll::Poller>::wait_deadline ()
+#1  0x0000564f6c6d53d5 in <polling::Poller>::wait_impl ()
+#2  0x0000564f6ba9d779 in <calloop::sys::Poll>::poll ()
+#3  0x0000564f6c87b26e in <calloop::loop_logic::EventLoop<smithay_clipboard::state::State>>::dispatch_events ()
+#4  0x0000564f6c87ade0 in <calloop::loop_logic::EventLoop<smithay_clipboard::state::State>>::dispatch::<core::option::Option<core::time::Duration>> ()
+#5  0x0000564f6c888f0c in smithay_clipboard::worker::worker_impl ()
+#6  0x0000564f6c89469c in std::sys::backtrace::__rust_begin_short_backtrace::<smithay_clipboard::worker::spawn::{closure#0}, ()> ()
+#7  0x0000564f6c88f5fb in <std::thread::lifecycle::spawn_unchecked<smithay_clipboard::worker::spawn::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#8  0x0000564f6c946fde in <std::sys::thread::unix::Thread>::new::thread_start ()
+#9  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#10 0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 5 (Thread 0x7f4b34e8d6c0 (LWP 474208) "board_perf_wind"):
+#0  0x00007f4b42e653bd in syscall () from /lib64/libc.so.6
+#1  0x0000564f6c92a055 in <std::sys::sync::condvar::futex::Condvar>::wait ()
+#2  0x0000564f6beeab4b in <parking::Inner>::park ()
+#3  0x0000564f6b9ec1ea in <std::thread::local::LocalKey<core::cell::RefCell<(parking::Parker, core::task::wake::Waker)>>>::with::<futures_lite::future::block_on<(), <accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}>::{closure#0}, ()> ()
+#4  0x0000564f6b96cdba in futures_lite::future::block_on::<(), <accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}> ()
+#5  0x0000564f6b9e511d in std::sys::backtrace::__rust_begin_short_backtrace::<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()> ()
+#6  0x0000564f6ba20c9c in <std::thread::lifecycle::spawn_unchecked<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#7  0x0000564f6c946fde in <std::sys::thread::unix::Thread>::new::thread_start ()
+#8  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#9  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 4 (Thread 0x7f4b33ad26c0 (LWP 474209) "blocking-1"):
+#0  0x00007f4b42e653bd in syscall () from /lib64/libc.so.6
+#1  0x0000564f6c929f6b in <std::sys::sync::condvar::futex::Condvar>::wait_optional_timeout ()
+#2  0x0000564f6ba8cf50 in <std::sync::poison::condvar::Condvar>::wait_timeout::<blocking::Inner> ()
+#3  0x0000564f6ba8c081 in <blocking::Executor>::main_loop ()
+#4  0x0000564f6ba8d18b in std::sys::backtrace::__rust_begin_short_backtrace::<<blocking::Executor>::grow_pool::{closure#0}, ()> ()
+#5  0x0000564f6ba8c95a in <std::thread::lifecycle::spawn_unchecked<<blocking::Executor>::grow_pool::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#6  0x0000564f6c946fde in <std::sys::thread::unix::Thread>::new::thread_start ()
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 3 (Thread 0x7f4b32f9b6c0 (LWP 474210) "async-io"):
+#0  0x0000564f6c6d488b in <polling::epoll::Poller>::wait_deadline ()
+#1  0x0000564f6c6d53d5 in <polling::Poller>::wait_impl ()
+#2  0x0000564f6ba72eee in <async_io::reactor::ReactorLock>::react ()
+#3  0x0000564f6ba74993 in async_io::driver::main_loop ()
+#4  0x0000564f6ba771c7 in std::sys::backtrace::__rust_begin_short_backtrace::<async_io::driver::unparker::{closure#0}::{closure#0}, ()> ()
+#5  0x0000564f6ba7463f in <std::thread::lifecycle::spawn_unchecked<async_io::driver::unparker::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#6  0x0000564f6c946fde in <std::sys::thread::unix::Thread>::new::thread_start ()
+#7  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#8  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 2 (Thread 0x7f4b32d9a6c0 (LWP 474650) "pcbcraft-live-m"):
+#0  0x00007f4b42e653bd in syscall () from /lib64/libc.so.6
+#1  0x0000564f6c9427c7 in std::thread::functions::park_timeout ()
+#2  0x0000564f6c174a33 in std::thread::scoped::scope::<pcbcraft_app::live_control::listen::{closure#0}, ()> ()
+#3  0x0000564f6c17416c in std::sys::backtrace::__rust_begin_short_backtrace::<<pcbcraft_app::live_control::LiveControl>::start_with_wait::{closure#0}, ()> ()
+#4  0x0000564f6c0f48fa in <std::thread::lifecycle::spawn_unchecked<<pcbcraft_app::live_control::LiveControl>::start_with_wait::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#5  0x0000564f6c946fde in <std::sys::thread::unix::Thread>::new::thread_start ()
+#6  0x00007f4b42de3c42 in start_thread () from /lib64/libc.so.6
+#7  0x00007f4b42e675ac in __clone3 () from /lib64/libc.so.6
+
+Thread 1 (Thread 0x7f4b42d6c900 (LWP 474191) "board_perf_wind"):
+#0  0x0000564f6c6d488b in <polling::epoll::Poller>::wait_deadline ()
+#1  0x0000564f6c6d53d5 in <polling::Poller>::wait_impl ()
+#2  0x0000564f6ba9ffcd in <calloop::sys::Poll>::poll ()
+#3  0x0000564f6bba84fa in <calloop::loop_logic::EventLoop<winit::platform_impl::linux::wayland::state::WinitState>>::dispatch_events ()
+#4  0x0000564f6bba3971 in <calloop::loop_logic::EventLoop<winit::platform_impl::linux::wayland::state::WinitState>>::dispatch::<core::option::Option<core::time::Duration>> ()
+#5  0x0000564f6bbab784 in <winit::platform_impl::linux::wayland::event_loop::EventLoop<eframe::native::winit_integration::UserEvent>>::loop_dispatch::<core::option::Option<core::time::Duration>> ()
+#6  0x0000564f6bbaf025 in <winit::platform_impl::linux::wayland::event_loop::EventLoop<eframe::native::winit_integration::UserEvent>>::poll_events_with_timeout::<&mut &mut <winit::event_loop::EventLoop<eframe::native::winit_integration::UserEvent> as winit::platform::run_on_demand::EventLoopExtRunOnDemand>::run_app_on_demand<eframe::native::run::WinitAppWrapper<eframe::native::wgpu_integration::WgpuWinitApp>>::{closure#0}> ()
+#7  0x0000564f6bbab56a in <winit::platform_impl::linux::wayland::event_loop::EventLoop<eframe::native::winit_integration::UserEvent>>::pump_events::<&mut <winit::event_loop::EventLoop<eframe::native::winit_integration::UserEvent> as winit::platform::run_on_demand::EventLoopExtRunOnDemand>::run_app_on_demand<eframe::native::run::WinitAppWrapper<eframe::native::wgpu_integration::WgpuWinitApp>>::{closure#0}> ()
+#8  0x0000564f6bbabb80 in <winit::platform_impl::linux::wayland::event_loop::EventLoop<eframe::native::winit_integration::UserEvent>>::run_on_demand::<<winit::event_loop::EventLoop<eframe::native::winit_integration::UserEvent> as winit::platform::run_on_demand::EventLoopExtRunOnDemand>::run_app_on_demand<eframe::native::run::WinitAppWrapper<eframe::native::wgpu_integration::WgpuWinitApp>>::{closure#0}> ()
+#9  0x0000564f6bbb264d in <winit::platform_impl::linux::EventLoop<eframe::native::winit_integration::UserEvent>>::run_on_demand::<<winit::event_loop::EventLoop<eframe::native::winit_integration::UserEvent> as winit::platform::run_on_demand::EventLoopExtRunOnDemand>::run_app_on_demand<eframe::native::run::WinitAppWrapper<eframe::native::wgpu_integration::WgpuWinitApp>>::{closure#0}> ()
+#10 0x0000564f6bbd95c4 in eframe::native::run::run_and_return::<eframe::native::wgpu_integration::WgpuWinitApp> ()
+#11 0x0000564f6bbbe901 in <std::thread::local::LocalKey<core::cell::RefCell<core::option::Option<winit::event_loop::EventLoop<eframe::native::winit_integration::UserEvent>>>>>::with::<eframe::native::run::with_event_loop<core::result::Result<(), eframe::Error>, eframe::native::run::run_wgpu::{closure#0}>::{closure#0}, core::result::Result<core::result::Result<(), eframe::Error>, eframe::Error>> ()
+#12 0x0000564f6bbdad9e in eframe::run_native_ext ()
+#13 0x0000564f6ba93f12 in board_perf_window::main ()
+#14 0x0000564f6ba9ad7e in std::sys::backtrace::__rust_begin_short_backtrace::<fn() -> core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>>, core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>>> ()
+#15 0x0000564f6ba9ad52 in std::rt::lang_start::<core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>>>::{closure#0} ()
+#16 0x0000564f6c93fa97 in std::rt::lang_start_internal ()
+#17 0x0000564f6ba94835 in main ()
+[Inferior 1 (process 474191) detached]

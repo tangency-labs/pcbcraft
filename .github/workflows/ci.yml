@@ -52,8 +52,8 @@ jobs:
         run: |
           cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
           cargo test --locked -p pcbcraft-app --features performance-harness performance::
-          python3 -B -m unittest discover -s scripts -p test_compare_performance.py
-          node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs
+          python3 -B -m unittest discover -s scripts -p 'test*performance*.py'
+          node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
 
   web:
     runs-on: ubuntu-latest

@@ -1,0 +1,26 @@
+{
+  "base_revision": "14bbda9ec1f8e4fc80b309010dae53f0b420447a",
+  "source_sha256": "5b051068b0efc67bc49abf3d215d5cf469ee6e64f4c7f1634482ab5ae76585d4",
+  "files": {
+    "Cargo.lock": "07c12e83ad3ecbd0f60a3f6bb53919406658f22721e3fffcb2ffdd759931d821",
+    "crates/app/Cargo.toml": "4cd1adcbb8ead7f5261c4868aa544077065a89df545f66a47b3e65d4ab88c255",
+    "crates/app/examples/board_perf_web.rs": "f358759ead77edbe42f1e72dd46fd1f8fe836583d4f8ca4b40e44c24be7da8d7",
+    "crates/app/examples/board_perf_window.rs": "a62fc32ab4221ab0643111ba1e9d4b67d9a24df5c2466635d4427a3b5f8afc69",
+    "crates/app/src/performance.rs": "4708d39881839429c4bff5abb3a4dbc9c2c8f60213e8be0d0d6c753bd29d3202",
+    "crates/app/src/performance/browser_capture.rs": "8354aba3112aa14b0b6616e41a7dfe88b79073b224fc5f6e9a2d78236ebeb9fe",
+    "crates/app/src/performance/fixture.rs": "40ef9d6bece8352f56836120dedc6509683a3ce33474474d8fcf11dba4aa109c",
+    "crates/app/src/performance/remote.rs": "bb630c9f6be8b6a99e25d3d1517c91cc86d4ae5618bf9f5f871659b044dabb4b",
+    "crates/app/src/performance/rendered.rs": "6ae275758a2997a40190c32a5f344cfe70a7b76c336369c6d06e912d40c9f2e4",
+    "crates/app/src/performance/replay.rs": "0cc373e18431f67b980c2c4c2c92e96b00d87a885f63604991a87d3f51b40e3b",
+    "scripts/collect-performance-resources.py": "823c94bfdc7a599a1b54f875cf1b3408169d5ba5871c0f0366f12bca47293dba",
+    "scripts/compare-rendered-performance.py": "c54fd89448a10a65a1fd0e1d6b27e002c850c9a4566758f9da7d850c33fb1bfc",
+    "scripts/test-rendered-performance-page.cjs": "5d29efde4be4229d401894adefc4031332c1200c88e5c36d1ac0821950a7818f",
+    "scripts/test_performance_resources.py": "64dc25ad07b766915ace1d10ac17a11be09730bc34756955e34592c57f606e4e",
+    "scripts/test_rendered_performance.py": "f68cde676ba2905e3981a0f1235270b971a50c4b5a09c861f371852d7dbccb88",
+    "tools/performance/rendered.html": "6874189cd7c2cc94a3272317f640a23c5c6ae190270755e4dab4750ef783a733"
+  },
+  "board_perf_sha256": "1460a457eac558f7f7dc894937796f88e0290bf096fcf9f81565c6e6e8645ec2",
+  "board_perf_window_sha256": "c8b81ad637f637fbc717f21f7a7c110fd60d64c547cbd14fe5ef849d714994ef",
+  "board_perf_web.wasm_sha256": "7fc5a4a9a1cf4cc88b3c104aef8e0aeda77b587816a673b235c3711430b03ebf",
+  "source_archive_sha256": "a4b5f43ef2672ebe7168e44fe8761d69c5a1ed74f42cf9b2e890772c783ecd3b"
+}

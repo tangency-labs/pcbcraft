@@ -1,0 +1,55 @@
+{
+  "native_wayland_hardware_smoke": {
+    "status": "complete",
+    "iterations": 1,
+    "captures": 44,
+    "source": "native-final-source.json",
+    "protocol_logging": true
+  },
+  "native_wayland_100_iteration_attempt": {
+    "status": "incomplete, no report accepted",
+    "last_logged_injection_ms": 11075.451544,
+    "last_step": "cancel.down",
+    "stacks": "native-wayland-reference-stacks.txt",
+    "observation": "Main thread in Wayland epoll/event loop; cause unestablished. Read-only debugger detached. Evidence captured before ending only this diagnostic process.",
+    "planned_iterations": 100,
+    "pid": 474191,
+    "concurrent_conditions": "X11 software diagnostic ran for about 30 seconds during this attempt before being stopped. Background development activity not controlled."
+  },
+  "browser_default_webgpu": {
+    "status": "early diagnostic readback failed; no accepted baseline",
+    "scope": "Earlier development snapshot; WebGL baseline is independently labeled and not WebGPU qualification"
+  },
+  "windows": "unavailable",
+  "macos": "unavailable",
+  "native_wayland_reference": {
+    "status": "complete",
+    "iterations": 100,
+    "captures": 4400,
+    "native_mcp_edits": 100,
+    "source": "accepted-input-source.json",
+    "compositor": "GNOME Shell 50.6",
+    "scope": "synthetic-input to UI/GPU readback, not compositor presentation or input-to-photon; no controlled optimization claim"
+  },
+  "native_logic_only_input_failure": {
+    "status": "failed, no report accepted",
+    "source": "watchdog-source.json",
+    "log": "native-logic-only-input-failure.log.gz",
+    "finding": "Diagnostic erased pending synthetic clicks across eframe logic-only callbacks; corrected with retained input until accepted UI and focused regression."
+  },
+  "native_wayland_final_idle_smoke": {
+    "status": "complete",
+    "iterations": 2,
+    "captures": 88,
+    "idle_between_iterations_ms": 2000,
+    "elapsed_ms": 5811.992843000001,
+    "source": "accepted-input-source.json",
+    "scope": "mechanism smoke, not endurance"
+  },
+  "browser_final_smoke": {
+    "status": "complete",
+    "iterations": 1,
+    "captures": 44,
+    "source": "accepted-input-source.json"
+  }
+}
