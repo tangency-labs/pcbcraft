@@ -117,7 +117,7 @@ mod live {
     use crate::{
         Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
-        canvas_camera::MAX_BOARD_ZOOM,
+        canvas_camera::{MAX_BOARD_ZOOM, MAX_DEFINITION_ZOOM},
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -542,7 +542,12 @@ mod live {
                 Param { name: "ribbon_tab", summary: "Authoring ribbon tab", required: false, kind: Kind::Choice(&["draw", "library", "view"]) },
                 Param { name: "browser", summary: "Whether the definition Browser is visible", required: false, kind: Kind::Bool },
                 Param { name: "properties", summary: "Whether compact Properties is visible", required: false, kind: Kind::Bool },
-                Param { name: "zoom_percent", summary: "Camera zoom percentage", required: false, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param {
+                    name: "zoom_percent",
+                    summary: "Definition detail zoom percentage",
+                    required: false,
+                    kind: Kind::Integer { min: 1, max: (MAX_DEFINITION_ZOOM * 100.) as i64, step: 1 },
+                },
                 Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
                 Param {
                     name: "grid_spacing_nm",

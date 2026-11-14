@@ -653,6 +653,8 @@ Library and View ribbon tabs, canvas, Browser and Properties. Switch back to
 and pending fields remain available when you return. Select a primitive
 on the canvas or in Browser, edit its Properties and choose **Apply**.
 **More properties…** expands the same draft; lengths accept mm, mil or inches.
+Wheel or pinch zooms up to 6400% for small pads and pin details; **View → Fit**
+frames the definition in the canvas clear of the panels.
 The picker’s split and window icons open a definition beside the current pane
 or in its own native window. Within either editor, **View → Split** creates a
 second pane, and **Detach / Dock** moves the focused pane between windows.

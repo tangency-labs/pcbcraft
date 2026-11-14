@@ -980,7 +980,7 @@ impl PcbApp {
                     doc.camera.set_snap_nm(grid);
                 }
                 if let Some(zoom) = params["zoom_percent"].as_i64() {
-                    doc.camera.set_zoom(zoom as f32 / 100.0);
+                    doc.camera.set_zoom_with_limit(zoom as f32 / 100.0, crate::canvas_camera::MAX_DEFINITION_ZOOM);
                 }
                 if let Some(center) = params.get("center") {
                     let center = serde_json::from_value(center.clone()).map_err(|e| e.to_string())?;

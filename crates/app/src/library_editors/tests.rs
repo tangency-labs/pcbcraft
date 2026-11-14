@@ -22,6 +22,8 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+mod zoom;
+
 /// Definition panes extend their own canvas palette through the exposed ribbon margins.
 #[test]
 fn definition_ribbon_backdrop_matches_the_document_canvas() {
@@ -289,6 +291,9 @@ fn canvas_selection_move_and_cancel_use_library_history() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
     h.run();
     let id = h.state().library_editors.active.unwrap();
+    // Keep this gesture fixture's 1 mm destination visible independently of automatic Fit.
+    h.state_mut().library_editors.documents.get_mut(&id).unwrap().camera.set_zoom(8.);
+    h.run();
     let area = h.get_by_label("Library canvas").rect();
     let start = h.state().library_editors.documents[&id].session.snapshot().objects[&1].anchor();
     let at = h.state().library_editors.documents[&id].camera.screen(start, area);

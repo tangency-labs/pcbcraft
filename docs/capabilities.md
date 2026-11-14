@@ -139,3 +139,5 @@ planned controls do not yet provide generic-part authoring, export, comparison o
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
+Symbol and footprint authoring share the PCB detail zoom range up to 6400%, with
+pointer-anchored wheel/pinch navigation and Fit for small native definitions.

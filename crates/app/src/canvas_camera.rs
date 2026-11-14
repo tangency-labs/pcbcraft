@@ -15,6 +15,8 @@ pub(super) const MAX_ZOOM: f32 = 8.0;
 pub(super) const MAX_BOARD_ZOOM: f32 = 64.0;
 /// Start empty boards at 32 logical points/mm so ordinary copper widths are visible.
 const INITIAL_BOARD_ZOOM: f32 = 4.0;
+/// Definition editing needs the same detail range as board copper, including small pads and pins.
+pub(super) const MAX_DEFINITION_ZOOM: f32 = MAX_BOARD_ZOOM;
 /// A wheel notch settles within this interval; live pinch gestures remain immediate.
 const WHEEL_ZOOM_SECONDS: f32 = 0.14;
 
@@ -283,9 +285,10 @@ impl Camera {
         Point { x_nm: (self.sign() * center.x).round() as i64, y_nm: center.y.round() as i64 }
     }
 
-    /// Zoom about the uncovered canvas center within the definition and schematic limits.
+    /// Zoom about the uncovered canvas center within schematic limits; detail workspaces pass
+    /// their own limit to `set_zoom_with_limit`.
     /// Cancels a pending fit, like any navigation.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn set_zoom(&mut self, zoom: f32) {
         self.set_zoom_with_limit(zoom, MAX_ZOOM);
     }
@@ -382,6 +385,8 @@ impl Camera {
 
     /// Fit native library primitives and navigate without a project, sheet or placed board.
     /// Caller-provided extents use integer nanometres in the definition's local coordinates.
+    /// Fit reserves its margin in screen space, so tiny artwork can fill the usable canvas;
+    /// wheel and pinch share the board's detail range without changing schematic navigation.
     pub(crate) fn navigate_definition(
         &mut self,
         response: &Response,
@@ -393,12 +398,11 @@ impl Camera {
         self.schematic_rect = Some(rect);
         if std::mem::take(&mut self.fit_requested) {
             *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
-            let bounds = points.fold(Rect::NOTHING, |bounds, point| {
-                bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
-            });
-            self.fit_bounds(bounds, rect, MAX_ZOOM);
+            let bounds =
+                points.fold(Rect::NOTHING, |bounds, point| bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2())));
+            self.fit_bounds(bounds, rect, MAX_DEFINITION_ZOOM);
         }
-        self.interact(response, rect, enabled, navigation, MAX_ZOOM);
+        self.interact(response, rect, enabled, navigation, MAX_DEFINITION_ZOOM);
     }
 
     /// Reveal selected board placements in their own coordinate space without changing zoom.

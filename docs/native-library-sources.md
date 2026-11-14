@@ -112,6 +112,9 @@ that exact revision in its existing editor. **Edit copy** creates a derivative
 under a fresh item identity and is also available for read-only libraries.
 **New → Symbol / Footprint** starts an independent draft. Generic-part authoring,
 comparison, export and Git/remote connections remain separate work.
+Both definition editors support wheel/pinch detail zoom up to 6400%, with the
+same pointer anchoring and pan controls as PCB layout. Fit uses the available
+canvas around panels without magnifying its screen margin with tiny artwork.
 
 In either editor, **Library → Publish…** (or Ctrl/Cmd+S) chooses a writable
 registered native folder. The first successful publication binds the editor to
