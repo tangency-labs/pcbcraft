@@ -93,12 +93,13 @@ impl Document {
     }
 }
 impl PcbApp {
-    /// Review selects a live pane with pending fields, or recovers a closed pane's retained
+    /// Review includes unconfirmed publications even in otherwise clean part documents.
+    /// It selects a live pane with pending fields, or recovers a closed pane's retained
     /// fields into the current host. It never silently discards a second view's draft.
     pub(crate) fn review_library_edits(&mut self, ctx: &Context, requested: Option<u64>) {
-        let part = requested
-            .filter(|id| self.library_editors.parts.contains_key(id))
-            .or_else(|| requested.is_none().then(|| self.library_editors.parts.iter().find(|(_, doc)| doc.dirty()).map(|(id, _)| *id)).flatten());
+        let part = requested.filter(|id| self.library_editors.parts.contains_key(id)).or_else(|| {
+            requested.is_none().then(|| self.library_editors.parts.keys().find(|id| self.library_editors.document_unsaved(**id)).copied()).flatten()
+        });
         if let Some(id) = part {
             self.message = self.place_part_document(ctx, id).err();
             return;

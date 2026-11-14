@@ -422,3 +422,129 @@ fn visible_document_tabs_return_to_retained_drafts() {
         assert!(h.state().library_editors.parts.contains_key(&id));
     }
 }
+
+/// Quit-time review must reveal a clean document whose copy publication still needs recovery,
+/// rather than treating the absence of ordinary edits as permission to leave it hidden.
+#[test]
+fn review_edits_reveals_unconfirmed_clean_part_copy() {
+    use crate::library_editors::publishing::{Capture, Request};
+    let (mut app, temp, id) = fixture();
+    let ctx = egui::Context::default();
+    app.publish_library_item(&ctx, id, 2, "workshop", false).unwrap();
+    finish(&mut app, &ctx);
+    assert!(!app.library_editors.parts[&id].dirty());
+    let path = temp.path().join("workshop");
+    let manifest = pcbcraft_storage::library::publishing::read_manifest(&path).unwrap();
+    let prepared = app.library_editors.parts[&id].session.prepare(app.session.libraries(), &manifest, 0, false, true).unwrap();
+    app.library_editors.publisher.recovery = Some(Request {
+        document: id,
+        source: "workshop".into(),
+        path: path.to_str().unwrap().into(),
+        generation: app.session.libraries().generation(),
+        prepared: Capture::Part(Arc::new(prepared)),
+    });
+    let view = app.views.active.id().0;
+    app.run_window_command(&ctx, "app.library_browse", &json!({"view":view,"source":"workshop"})).unwrap();
+    assert!(app.views.active.library.as_ref().unwrap().part_document.is_none());
+    assert_eq!(app.library_editors.publisher.unconfirmed(), Some(id));
+    let before = app.session.snapshot().unwrap();
+    app.review_library_edits(&ctx, None);
+    assert_eq!(app.views.active.library.as_ref().unwrap().part_document, Some(id));
+    assert_eq!(app.library_editors.publisher.unconfirmed(), Some(id));
+    assert!(!app.library_editors.parts[&id].dirty());
+    assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+}
+
+/// An explicit click returns to Browse even when it selects the current source or project;
+/// the retained part session is unchanged and can be selected again from its document tab.
+#[test]
+fn selected_browser_rows_return_from_retained_part_document() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for (params, label) in [
+        (json!({"source":"workshop"}), "Workshop"),
+        (json!({"source":"bundled-basic-components"}), "Basic components"),
+        (json!({"scope":"project"}), "Project libraries"),
+    ] {
+        let (mut app, _temp, id) = fixture();
+        let ctx = egui::Context::default();
+        let mut params = params;
+        params["view"] = json!(app.views.active.id().0);
+        app.run_window_command(&ctx, "app.library_browse", &params).unwrap();
+        app.place_part_document(&ctx, id).unwrap();
+        let record = app.library_editors.parts[&id].session.inspect();
+        let before = app.session.snapshot().unwrap();
+        let mut h =
+            Harness::builder().with_max_steps(64).with_size(egui::vec2(1800., 1100.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        h.get_by_role_and_label(egui::Role::Button, label).click();
+        h.run();
+        assert!(h.state().views.active.library.as_ref().unwrap().part_document.is_none(), "{label}");
+        assert_eq!(h.state().library_editors.parts[&id].session.inspect(), record);
+        h.get_by_role_and_label(egui::Role::Tab, "Original connector").click();
+        h.run();
+        assert_eq!(h.state().views.active.library.as_ref().unwrap().part_document, Some(id));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// Updating a footprint retains both mapped and unconnected removed pads for explicit review.
+/// Real removal and reassignment repair the draft without rebuilding its package, with Undo.
+#[test]
+fn removed_pad_assignments_are_visible_repairable_and_undoable() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _temp, id) = fixture();
+    let mut old = (*app.session.libraries().footprint("basic-components", "header-1x02-254", 3).unwrap()).clone();
+    old.library = "mapping-review".into();
+    old.revision = 1;
+    let mut extra = old.pads[1].clone();
+    extra.number = "4".into();
+    old.pads.push(extra);
+    let mut new = old.clone();
+    new.revision = 2;
+    new.pads.retain(|pad| pad.number == "1");
+    let mut replacement = old.pads[1].clone();
+    replacement.number = "3".into();
+    new.pads.push(replacement);
+    let manifest = pcbcraft_engine::authoring::publishing::new_library("mapping-review", "Mapping review", "MIT OR Apache-2.0").unwrap();
+    let documents = BTreeMap::from([
+        ("library.json".into(), manifest),
+        ("footprints/header-r1.json".into(), serde_json::to_string(&old).unwrap()),
+        ("footprints/header-r2.json".into(), serde_json::to_string(&new).unwrap()),
+    ]);
+    let source = pcbcraft_engine::library::sources::NativeSource::load(&documents).unwrap();
+    assert!(source.problems().is_empty(), "{:?}", source.problems());
+    app.session.install_library_source("mapping-review", Arc::new(source)).unwrap();
+    let old_reference = Reference { library: old.library.clone(), id: old.id.clone(), revision: 1 };
+    let mut record = app.library_editors.parts[&id].session.record().clone();
+    let Record::Part(part) = &mut record else { panic!() };
+    let package = part.packages.get_mut("header").unwrap();
+    package.footprint = old_reference.clone();
+    package.unconnected_pads.push("4".into());
+    record.validate(app.session.libraries()).unwrap();
+    let record = record.advance_dependency(Kind::Footprint, &old_reference, &Reference { revision: 2, ..old_reference.clone() }).unwrap();
+    app.replace_part_document(id, 2, record.clone()).unwrap();
+    let before = app.session.snapshot().unwrap();
+    let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(1800., 1300.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    h.get_by_label("Remove assignment for pad 2").click();
+    h.run();
+    assert!(h.query_all_by_label("Remove assignment for pad 2").next().is_none());
+    h.get_by_label("Undo").click();
+    h.run();
+    assert_eq!(h.state().library_editors.parts[&id].session.record(), &record);
+    h.get_by_label("Redo").click();
+    h.run();
+    h.get_by_label("Remove assignment for pad 4").click();
+    h.run();
+    assert!(h.query_all_by_label("Remove assignment for pad 4").next().is_none());
+    h.get_by_label("Terminal for pad 3").click();
+    h.run();
+    h.get_by_role_and_label(egui::Role::RadioButton, "2").click();
+    h.run();
+    let repaired = h.state().library_editors.parts[&id].session.record();
+    repaired.validate(h.state().session.libraries()).unwrap();
+    let Record::Part(part) = repaired else { panic!() };
+    assert_eq!(part.packages["header"].mapping["2"], vec!["3"]);
+    assert!(part.packages["header"].unconnected_pads.is_empty());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

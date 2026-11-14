@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Reserved root-level folders retain a native recovery library until trash or rollback completes.
+pub(super) const RECOVERY_PREFIX: &str = "pcbcraft-deleted-part-";
+
 /// A bounded immutable disk capture, held with the root's verified directory handle.
 #[derive(Clone, Debug)]
 pub struct Plan {
@@ -90,7 +93,7 @@ fn execute_with(root: &Path, plan: &Plan, trash: impl FnOnce(&Path) -> Result<()
     lock.try_lock().map_err(|e| format!("Another publisher is using this library: {e}"))?;
     let _lock = super::publishing::Lock(lock);
     verify(root, plan)?;
-    let recovery = tempfile::Builder::new().prefix("pcbcraft-deleted-part-").tempdir_in(root).map_err(|e| e.to_string())?.keep();
+    let recovery = tempfile::Builder::new().prefix(RECOVERY_PREFIX).tempdir_in(root).map_err(|e| e.to_string())?.keep();
     let archive = Directory::open(&recovery).map_err(|e| e.to_string())?;
     let recovery_name = recovery.file_name().and_then(|name| name.to_str()).ok_or("Invalid recovery directory name.")?;
     let captured_archive = plan.directory.child(recovery_name, false).map_err(|e| e.to_string())?.ok_or("Recovery directory moved.")?;
@@ -102,6 +105,9 @@ fn execute_with(root: &Path, plan: &Plan, trash: impl FnOnce(&Path) -> Result<()
     let mut manifest = archive.create("library.json").map_err(|e| e.to_string())?;
     manifest.write_all(plan.documents["library.json"].as_bytes()).and_then(|_| manifest.sync_all()).map_err(|e| e.to_string())?;
     drop(manifest);
+    // Persist the native recovery marker and its root entry before moving any record, so a
+    // later loader can diagnose interrupted staging without relying on the in-memory list.
+    archive.sync().and_then(|_| plan.directory.sync()).map_err(|e| e.to_string())?;
     let mut moved = Vec::new();
     let staged = (|| {
         for path in &plan.removal.files {
@@ -392,5 +398,36 @@ mod tests {
         for path in &plan.removal.files {
             assert_eq!(std::fs::read_to_string(trashed.join(path)).unwrap(), plan.documents[path]);
         }
+    }
+    /// Simulate termination after staging without executing the ordinary error rollback. A
+    /// fresh load must expose the recovery folder and retain every original revision there.
+    #[test]
+    fn interrupted_staging_is_visible_on_reload_and_blocks_writes() {
+        let (_temp, root, key) = fixture();
+        let plan = prepare(&root, &key).unwrap();
+        let result = std::panic::catch_unwind(|| execute_with(&root, &plan, |_| panic!("simulated termination")));
+        assert!(result.is_err());
+        let loaded = super::super::load(&root).unwrap();
+        assert!(loaded.problems().iter().any(|problem| problem.contains("Pending part-deletion recovery")));
+        let recovery = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.file_name().unwrap().to_str().unwrap().starts_with(RECOVERY_PREFIX))
+            .unwrap();
+        assert_eq!(super::super::load(&recovery).unwrap().items().len(), 2);
+        for path in &plan.removal.files {
+            assert_eq!(std::fs::read_to_string(recovery.join(path)).unwrap(), plan.documents[path]);
+        }
+        assert!(prepare(&root, loaded.items().first().map(|item| &item.key).unwrap()).unwrap_err().contains("diagnostics"));
+        let manifest = super::super::publishing::read_manifest(&root).unwrap();
+        let publication =
+            Session::new(Record::new_part(None).unwrap(), false).unwrap().prepare(&Catalog::bundled(), &manifest, 0, false, false).unwrap();
+        assert!(super::super::publishing::publish(&root, &publication).unwrap_err().to_string().contains("diagnostics"));
+        // Resolve the pending operation by restoring the original native files explicitly.
+        for path in &plan.removal.files {
+            std::fs::rename(recovery.join(path), root.join(path)).unwrap();
+        }
+        std::fs::remove_dir_all(&recovery).unwrap();
+        assert!(super::super::load(&root).unwrap().problems().is_empty());
     }
 }

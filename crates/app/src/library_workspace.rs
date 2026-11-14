@@ -701,6 +701,7 @@ impl PcbApp {
                         state.kind = 0;
                         state.selected = None;
                         state.compact = 1;
+                        state.part_document = None;
                     }
                     if open {
                         for (kind, label, field) in [
@@ -742,6 +743,7 @@ impl PcbApp {
                                 state.kind = kind;
                                 state.selected = None;
                                 state.compact = 1;
+                                state.part_document = None;
                             }
                         }
                     }

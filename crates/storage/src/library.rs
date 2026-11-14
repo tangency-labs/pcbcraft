@@ -1,4 +1,4 @@
-//! Read-only, bounded native library folders. Call from a worker, never the editor loop.
+//! Bounded native library I/O and lifecycle operations. Call from a worker, never the editor loop.
 use pcbcraft_engine::library::sources::{Documents, MAX_FILE_BYTES, MAX_FILES, MAX_SOURCE_BYTES, NativeSource, is_document_path};
 use std::{fs, io::Read, path::Path};
 pub mod deletion;
@@ -22,7 +22,7 @@ fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
     }
     let mut documents = Documents::new();
     documents.insert("library.json".into(), read_file(&root.join("library.json"))?);
-    let mut problems = Vec::new();
+    let mut problems = recovery_problems(root)?;
     let mut total = documents["library.json"].len();
     let mut count = 1;
     for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts"] {
@@ -68,6 +68,27 @@ fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
         }
     }
     Ok((documents, problems))
+}
+
+/// Surface interrupted/retained deletion archives instead of presenting an incomplete source
+/// as clean. Inspect only bounded root-entry metadata; never adopt or follow recovery links.
+fn recovery_problems(root: &Path) -> Result<Vec<String>, String> {
+    let mut problems = Vec::new();
+    for (index, entry) in fs::read_dir(root).map_err(|e| e.to_string())?.enumerate() {
+        if index >= MAX_FILES {
+            problems.push("Library root entry limit reached; part-deletion recovery inspection is incomplete.".into());
+            break;
+        }
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_name().to_str().is_some_and(|name| name.starts_with(deletion::RECOVERY_PREFIX)) {
+            problems.push(format!(
+                "Pending part-deletion recovery: {}. Inspect and restore or move this recovery folder before publishing or deleting more parts.",
+                entry.path().display()
+            ));
+        }
+    }
+    problems.sort();
+    Ok(problems)
 }
 
 /// Bound regular-file reads even if a file grows after metadata was checked; invalid UTF-8 fails.

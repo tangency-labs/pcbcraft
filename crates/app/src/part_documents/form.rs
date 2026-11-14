@@ -275,6 +275,7 @@ fn typed_fields(
 }
 /// Choose physical packages independently of schematic symbols. When a symbol is present,
 /// each pad is explicitly assigned or marked unconnected; geometry never infers a mapping.
+/// Retained assignments to removed pads remain visible until explicitly removed during review.
 fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document, catalog: &Catalog, browse: &mut Option<ReferenceField>) {
     properties::section(ui, "Footprints");
     ui.horizontal(|ui| {
@@ -318,8 +319,29 @@ fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document
     let Some(footprint) = catalog.footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision) else { return };
     let Some(symbol) = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision)) else { return };
     properties::section(ui, "Pin mapping");
-    let pads: Vec<_> = footprint.pads.iter().map(|pad| pad.number.clone()).collect();
+    let mut pads: Vec<_> = footprint.pads.iter().map(|pad| pad.number.clone()).collect();
+    let removed: std::collections::BTreeSet<_> =
+        package.mapping.values().flatten().chain(&package.unconnected_pads).filter(|pad| !pads.contains(pad)).cloned().collect();
+    pads.extend(removed.iter().cloned());
+    if doc.selected_pad.as_ref().is_some_and(|pad| !pads.contains(pad)) {
+        doc.selected_pad = None;
+    }
     pcbcraft_chrome::part_form::mapping(ui, &pads, &mut doc.selected_pad, |ui, pad| {
+        if removed.contains(pad) {
+            ui.horizontal(|ui| {
+                ui.label("Removed pad");
+                let response = controls::button(ui, "Remove assignment");
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Remove assignment for pad {pad}")));
+                if response.clicked() {
+                    for pads in package.mapping.values_mut() {
+                        pads.retain(|p| p != pad);
+                    }
+                    package.mapping.retain(|_, pads| !pads.is_empty());
+                    package.unconnected_pads.retain(|p| p != pad);
+                }
+            });
+            return;
+        }
         let mut terminal = package
             .mapping
             .iter()

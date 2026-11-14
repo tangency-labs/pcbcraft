@@ -77,7 +77,10 @@ The host captures the native files, rechecks them under the publisher lock, and
 stages the reviewed records as a small native library folder before sending that
 folder to system trash. A failed trash operation restores unused source names;
 if a newer file prevents restoration, the error identifies the retained recovery
-folder. There is no permanent-delete fallback. The library refreshes after the
+folder. Source loading also reports any pending recovery folder, including after
+an interrupted process, and blocks further publication/deletion until it is
+explicitly restored or moved out of the library. This reports recoverable state;
+it does not perform automatic crash recovery. There is no permanent-delete fallback. The library refreshes after the
 operation, including failure. This per-part path currently requires a Unix
 desktop; Windows and browser per-part deletion remain unavailable. A folder
 restored from trash contains the original manifest and deleted native records;
