@@ -106,3 +106,11 @@ original electronics geometry. This composition needs no new generic control or
 external asset. Package model bindings and descriptive fields remain with #86
 and #314 respectively. See the [part document workflow](native-library-sources.md#generic-and-orderable-part-documents)
 for publication, close protection and shared commands.
+
+Part association fields show their selected item and a Browse action. The chooser
+uses catalog search, a library filter, native preview and explicit exact revision
+selection, with 50 results per page. It does not expand every installed record
+into a field dropdown. Matching metadata is rebuilt only when the query, filter
+or source generation changes. The shared table's explicit row-reveal API keeps
+keyboard selection visible; narrow hosts use Results/Preview choices inside the
+same bounded chooser and fixed Choose/Cancel footer.

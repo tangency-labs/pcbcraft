@@ -133,6 +133,7 @@ mod live {
         LibraryAction,
         PartRecord,
         PartReference,
+        PartReferenceField,
         /// A runtime document ID from inspect_editor.library_editors.
         LibraryDocument,
         /// A library document revision from inspect_editor.library_editors.
@@ -175,6 +176,9 @@ mod live {
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
                 Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
+                Self::PartReferenceField => {
+                    json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"const":"footprint"},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
+                }
                 Self::PartReference => {
                     json!({"type":"object","properties":{"library":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX}},"required":["library","id","revision"],"additionalProperties":false})
                 }
@@ -214,6 +218,10 @@ mod live {
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
                         && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
                 }),
+                Self::PartReferenceField => {
+                    serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 256)
+                        && serde_json::from_value::<pcbcraft_engine::part_authoring::ReferenceField>(value.clone()).is_ok()
+                }
                 Self::PartReference => {
                     serde_json::from_value::<pcbcraft_engine::library::parts::Reference>(value.clone()).is_ok_and(|r| r.validate().is_ok())
                 }
@@ -244,6 +252,7 @@ mod live {
             }
             Err(match self {
                 Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
+                Self::PartReferenceField => "must identify symbol, category, part or a footprint's stable package".into(),
                 Self::PartReference => "must contain an exact native library reference".into(),
                 Self::PartRecord => "must contain a bounded native part or manufacturer record".into(),
                 Self::LibraryAction => "must be a bounded native authoring Action".into(),
@@ -485,6 +494,27 @@ mod live {
                 Param { name: "document", summary: "Part document ID from inspection", required: true, kind: Kind::LibraryDocument },
                 Param { name: "expected_revision", summary: "Current part document revision", required: true, kind: Kind::LibraryRevision },
                 Param { name: "record", summary: "Native part or manufacturer draft", required: true, kind: Kind::PartRecord },
+            ],
+        },
+        WindowCommand {
+            id: "app.part_reference",
+            title: "Choose Part Reference",
+            summary: "Choose an exact loaded definition for a captured part association, clearing only values owned by the changed field.",
+            params: &[
+                Param { name: "document", summary: "Part document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Captured document revision", required: true, kind: Kind::LibraryRevision },
+                Param {
+                    name: "field",
+                    summary: "Native association field, including a stable package ID for footprints",
+                    required: true,
+                    kind: Kind::PartReferenceField,
+                },
+                Param {
+                    name: "reference",
+                    summary: "Exact native reference; omit only to clear a category",
+                    required: false,
+                    kind: Kind::PartReference,
+                },
             ],
         },
         WindowCommand {

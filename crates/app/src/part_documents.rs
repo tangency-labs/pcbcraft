@@ -1,5 +1,6 @@
 //! Generic and orderable part documents live inside the existing Parts Library workspace.
 mod form;
+pub(crate) mod picker;
 mod publishing;
 #[cfg(test)]
 mod tests;
@@ -10,7 +11,7 @@ use pcbcraft_engine::{
         parts::Reference,
         sources::{Catalog, Key, Kind},
     },
-    part_authoring::{Record, Session},
+    part_authoring::{Record, ReferenceField, Session},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::Value;
@@ -162,58 +163,22 @@ fn catalog_record(catalog: &Catalog, key: &Key) -> Result<Record, String> {
     if catalog.conflicting(key) {
         return Err("Resolve this part revision conflict before editing.".into());
     }
-    let items = catalog.inspect();
-    for entry in items.as_array().into_iter().flatten() {
-        let Some(source) = entry["source"].as_str() else { continue };
-        if let Some(item) = catalog.source_items(source).iter().find(|item| item.key == *key) {
-            if let Some(part) = item.part() {
-                return Ok(Record::Part((*part).clone()));
-            }
-            if let Some(part) = item.manufacturer_part() {
-                return Ok(Record::Orderable((*part).clone()));
-            }
-        }
+    let item = catalog.item(key)?;
+    if let Some(part) = item.part() {
+        return Ok(Record::Part((*part).clone()));
     }
-    Err("Selected part is unavailable.".into())
+    if let Some(part) = item.manufacturer_part() {
+        return Ok(Record::Orderable((*part).clone()));
+    }
+    Err("Select a generic or orderable part.".into())
 }
-/// Exact address options share the catalog used by browsing and placement, including older revisions.
-fn references(catalog: &Catalog, kind: Kind) -> Vec<(Reference, String)> {
-    let loaded = catalog.inspect();
-    let mut records = BTreeMap::new();
-    for source in loaded.as_array().into_iter().flatten().filter(|source| source["available"] == true).filter_map(|source| source["source"].as_str())
-    {
-        for item in catalog.source_items(source).iter().filter(|item| item.key.kind == kind && !catalog.conflicting(&item.key)) {
-            let r = Reference { library: item.key.library.clone(), id: item.key.id.clone(), revision: item.key.revision };
-            records
-                .insert((r.library.clone(), r.id.clone(), r.revision), (r, format!("{} · {} · r{}", item.name, item.key.library, item.key.revision)));
-        }
-    }
-    records.into_values().collect()
-}
-/// Portable exact addresses appear as readable catalog choices; no repository fields are required.
-fn reference_choice(ui: &mut egui::Ui, label: &str, current: &mut Reference, catalog: &Catalog, kind: Kind) {
-    let records = references(catalog, kind);
-    let key = |r: &Reference| format!("{}/{}@{}", r.library, r.id, r.revision);
-    let mut selected = key(current);
-    let mut options: Vec<_> = records.iter().map(|(r, name)| (key(r), name.clone())).collect();
-    if !records.iter().any(|(r, _)| r == current) {
-        options.insert(
-            0,
-            (
-                selected.clone(),
-                if current.library == "user" {
-                    format!("Choose {}…", label.to_lowercase())
-                } else {
-                    format!("Unavailable · {}/{} · r{}", current.library, current.id, current.revision)
-                },
-            ),
-        );
-    }
-    let options: Vec<_> = options.iter().map(|(key, name)| (key.as_str(), name.clone())).collect();
-    properties::choice(ui, label, ui.scope_id().with(label), &mut selected, &options);
-    if let Some((r, _)) = records.iter().find(|(r, _)| key(r) == selected) {
-        *current = r.clone();
-    }
+/// Display only the selected native association; catalog enumeration belongs to its chooser.
+fn reference_name(catalog: &Catalog, reference: Option<&Reference>, kind: Kind) -> String {
+    let Some(reference) = reference else { return "None".into() };
+    let key = Key { library: reference.library.clone(), id: reference.id.clone(), revision: reference.revision, kind };
+    catalog.item(&key).map(|item| format!("{} · {} · r{}", item.name, key.library, key.revision)).unwrap_or_else(|_| {
+        if reference.library == "user" { "None selected".into() } else { format!("Unavailable · {} · r{}", reference.id, reference.revision) }
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -234,6 +199,11 @@ impl PcbApp {
             "app.part_edit" => {
                 let record = serde_json::from_value(params["record"].clone()).map_err(|e| e.to_string())?;
                 self.replace_part_document(document()?, revision()?, record)?;
+            }
+            "app.part_reference" => {
+                let field: ReferenceField = serde_json::from_value(params["field"].clone()).map_err(|e| e.to_string())?;
+                let reference = params.get("reference").map(|value| serde_json::from_value(value.clone()).map_err(|e| e.to_string())).transpose()?;
+                self.choose_part_reference(document()?, revision()?, &field, reference)?;
             }
             "app.part_history" => {
                 let doc = self.library_editors.parts.get_mut(&document()?).ok_or("Unknown part document.")?;

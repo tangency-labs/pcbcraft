@@ -1319,3 +1319,9 @@ already qualified Craft fields, choices, table, menus and buttons through
 original painters. Tests assemble original bundled connector/header definitions
 and explicitly synthetic manufacturer metadata. No external EDA implementation,
 library data, artwork, new dependency or native format was introduced.
+
+The part-reference chooser follow-up composes the same pinned Craft search field,
+selectable table with row reveal, property form, choices and fixed footer. Its
+query cache, exact reference transactions and large-catalog tests are original
+PCBcraft work over the existing native catalog. The generated scale fixture uses
+original authoring primitives, without third-party records or new dependencies.

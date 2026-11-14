@@ -7,7 +7,7 @@ use std::{
 };
 
 /// Use original bundled definitions and a real unused native publication folder.
-fn fixture() -> (PcbApp, tempfile::TempDir, u64) {
+pub(super) fn fixture() -> (PcbApp, tempfile::TempDir, u64) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("workshop");
     let manifest = pcbcraft_engine::authoring::publishing::new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap();

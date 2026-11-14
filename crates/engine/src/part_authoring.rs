@@ -373,3 +373,83 @@ impl Record {
 
 #[cfg(test)]
 mod tests;
+
+/// A native association field, addressed by meaning and stable package identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "field", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReferenceField {
+    Symbol,
+    Footprint { package: String },
+    Category,
+    Part,
+}
+impl ReferenceField {
+    /// A field's catalog kind does not depend on its label or position in the form.
+    pub fn kind(&self) -> Kind {
+        match self {
+            Self::Symbol => Kind::Symbol,
+            Self::Footprint { .. } => Kind::Footprint,
+            Self::Category => Kind::Category,
+            Self::Part => Kind::Part,
+        }
+    }
+}
+impl Record {
+    /// Resolve a field on the current draft; wrong document kinds and removed packages fail.
+    pub fn reference_field(&self, field: &ReferenceField) -> Result<Option<Reference>, String> {
+        match (self, field) {
+            (Self::Part(p), ReferenceField::Symbol) => Ok(Some(p.symbol.clone())),
+            (Self::Part(p), ReferenceField::Category) => Ok(p.category.as_ref().map(|c| c.definition.clone())),
+            (Self::Part(p), ReferenceField::Footprint { package }) => {
+                p.packages.get(package).map(|p| Some(p.footprint.clone())).ok_or("The package no longer exists.".into())
+            }
+            (Self::Orderable(p), ReferenceField::Part) => Ok(Some(p.part.clone())),
+            _ => Err("This reference field does not belong to the part document.".into()),
+        }
+    }
+    /// Validate an explicitly chosen exact definition, then clear only values owned by the
+    /// changed association. Geometry/mappings are never inferred; publication validates the draft.
+    pub fn select_reference(&self, field: &ReferenceField, reference: Option<Reference>, catalog: &Catalog) -> Result<Self, String> {
+        let current = self.reference_field(field)?;
+        if let Some(r) = &reference {
+            let key = crate::library::sources::Key { library: r.library.clone(), id: r.id.clone(), revision: r.revision, kind: field.kind() };
+            catalog.item(&key)?;
+            match field {
+                ReferenceField::Category => {
+                    catalog.category(r)?;
+                }
+                ReferenceField::Part => {
+                    catalog.resolve_part(r)?;
+                }
+                _ => {}
+            }
+        } else if !matches!(field, ReferenceField::Category) {
+            return Err("Choose an exact library definition.".into());
+        }
+        if current == reference {
+            return Ok(self.clone());
+        }
+        let mut candidate = self.clone();
+        match (&mut candidate, field, reference) {
+            (Self::Part(p), ReferenceField::Symbol, Some(r)) => p.symbol = r,
+            (Self::Part(p), ReferenceField::Category, r) => {
+                p.category = r.map(|definition| crate::library::parts::CategoryBinding { definition, primary_value: None });
+                p.fixed_parameters.clear();
+            }
+            (Self::Part(p), ReferenceField::Footprint { package }, Some(r)) => {
+                let package = p.packages.get_mut(package).ok_or("The package no longer exists.")?;
+                package.footprint = r;
+                package.mapping.clear();
+                package.unconnected_pads.clear();
+            }
+            (Self::Orderable(p), ReferenceField::Part, Some(r)) => {
+                p.part = r;
+                p.package.clear();
+                p.specifications.clear();
+            }
+            _ => return Err("This reference field does not belong to the part document.".into()),
+        }
+        candidate.bounded()?;
+        Ok(candidate)
+    }
+}

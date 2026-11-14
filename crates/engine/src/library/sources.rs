@@ -131,7 +131,7 @@ pub(crate) const COMMANDS: [Command; 8] = [
     Command {
         id: SEARCH,
         title: "Search libraries",
-        summary: "Search current native symbols and footprints, excluding conflicting identities.",
+        summary: "Search native records, excluding conflicts; latest revisions by default, with explicit older-revision browsing.",
         params: &[
             Param {
                 name: "query",
@@ -144,6 +144,12 @@ pub(crate) const COMMANDS: [Command; 8] = [
                 summary: "symbol, footprint, category, part or manufacturer_part; omit for all",
                 required: false,
                 kind: ParamKind::LibraryKind,
+            },
+            Param {
+                name: "include_older",
+                summary: "Include individually addressable older revisions; default is latest only",
+                required: false,
+                kind: ParamKind::Flag,
             },
         ],
     },
@@ -796,6 +802,28 @@ impl Catalog {
         }
         latest.into_values().filter(|(_, item)| !conflicts.contains(&item.key) && item.matches(&query)).collect()
     }
+    /// Search all available exact revisions with the same matching/conflict policy as the
+    /// latest-only catalog. Identical copies appear once and unavailable registrations stay out.
+    pub fn search_revisions(&self, query: &str, kind: Option<Kind>) -> Vec<(&str, &Item)> {
+        let query = query.trim().to_lowercase();
+        self.index
+            .iter()
+            .filter(|(key, _)| kind.is_none_or(|kind| key.kind == kind) && !self.conflicts.contains(key))
+            .filter_map(|(_, (source, index))| {
+                if source == super::compatibility::SOURCE {
+                    return None;
+                }
+                let item = self.sources.get(source)?.items.get(*index)?;
+                item.matches(&query).then_some((source.as_str(), item))
+            })
+            .collect()
+    }
+
+    /// Read one exact available, unambiguous catalog record without enumerating its source.
+    pub fn item(&self, key: &Key) -> Result<&Item, String> {
+        self.exact(&Reference { library: key.library.clone(), id: key.id.clone(), revision: key.revision }, key.kind)
+    }
+
     /// Resolve an exact unambiguous symbol for placement; a stale catalog selection fails explicitly.
     pub fn symbol(&self, library: &str, id: &str, revision: u32) -> Option<Arc<SymbolDefinition>> {
         let conflicts = &self.conflicts;
@@ -995,9 +1023,9 @@ impl Session {
                     .map(|kind| serde_json::from_value::<Kind>(kind.clone()))
                     .transpose()
                     .map_err(|e| CommandError::InvalidParams(e.to_string()))?;
-                let items: Vec<_> = self
-                    .libraries
-                    .search(&query, kind)
+                let matches =
+                    if params["include_older"] == true { self.libraries.search_revisions(&query, kind) } else { self.libraries.search(&query, kind) };
+                let items: Vec<_> = matches
                     .into_iter()
                     .map(|(source, item)| {
                         let mut value = item.inspect();

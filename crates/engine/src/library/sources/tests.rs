@@ -210,3 +210,39 @@ fn browse_retains_revisions_and_quarantine_and_redundancy_is_content_exact() {
     assert!(catalog.source_items("first").iter().any(|item| catalog.conflicting(&item.key)));
     assert!(!catalog.contains_source(&source));
 }
+
+/// Explicit revision browsing shares matching and quarantine rules with latest-only placement
+/// search, de-duplicates identical sources and leaves project/history authority unchanged.
+#[test]
+fn explicit_revision_search_is_shared_and_never_falls_back_from_conflicts() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let mut files = documents();
+    files.insert("symbols/resistor-old.json".into(), include_str!("../../../../../libraries/basic-components/symbols/resistor-v1.json").into());
+    session.execute(LOAD, &json!({"source":"one","documents":files})).unwrap();
+    session.execute(LOAD, &json!({"source":"two","documents":files})).unwrap();
+    let local = |value: Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["key"]["library"] == "local-demo" && row["key"]["kind"] == "symbol")
+            .map(|row| row["key"]["revision"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor"})).unwrap()), vec![2]);
+    assert_eq!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"RESISTOR","include_older":true})).unwrap()), vec![1, 2]);
+    let mut changed: Value = serde_json::from_str(&files["symbols/resistor.json"]).unwrap();
+    changed["name"] = json!("Conflicting resistor");
+    files.insert("symbols/resistor.json".into(), changed.to_string());
+    session.execute(LOAD, &json!({"source":"two","documents":files})).unwrap();
+    assert!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor"})).unwrap()).is_empty());
+    assert_eq!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor","include_older":true})).unwrap()), vec![1]);
+    session.mark_library_unavailable("one");
+    session.mark_library_unavailable("two");
+    assert!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor","include_older":true})).unwrap()).is_empty());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+}

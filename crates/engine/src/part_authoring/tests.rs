@@ -145,3 +145,24 @@ fn headless_preparation_returns_native_bytes_without_project_changes() {
     assert!(prepared["documents"].as_object().unwrap().keys().all(|path| path.starts_with("parts/")));
     assert_eq!(project.inspect(), before);
 }
+
+/// Choosing the current address preserves authored maps; changing one package clears only
+/// that package's map and keeps stable package/part identities for subsequent explicit editing.
+#[test]
+fn reference_field_choice_preserves_noop_and_unrelated_package_data() {
+    let (catalog, mut record, _manifest) = fixture();
+    let Record::Part(part) = &mut record else { panic!() };
+    part.packages.insert("other".into(), part.packages["header"].clone());
+    let current = part.packages["header"].footprint.clone();
+    let field = ReferenceField::Footprint { package: "header".into() };
+    assert_eq!(record.select_reference(&field, Some(current), &catalog).unwrap(), record);
+    let other = catalog.search("", Some(Kind::Footprint)).into_iter().find(|(_, item)| item.key.id != "header-1x02-254").unwrap().1.key.clone();
+    let changed =
+        record.select_reference(&field, Some(Reference { library: other.library, id: other.id, revision: other.revision }), &catalog).unwrap();
+    let Record::Part(before) = &record else { panic!() };
+    let Record::Part(after) = &changed else { panic!() };
+    assert_eq!(before.reference(), after.reference());
+    assert_eq!(before.packages["other"], after.packages["other"]);
+    assert!(after.packages["header"].mapping.is_empty());
+    assert!(record.select_reference(&ReferenceField::Symbol, None, &catalog).is_err());
+}

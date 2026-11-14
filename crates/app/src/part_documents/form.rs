@@ -1,6 +1,6 @@
 //! Native part relationships are edited here; geometry remains in the drawing editors.
 use super::*;
-use pcbcraft_engine::library::parts::{Category, CategoryBinding, FieldType, Package, PartDefinition, Value as TypedValue};
+use pcbcraft_engine::library::parts::{Category, FieldType, Package, PartDefinition, Value as TypedValue};
 use std::sync::Arc;
 
 impl PcbApp {
@@ -14,6 +14,8 @@ impl PcbApp {
         let mut publish = false;
         let mut open_orderable = None;
         let mut edit_orderable = None;
+        let mut browse = None;
+        let mut clear_category = false;
         ui.push_id(("part_form", id), |ui| {
             properties::section(
                 ui,
@@ -34,19 +36,31 @@ impl PcbApp {
             match &mut record {
                 Record::Part(part) => {
                     properties::text(ui, "Name", &mut part.name);
-                    reference_choice(ui, "Symbol", &mut part.symbol, catalog, Kind::Symbol);
+                    if pcbcraft_chrome::part_form::reference(ui, "Symbol", &reference_name(catalog, Some(&part.symbol), Kind::Symbol), false)
+                        == pcbcraft_chrome::part_form::ReferenceAction::Browse
+                    {
+                        browse = Some(ReferenceField::Symbol);
+                    }
                     if let Some(symbol) = catalog.symbol(&part.symbol.library, &part.symbol.id, part.symbol.revision) {
                         properties::field(ui, "Units", |ui| {
                             ui.label(symbol.units().iter().map(|unit| unit.unit_id()).collect::<Vec<_>>().join(", "));
                         });
                     }
-                    if category_form(ui, part, catalog) {
-                        doc.pending.clear();
+                    match pcbcraft_chrome::part_form::reference(
+                        ui,
+                        "Category",
+                        &reference_name(catalog, part.category.as_ref().map(|c| &c.definition), Kind::Category),
+                        part.category.is_some(),
+                    ) {
+                        pcbcraft_chrome::part_form::ReferenceAction::Browse => browse = Some(ReferenceField::Category),
+                        pcbcraft_chrome::part_form::ReferenceAction::Clear => clear_category = true,
+                        _ => {}
                     }
+                    primary_value_form(ui, part, catalog);
                     if let Some(category) = part.category.as_ref().and_then(|binding| catalog.category(&binding.definition).ok()) {
                         typed_fields(ui, &category, &mut part.fixed_parameters, &mut doc.pending, &mut doc.error, "Fixed parameters");
                     }
-                    package_form(ui, part, &mut doc, catalog);
+                    package_form(ui, part, &mut doc, catalog, &mut browse);
                     properties::section(ui, "Orderable parts");
                     for orderable in catalog.manufacturers_for(&part.reference()) {
                         if controls::button(ui, format!("{} · {} · r{}", orderable.manufacturer, orderable.mpn, orderable.revision)).clicked() {
@@ -61,12 +75,10 @@ impl PcbApp {
                     properties::text(ui, "Name", &mut part.name);
                     properties::text(ui, "Manufacturer", &mut part.manufacturer);
                     properties::text(ui, "Part number", &mut part.mpn);
-                    let previous = part.part.clone();
-                    reference_choice(ui, "Generic part", &mut part.part, catalog, Kind::Part);
-                    if previous != part.part {
-                        part.specifications.clear();
-                        doc.pending.clear();
-                        part.package.clear();
+                    if pcbcraft_chrome::part_form::reference(ui, "Generic part", &reference_name(catalog, Some(&part.part), Kind::Part), false)
+                        == pcbcraft_chrome::part_form::ReferenceAction::Browse
+                    {
+                        browse = Some(ReferenceField::Part);
                     }
                     let mut datasheet = part.datasheet.clone().unwrap_or_default();
                     properties::text(ui, "Datasheet", &mut datasheet);
@@ -78,6 +90,16 @@ impl PcbApp {
                             typed_fields(ui, category, &mut part.specifications, &mut doc.pending, &mut doc.error, "Specifications");
                         }
                     }
+                }
+            }
+            if clear_category {
+                if doc.pending.is_empty() {
+                    match record.select_reference(&ReferenceField::Category, None, catalog) {
+                        Ok(candidate) => record = candidate,
+                        Err(error) => doc.error = Some(error),
+                    }
+                } else {
+                    doc.error = Some("Apply or reset typed fields before clearing the category.".into());
                 }
             }
             controls::collapsing(ui, "part_details", "Details", false, None, |ui| {
@@ -108,6 +130,9 @@ impl PcbApp {
             doc.error = doc.session.replace(doc.session.revision(), record).err();
         }
         self.library_editors.parts.insert(id, doc);
+        if let Some(field) = browse {
+            self.message = self.begin_part_reference(ui.ctx(), id, field).err();
+        }
         if publish {
             self.message = self.begin_library_publish(id).err();
         }
@@ -155,25 +180,8 @@ impl PcbApp {
         }
     }
 }
-/// Category changes are explicit and clear dependent bindings/values rather than retyping them.
-fn category_form(ui: &mut egui::Ui, part: &mut PartDefinition, catalog: &Catalog) -> bool {
-    let records = references(catalog, Kind::Category);
-    let key = |r: &Reference| format!("{}/{}@{}", r.library, r.id, r.revision);
-    let before = part.category.as_ref().map(|binding| key(&binding.definition)).unwrap_or_default();
-    let mut selected = before.clone();
-    let mut options = vec![(String::new(), "None".into())];
-    options.extend(records.iter().map(|(r, name)| (key(r), name.clone())));
-    properties::choice(
-        ui,
-        "Category",
-        ui.scope_id().with("part_category"),
-        &mut selected,
-        &options.iter().map(|(key, name)| (key.as_str(), name.clone())).collect::<Vec<_>>(),
-    );
-    if before != selected {
-        part.category = records.iter().find(|(r, _)| key(r) == selected).map(|(r, _)| CategoryBinding { definition: r.clone(), primary_value: None });
-        part.fixed_parameters.clear();
-    }
+/// The primary quantity is chosen only among the exact selected category's bounded fields.
+fn primary_value_form(ui: &mut egui::Ui, part: &mut PartDefinition, catalog: &Catalog) {
     if let Some(binding) = &mut part.category
         && let Ok(category) = catalog.category(&binding.definition)
     {
@@ -189,7 +197,6 @@ fn category_form(ui: &mut egui::Ui, part: &mut PartDefinition, catalog: &Catalog
         properties::choice(ui, "Value field", ui.scope_id().with("primary_value"), &mut primary, &options);
         binding.primary_value = (!primary.is_empty()).then_some(primary);
     }
-    before != selected
 }
 /// Typed values are applied through the existing category parser; missing values remain absent.
 fn typed_fields(
@@ -241,7 +248,7 @@ fn typed_fields(
 }
 /// Each physical pad is explicitly assigned to a terminal or marked unconnected; positions/names
 /// never infer a mapping, and multiple pads may intentionally share one terminal.
-fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document, catalog: &Catalog) {
+fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document, catalog: &Catalog, browse: &mut Option<ReferenceField>) {
     properties::section(ui, "Packages");
     ui.horizontal(|ui| {
         if controls::enabled_button(ui, part.packages.len() < 64, "Add package").clicked()
@@ -281,13 +288,10 @@ fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document
     doc.package = (!chosen.is_empty()).then_some(chosen.clone());
     let Some(package) = part.packages.get_mut(&chosen) else { return };
     properties::text(ui, "Name", &mut package.name);
-    let previous = package.footprint.clone();
-    reference_choice(ui, "Footprint", &mut package.footprint, catalog, Kind::Footprint);
-    if previous != package.footprint {
-        package.mapping.clear();
-        package.unconnected_pads.clear();
-        doc.selected_pad = None;
-        doc.footprint_camera = Default::default();
+    if pcbcraft_chrome::part_form::reference(ui, "Footprint", &reference_name(catalog, Some(&package.footprint), Kind::Footprint), false)
+        == pcbcraft_chrome::part_form::ReferenceAction::Browse
+    {
+        *browse = Some(ReferenceField::Footprint { package: chosen });
     }
     properties::field(ui, "3D model", |ui| {
         ui.add_enabled(false, egui::Label::new("None"));

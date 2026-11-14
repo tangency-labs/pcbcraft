@@ -256,6 +256,15 @@ also offers **Create part from this symbol** in its editor. **Edit** reopens an
 exact published generic or orderable part; **Edit copy** gives the derivative a
 new identity while preserving its licence and source provenance.
 
+Use **Browse** beside Symbol, Footprint, Category or Generic part to open the
+shared searchable chooser. Narrow results by library, inspect the native preview,
+and confirm with Choose. Arrow keys move the selection and Enter confirms it;
+Cancel preserves the current association. Results default to the latest revision
+of each item, with **Include older revisions** for an explicit historical choice.
+Opening an already selected older revision retains that exact selection. Results
+are paged in sets of 50, and matching metadata is cached until the search, filter
+or loaded sources change. The form itself shows only its chosen association.
+
 Choose a symbol and, optionally, an existing category and its primary quantity
 field. Fixed parameters use the category's typed input parser; Apply value commits
 an entered value, Reset value restores it, and applying an empty field removes
@@ -289,10 +298,17 @@ corrected before it can publish. This flow changes reusable source definitions;
 reviewed adoption by already placed project instances belongs to #312.
 
 Live MCP exposes `app.part_new`, `app.part_orderable`, `app.part_edit`,
-`app.part_history` and `app.part_focus`, using explicit document IDs and captured
-revisions from `inspect_editor.library_editors.part_documents`.
+`app.part_history`, `app.part_reference` and `app.part_focus`, using explicit
+document IDs and captured revisions from `inspect_editor.library_editors.part_documents`.
 `app.library_publish`, `app.library_catalog_edit` and `app.library_close` also
 accept these documents. `library.prepare_part_publication` prepares validated
 native part/manufacturer documents in a headless session, using already loaded
 exact dependencies and transported destination documents. It accepts no host
 filesystem paths and never confirms a save.
+
+`app.part_reference` chooses a typed association field at the captured document
+revision. A footprint field includes its stable package ID; changing it clears
+that package's old map before explicit remapping. Category and generic-part
+changes clear only their dependent values. Re-selecting the same exact address
+is a no-op. `library.search` accepts `include_older: true` to browse the same
+available, unambiguous exact revisions through MCP; default search stays latest-only.

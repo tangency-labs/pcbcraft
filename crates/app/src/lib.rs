@@ -209,6 +209,7 @@ enum Dialog {
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
     LibraryPublish(library_editors::publishing::Draft),
+    PartReference(Box<part_documents::picker::State>),
     NewLibrary(library_editors::publishing::NewLibrary),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
@@ -2170,6 +2171,7 @@ impl PcbApp {
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::LibraryPublish(draft) => self.library_publish_dialog(ctx, draft),
+            Dialog::PartReference(state) => self.part_reference_dialog(ctx, *state),
             Dialog::NewLibrary(draft) => self.new_library_dialog(ctx, draft),
             Dialog::PasteOptions(draft) => self.paste_options_dialog(ctx, draft),
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
