@@ -513,9 +513,11 @@ Use **Analyze → Rules** to save board limits and preferred routing dimensions.
 Clear **Use built-in defaults** to author values, then Apply; checking it restores
 the built-in values. New routes use those preferences, while existing copper
 keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
-The separate [net-class catalog](net-classes.md) can be authored and resolved
-through MCP; class assignment, editor controls and routing/DRC integration remain
-follow-on work.
+The separate [net-class catalog](net-classes.md) and
+[persistent assignments](net-class-assignments.md) can be authored and inspected
+through MCP. Naming a net does not classify it. Editor controls remain under #303;
+until #302 integrates routing/DRC, dimensional assignments make those operations
+unavailable rather than accepting a board-default-only result.
 
 Run **Analyze → DRC** to check the board. The check shows its current stage while
 pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops

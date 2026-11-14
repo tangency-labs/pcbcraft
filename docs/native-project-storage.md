@@ -113,6 +113,12 @@ registries are refused. Existing projects without records retain their low-level
 encoding; Open and inspection never promote nets. Older readers must refuse
 these headers rather than discard identity, lineage or unresolved decisions.
 
+A nonempty project class catalog selects project/20; saved
+[net-class bindings](net-class-assignments.md) select project/21 and board-owned
+instances/3. Bindings remain inside the same logical registry and carry class and
+origin net UUIDs, while physical board and sheet formats stay unchanged. Older
+headers refuse the new vocabulary, and the new envelope requires actual bindings.
+
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,
 starting with 12 hex digits and extending the prefix on case-insensitive

@@ -33,6 +33,7 @@ impl Network {
             primary: primary.clone(),
             fallbacks: self.anchors.iter().filter(|a| *a != primary).take(3).cloned().collect(),
             lineage: Vec::new(),
+            class_bindings: Vec::new(),
             state: State::Active {},
         })
     }
@@ -45,7 +46,7 @@ impl Network {
             Ok(Record { primary: primary.clone(), fallbacks: surviving.into_iter().skip(1).collect(), ..record.clone() })
         } else {
             let next = self.record(record.id, None)?;
-            Ok(Record { lineage: record.lineage.clone(), ..next })
+            Ok(Record { lineage: record.lineage.clone(), class_bindings: record.class_bindings.clone(), ..next })
         }
     }
 }

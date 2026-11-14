@@ -150,6 +150,7 @@ enum ParamKind {
     ClassRules,
     ClassSet,
     ClassId,
+    ClassTarget,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -230,6 +231,7 @@ impl ParamKind {
             Self::BoardRules => board::rules::schema(),
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
+            Self::ClassTarget => nets::class_target_schema(),
             Self::ClassId => json!({"type":"string","format":"uuid"}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
@@ -476,6 +478,9 @@ impl ParamKind {
                 .map_err(|_| "must contain supported integer-nanometre class rules")
                 .and_then(|rules| net_classes::validate_rules(&rules).map_err(|_| "class dimensions are invalid or contradictory")),
             Self::ClassSet => net_classes::parse_set(value).map(|_| ()).map_err(|_| "must contain a bounded set of unique non-nil class UUIDs"),
+            Self::ClassTarget => nets::ClassTarget::parse(value)
+                .map(|_| ())
+                .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
             Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
                 .ok()
                 .filter(|id| !id.is_nil())
@@ -1972,8 +1977,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: net_classes::REMOVE,
         title: "Remove Net Class",
-        summary: "Remove a project class in one undoable transaction; net bindings are not implemented in this slice.",
-        params: &[EXPECTED_REVISION, Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable class UUID from inspection" }],
+        summary: "Remove an unbound project class, or explicitly rebind every current/historical assignment atomically.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable class UUID from inspection" },
+            Param {
+                name: "rebind",
+                kind: ParamKind::ClassId,
+                required: false,
+                summary: "Existing replacement class for all current and retained references",
+            },
+        ],
     },
     Command {
         id: net_classes::INSPECT,
@@ -2000,6 +2014,37 @@ const CATALOG: &[Command] = &[
                 summary: "Second object's explicit class set for symmetric clearance resolution",
             },
         ],
+    },
+    Command {
+        id: nets::SET_CLASSES,
+        title: "Set Net Classes",
+        summary: "Replace a net's complete class set, promoting an eligible derived target in the same undoable transaction. An empty set removes assignments.",
+        params: &[
+            EXPECTED_REVISION,
+            Param {
+                name: "target",
+                kind: ParamKind::ClassTarget,
+                required: true,
+                summary: "Scoped persistent or revision-derived target from net-registry inspection",
+            },
+            Param {
+                name: "classes",
+                kind: ParamKind::ClassSet,
+                required: true,
+                summary: "Complete set of class UUIDs; origin is retained for unchanged assignments",
+            },
+        ],
+    },
+    Command {
+        id: nets::INSPECT_CLASSES,
+        title: "Inspect Net Assignments",
+        summary: "Inspect scoped assignments, origin, identity status and dimensional conflicts without promotion or authored edits.",
+        params: &[Param {
+            name: "target",
+            kind: ParamKind::ClassTarget,
+            required: false,
+            summary: "Optional scoped target; omit to list current identities and eligible derived anchors",
+        }],
     },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
@@ -2463,6 +2508,8 @@ impl Session {
             | net_classes::REMOVE
             | net_classes::INSPECT
             | net_classes::RESOLVE
+            | nets::SET_CLASSES
+            | nets::INSPECT_CLASSES
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2635,6 +2682,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
+        if id == nets::INSPECT_CLASSES {
+            self.validate_project_command(id, params)?;
+            return self.inspect_net_class_target(params);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
@@ -2726,6 +2777,8 @@ impl Session {
                 | net_classes::REMOVE
                 | net_classes::INSPECT
                 | net_classes::RESOLVE
+                | nets::SET_CLASSES
+                | nets::INSPECT_CLASSES
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -2817,6 +2870,10 @@ impl Session {
             net_classes::CREATE | net_classes::UPDATE | net_classes::REMOVE => self.edit_net_class(id, params)?,
             net_classes::INSPECT | net_classes::RESOLVE => {
                 self.net_class_query(id, params)?;
+            }
+            nets::SET_CLASSES => self.set_net_classes(params)?,
+            nets::INSPECT_CLASSES => {
+                self.inspect_net_class_target(params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,

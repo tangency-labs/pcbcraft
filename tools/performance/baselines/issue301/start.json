@@ -1,0 +1,18 @@
+{
+  "base": "3ba1e4120b66d4e21ec01adad1f8cee1adada722",
+  "prerequisite_pr": 347,
+  "prerequisite_head": "2fd9e4ddec9fdca50a75574a146b93997bb34846",
+  "worktree": "/home/travisl/projects/PCBcraft/work/net-class-assignments",
+  "branch": "travle1/net-class-assignments",
+  "scope": "Persistent scoped class assignments and topology reconciliation, codecs, shared commands and unsupported-consumer guards. No editor controls or class-aware routing/DRC implementation.",
+  "performance_question": "Observe unchanged persistent-net move/disconnect transactions before/after binding metadata. Twenty saved-input CPU samples per operation; no renderer, allocation, endurance or tail-performance qualification.",
+  "performance": {
+    "probe_sha256": "c4eeb1db2461ed11d6c767977fa586a6d50284fc4ae8202e25a457d9b2ad08dd",
+    "fixture_sha256": "40a79960b718564f244177f404906a04ffe7b8d8481125ef66e6f85c95ee4453",
+    "actions_sha256": "39f47ef867ece3c24662ca18e7237c2764d3a10d2859f3f415f57d996fae420c",
+    "build": "release",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\n",
+    "platform": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "conditions": "Shared development host; no controlled AC, thermal or exclusive CPU claim."
+  }
+}

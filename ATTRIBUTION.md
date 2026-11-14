@@ -1362,3 +1362,12 @@ They reuse the delivered board-default vocabulary and existing serialization,
 UUID and history infrastructure. Fixtures are authored with native commands and
 production folder/archive codecs. No external EDA implementation, library data,
 artwork, dependency or toolkit change was introduced.
+
+## Persistent net-class assignments
+
+The #301 assignment vocabulary, reconciliation, scoped shared commands, protected
+definition removal, project/21 and instances/3 extensions, consumer refusal and
+regressions are original MIT OR Apache-2.0 PCBcraft work. They reuse the existing
+sparse registry, class resolver and native publication infrastructure. Test and
+CPU fixtures were generated through native commands and production codecs; no
+external EDA implementation, asset, library data or dependency was introduced.

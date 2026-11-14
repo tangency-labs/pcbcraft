@@ -553,3 +553,5 @@ fn opening_a_named_project_sixteen_does_not_promote_or_change_its_bytes() {
     assert_eq!(session.project().unwrap().net_registry.records.len(), 2);
     round_trip(&session);
 }
+
+mod classes;

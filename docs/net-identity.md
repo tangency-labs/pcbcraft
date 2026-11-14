@@ -7,7 +7,8 @@ Design recorded November 8, 2026; related work:
 This policy applies to schematic-only, single-board and multiboard projects.
 The [implemented single-board/schematic-only registry](net-registry-storage.md)
 covers sparse IDs, anchors, reconciliation and explicit ambiguity resolution.
-The broader multiboard, system, class and authored-rule contracts below remain
+The [assignment slice](net-class-assignments.md) adds saved classes and origins.
+The broader multiboard, system and authored-rule contracts below remain
 design work; the [path to the net registry](net-registry-path.md) orders those slices.
 
 The electrical graph remains derived. The registry gives future reviewed board updates and authored rules stable

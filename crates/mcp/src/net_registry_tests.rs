@@ -173,3 +173,86 @@ fn ambiguity_resolution_is_available_in_both_mcp_modes() {
     assert_eq!(active(&live, &source), active(&headless, &source));
     assert_eq!(active(&live, &source)["state"]["kind"], "active");
 }
+
+/// Assignment requests share scoped authority and origin-preserving history in both adapters;
+/// query payloads survive inspect:false and rejected stale/foreign requests publish nothing.
+#[test]
+fn class_assignments_share_live_headless_targets_queries_and_rejection() {
+    use pcbcraft_engine::net_classes;
+    let mut setup = circuit(2);
+    apply(&mut setup, net_classes::CREATE, json!({"name":"Power","rules":{"clearance_nm":500000}}));
+    apply(&mut setup, nets::PROMOTE, json!({"anchor":{"symbol":"symbol-2","terminal":"1"}}));
+    let project = setup.snapshot().unwrap();
+    let class = project.net_classes().definitions[0].id;
+    let target = json!({"kind":"derived","anchor":project.inspect_net_registry().unwrap()["nets"][0]["anchor"]});
+    let mut headless = Headless::with_project(project.clone());
+    let mut session = Session::default();
+    session.open_snapshot(project.clone());
+    let mut live = OpenEditor { session, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    for id in [nets::SET_CLASSES, nets::INSPECT_CLASSES] {
+        assert!(catalog.as_array().unwrap().iter().any(|command| command["id"] == id));
+    }
+    let request =
+        json!({"command":nets::SET_CLASSES,"inspect":false,"params":{"target":target,"classes":[class],"expected_revision":live.session.revision()}});
+    live.blocked = true;
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
+    live.blocked = false;
+    let a = call_editor(&mut live, &json!({"method":"engine.execute","params":request})).unwrap();
+    assert_eq!(a, headless.call("engine.execute", request.clone()).unwrap());
+    let assigned = live.session.snapshot().unwrap();
+    assert!(headless.call("engine.execute", request.clone()).is_err());
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&assigned, &live.session.snapshot().unwrap()));
+    let query = json!({"command":nets::INSPECT_CLASSES,"inspect":false,"params":{"target":target}});
+    let a = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(a, headless.call("engine.execute", query).unwrap());
+    assert_eq!(a["net_assignments"]["status"], "ready");
+    assert!(a.get("project").is_none());
+    call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(live.session.snapshot().unwrap()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(project).unwrap()
+    );
+}
+
+/// Read-only discovery supplies typed derived anchors before any persistent ID exists. Both
+/// hosts then promote and bind in one transaction, without a separate promotion history step.
+#[test]
+fn assignment_discovery_promotes_derived_targets_in_one_shared_transaction() {
+    let mut setup = circuit(2);
+    apply(&mut setup, pcbcraft_engine::net_classes::CREATE, json!({"name":"Power","rules":{}}));
+    let p = setup.snapshot().unwrap();
+    let class = p.net_classes().definitions[0].id;
+    let mut headless = Headless::with_project(p.clone());
+    let mut session = Session::default();
+    session.open_snapshot(p.clone());
+    let mut live = OpenEditor { session, blocked: false };
+    let query = json!({"command":nets::INSPECT_CLASSES,"inspect":false,"params":{}});
+    let before = live.session.snapshot().unwrap();
+    let revision = live.session.revision();
+    let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(report, headless.call("engine.execute", query).unwrap());
+    assert_eq!(report["net_assignments"]["records"], json!([]));
+    assert!(Arc::ptr_eq(&before, &live.session.snapshot().unwrap()));
+    let target = json!({"kind":"derived","anchor":report["net_assignments"]["nets"][0]["anchor"]});
+    let edit = json!({"command":nets::SET_CLASSES,"inspect":false,"params":{"target":target,"classes":[class],"expected_revision":revision}});
+    call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).unwrap();
+    headless.call("engine.execute", edit).unwrap();
+    assert_eq!(live.session.revision(), revision + 1);
+    let query = json!({"command":nets::INSPECT_CLASSES,"inspect":false,"params":{}});
+    for report in
+        [call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap(), headless.call("engine.execute", query).unwrap()]
+    {
+        let records = report["net_assignments"]["records"].as_array().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["class_bindings"][0]["class"], json!(class));
+        assert_eq!(records[0]["class_bindings"][0]["origin"], records[0]["id"]);
+    }
+    call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(live.session.snapshot().unwrap()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(p).unwrap()
+    );
+}
