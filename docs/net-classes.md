@@ -4,9 +4,8 @@ Issue [#300](https://github.com/tangency-labs/pcbcraft/issues/300) supplies a
 project-wide catalog and a resolver for explicitly supplied class sets. Classes
 can be authored in a schematic-only project without creating a board or a
 stackup. [Persistent assignments](net-class-assignments.md) now bind those IDs to
-meaningful nets through shared commands. Editor controls and class-aware routing,
-clearance queries and DRC remain under #302–#303; dimensional assignments make
-unsupported consumers refuse rather than silently use only board defaults.
+meaningful nets through shared commands. [Routing, clearance queries and DRC](net-class-consumers.md)
+consume those assignments; editor controls remain under #303.
 
 ## Authored definitions
 

@@ -7,6 +7,7 @@ mod tests;
 
 use crate::{Project, board::track};
 pub(crate) use commands::{parse_set, rules_schema, set_schema};
+pub(crate) use resolve::pair_clearance;
 pub use resolve::{Conflict, Contribution, PairResolution, Resolution, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

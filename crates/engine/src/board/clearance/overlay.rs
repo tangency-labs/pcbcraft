@@ -18,20 +18,37 @@ pub struct OverlayDecision {
     pub touches: bool,
     pub clearance_violation: bool,
     pub conflicting_nets: bool,
+    /// Effective symmetric requirement for this probe/obstacle pair.
+    pub clearance_nm: i64,
 }
 
 /// Overlay decisions retain source authority; callers still check current gesture ownership.
 pub struct OverlayResults {
     pub authority: Authority,
     pub decisions: Vec<OverlayDecision>,
+    pub probe_rules: Option<super::super::class_rules::Applied>,
+    /// Deduplicated policy reports use typed overlay addresses through `rules_for`.
+    pub rules: super::super::class_rules::Context,
     overlay: Arc<()>,
     generation: u64,
 }
 
 impl OverlayResults {
+    /// Resolve source or added-object provenance without aliasing their separate identity spaces.
+    pub fn rules_for(&self, obstacle: ObstacleId) -> Option<&super::super::class_rules::Applied> {
+        self.rules.objects.get(&rule_key(obstacle)).and_then(|index| self.rules.policies.get(*index))
+    }
     /// Reject changed/canceled overlays as well as changed source sessions before reuse.
     pub fn is_current(&self, overlay: &Overlay<'_>, session: &Session) -> bool {
         self.authority.is_current(session) && Arc::ptr_eq(&self.overlay, &overlay.identity) && self.generation == overlay.generation
+    }
+}
+
+/// Result-local names distinguish a source position from a caller-owned added UUID.
+fn rule_key(id: ObstacleId) -> String {
+    match id {
+        ObstacleId::Source(index) => format!("source-{index}"),
+        ObstacleId::Added(id) => format!("added-{id}"),
     }
 }
 
@@ -169,19 +186,36 @@ impl Overlay<'_> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let rules = self
+            .query
+            .net_rules
+            .as_ref()
+            .map(|rules| rules.capture_named(&self.query.authority.snapshot, gaps.iter().map(|(id, item, _)| (rule_key(*id), *item))))
+            .transpose()?
+            .unwrap_or_default();
+        let probe_rules = self.query.probe_policy(&connected)?;
         let decisions = gaps
             .into_iter()
             .map(|(id, item, gap)| {
-                let d = decision(None, 0, gap, &connected, &item.intended_nets, false, self.query.authority.clearance_nm);
+                let d =
+                    decision(None, 0, gap, &connected, &item.intended_nets, false, self.query.membership_clearance(&connected, &item.intended_nets));
                 OverlayDecision {
                     obstacle: id,
                     gap_nm: d.gap_nm,
                     touches: d.touches,
                     clearance_violation: d.clearance_violation,
                     conflicting_nets: d.conflicting_nets,
+                    clearance_nm: d.clearance_nm,
                 }
             })
             .collect();
-        Ok(OverlayResults { authority: self.query.authority.clone(), decisions, overlay: self.identity.clone(), generation: self.generation })
+        Ok(OverlayResults {
+            authority: self.query.authority.clone(),
+            decisions,
+            probe_rules,
+            rules,
+            overlay: self.identity.clone(),
+            generation: self.generation,
+        })
     }
 }

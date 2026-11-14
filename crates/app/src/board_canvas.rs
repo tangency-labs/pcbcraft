@@ -103,6 +103,7 @@ impl ReferenceDrag {
 /// Selection and authored intent are handled after the renderer releases its view/session borrows.
 #[derive(Default)]
 pub(super) struct Interaction {
+    pub(super) error: Option<(ViewInput, String)>,
     pub(super) clipboard: Option<crate::board_clipboard::Action>,
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
@@ -301,7 +302,14 @@ pub(super) fn show(
         filters.graphics,
     );
     let enabled = enabled && !edge.consumed && !route.consumed;
-    let mut out = Interaction { drawing_edit: edge.command, track_edit: route.command, reference_edit, reference_pick, ..Interaction::default() };
+    let mut out = Interaction {
+        error: source.zip(route.error),
+        drawing_edit: edge.command,
+        track_edit: route.command,
+        reference_edit,
+        reference_pick,
+        ..Interaction::default()
+    };
     if (edge.consumed || route.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some()) {
         out.selection = Some(BTreeSet::new());
     }

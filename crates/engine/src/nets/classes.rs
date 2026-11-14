@@ -88,6 +88,27 @@ impl Registry {
     }
 }
 impl Project {
+    /// Project current classified terminals onto stable component/pin keys without saved
+    /// membership. Unclassified projects skip graph construction entirely; names are unused.
+    pub(crate) fn classified_terminals(&self) -> Result<std::collections::BTreeMap<(u64, String), Uuid>, CommandError> {
+        let records: Vec<_> =
+            self.net_registry.records.iter().filter(|record| matches!(record.state, State::Active {}) && !record.class_bindings.is_empty()).collect();
+        if records.is_empty() {
+            return Ok(Default::default());
+        }
+        let graph = Graph::build(self).map_err(CommandError::InvalidParams)?;
+        let mut result = std::collections::BTreeMap::new();
+        for record in records {
+            let network = graph.network(&record.primary).ok_or_else(|| CommandError::InvalidParams("Missing classified net primary.".into()))?;
+            for anchor in &graph.networks[network].anchors {
+                if anchor.kind == super::AnchorKind::Terminal {
+                    result.insert((anchor.object, anchor.terminal.clone()), record.id);
+                }
+            }
+        }
+        Ok(result)
+    }
+
     /// Resolve a scoped target without allocating identities. Historical targets may be inspected
     /// but must not be assigned or consumed as current dimensional authority.
     fn class_target(&self, target: &ClassTarget) -> Result<(Option<Uuid>, Option<usize>), CommandError> {
@@ -154,21 +175,15 @@ impl Project {
         }
     }
 
-    /// Until class-aware consumers are delivered, required dimensional bindings cannot be
-    /// silently evaluated using only board defaults. Empty classification sets add no dimensions.
-    pub(crate) fn require_supported_class_consumer(&self) -> Result<(), CommandError> {
-        if self
-            .net_registry
+    /// Consumers may skip dimensional policy preparation when no active class contributes any
+    /// dimension. Historical bindings and empty classifications do not enable rule enforcement.
+    pub(crate) fn has_dimensional_net_classes(&self) -> bool {
+        self.net_registry
             .records
             .iter()
             .filter(|record| matches!(record.state, State::Active {}))
             .flat_map(|record| &record.class_bindings)
             .any(|binding| self.net_classes.get(binding.class).is_some_and(|class| !class.rules.is_empty()))
-        {
-            Err(CommandError::Unavailable("This operation does not yet support assigned net-class rules.".into()))
-        } else {
-            Ok(())
-        }
     }
 }
 

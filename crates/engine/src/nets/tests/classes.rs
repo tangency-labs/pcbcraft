@@ -237,10 +237,10 @@ fn ambiguous_split_and_explicit_resolution_keep_current_branch_assignments() {
     round_trip(&s);
 }
 
-/// First-board creation transfers the same registry home and IDs; unsupported consumers refuse
-/// required assigned dimensions, while direct checker reports cannot claim a default-only pass.
+/// First-board creation transfers the same registry home and IDs. Consumers remain available
+/// before placement; there is no physical copper on which to invent an applicable class policy.
 #[test]
-fn first_board_and_unsupported_consumers_preserve_identity_and_intent() {
+fn first_board_and_consumers_preserve_identity_and_intent() {
     let (mut s, pins) = circuit(2, false);
     connect(&mut s, &pins[0], &pins[1]);
     let power = class(&mut s, "Power", json!({"clearance_nm":500000}));
@@ -260,13 +260,16 @@ fn first_board_and_unsupported_consumers_preserve_identity_and_intent() {
     round_trip(&s);
     assert!(p.resolve_net_assignment(NetAddress { project: p.id, scope: schematic, net: id }).is_err());
     assert!(p.resolve_net_assignment(NetAddress { project: p.id, scope, net: id }).is_ok());
-    assert!(s.check_design(&json!({"board":board.board})).unwrap_err().to_string().contains("assigned net-class"));
-    assert!(s.design_check_job(&json!({"board":board.board})).is_err());
-    assert!(s.clearance_query(board, 0).is_err());
+    assert!(s.check_design(&json!({"board":board.board})).is_ok());
+    assert!(s.design_check_job(&json!({"board":board.board})).is_ok());
+    assert!(s.clearance_query(board, 0).is_ok());
     let report = p.board_view(board).unwrap().check_design(crate::board::drc::Rules::default());
-    assert_eq!(report.total, 1);
-    assert_eq!(report.violations[0].kind, crate::board::drc::Kind::UnsupportedNetClasses);
-    assert!(s.prepare_copper_edit(crate::ADD_TRACKS,&json!({"board":board.board,"expected_revision":s.revision(),"layer":Uuid::from_u128(55),"points":[{"x_nm":0,"y_nm":0},{"x_nm":1000000,"y_nm":0}]})).err().unwrap().to_string().contains("assigned net-class"));
+    assert_eq!(report.total, 0);
+    let snapshot = s.snapshot().unwrap();
+    let mut invalid = s.prepare_copper_edit(crate::ADD_TRACKS,&json!({"board":board.board,"expected_revision":s.revision(),"layer":Uuid::from_u128(55),"points":[{"x_nm":0,"y_nm":0},{"x_nm":1000000,"y_nm":0}]})).unwrap();
+    while !invalid.step(7) {}
+    assert!(invalid.take_result().is_err());
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     apply(&mut s, "edit.undo", json!({}));
     assert_eq!(s.project().unwrap().net_registry, before.net_registry);
     apply(&mut s, "edit.redo", json!({}));

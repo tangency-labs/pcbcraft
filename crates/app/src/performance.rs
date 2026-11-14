@@ -124,11 +124,26 @@ fn exhaustive_probe_findings(query: &ClearanceQuery, contour: &Contour, layers: 
         .collect();
     let connected: BTreeSet<_> =
         gaps.iter().filter(|(_, _, gap)| *gap <= 0.0).flat_map(|(_, object, _)| object.intended_nets.iter().copied()).collect();
+    let baseline = query.authority().rules().values.clearance_nm;
+    let object_clearance = |object: &pcbcraft_engine::board::clearance::Object| {
+        query
+            .authority()
+            .class_rules()
+            .and_then(|context| context.rules_for(&object.name))
+            .and_then(|policy| policy.clearance_nm().ok())
+            .unwrap_or(baseline)
+    };
+    let probe_clearance = query
+        .objects()
+        .iter()
+        .filter(|object| object.intended_nets.iter().any(|net| connected.contains(net)))
+        .map(object_clearance)
+        .fold(baseline, i64::max);
     gaps.into_iter()
         .filter_map(|(index, object, gap)| {
             let touches = gap <= 0.0;
             let same_net = connected.len() == 1 && object.intended_nets.len() == 1 && connected.contains(&object.intended_nets[0]);
-            let clearance_violation = !same_net && gap < query.authority().clearance_nm() as f64;
+            let clearance_violation = !same_net && gap < probe_clearance.max(object_clearance(object)) as f64;
             (touches || clearance_violation).then_some((None, index, touches, clearance_violation, touches && connected.len() > 1))
         })
         .collect()
@@ -191,6 +206,51 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
             return Err("clearance candidate findings differ from exhaustive reference".into());
         }
         drop(pairs);
+        if let Some(context) = query.authority().class_rules()
+            && let Some(object) = query.objects().iter().find(|object| context.rules_for(&object.name).is_some())
+        {
+            let at = object.at;
+            let current_view = project.board_view(artifact.board).ok_or("missing current board")?;
+            let policy = timed(&mut samples, "class.route_rules.contact", || current_view.route_rules_at(at, object.layers.first().copied()))
+                .map_err(|e| e.to_string())?
+                .ok_or("classified contact lost its policy")?;
+            let width = policy.track_width(None).map_err(|e| e.to_string())?;
+            let mut route = Session::default();
+            route.open_snapshot(project.clone());
+            let params = json!({"board":artifact.board.board,"layer":object.layers.first(),"points":[at,Point{x_nm:at.x_nm,y_nm:at.y_nm-3_000_000}],"expected_revision":route.revision()});
+            let mut job = timed(&mut samples, "class.route.request_capture", || route.prepare_copper_edit(pcbcraft_engine::ADD_TRACKS, &params))
+                .map_err(|e| e.to_string())?;
+            let began = clock_ms();
+            let mut batches = 0;
+            let mut maximum_batches = BTreeMap::<String, f64>::new();
+            loop {
+                let stage = job.progress().stage;
+                let started = clock_ms();
+                let done = job.step(256);
+                let elapsed = clock_ms() - started;
+                maximum_batches.entry(format!("class.route.batch_max.{stage}")).and_modify(|value| *value = value.max(elapsed)).or_insert(elapsed);
+                batches += 1;
+                if batches > 10_000_000 {
+                    return Err("classified route exceeded work bound".into());
+                }
+                if done {
+                    break;
+                }
+            }
+            samples.entry("class.route.engine_total".into()).or_default().push(clock_ms() - began);
+            for (stage, maximum) in maximum_batches {
+                samples.entry(stage).or_default().push(maximum);
+            }
+            let edit = job.take_result().map_err(|e| e.to_string())?.ok_or("missing classified edit")?;
+            if edit.class_rules().is_none() {
+                return Err("classified edit omitted rule provenance".into());
+            }
+            timed(&mut samples, "class.route.atomic_publish", || route.commit_copper_edit(edit)).map_err(|e| e.to_string())?;
+            let routed = route.project().and_then(|project| project.board_view(artifact.board)).ok_or("missing routed board")?;
+            if !routed.tracks().iter().any(|track| track.start == at && track.width_nm == width) {
+                return Err("committed classified width differs from contact default".into());
+            }
+        }
         let object = query.objects().first().ok_or("fixture requires copper")?;
         for (id, start, end) in [
             ("empty", Point { x_nm: -5_080_000, y_nm: -5_080_000 }, Point { x_nm: 5_080_000, y_nm: -5_080_000 }),
@@ -298,6 +358,37 @@ mod tests {
             assert!(report.metrics.iter().any(|m| m.id == id), "missing boundary {id}");
         }
         assert!(!report.unmeasured.is_empty());
+    }
+
+    /// Extend the retained recipe using only shared commands, preserving its trace and copper.
+    fn assigned_reference() -> String {
+        let mut artifact = load_artifact(&generate("reference-v1", "test").unwrap()).unwrap();
+        let mut author = Session::default();
+        author.open_snapshot(decode_packed(&artifact.project).unwrap().project);
+        fixture::apply(
+            &mut author,
+            "net_classes.create",
+            json!({"name":"Power","rules":{"clearance_nm":700000,"min_track_width_nm":400000,"preferred_track_width_nm":500000}}),
+        )
+        .unwrap();
+        let class = author.project().unwrap().net_classes().definitions[0].id;
+        let targets = author.project().unwrap().inspect_net_registry().unwrap();
+        let anchor = targets["nets"][0]["anchor"].clone();
+        fixture::apply(&mut author, "nets.set_classes", json!({"target":{"kind":"derived","anchor":anchor},"classes":[class]})).unwrap();
+        artifact.project = pcbcraft_engine::persistence::encode_packed(author.snapshot().unwrap()).unwrap();
+        artifact.project_sha256 = digest(&artifact.project);
+        artifact.recipe = "reference-v1-class-assigned".into();
+        serde_json::to_string(&artifact).unwrap()
+    }
+
+    /// Assigned fixtures must exercise class contact/default/publication costs as well as the
+    /// per-object exhaustive spacing oracle. Unclassified artifact boundaries remain unchanged.
+    #[test]
+    fn assigned_reference_checks_class_defaults_and_pair_specific_oracles() {
+        let report = run(&assigned_reference(), environment(), 1).unwrap();
+        for id in ["class.route_rules.contact", "class.route.engine_total", "class.route.atomic_publish"] {
+            assert!(report.metrics.iter().any(|metric| metric.id == id));
+        }
     }
 
     /// Route diagnostics retain raw lifecycle samples, exact command equivalence and bounded

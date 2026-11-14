@@ -256,3 +256,80 @@ fn assignment_discovery_promotes_derived_targets_in_one_shared_transaction() {
         pcbcraft_engine::persistence::encode_documents(p).unwrap()
     );
 }
+
+/// Scoped routing inspection and class-aware edits use the same live/headless transaction path,
+/// retain read results with inspection disabled and reject stale or weakened dimensions atomically.
+#[test]
+fn class_routing_queries_and_commits_have_live_headless_parity() {
+    use pcbcraft_engine::{
+        board::{
+            class_rules::ROUTE_RULES,
+            setup::{LayerPurpose, Side},
+        },
+        net_classes,
+    };
+    let mut setup = Session::default();
+    apply(&mut setup, "project.new", json!({"create_board":true}));
+    apply(&mut setup, pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    for index in 0..2 {
+        apply(&mut setup, PLACE_RESISTOR, json!({"x_nm":index*10000000,"y_nm":0}));
+        let symbol = setup.project().unwrap().symbols().last().unwrap().id();
+        apply(
+            &mut setup,
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":index*10000000,"y_nm":0}),
+        );
+    }
+    let symbols: Vec<_> = setup.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    apply(&mut setup, CONNECT_PINS, json!({"from":{"symbol":symbols[0],"terminal":"1"},"to":{"symbol":symbols[1],"terminal":"1"}}));
+    apply(&mut setup, pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, json!({}));
+    apply(
+        &mut setup,
+        net_classes::CREATE,
+        json!({"name":"Power","rules":{"clearance_nm":500000,"min_track_width_nm":400000,"preferred_track_width_nm":500000}}),
+    );
+    let class = setup.project().unwrap().net_classes().definitions[0].id;
+    let anchor = setup.execute(nets::INSPECT_CLASSES, &json!({})).unwrap()["net_assignments"]["nets"][0]["anchor"].clone();
+    apply(&mut setup, nets::SET_CLASSES, json!({"target":{"kind":"derived","anchor":anchor},"classes":[class]}));
+    let project = setup.snapshot().unwrap();
+    let board = project.board_target().unwrap();
+    let view = project.board_view(board).unwrap();
+    let at = view.footprints().next().unwrap().pads.iter().find(|pad| pad.number == "1").unwrap().center;
+    let layer = view.layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Front)).unwrap().id;
+    let mut headless = Headless::with_project(project.clone());
+    let mut live_session = Session::default();
+    live_session.open_snapshot(project.clone());
+    let mut live = OpenEditor { session: live_session, blocked: false };
+    let revision = live.session.revision();
+    let query = json!({"command":ROUTE_RULES,"inspect":false,"params":{"board":board.board,"at":at,"layer":layer}});
+    let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(report, headless.call("engine.execute", query.clone()).unwrap());
+    assert_eq!(report["route_rules"]["applied"]["resolution"]["values"]["preferred_track_width_nm"], 500000);
+    assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
+    assert_eq!(live.session.revision(), revision);
+    let edit = json!({"command":pcbcraft_engine::ADD_TRACKS,"inspect":false,"params":{"board":board.board,"layer":layer,"points":[at,{"x_nm":at.x_nm,"y_nm":at.y_nm+2000000}],"expected_revision":revision}});
+    live.blocked = true;
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).is_err());
+    assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
+    live.blocked = false;
+    assert_eq!(
+        call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).unwrap(),
+        headless.call("engine.execute", edit.clone()).unwrap()
+    );
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).is_err());
+    assert!(headless.call("engine.execute", edit).is_err());
+    assert!(live.session.project().unwrap().board_view(board).unwrap().tracks().iter().all(|track| track.width_nm == 500000));
+    let remote = headless.call("project.inspect", json!({})).unwrap();
+    assert_eq!(remote["project"]["boards"][0]["tracks"][0]["width_nm"], 500000);
+    let before = live.session.snapshot().unwrap();
+    let weak = json!({"command":pcbcraft_engine::ADD_TRACKS,"inspect":false,"params":{"board":board.board,"layer":layer,"points":[at,{"x_nm":at.x_nm,"y_nm":at.y_nm-2000000}],"width_nm":200000,"expected_revision":live.session.revision()}});
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":weak})).is_err());
+    assert!(headless.call("engine.execute", weak).is_err());
+    assert!(Arc::ptr_eq(&before, &live.session.snapshot().unwrap()));
+    let undo = json!({"command":"edit.undo","inspect":false,"params":{}});
+    assert_eq!(call_editor(&mut live, &json!({"method":"engine.execute","params":undo})).unwrap(), headless.call("engine.execute", undo).unwrap());
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(live.session.snapshot().unwrap()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(project).unwrap()
+    );
+}

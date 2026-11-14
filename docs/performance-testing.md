@@ -91,6 +91,16 @@ painting code. They do not create an eframe window or submit pixels to a GPU.
 | `replay.<step>.tessellate` | CPU tessellation of those shapes; no renderer submission |
 | `replay.shared-edit.command` | Shared engine edit while a real route draft is pending; excludes MCP transport |
 
+Assigned-class artifacts additionally report `class.route_rules.contact`,
+`class.route.request_capture`, per-stage `class.route.batch_max.*`,
+`class.route.engine_total` and `class.route.atomic_publish`. Each batch metric is
+the maximum 256-unit service call in that iteration; the total includes all calls.
+The runner verifies committed width against the contacted policy and checks pair-
+specific probe spacing with an exhaustive oracle. Use exact saved command-generated
+assigned artifacts for these measurements; unassigned fixtures omit these boundaries.
+A pre-class-consumer revision refuses assigned operations, so their absolute costs
+must not be presented as a matched before/after speedup.
+
 Cold engine samples decode a fresh project each time; the executable/WASM module
 stays loaded, so this means cold model caches rather than cold process startup.
 Replay creates a fresh app

@@ -387,4 +387,10 @@ promotion; with a target it returns bindings, origins and conflicts.
 `nets.set_classes` replaces the full class set with revision checking and promotes
 an eligible derived target in the same history step. The assignment query retains
 its payload with `inspect: false`. See the [assignment contract](net-class-assignments.md)
-for target shapes, protected removal/rebind and the unsupported-consumer boundary.
+for target shapes and protected removal/rebind. `pcb.route_rules` inspects effective
+sizes, clearance and conflicts at an addressed copper contact without mutation,
+including with `inspect: false`. Omitted routing sizes use that contact's class
+preferences; explicit changed copper must satisfy applicable hard dimensions.
+Queries and DRC retain per-object class IDs, revisions and assignment origins.
+See the [consumer contract](net-class-consumers.md) for parameters, provenance,
+stale authority and operation-specific conflict behavior.

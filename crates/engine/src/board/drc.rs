@@ -43,7 +43,9 @@ pub use super::rules::Values as Rules;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
-    /// Required assigned class dimensions are not evaluated by this checker yet.
+    /// Applicable hard requirements contradict, so the affected checking result is incomplete.
+    NetClassConflict,
+    /// Assigned policy could not be captured, so checking cannot establish a complete result.
     UnsupportedNetClasses,
     /// One physical copper island joins pads from distinct intended nets, independently of
     /// the clearance rule, including when the required clearance is zero.
@@ -93,6 +95,9 @@ pub struct Report {
     pub rules: Rules,
     /// Per-property built-in, saved board-rule or request-local provenance.
     pub sources: BTreeMap<String, super::rules::Source>,
+    /// Snapshot-local copper addresses refer to deduplicated class/origin/conflict reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_rules: Option<super::class_rules::Context>,
     pub violations: Vec<Violation>,
     pub counts: BTreeMap<Kind, usize>,
     pub total: usize,
@@ -125,7 +130,7 @@ impl Findings {
     }
     /// Produce the deterministic capped report after every phase has completed.
     fn finish(self, rules: Rules, sources: BTreeMap<String, super::rules::Source>) -> Report {
-        Report { rules, sources, violations: self.listed.into_values().collect(), counts: self.counts, total: self.total }
+        Report { rules, sources, class_rules: None, violations: self.listed.into_values().collect(), counts: self.counts, total: self.total }
     }
 }
 
@@ -153,11 +158,20 @@ fn mm(nm: f64) -> String {
     format!("{:.3} mm", nm / 1_000_000.)
 }
 
-impl BoardView<'_> {
-    /// Check this board against `rules` and return every finding, sorted by kind and position.
-    pub fn check_design(self, rules: Rules) -> Report {
-        let mut found = Findings::default();
-        if let Err(error) = self.require_supported_net_classes() {
+/// Capture exact per-object authority once for either checker. Unavailable policy becomes an
+/// explicit incomplete finding; only contradictions in dimensions the checker uses block it.
+fn capture_class_rules(
+    view: BoardView<'_>,
+    geometry: &BoardGeometry,
+    effective: &super::rules::Effective,
+    found: &mut Findings,
+) -> Option<super::class_rules::Context> {
+    let captured =
+        super::class_rules::NetRules::new(view, effective.clone()).and_then(|rules| rules.map(|rules| rules.capture(view, geometry)).transpose());
+    let context = match captured {
+        Ok(Some(context)) if !context.policies.is_empty() => context,
+        Ok(_) => return None,
+        Err(error) => {
             found.push(Violation {
                 kind: Kind::UnsupportedNetClasses,
                 message: error.to_string(),
@@ -165,17 +179,67 @@ impl BoardView<'_> {
                 items: Vec::new(),
                 nets: Vec::new(),
             });
-            return found.finish(rules, self.effective_rules().sources);
+            return None;
         }
+    };
+    if context
+        .policies
+        .iter()
+        .all(|policy| policy.resolution.conflicts.iter().all(|conflict| conflict.properties.iter().any(|property| property.is_preference())))
+    {
+        return Some(context);
+    }
+    use crate::net_classes::Property::*;
+    let tracks: std::collections::BTreeSet<_> = view.tracks().iter().map(|track| track.id.to_string()).collect();
+    let vias: std::collections::BTreeSet<_> = view.vias().iter().map(|via| via.id.to_string()).collect();
+    let mut conflicts = BTreeMap::<(usize, String), Vec<String>>::new();
+    for (name, &index) in &context.objects {
+        let mut needed = vec![ClearanceNm, EdgeClearanceNm];
+        if tracks.contains(name) {
+            needed.push(MinTrackWidthNm);
+        }
+        if vias.contains(name) {
+            needed.extend([MinViaDiameterNm, MaxViaDiameterNm, MinViaDrillNm, MaxViaDrillNm, MinAnnularRingNm]);
+        }
+        if let Err(error) = context.policies[index].require(&needed) {
+            conflicts.entry((index, error.to_string())).or_default().push(name.clone());
+        }
+    }
+    for ((_, message), items) in conflicts {
+        let at = geometry.items.iter().find(|item| items.contains(&item.name)).map_or(Point { x_nm: 0, y_nm: 0 }, |item| item.at);
+        found.push(Violation { kind: Kind::NetClassConflict, message, at, items, nets: Vec::new() });
+    }
+    Some(context)
+}
+
+impl BoardView<'_> {
+    /// Check this board against `rules` and return every finding, sorted by kind and position.
+    pub fn check_design(self, rules: Rules) -> Report {
+        let mut effective = self.effective_rules();
+        let supplied = json!(rules);
+        let base = json!(effective.values);
+        for name in super::rules::LIMIT_FIELDS.iter().chain(super::rules::PREFERENCE_FIELDS) {
+            if supplied[*name] != base[*name] {
+                effective.sources.insert((*name).into(), super::rules::Source::Request);
+            }
+        }
+        effective.values = rules;
+        self.check_design_resolved(effective)
+    }
+
+    /// Sync and incremental checks retain identical request provenance and object policy.
+    fn check_design_resolved(self, effective: super::rules::Effective) -> Report {
+        let rules = effective.values;
+        let mut found = Findings::default();
         let geometry = BoardGeometry::new(self);
+        let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
         let items = &geometry.items;
-        self.check_dimensions(rules, &mut found);
+        self.check_dimensions(rules, class_rules.as_ref(), &mut found);
 
         self.check_shorts(&geometry.lands, &geometry.members, items, &mut found);
 
         // Physical island short diagnostics remain independent of the strict clearance rule.
-        let clearance = rules.clearance_nm as f64;
-        for decision in geometry.clearance_pairs(rules.clearance_nm) {
+        for decision in geometry.clearance_pairs(rules.clearance_nm, class_rules.as_ref()) {
             if !decision.clearance_violation {
                 continue;
             }
@@ -189,7 +253,7 @@ impl BoardView<'_> {
                 let message = if distance <= 0. {
                     format!("Copper touches{nets}")
                 } else {
-                    format!("Clearance {} is below the {} rule{nets}", mm(distance), mm(clearance))
+                    format!("Clearance {} is below the {} rule{nets}", mm(distance), mm(decision.clearance_nm as f64))
                 };
                 let mut names = vec![a.name.clone(), b.name.clone()];
                 names.sort();
@@ -212,23 +276,18 @@ impl BoardView<'_> {
             }
         }
 
-        self.check_outline(items, rules, &mut found);
+        self.check_outline(items, rules, class_rules.as_ref(), &mut found);
         self.check_courtyards(&mut found);
 
-        let mut effective = self.effective_rules();
-        let supplied = json!(rules);
-        let base = json!(effective.values);
-        for name in super::rules::LIMIT_FIELDS.iter().chain(super::rules::PREFERENCE_FIELDS) {
-            if supplied[*name] != base[*name] {
-                effective.sources.insert((*name).into(), super::rules::Source::Request);
-            }
-        }
-        found.finish(rules, effective.sources)
+        let mut report = found.finish(rules, effective.sources);
+        report.class_rules = class_rules;
+        report
     }
 
     /// Check authored track/via dimensions without preparing connectivity or changing state.
-    fn check_dimensions(self, rules: Rules, found: &mut Findings) {
+    fn check_dimensions(self, rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
         for track in self.tracks() {
+            let rules = context.map_or(rules, |context| context.limits_for(&track.id.to_string(), rules));
             if track.width_nm < rules.min_track_width_nm {
                 found.push(Violation {
                     kind: Kind::TrackWidth,
@@ -240,6 +299,7 @@ impl BoardView<'_> {
             }
         }
         for via in self.vias() {
+            let rules = context.map_or(rules, |context| context.limits_for(&via.id.to_string(), rules));
             for (kind, value, min, max, name) in [
                 (Kind::ViaDiameter, via.diameter_nm, rules.min_via_diameter_nm, rules.max_via_diameter_nm, "Via diameter"),
                 (Kind::ViaDrill, via.drill_nm, rules.min_via_drill_nm, rules.max_via_drill_nm, "Via drill"),
@@ -327,7 +387,7 @@ impl BoardView<'_> {
     /// Require a closed Board Outline, every copper item inside it, and copper at least the edge
     /// clearance from every outline segment. Penetration remains a finding at zero required
     /// clearance. Open outline paths still count as edges.
-    fn check_outline(self, items: &[Item], rules: Rules, found: &mut Findings) {
+    fn check_outline(self, items: &[Item], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
         let layers = self.layers();
         let outline: Vec<_> = self
             .drawings()
@@ -356,6 +416,7 @@ impl BoardView<'_> {
             })
             .collect();
         for item in items {
+            let rules = context.map_or(rules, |context| context.limits_for(&item.name, rules));
             let anchors = &item.contour.core;
             if !anchors.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon))) {
                 found.push(Violation {
@@ -429,9 +490,7 @@ impl Session {
     /// Validate the board address and rules, then report findings without editing anything.
     pub fn check_design(&self, params: &Value) -> Result<Value, CommandError> {
         let (view, effective) = self.design_check_inputs(params)?;
-        let mut report = view.check_design(effective.values);
-        report.sources = effective.sources;
-        Ok(json!(report))
+        Ok(json!(view.check_design_resolved(effective)))
     }
 
     /// Refuse a design check's bad board address or rules without running the check, so the
@@ -445,7 +504,6 @@ impl Session {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        view.require_supported_net_classes()?;
         let mut overrides = params.clone();
         if overrides.is_null() {
             overrides = json!({});

@@ -74,6 +74,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
+                        | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::net_classes::INSPECT
                         | pcbcraft_engine::net_classes::RESOLVE
                         | pcbcraft_engine::PREVIEW_UPDATE

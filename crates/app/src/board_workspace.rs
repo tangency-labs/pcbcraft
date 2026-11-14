@@ -578,6 +578,7 @@ impl PcbApp {
             })
             .inner;
         if (pick.clipboard.is_some()
+            || pick.error.is_some()
             || pick.items.is_some()
             || pick.selection.is_some()
             || pick.edit.is_some()
@@ -589,6 +590,11 @@ impl PcbApp {
             && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
+            if let Some((source, error)) = pick.error
+                && self.views.active.accepts(source, &self.session)
+            {
+                self.message = Some(error);
+            }
             if let Some(action) = pick.clipboard {
                 self.board_clipboard_action(ui.ctx(), action);
             }

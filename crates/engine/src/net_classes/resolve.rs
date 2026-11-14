@@ -11,7 +11,13 @@ use uuid::Uuid;
 pub enum Source {
     Builtin,
     Board { rule: Uuid },
+    Request,
     Class { rule: Uuid, revision: u32 },
+}
+
+/// Both addressed objects retain their own requirements; pair spacing uses the stricter one.
+pub(crate) fn pair_clearance(left: i64, right: i64) -> i64 {
+    left.max(right)
 }
 
 /// All applicable values remain inspectable, including overridden preferences and weaker limits.
@@ -118,6 +124,17 @@ impl Project {
     /// defaults replace built-ins as in #242, but cannot weaken class limits. Unknown/foreign IDs
     /// are errors. No net lookup, stackup, revision change or derived geometry is needed.
     pub fn resolve_net_classes(&self, classes: &[Uuid], board: Option<BoardTarget>) -> Result<Resolution, CommandError> {
+        self.resolve_net_classes_with_rules(classes, board, None)
+    }
+
+    /// Consumer-local diagnostic defaults retain per-property provenance. Applicable class
+    /// limits still tighten that baseline, and preference conflicts remain explicit.
+    pub(crate) fn resolve_net_classes_with_rules(
+        &self,
+        classes: &[Uuid],
+        board: Option<BoardTarget>,
+        baseline: Option<&crate::board::rules::Effective>,
+    ) -> Result<Resolution, CommandError> {
         if classes.len() > MAX_CLASSES {
             return Err(CommandError::InvalidParams("Too many explicit class IDs.".into()));
         }
@@ -134,6 +151,7 @@ impl Project {
         };
         let (defaults, source) = authored
             .map_or((crate::board::rules::Values::default(), Source::Builtin), |settings| (settings.values, Source::Board { rule: settings.id }));
+        let defaults = baseline.map_or(defaults, |effective| effective.values);
         let mut result = Resolution {
             classes: classes.into_iter().collect(),
             board,
@@ -143,7 +161,15 @@ impl Project {
         };
         for property in Property::ALL {
             let base = property.value(&defaults);
-            let mut candidates = vec![Contribution { source: source.clone(), value_nm: base }];
+            let base_source = baseline.and_then(|effective| effective.sources.get(property.as_str())).map_or_else(
+                || source.clone(),
+                |source| match source {
+                    crate::board::rules::Source::Builtin => Source::Builtin,
+                    crate::board::rules::Source::Board { rule } => Source::Board { rule: *rule },
+                    crate::board::rules::Source::Request => Source::Request,
+                },
+            );
+            let mut candidates = vec![Contribution { source: base_source, value_nm: base }];
             candidates.extend(definitions.iter().filter_map(|class| {
                 class
                     .rules
@@ -195,10 +221,14 @@ impl Project {
         contributions.sort_by_key(|c| match c.source {
             Source::Builtin => (0, Uuid::nil()),
             Source::Board { rule } => (1, rule),
-            Source::Class { rule, .. } => (2, rule),
+            Source::Request => (2, Uuid::nil()),
+            Source::Class { rule, .. } => (3, rule),
         });
-        let clearance_nm =
-            contributions.iter().map(|c| c.value_nm).max().ok_or_else(|| CommandError::InvalidParams("Missing clearance baseline.".into()))?;
+        let mut spacing = objects.iter().map(|object| object.values.get(&Property::ClearanceNm).copied().flatten());
+        let (Some(Some(left)), Some(Some(right))) = (spacing.next(), spacing.next()) else {
+            return Err(CommandError::InvalidParams("Missing clearance baseline.".into()));
+        };
+        let clearance_nm = pair_clearance(left, right);
         Ok(PairResolution { board, clearance_nm, contributions, objects, conflicts })
     }
 }

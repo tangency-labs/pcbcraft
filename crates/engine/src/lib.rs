@@ -1831,6 +1831,16 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::class_rules::ROUTE_RULES,
+        title: "Inspect Routing Rules",
+        summary: "Inspect scoped net-class routing defaults, hard limits, origins and conflicts at a current copper contact without editing.",
+        params: &[
+            BOARD,
+            Param { name: "at", required: true, summary: "Current copper contact point in integer nanometres", kind: ParamKind::Point },
+            Param { name: "layer", required: false, summary: "Copper layer UUID; omit for a through-via contact", kind: ParamKind::DrawingId },
+        ],
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -2542,6 +2552,7 @@ impl Session {
             | DELETE_DRAWING
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
+            | board::class_rules::ROUTE_RULES
             | EXPORT_FABRICATION
             | ADD_TRACKS
             | ADD_VIA
@@ -2686,6 +2697,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
         }
+        if id == board::class_rules::ROUTE_RULES {
+            self.validate_project_command(id, params)?;
+            return self.route_rule_query(params);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
@@ -2750,6 +2765,7 @@ impl Session {
                 | DELETE_DRAWING
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
+                | board::class_rules::ROUTE_RULES
                 | EXPORT_FABRICATION
                 | ADD_TRACKS
                 | ADD_VIA
@@ -2983,6 +2999,9 @@ impl Session {
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
+            board::class_rules::ROUTE_RULES => {
+                self.route_rule_query(params)?;
+            }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }

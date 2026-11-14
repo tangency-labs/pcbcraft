@@ -193,6 +193,7 @@ pub struct Copper {
 }
 
 /// Resolved pad geometry and net membership used by connectivity, DRC and footprint edits.
+#[derive(Clone)]
 pub(super) struct Land {
     pub(super) key: (String, String),
     pub(super) corners: [Point; 4],
@@ -686,15 +687,45 @@ impl Session {
 }
 
 /// Construct and validate authored copper records without connectivity traversal or publication.
-/// Every command edits a private candidate; omitted dimensions use captured board preferences.
+/// Edit a private candidate; omitted creation sizes use source-contact class preferences or
+/// board defaults. Preparation validates final membership and explicit hard limits before publication.
 fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
     let effective = project.board.rules.as_ref().map_or_else(super::rules::Values::default, |rules| rules.values);
+    let needs_defaults = match command {
+        ADD_TRACKS => {
+            params.get("width_nm").is_none()
+                || (params.get("layer_changes").and_then(Value::as_array).is_some_and(|changes| !changes.is_empty())
+                    && (params.get("via_diameter_nm").is_none() || params.get("via_drill_nm").is_none()))
+        }
+        ADD_VIA => params.get("via_diameter_nm").is_none() || params.get("via_drill_nm").is_none(),
+        _ => false,
+    };
+    // Explicit GUI/pointer dimensions need no source-geometry lookup. The completed candidate
+    // still validates their actual classified membership before publication.
+    let policy = if needs_defaults {
+        let view = project
+            .board_view(project.resolve_board(params.get("board").and_then(Value::as_str))?)
+            .ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+        let (at, layer) = if command == ADD_TRACKS {
+            let points: Vec<Point> = param(params, "points")?;
+            (*points.first().ok_or_else(|| CommandError::InvalidParams("A route needs a starting point.".into()))?, Some(param(params, "layer")?))
+        } else {
+            (param(params, "at")?, None)
+        };
+        view.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions())
+    } else {
+        None
+    };
     let mut tracks = project.board.tracks.clone();
     let mut vias = project.board.vias.clone();
     let mut added = BTreeSet::new();
     if command == ADD_TRACKS {
         let mut layer: Uuid = param(params, "layer")?;
-        let width_nm: i64 = if params.get("width_nm").is_none() { effective.preferred_track_width_nm } else { param(params, "width_nm")? };
+        let explicit_width = params.get("width_nm").map(|_| param(params, "width_nm")).transpose()?;
+        let width_nm = match &policy {
+            Some(policy) => policy.track_width(explicit_width)?,
+            None => explicit_width.unwrap_or(effective.preferred_track_width_nm),
+        };
         let points: Vec<Point> = param(params, "points")?;
         if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
@@ -728,7 +759,16 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
                 param(params, name)
             }
         };
-        let (diameter_nm, drill_nm) = (size("via_diameter_nm")?, size("via_drill_nm")?);
+        let (diameter_nm, drill_nm) = if let Some(policy) = &policy
+            && !changes.is_empty()
+        {
+            policy.via_sizes(
+                params.get("via_diameter_nm").map(|_| param(params, "via_diameter_nm")).transpose()?,
+                params.get("via_drill_nm").map(|_| param(params, "via_drill_nm")).transpose()?,
+            )?
+        } else {
+            (size("via_diameter_nm")?, size("via_drill_nm")?)
+        };
         let mut changes = changes.iter().peekable();
         for (index, pair) in points.windows(2).enumerate() {
             if let Some(change) = changes.next_if(|change| change.at == index) {
@@ -763,17 +803,13 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         let id = crate::fresh_id()?;
         added.insert(id);
-        vias.push(Via {
-            id,
-            locked: false,
-            at,
-            diameter_nm: params
-                .get("via_diameter_nm")
-                .map(|_| param(params, "via_diameter_nm"))
-                .transpose()?
-                .unwrap_or(effective.preferred_via_diameter_nm),
-            drill_nm: params.get("via_drill_nm").map(|_| param(params, "via_drill_nm")).transpose()?.unwrap_or(effective.preferred_via_drill_nm),
-        });
+        let explicit_diameter = params.get("via_diameter_nm").map(|_| param(params, "via_diameter_nm")).transpose()?;
+        let explicit_drill = params.get("via_drill_nm").map(|_| param(params, "via_drill_nm")).transpose()?;
+        let (diameter_nm, drill_nm) = match &policy {
+            Some(policy) => policy.via_sizes(explicit_diameter, explicit_drill)?,
+            None => (explicit_diameter.unwrap_or(effective.preferred_via_diameter_nm), explicit_drill.unwrap_or(effective.preferred_via_drill_nm)),
+        };
+        vias.push(Via { id, locked: false, at, diameter_nm, drill_nm });
     } else if command == MOVE_TRACKS {
         let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
         let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;

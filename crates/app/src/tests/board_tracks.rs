@@ -6,6 +6,8 @@ use pcbcraft_engine::{
     persistence::encode_documents,
     schematic::Point,
 };
+use std::collections::BTreeSet;
+use uuid::Uuid;
 
 /// Two 0402 resistors whose first terminals share an accepted net, on a two-layer board,
 /// opened in the PCB layout with the Top copper layer active.
@@ -163,6 +165,133 @@ fn x_routes_between_pads_in_one_undoable_command() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     assert_eq!(airwires(&h).len(), 1);
+}
+
+/// Author classes through the shared command path until #303 provides editor controls.
+fn classify_route(h: &mut Harness<'_, PcbApp>, name: &str, rules: Value) -> Uuid {
+    let previous: BTreeSet<_> = h.state().session.project().unwrap().net_classes().definitions.iter().map(|class| class.id).collect();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::net_classes::CREATE, &json!({"name":name,"rules":rules,"expected_revision":revision}));
+    let class = h.state().session.project().unwrap().net_classes().definitions.iter().find(|class| !previous.contains(&class.id)).unwrap().id;
+    let report = h.state().session.project().unwrap().inspect_net_registry().unwrap();
+    let anchor = report["nets"][0]["anchor"].clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::nets::SET_CLASSES,
+        &json!({"target":{"kind":"derived","anchor":anchor},"classes":[class],"expected_revision":revision}),
+    );
+    h.run();
+    assert_eq!(h.state().message, None);
+    class
+}
+
+/// The actual X/click path adopts class dimensions once, paints their clearance, commits the
+/// same engine-validated width and restores the classified project through ordinary Undo.
+#[test]
+fn classified_route_uses_defaults_halo_and_shared_undo() {
+    for (theme, size) in [(ThemeChoice::Dark, egui::vec2(1400., 900.)), (ThemeChoice::Light, egui::vec2(960., 640.))] {
+        let mut h = routable();
+        h.set_size(size);
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        h.query_all_by_label("Fit board").next().unwrap().click();
+        h.run();
+        classify_route(&mut h, "Power", json!({"clearance_nm":700000,"min_track_width_nm":400000,"preferred_track_width_nm":500000}));
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let line = airwires(&h)[0].clone();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.from.position);
+        assert_eq!(h.state().views.active.board.tracks.width_nm, 500000);
+        assert_eq!(h.state().message, None);
+        let vertex = Point { x_nm: line.from.position.x_nm, y_nm: -2540000 };
+        let end = at(&h, vertex);
+        h.hover_at(end);
+        h.run();
+        let radius = at(&h, Point { x_nm: 950000, y_nm: 0 }).distance(at(&h, Point { x_nm: 0, y_nm: 0 }));
+        let ink = pcbcraft_chrome::Tokens::get().board_ink.gamma_multiply(0.19);
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path)
+            if path.fill==ink && path.points.iter().any(|point|point.distance(end+egui::vec2(radius,0.))<0.01))),
+            "{theme:?}"
+        );
+        click_route(&mut h, vertex);
+        click_route(&mut h, Point { x_nm: line.to.position.x_nm, y_nm: -2540000 });
+        click_route(&mut h, line.to.position);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while h.state().session.revision() == revision {
+            assert!(std::time::Instant::now() < deadline, "class route did not publish: {:?}", h.state().message);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(tracks(&h).iter().all(|track| track.width_nm == 500000));
+        assert!(airwires(&h).is_empty());
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// A rule edit revokes an active draft; conflicting defaults refuse pickup visibly instead of
+/// routing with a stale board preference or submitting a hidden partial edit.
+#[test]
+fn class_edits_revoke_drafts_and_unresolved_widths_report_errors() {
+    let mut h = routable();
+    let class = classify_route(&mut h, "Power", json!({"min_track_width_nm":400000,"preferred_track_width_nm":500000}));
+    let line = airwires(&h)[0].clone();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(h.state().views.active.board.tracks.routing());
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::net_classes::UPDATE,
+        &json!({"class":class,"name":"Power","rules":{"min_track_width_nm":500000,"preferred_track_width_nm":600000},"expected_revision":revision}),
+    );
+    h.run();
+    assert!(!h.state().views.active.board.tracks.routing());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click_route(&mut h, line.from.position);
+    assert_eq!(h.state().views.active.board.tracks.width_nm, 600000);
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::net_classes::CREATE,
+        &json!({"name":"Alternative","rules":{"preferred_track_width_nm":700000},"expected_revision":revision}),
+    );
+    let alternative = h.state().session.project().unwrap().net_classes().definitions.iter().find(|definition| definition.id != class).unwrap().id;
+    let anchor = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::nets::SET_CLASSES,
+        &json!({"target":{"kind":"derived","anchor":anchor},"classes":[class,alternative],"expected_revision":revision}),
+    );
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(!h.state().views.active.board.tracks.routing());
+    assert!(h.state().message.as_ref().is_some_and(|message| message.contains("unresolved")));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(tracks(&h).is_empty());
+    let anchor = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    h.state_mut()
+        .run(pcbcraft_engine::nets::SET_CLASSES, &json!({"target":{"kind":"derived","anchor":anchor},"classes":[],"expected_revision":revision}));
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert_eq!(h.state().message, None);
+    assert!(h.state().views.active.board.tracks.routing());
+    assert_eq!(h.state().views.active.board.tracks.width_nm, 250000);
 }
 
 /// Pads keep their exact copper contacts when the board uses a coarser or uneven grid. A route

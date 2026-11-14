@@ -22,9 +22,10 @@ they are not a fabrication qualification. Preferred dimensions must satisfy all
 hard limits, including the annular ring. Reversed or impossible bounds, invalid
 units and unsupported sizes are refused without partial changes. Changing rules
 does not resize or unlock existing copper: DRC reports any resulting violations.
-Explicit copper dimensions remain authored geometry, so they can be inspected
-and checked even when they violate a saved limit. Clearance enforcement while
-routing remains separate work.
+Existing and unclassified explicit copper dimensions remain authored geometry,
+so they can be inspected and checked even when they violate a saved limit.
+Changed copper carrying dimensional classes must satisfy its effective hard
+width/via limits. Obstacle clearance enforcement while routing remains separate work.
 
 ## Resolution and commands
 
@@ -52,8 +53,9 @@ recognized hard-limit fields; unknown keys are refused.
 The older explicit-clearance query API follows the same resolver.
 
 Omitting dimensions from `pcb.add_tracks` or `pcb.add_via` uses the corresponding
-board preferences, including layer-change vias. The GUI initializes its sizes
-from those same preferences. An explicit ribbon preset/custom size overrides the
+board preferences, including layer-change vias, unless the starting contact has
+applicable class preferences. The GUI initializes its sizes from those same
+preferences and adopts the contacted class defaults at pickup. An explicit ribbon preset/custom size overrides the
 upcoming geometry in that view until the board or its saved rules change;
 ordinary edits do not reset that choice. Rule edits invalidate unfinished route
 authority, prepared clearance results and previous DRC reports through the
@@ -74,10 +76,8 @@ same intent. The legacy diagnostic single-document encoder refuses to discard
 rules. This slice does not change the project, board-folder or archive layout.
 
 The [net-class catalog and explicit-set resolver](net-classes.md) are available
-through shared commands, independently of this board-default consumer path.
-[Persistent assignments](net-class-assignments.md) are available through shared
-commands. Class-aware routing/checking, relationship constraints
-and fabrication profiles remain under #77 and its follow-on issues. Dimensional
-assignments explicitly block unsupported consumers. This board-default resolver
-provides a shared consumer boundary without assigning rules by display names or
-claiming impedance, current-capacity or manufacturing verification.
+through shared commands, along with [persistent assignments](net-class-assignments.md).
+[Class-aware routing, queries and DRC](net-class-consumers.md) combine this board
+baseline with applicable class limits and retain both sources. Relationship
+constraints and fabrication profiles remain under #77 and its follow-on issues;
+this does not claim impedance, current-capacity or manufacturing verification.
