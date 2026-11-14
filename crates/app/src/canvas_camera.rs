@@ -15,8 +15,8 @@ pub(super) const MAX_ZOOM: f32 = 8.0;
 pub(super) const MAX_BOARD_ZOOM: f32 = 64.0;
 /// Start empty boards at 32 logical points/mm so ordinary copper widths are visible.
 const INITIAL_BOARD_ZOOM: f32 = 4.0;
-/// Definition editing needs the same detail range as board copper, including small pads and pins.
-pub(super) const MAX_DEFINITION_ZOOM: f32 = MAX_BOARD_ZOOM;
+/// Definition editing magnifies micron-scale details independently of whole-board navigation.
+pub(super) const MAX_DEFINITION_ZOOM: f32 = 1024.0;
 /// A wheel notch settles within this interval; live pinch gestures remain immediate.
 const WHEEL_ZOOM_SECONDS: f32 = 0.14;
 
@@ -386,7 +386,7 @@ impl Camera {
     /// Fit native library primitives and navigate without a project, sheet or placed board.
     /// Caller-provided extents use integer nanometres in the definition's local coordinates.
     /// Fit reserves its margin in screen space, so tiny artwork can fill the usable canvas;
-    /// wheel and pinch share the board's detail range without changing schematic navigation.
+    /// wheel and pinch use the authoring detail range without changing project navigation.
     pub(crate) fn navigate_definition(
         &mut self,
         response: &Response,

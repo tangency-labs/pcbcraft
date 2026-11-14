@@ -36,11 +36,12 @@ fn definition_detail_zoom_accepts_wheel_and_pinch_without_moving_the_anchor() {
         });
         h.run();
         assert!(h.state().library_editors.documents[&id].camera.zoom() > 8., "{kind:?} wheel stopped at the old schematic ceiling");
-        for _ in 0..3 {
+        for _ in 0..5 {
             h.event(egui::Event::Zoom(4.));
             h.run();
         }
         let doc = &h.state().library_editors.documents[&id];
+        assert!(doc.camera.zoom() > 64., "{kind:?} stopped at the former PCB detail ceiling");
         assert_eq!(doc.camera.zoom(), crate::canvas_camera::MAX_DEFINITION_ZOOM);
         let after = doc.camera.unsnapped(pointer, area);
         assert!((after.x_nm - anchor.x_nm).abs() <= 100 && (after.y_nm - anchor.y_nm).abs() <= 100);
@@ -63,11 +64,11 @@ fn tiny_footprint_fit_fills_the_clear_canvas_and_explicit_zoom_uses_the_same_lim
     assert!(doc.camera.zoom() > 8., "tiny footprint Fit stayed at {}", doc.camera.zoom());
     let before = doc.session.snapshot();
     let ctx = h.ctx.clone();
-    h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"zoom_percent":6400})).unwrap();
+    h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"zoom_percent":102400})).unwrap();
     h.run();
-    assert_eq!(h.state().library_editors.documents[&id].camera.zoom(), 64.);
-    assert!(h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"zoom_percent":6401})).is_err());
-    assert_eq!(h.state().library_editors.documents[&id].camera.zoom(), 64.);
+    assert_eq!(h.state().library_editors.documents[&id].camera.zoom(), 1024.);
+    assert!(h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"zoom_percent":102401})).is_err());
+    assert_eq!(h.state().library_editors.documents[&id].camera.zoom(), 1024.);
     h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"fit":true})).unwrap();
     h.run();
     assert!(h.state().library_editors.documents[&id].camera.zoom() > 8.);
@@ -84,7 +85,7 @@ fn magnified_footprint_pad_selection_and_fine_move_round_trip() {
     let (object, original) = (*object, original.anchor());
     {
         let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
-        doc.camera.set_zoom_with_limit(32., crate::canvas_camera::MAX_DEFINITION_ZOOM);
+        doc.camera.set_zoom_with_limit(512., crate::canvas_camera::MAX_DEFINITION_ZOOM);
         doc.camera.set_snap_nm(25_000);
         doc.camera.center_on(original);
     }
