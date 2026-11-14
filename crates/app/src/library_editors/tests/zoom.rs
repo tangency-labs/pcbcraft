@@ -42,7 +42,7 @@ fn definition_detail_zoom_accepts_wheel_and_pinch_without_moving_the_anchor() {
         }
         let doc = &h.state().library_editors.documents[&id];
         assert!(doc.camera.zoom() > 64., "{kind:?} stopped at the former PCB detail ceiling");
-        assert_eq!(doc.camera.zoom(), crate::canvas_camera::MAX_DEFINITION_ZOOM);
+        assert_eq!(doc.camera.zoom(), crate::canvas_camera::MAX_ZOOM);
         let after = doc.camera.unsnapped(pointer, area);
         assert!((after.x_nm - anchor.x_nm).abs() <= 100 && (after.y_nm - anchor.y_nm).abs() <= 100);
         assert!(Arc::ptr_eq(&before, &doc.session.snapshot()));
@@ -85,7 +85,7 @@ fn magnified_footprint_pad_selection_and_fine_move_round_trip() {
     let (object, original) = (*object, original.anchor());
     {
         let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
-        doc.camera.set_zoom_with_limit(512., crate::canvas_camera::MAX_DEFINITION_ZOOM);
+        doc.camera.set_zoom(512.);
         doc.camera.set_snap_nm(25_000);
         doc.camera.center_on(original);
     }

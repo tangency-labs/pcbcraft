@@ -1,7 +1,7 @@
 //! Document-addressed view state. Hosts own placement; the session owns authored data.
 
 use crate::{
-    canvas_camera::{Camera, MAX_BOARD_ZOOM, MAX_ZOOM},
+    canvas_camera::Camera,
     schematic_canvas::{Draft, LegTarget, Tool},
 };
 use pcbcraft_engine::{Session, SheetTarget, board::view::BoardTarget, selection::Selection};
@@ -32,14 +32,6 @@ impl Workspace {
         match self {
             Self::Schematic => "Schematic",
             Self::Board => "PCB Layout",
-        }
-    }
-
-    /// Maximum manual camera zoom for this workspace.
-    pub(super) fn max_zoom(self) -> f32 {
-        match self {
-            Self::Schematic => MAX_ZOOM,
-            Self::Board => MAX_BOARD_ZOOM,
         }
     }
 
@@ -139,15 +131,10 @@ fn filters_open_default() -> bool {
 impl ViewState {
     /// Bound layer data and validate transforms before replacing live views.
     pub(super) fn valid(&self) -> bool {
-        let workspace = self.target.workspace();
-        let parked = match workspace {
-            Workspace::Schematic => Workspace::Board,
-            Workspace::Board => Workspace::Schematic,
-        };
         self.title.len() <= 1024
             && self.panels.valid()
-            && self.camera.valid(workspace.max_zoom())
-            && self.parked_camera.valid(parked.max_zoom())
+            && self.camera.valid()
+            && self.parked_camera.valid()
             && self.hidden_layers.len() <= 128
             && self.hidden_layers.iter().chain(self.active_layer.iter()).all(|id| id.len() <= 128)
     }

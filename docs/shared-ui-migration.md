@@ -327,6 +327,12 @@ stay direct, while clicks, focus/host changes, blocked canvas input, Fit and
 explicit centering discard outstanding motion. The camera advances once per
 native viewport frame and requests repaint only until the target is reached.
 
+Schematic, PCB layout, symbol and footprint editors share one manual zoom range,
+up to 102400%, across wheel/pinch, live commands and saved camera validation.
+Initial framing, Fit and snap grids remain appropriate to each document's content.
+A workspace-specific manual ceiling needs a concrete constraint; none currently
+requires an exception.
+
 Dots and line grids fade their fine marks as their density limit approaches.
 Every fifth mark stays visible, matching the next coarser grid at the transition.
 Canvas and ribbon backgrounds use the same geometry and fade; actual snap spacing

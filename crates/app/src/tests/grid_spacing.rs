@@ -359,7 +359,7 @@ fn board_grid_button_reports_thinned_dots_without_changing_snap() {
     h.state_mut().preferences.board_grid_style = grid::Style::Dots;
     choose_grid(&mut h, "10 mil");
     let zoom = |h: &mut Harness<'_, PcbApp>, level: f32| {
-        h.state_mut().views.active.camera.set_zoom_with_limit(level, crate::canvas_camera::MAX_BOARD_ZOOM);
+        h.state_mut().views.active.camera.set_zoom(level);
         h.run();
         assert_eq!(h.state().views.active.camera.snap_nm(), 10 * MIL);
         grid::shown_every(h.state().views.active.camera.snap_step()).unwrap()

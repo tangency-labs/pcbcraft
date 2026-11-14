@@ -117,7 +117,7 @@ mod live {
     use crate::{
         Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
-        canvas_camera::{MAX_BOARD_ZOOM, MAX_DEFINITION_ZOOM},
+        canvas_camera::MAX_ZOOM,
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -546,7 +546,7 @@ mod live {
                     name: "zoom_percent",
                     summary: "Definition detail zoom percentage",
                     required: false,
-                    kind: Kind::Integer { min: 1, max: (MAX_DEFINITION_ZOOM * 100.) as i64, step: 1 },
+                    kind: Kind::Integer { min: 1, max: (MAX_ZOOM * 100.) as i64, step: 1 },
                 },
                 Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
                 Param {
@@ -651,14 +651,14 @@ mod live {
         WindowCommand {
             id: "view.zoom",
             title: "Zoom",
-            summary: "Zoom about the view center. The limit is 6400% in PCB layout and 800% in the schematic.",
+            summary: "Zoom about the view center within the shared editor range.",
             params: &[
                 VIEW,
                 Param {
                     name: "zoom_percent",
                     summary: "The zoom in percent",
                     required: true,
-                    kind: Kind::Integer { min: 1, max: (MAX_BOARD_ZOOM * 100.0) as i64, step: 1 },
+                    kind: Kind::Integer { min: 1, max: (MAX_ZOOM * 100.0) as i64, step: 1 },
                 },
             ],
         },
@@ -1329,12 +1329,7 @@ mod live {
                 ("view.zoom", Some((view, _)), _) => {
                     let percent = params["zoom_percent"].as_u64().unwrap_or(100);
                     if let Some(view) = self.views.view_mut(view) {
-                        let max_zoom = view.workspace.max_zoom();
-                        let max_percent = (max_zoom * 100.0) as u64;
-                        if percent > max_percent {
-                            return Err(format!("`zoom_percent` must be at most {max_percent} for this workspace."));
-                        }
-                        view.camera.set_zoom_with_limit(percent as f32 / 100.0, max_zoom);
+                        view.camera.set_zoom(percent as f32 / 100.0);
                     }
                 }
                 ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,
