@@ -35,7 +35,9 @@ pub fn workspace(
 ) -> Option<TreeAction> {
     let mut action = None;
     let t = Tokens::get();
-    let mut area = ui.available_rect_before_wrap().shrink(t.space_8);
+    // Compact columns meet the window edge and each other; Floating keeps PCBcraft's card insets.
+    let joined = crate::workspace::PanelStyle::compact(ui.ctx());
+    let mut area = ui.available_rect_before_wrap().shrink(if joined { 0.0 } else { t.space_8 });
     if area.width() < 1050.0 {
         browser.cancel_resize();
         preview_width.cancel_resize();
@@ -50,13 +52,13 @@ pub fn workspace(
                 preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, area, *collapsed, |ui| draw(ui, region));
             *collapsed ^= toggle;
         } else {
-            action = card(ui, area, region, if matches!(region, Region::Browser) { Some(&mut browser.collapsed) } else { None }, &mut draw);
+            action = card(ui, area, region, if matches!(region, Region::Browser) { Some(&mut browser.collapsed) } else { None }, false, &mut draw);
         }
     } else {
-        let gap = t.space_12;
+        let gap = if joined { 0.0 } else { t.space_12 };
         let default_right = (area.width() * 0.29).clamp(300.0, 440.0);
         let floating = preview.position() == crate::workspace::panels::Position::Floating;
-        let left = browser.resize(ui, area, area.width() - if floating { 0.0 } else { 240.0 + gap } - gap - 360.0);
+        let left = browser.resize(ui, area, gap, area.width() - if floating { 0.0 } else { 240.0 + gap } - gap - 360.0);
         let max_preview = (area.width() - left - gap * 2.0 - 360.0).max(240.0);
         let mut right = preview_width.width(default_right).clamp(240.0, max_preview);
         let browser_rect = Rect::from_min_max(area.min, pos2(area.left() + left, area.bottom()));
@@ -83,13 +85,18 @@ pub fn workspace(
             pos2(if !on_left && !floating { preview_rect.left() - gap } else { area.right() }, area.bottom()),
         );
         for (rect, region) in [(browser_rect, Region::Browser), (items, Region::Items)] {
-            action =
-                card(ui, rect, region, if matches!(region, Region::Browser) { Some(&mut browser.collapsed) } else { None }, &mut draw).or(action);
+            let collapsed = if matches!(region, Region::Browser) { Some(&mut browser.collapsed) } else { None };
+            action = card(ui, rect, region, collapsed, matches!(region, Region::Browser), &mut draw).or(action);
         }
-        let (_, toggle) =
-            preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, preview_rect.shrink(1.0), *collapsed, |ui| {
-                draw(ui, Region::Preview)
-            });
+        let (_, toggle) = preview.show_in_slot(
+            ui,
+            ui.scope_id().with("library_preview"),
+            "Preview",
+            area,
+            preview_rect.shrink(if joined { 0.0 } else { 1.0 }),
+            *collapsed,
+            |ui| draw(ui, Region::Preview),
+        );
         *collapsed ^= toggle;
     }
     ui.advance_cursor_after_rect(area);
@@ -97,19 +104,33 @@ pub fn workspace(
 }
 
 /// A card uses the same toolkit surface and font roles as the existing Browser and Properties.
-fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool>, draw: &mut impl FnMut(&mut Ui, Region)) -> Option<TreeAction> {
+/// Compact cards use the shared compact frame; `divider` draws one line at the card's right edge
+/// where another column joins it (the Browser beside Items). Preview draws its own divider.
+fn card(
+    ui: &mut Ui,
+    rect: Rect,
+    region: Region,
+    mut collapsed: Option<&mut bool>,
+    divider: bool,
+    draw: &mut impl FnMut(&mut Ui, Region),
+) -> Option<TreeAction> {
     let mut action = None;
     let id = match region {
         Region::Browser => "library_browser",
         Region::Items => "library_items",
         Region::Preview => "library_preview",
     };
-    let rect = rect.shrink(1.0);
+    let compact = crate::workspace::PanelStyle::compact(ui.ctx());
+    let rect = rect.shrink(if compact { 0.0 } else { 1.0 });
     let mut child = ui.new_child(UiBuilder::new().id_salt(id).max_rect(rect).layout(Layout::top_down(Align::Min)));
     child.set_clip_rect(ui.clip_rect().intersect(rect));
-    let frame = kit::panel_host_frame(ui.ctx(), true).inner_margin(Tokens::get().space_12);
+    let frame = if compact {
+        crate::workspace::panel_frame(ui.ctx(), false)
+    } else {
+        kit::panel_host_frame(ui.ctx(), true).inner_margin(Tokens::get().space_12)
+    };
     let margin = frame.total_margin().sum();
-    frame.show(&mut child, |ui| {
+    let shown = frame.show(&mut child, |ui| {
         let height = if collapsed.as_deref().copied().unwrap_or(false) { Tokens::get().control_height } else { rect.height() - margin.y };
         ui.set_min_size(vec2((rect.width() - margin.x).max(0.0), height.max(0.0)));
         ui.set_max_size(ui.min_size());
@@ -143,6 +164,10 @@ fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool
             draw(ui, region);
         }
     });
+    if compact && divider {
+        let divider = crate::workspace::Dividers { right: true, ..Default::default() };
+        crate::workspace::paint_dividers(child.painter(), shown.response.rect, divider);
+    }
     action
 }
 

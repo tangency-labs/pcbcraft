@@ -416,6 +416,10 @@ them all. Filters are independent for each view, are retained in local saved
 arrangements, and leave the project unchanged; unavailable object types are disabled.
 Drag the title of Selection filters, Layers or Properties to float or dock the
 card, or use its **…** menu for **Float**, **Dock left** and **Dock right**.
+Preferences → Appearance → **Panel style** switches the ribbon, Browser and
+docked cards between **Floating**, which keeps rounded cards clear of the
+window edge, and **Compact**, which joins them to it and to each other. Cards placed over the canvas stay
+floating, and each view keeps its own dock side and positions.
 
 To edit an existing footprint, hover it and press **M**, move the pointer, then
 click to place it, or drag the footprint with the left mouse button. **R** rotates

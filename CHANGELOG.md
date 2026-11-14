@@ -2,6 +2,17 @@
 
 ## 0.1.0 (unreleased)
 
+Preferences → Appearance → **Panel style** switches the workspace shell
+between **Floating** cards and a **Compact** layout, following SolidCraft. In
+Compact the ribbon, workspace tile, Browser, Net Inspector, docked panels and
+the Parts Library columns lose their gaps, shadows and outlines and join the
+window edge and each other with single dividers and tighter padding; cards
+docked in the same column stack directly beneath each other. The Symbol and
+Footprint editors no longer show a dark strip between the ribbon and the
+canvas. The choice is remembered with your settings and available
+through `app.set_preferences`; each view keeps its saved dock side and floating
+positions, and project data and history are unchanged.
+
 PCB views now remember their own snap spacing and presets separately from
 schematic views. Choosing a board grid no longer replaces the schematic startup
 spacing, and switching workspaces restores each editor's choice. Both default to

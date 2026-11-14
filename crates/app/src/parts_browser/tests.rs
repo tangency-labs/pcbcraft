@@ -312,6 +312,24 @@ fn compact_placement_and_keyboard_focus_leave_the_catalog_open() {
     assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Wire { .. })));
 }
 
+/// The compact catalog follows the shared Panel style: its docked card meets the canvas edge
+/// without changing its saved side, contents or the project.
+#[test]
+fn compact_catalog_follows_panel_style() {
+    let mut h = editor(1400.);
+    click(&mut h, "Dock Parts Catalog");
+    let before = h.state().session.inspect();
+    let placement = h.state().parts.panel.saved_state();
+    let floating = h.get_by_label("Move Parts Catalog").rect();
+    h.state_mut().preferences.panel_style = pcbcraft_chrome::workspace::PanelStyle::Compact;
+    h.run();
+    let compact = h.get_by_label("Move Parts Catalog").rect();
+    assert!((compact.left() - floating.left()).abs() > 8.0, "the card should move to the edge: {floating:?} {compact:?}");
+    assert!((compact.top() - floating.top()).abs() > 8.0, "the floating gap should disappear: {floating:?} {compact:?}");
+    assert_eq!(h.state().parts.panel.saved_state(), placement);
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// Supply selection and custom names survive both presentation switches and compact placement.
 #[test]
 fn power_name_survives_round_trip_and_compact_placement() {

@@ -592,3 +592,25 @@ fn workspace_names_order_and_consistent_tile_widths() {
         assert!(h.get_by_label("Parts Library").rect().top() < h.get_by_label("Symbol Editor").rect().top());
     }
 }
+
+/// Compact panel style joins the library's Browser, Items and Preview columns to the window
+/// edges and each other; Floating restores PCBcraft's card insets without changing the source.
+#[test]
+fn compact_panel_style_joins_library_columns() {
+    use pcbcraft_chrome::workspace::PanelStyle;
+    let mut h = fixture(1800.);
+    let before = h.state().session.inspect();
+    let rects = |h: &Harness<'_, PcbApp>| ["Built-in", "Collapse Browser", "Move Preview"].map(|label| h.get_by_label(label).rect());
+    let [row, browser, preview] = rects(&h);
+    h.state_mut().preferences.panel_style = PanelStyle::Compact;
+    h.run();
+    let [compact_row, compact_browser, compact_preview] = rects(&h);
+    assert!(compact_row.left() < row.left() - 8.0, "the Browser meets the window edge: {row:?} {compact_row:?}");
+    assert!(compact_browser.top() < browser.top() - 8.0, "the Browser meets the ribbon: {browser:?} {compact_browser:?}");
+    assert!(compact_preview.top() < preview.top() - 4.0, "Preview meets the ribbon: {preview:?} {compact_preview:?}");
+    assert!(compact_preview.right() > preview.right() + 4.0, "Preview meets the window edge: {preview:?} {compact_preview:?}");
+    h.state_mut().preferences.panel_style = PanelStyle::Floating;
+    h.run();
+    assert_eq!(rects(&h), [row, browser, preview]);
+    assert_eq!(h.state().session.inspect(), before);
+}

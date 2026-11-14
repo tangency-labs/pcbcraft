@@ -123,6 +123,7 @@ mod live {
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
         schematic_canvas::Tool,
     };
+    use pcbcraft_chrome::workspace::PanelStyle;
 
     /// The kinds of value a window command parameter takes.
     #[derive(Clone, Copy, Debug)]
@@ -362,6 +363,7 @@ mod live {
     const FOLLOW: &[&str] = &["off", "both", "secondary_follows_primary", "primary_follows_secondary"];
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
+    const PANEL_STYLES: &[&str] = &["floating", "compact"];
     const PANELS: &[&str] = &["browser", "parts", "nets", "properties", "selection_filters"];
     const CATALOG_MODES: &[&str] = &["expanded", "compact"];
     const TABS: &[&str] = &["capture", "layout", "sheets", "analyze", "libraries", "manage", "route", "draw", "manufacture", "view"];
@@ -995,6 +997,7 @@ mod live {
                 setting("zoom_around", "The point that stays still while zooming", Kind::Choice(ZOOM_AROUND)),
                 setting("middle_drag_zoom", "Make middle-button drag zoom instead of panning", Kind::Bool),
                 setting("right_drag_pan", "Make right-button drag pan instead of selecting a box", Kind::Bool),
+                setting("panel_style", "How the ribbon and edge panels are framed", Kind::Choice(PANEL_STYLES)),
             ],
         },
         WindowCommand {
@@ -1056,6 +1059,7 @@ mod live {
             "zoom_around": match preferences.navigation.zoom_around { ZoomAround::Pointer => "pointer", ZoomAround::Center => "center" },
             "middle_drag_zoom": preferences.navigation.middle_drag_zoom,
             "right_drag_pan": preferences.navigation.right_drag_pan,
+            "panel_style": match preferences.panel_style { PanelStyle::Floating => "floating", PanelStyle::Compact => "compact" },
         })
     }
 
@@ -1118,6 +1122,9 @@ mod live {
         }
         if let Some(pan) = params.get("right_drag_pan").and_then(Value::as_bool) {
             preferences.navigation.right_drag_pan = pan;
+        }
+        if let Some(style) = text("panel_style") {
+            preferences.panel_style = if style == "compact" { PanelStyle::Compact } else { PanelStyle::Floating };
         }
         preferences
     }
@@ -1764,9 +1771,14 @@ mod live {
         fn preferences_round_trip_through_their_command_names() {
             let changed = updated_preferences(
                 Preferences::default(),
-                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots"}),
+                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots", "panel_style": "compact"}),
             );
+            assert_eq!(changed.panel_style, PanelStyle::Compact);
+            assert!(changed.navigation.middle_drag_zoom && changed.navigation.right_drag_pan);
             let inspected = inspect_preferences(&changed);
+            assert_eq!(inspected["panel_style"], "compact");
+            assert_eq!(inspected["middle_drag_zoom"], true);
+            assert_eq!(inspected["right_drag_pan"], true);
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);
             assert_eq!(updated_preferences(changed, &json!({})), changed);
             assert_eq!(changed.scale_percent, Preferences::default().scale_percent);

@@ -967,20 +967,26 @@ impl PcbApp {
             |(panels, _)| panels.to_vec(),
         );
         covered.push(assistant);
+        let compact = self.preferences.panel_style == pcbcraft_chrome::workspace::PanelStyle::Compact;
+        let mut properties_rect = Rect::NOTHING;
         if project_focus && !board {
             let inspector_area = properties_area;
             self.net_inspector.show(ui, self.views.active.snapshot(&self.session), inspector_area);
-            if self.net_inspector.open {
-                covered.push(self.net_inspector.rect);
-            } else {
-                covered.push(self.selection_properties(ui, area, properties_area));
-            }
+            properties_rect = if self.net_inspector.open { self.net_inspector.rect } else { self.selection_properties(ui, area, properties_area) };
+            covered.push(properties_rect);
         }
+        // Compact columns close up beneath the Properties or Net Inspector card drawn above.
+        let filters_area = if board {
+            filters_area
+        } else {
+            use crate::workspace_panels::{FILTERS, PROPERTIES, follow, on_side};
+            follow(filters_area, [on_side(&slot_panels, PROPERTIES, slot_panels[FILTERS].position(), properties_rect)], compact)
+        };
         if board && let Some((panels, _)) = board_panel {
             // The DRC card floats on the right below Properties, leaving Layers and Properties clear.
             let mut drc_area = area;
             // `board_panels` returns the Browser, Layers and Properties cards in that order.
-            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + 8.);
+            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + if compact { 0. } else { 8. });
             let revision = self.session.revision();
             match self.views.active.board.drc.show(ui, drc_area, revision, self.preferences.units) {
                 crate::board_drc::Action::Focus(at) => self.views.active.camera.center_on(at),

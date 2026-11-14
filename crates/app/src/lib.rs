@@ -2285,6 +2285,7 @@ impl PcbApp {
     }
 
     fn sync_style(&mut self, ctx: &egui::Context) {
+        self.preferences.panel_style.publish(ctx);
         let dark = self.preferences.is_dark(ctx.system_theme());
         let zoom = self.preferences.zoom();
         if self.applied.is_none() {

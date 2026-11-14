@@ -5,6 +5,8 @@ use egui::{
     WidgetInfo, pos2, vec2,
 };
 
+use solidcraft_ui_kit::LayoutMode;
+
 use crate::{Tokens, fonts, menu::CheckKind};
 
 pub mod catalog;
@@ -160,9 +162,108 @@ const FLOATING_MARGIN: f32 = 10.0;
 const FLOATING_RADIUS: u8 = 12;
 const FLOATING_HEADER: f32 = 24.0;
 
-/// The shared surface for cards that overlay the canvas.
-fn floating_frame(ctx: &egui::Context) -> Frame {
-    solidcraft_ui_kit::panel_host_frame(ctx, true).inner_margin(Margin::same(FLOATING_MARGIN as i8))
+/// How the workspace shell is framed, following SolidCraft's Panel style preference.
+///
+/// Floating keeps the ribbon, workspace tile and edge-anchored cards as separate rounded cards
+/// with a gap to the window edge and each other. Compact uses the toolkit's joined container:
+/// those surfaces lose their gaps, shadows and outer corner radii and meet the window edge and
+/// their neighbours. Cards a person explicitly placed over the canvas stay floating in either
+/// style. PCBcraft owns the saved names; the frame value is the toolkit's `LayoutMode`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelStyle {
+    #[default]
+    Floating,
+    Compact,
+}
+
+impl PanelStyle {
+    /// Publish this frame's style as the toolkit's `LayoutMode`, so shared containers built with
+    /// `Container::new` (including `panel_host_frame(ctx, false)`) adopt it. Call once per frame
+    /// before any workspace chrome is drawn.
+    pub fn publish(self, ctx: &egui::Context) {
+        match self {
+            Self::Floating => LayoutMode::Floating,
+            Self::Compact => LayoutMode::Docked,
+        }
+        .publish(ctx);
+    }
+
+    /// Read the style published for this frame; Floating when no host published one.
+    pub fn current(ctx: &egui::Context) -> Self {
+        match LayoutMode::current(ctx) {
+            LayoutMode::Floating => Self::Floating,
+            LayoutMode::Docked => Self::Compact,
+        }
+    }
+
+    /// Whether `ctx` is drawing the joined Compact shell this frame.
+    pub fn compact(ctx: &egui::Context) -> bool {
+        Self::current(ctx) == Self::Compact
+    }
+}
+
+/// Distance between an edge-anchored card and the edge it is anchored to: PCBcraft's 12-point
+/// floating gap, or none in the Compact style.
+fn edge_gap(ctx: &egui::Context) -> f32 {
+    if PanelStyle::compact(ctx) { 0.0 } else { FLOATING_GAP }
+}
+
+/// Content inset of a compact card: tighter than the floating card's 10-point margin.
+const COMPACT_MARGIN: Margin = Margin { left: 8, right: 8, top: 4, bottom: 6 };
+
+/// Select the toolkit's panel container with PCBcraft's content inset. `floating` cards (placed
+/// over the canvas) always keep the rounded card; edge-anchored cards follow the published style.
+///
+/// A compact card uses the toolkit's square, unshadowed compact container without its stroke:
+/// that stroke outlines every side and only merges with a neighbour through a negative outer
+/// margin, which `panel_host_frame` resets, so adjoining cards would show doubled lines. The
+/// caller paints single dividers on canvas-facing sides with [`paint_dividers`] instead.
+pub(crate) fn panel_frame(ctx: &egui::Context, floating: bool) -> Frame {
+    if !floating && PanelStyle::compact(ctx) {
+        solidcraft_ui_kit::panel_host_frame(ctx, false).stroke(Stroke::NONE).inner_margin(COMPACT_MARGIN)
+    } else {
+        solidcraft_ui_kit::panel_host_frame(ctx, floating).inner_margin(Margin::same(FLOATING_MARGIN as i8))
+    }
+}
+
+/// Which sides of a compact surface face the canvas and receive a one-line divider. Sides
+/// against the window edge or another compact surface are left open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Dividers {
+    pub left: bool,
+    pub right: bool,
+    pub bottom: bool,
+}
+
+impl Dividers {
+    /// Dividers for a card anchored to the left or `right` edge of `area`: its canvas-facing
+    /// side and its bottom, unless the card reaches the area's bottom edge.
+    pub(crate) fn edge_card(rect: Rect, area: Rect, right: bool) -> Self {
+        Self { left: right, right: !right, bottom: rect.bottom() < area.bottom() - 1.0 }
+    }
+}
+
+/// Paint single theme-border lines just inside the requested sides of `rect`.
+pub(crate) fn paint_dividers(painter: &egui::Painter, rect: Rect, dividers: Dividers) {
+    let t = solidcraft_theme::Tokens::get();
+    let stroke = t.primary_border(t.border);
+    let inner = rect.shrink(stroke.width / 2.0);
+    if dividers.left {
+        painter.vline(inner.left(), rect.y_range(), stroke);
+    }
+    if dividers.right {
+        painter.vline(inner.right(), rect.y_range(), stroke);
+    }
+    if dividers.bottom {
+        painter.hline(rect.x_range(), inner.bottom(), stroke);
+    }
+}
+
+/// Height of a card's header, frame border and inner margin, excluding the floating gap.
+pub(crate) fn card_header_height() -> f32 {
+    let t = solidcraft_theme::Tokens::get();
+    FLOATING_HEADER + 2.0 * (FLOATING_MARGIN + t.primary_border(t.border).width)
 }
 
 /// The drawing on a workspace's tile in the picker.
@@ -324,19 +425,29 @@ pub fn ribbon_with_controls(
     let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 } + extra_tab_rows * t.control_height + extra_controls;
     let painter = ui.painter().clone();
     let background = painter.add(Shape::Noop);
+    // Floating cards sit inside a margin; Compact cards meet the window edges and each other.
+    let compact_shell = PanelStyle::compact(ui.ctx());
+    let shell_margin = if compact_shell { Margin::ZERO } else { Margin::symmetric(t.space_8 as i8, t.space_6 as i8) };
     let panel = Panel::top("workspace_ribbon")
-        .default_size(height + 2.0 * t.space_6)
-        .min_size(height + 2.0 * t.space_6)
+        .default_size(height + shell_margin.sum().y)
+        .min_size(height + shell_margin.sum().y)
         .resizable(false)
         .show_separator_line(false)
-        .frame(Frame::new().fill(Color32::TRANSPARENT).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)))
+        // A compact shell fills any rounding slack with the cards' own surface, so no seam shows.
+        .frame(Frame::new().fill(if compact_shell { card(ui.ctx(), 0.0).fill } else { Color32::TRANSPARENT }).inner_margin(shell_margin))
         .show(ui, |ui| {
             let mut picked = None;
             let mut quick_pick = None;
             ui.horizontal_top(|ui| {
+                let spacing = ui.spacing().item_spacing;
+                if compact_shell {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                }
                 // Reserve the leading column, then measure the command card before drawing its peer.
                 let workspace_rect = wide.then(|| ui.allocate_space(vec2(WORKSPACE_WIDTH, height)).1);
                 let ribbon_card = card(ui.ctx(), t.space_4).show(ui, |ui| {
+                    // The joined-card spacing applies only between the two cards.
+                    ui.spacing_mut().item_spacing = spacing;
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
@@ -458,11 +569,19 @@ pub fn ribbon_with_controls(
                             )
                         })
                         .inner;
+                    if compact_shell {
+                        // One divider between the joined workspace tile and command card.
+                        paint_dividers(ui.painter(), rect, Dividers { right: true, ..Dividers::default() });
+                    }
                     picked = picker(ui, &tile, workspaces, !was_open);
                 }
             });
             (picked, quick_pick)
         });
+    if compact_shell {
+        // The joined ribbon's only outline is its edge against the canvas.
+        paint_dividers(ui.painter(), panel.response.rect, Dividers { bottom: true, ..Dividers::default() });
+    }
     RibbonResponse {
         workspace: panel.inner.0,
         quick: panel.inner.1,
@@ -1126,7 +1245,9 @@ pub fn canvas_heading(p: &egui::Painter, canvas: Rect, left_panel: Rect, right_p
     let t = Tokens::get();
     let left = if left_panel.is_finite() { left_panel.right() + FLOATING_GAP } else { canvas.left() + FLOATING_GAP };
     let right = if right_panel.is_finite() { right_panel.left() - FLOATING_GAP } else { canvas.right() - FLOATING_GAP };
-    let y = canvas.top() + FLOATING_GAP + FLOATING_HEADER / 2.0 + FLOATING_MARGIN;
+    // Centre on the Browser header, which sits at the edge gap of the current Panel style.
+    let inset = if PanelStyle::compact(p.ctx()) { f32::from(COMPACT_MARGIN.top) } else { FLOATING_MARGIN };
+    let y = canvas.top() + edge_gap(p.ctx()) + FLOATING_HEADER / 2.0 + inset;
     let count_width = p.layout_no_wrap(count.to_owned(), FontId::proportional(t.font_body), ink[1]).size().x;
     let width = (right - count_width - t.space_24 - left).max(0.0);
     let galley = elided(p, title, FontId::proportional(t.font_button + 1.0), ink[0], width);
@@ -1188,13 +1309,18 @@ pub fn floating_card_with_id(ui: &Ui, id: egui::Id, title: &str, area: Rect, col
 
 /// Minimum area height needed for a floating card's header, frame and edge clearance.
 pub(crate) fn floating_card_min_height() -> f32 {
-    let t = solidcraft_theme::Tokens::get();
-    FLOATING_HEADER + 2.0 * (FLOATING_MARGIN + t.primary_border(t.border).width) + 2.0 * FLOATING_GAP
+    card_header_height() + 2.0 * FLOATING_GAP
+}
+
+/// Minimum area height for a docked card; a compact card omits the floating edge clearance.
+pub(crate) fn panel_min_height(compact: bool) -> f32 {
+    card_header_height() + if compact { 0.0 } else { 2.0 * FLOATING_GAP }
 }
 
 /// Anchor a workspace card to either canvas edge, retaining shared dimensions and collapse behavior.
 /// Short areas omit the body, or the entire card when its header cannot fit, without changing
-/// the caller's collapse preference. The body scrolls within the available height.
+/// the caller's collapse preference. The body scrolls within the available height. Floating
+/// style insets the card 12 points from the corner; Compact joins it to the area's edges.
 #[allow(clippy::too_many_arguments)]
 pub fn floating_card_aligned(
     ui: &Ui,
@@ -1223,34 +1349,40 @@ pub fn floating_card_width(
     add: impl FnOnce(&mut Ui),
 ) -> (Rect, bool) {
     let t = Tokens::get();
-    let width = width.min((area.width() - 2.0 * FLOATING_GAP).max(1.0));
-    if area.height() < floating_card_min_height() {
+    let compact = PanelStyle::compact(ui.ctx());
+    let gap = edge_gap(ui.ctx());
+    let width = width.min((area.width() - 2.0 * gap).max(1.0));
+    if area.height() < panel_min_height(compact) {
         return (Rect::NOTHING, false);
     }
-    let height = area.height() - 2.0 * FLOATING_GAP;
-    let body_height = (height - 2.0 * (FLOATING_MARGIN + 1.0) - FLOATING_HEADER - t.space_8).max(0.0);
-    let frame = floating_frame(ui.ctx());
+    let height = area.height() - 2.0 * gap;
+    // These cards are always anchored to an edge, so they follow the published Panel style.
+    let frame = panel_frame(ui.ctx(), false);
+    let margins = frame.total_margin().sum();
+    let body_height = (height - margins.y - FLOATING_HEADER - t.space_8).max(0.0);
     let shown = egui::Area::new(id)
         .enabled(ui.is_enabled())
         .order(egui::Order::Middle)
-        .fixed_pos(pos2(if right { area.right() - width - FLOATING_GAP } else { area.left() + FLOATING_GAP }, area.top() + FLOATING_GAP))
+        .fixed_pos(pos2(if right { area.right() - width - gap } else { area.left() + gap }, area.top() + gap))
         .constrain(false)
         .show(ui.ctx(), |ui| {
             // An area otherwise offers only last frame's size, so rows just unfolded would
             // scroll inside the old card instead of growing it.
             ui.set_max_height(height);
-            frame
-                .show(ui, |ui| {
-                    ui.set_width(width - 2.0 * (FLOATING_MARGIN + 1.0));
-                    ui.spacing_mut().item_spacing.y = t.space_2;
-                    let toggle = card_header(ui, title, collapsed).clicked();
-                    if !collapsed && body_height > 0.0 {
-                        ui.separator();
-                        ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, add);
-                    }
-                    toggle
-                })
-                .inner
+            let card = frame.show(ui, |ui| {
+                ui.set_width(width - margins.x);
+                ui.spacing_mut().item_spacing.y = t.space_2;
+                let toggle = card_header(ui, title, collapsed).clicked();
+                if !collapsed && body_height > 0.0 {
+                    ui.separator();
+                    ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, add);
+                }
+                toggle
+            });
+            if compact {
+                paint_dividers(ui.painter(), card.response.rect, Dividers::edge_card(card.response.rect, area, right));
+            }
+            card.inner
         });
     (shown.response.rect, shown.inner)
 }
@@ -1341,11 +1473,15 @@ fn card_contents(ui: &mut Ui, title: &str, max_body_height: f32, closable: bool,
     close
 }
 
-/// Shared bordered surface for the ribbon and inspector.
+/// Shared bordered surface for the ribbon, workspace tile and inspector. It follows the published
+/// Panel style: a rounded shadowed card when Floating, the toolkit's square joined card when
+/// Compact. Compact drops the toolkit's all-round stroke and negative outer margin; the caller
+/// paints single dividers where the surface meets the canvas or its neighbour.
 fn card(ctx: &egui::Context, inset: f32) -> Frame {
-    solidcraft_ui_kit::Container::floating_card(solidcraft_ui_kit::Surface::Chrome)
+    let frame = solidcraft_ui_kit::Container::new(ctx, solidcraft_ui_kit::Surface::Chrome)
         .frame(ctx, Tokens::get().panel, solidcraft_ui_kit::frame::Side::Left)
-        .inner_margin(Margin::same(inset as i8))
+        .inner_margin(Margin::same(inset as i8));
+    if PanelStyle::compact(ctx) { frame.stroke(Stroke::NONE).outer_margin(0) } else { frame }
 }
 
 /// Draw a workspace's icon, `size` points square, in the theme's icon colour roles. Planned
@@ -1738,5 +1874,33 @@ mod ribbon_tests {
             });
         });
         output.textures_delta.clear();
+    }
+
+    /// Panel style reaches the toolkit's own layout value, so edge-anchored and ribbon cards use
+    /// the joined compact container (square, unshadowed) while canvas-floating cards keep theirs.
+    #[test]
+    fn panel_style_selects_the_toolkits_joined_container() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        assert_eq!(PanelStyle::current(&ctx), PanelStyle::Floating);
+        let floating = (panel_frame(&ctx, false), card(&ctx, 4.0));
+        assert!(floating.0.corner_radius.nw > 0 && floating.0.shadow.blur > 0, "a floating-style docked card is rounded and shadowed");
+        assert!(floating.1.corner_radius.nw > 0, "a floating-style ribbon card is rounded");
+        assert!((edge_gap(&ctx) - FLOATING_GAP).abs() < f32::EPSILON);
+
+        PanelStyle::Compact.publish(&ctx);
+        assert_eq!(LayoutMode::current(&ctx), LayoutMode::Docked, "the toolkit's containers must see the Compact style");
+        assert_eq!(PanelStyle::current(&ctx), PanelStyle::Compact);
+        for frame in [panel_frame(&ctx, false), card(&ctx, 4.0)] {
+            assert_eq!(frame.corner_radius, egui::CornerRadius::ZERO, "compact cards join their edges");
+            assert_eq!(frame.shadow.blur, 0, "compact cards drop the floating shadow");
+            assert_eq!(frame.stroke, Stroke::NONE, "compact cards draw single dividers instead of an all-round outline");
+            assert_eq!(frame.outer_margin, Margin::ZERO);
+        }
+        assert_eq!(panel_frame(&ctx, true), floating.0.clone(), "cards placed over the canvas stay floating");
+        assert_eq!(edge_gap(&ctx), 0.0);
+
+        PanelStyle::Floating.publish(&ctx);
+        assert_eq!(panel_frame(&ctx, false), floating.0);
     }
 }

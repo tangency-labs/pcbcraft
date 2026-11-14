@@ -1,5 +1,5 @@
 //! Movable contextual cards share the workspace frame and Parts' edge-docking gestures.
-use super::{FLOATING_GAP, FLOATING_HEADER, FLOATING_RADIUS, floating_card_min_height, floating_frame};
+use super::{FLOATING_GAP, FLOATING_HEADER, FLOATING_RADIUS};
 use crate::{MenuItem, Tokens, menu};
 use egui::{Align2, Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
@@ -324,8 +324,9 @@ impl Panel {
         let floating = self.state.position == Position::Floating;
         let area = if floating { canvas } else { dock };
         let fill_slot = slot && !floating;
-        let gap = if fill_slot { 0.0 } else { FLOATING_GAP };
-        if area.height() < floating_card_min_height() || !area.is_positive() {
+        let compact = !floating && super::PanelStyle::compact(ui.ctx());
+        let gap = if fill_slot || compact { 0.0 } else { FLOATING_GAP };
+        if area.height() < super::panel_min_height(compact) || !area.is_positive() {
             self.cancel_drag();
             return (Rect::NOTHING, false);
         }
@@ -339,7 +340,9 @@ impl Panel {
         } else {
             area.height() - 2.0 * gap
         };
-        let body_height = (height - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
+        let frame = super::panel_frame(ui.ctx(), floating);
+        let margins = frame.total_margin().sum();
+        let body_height = (height - margins.y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
         let bounds = canvas.shrink(gap);
         let desired = if floating {
             self.state.at.map(|[x, y]| canvas.min + vec2(x, y)).unwrap_or(bounds.min + vec2(32.0, 32.0))
@@ -348,13 +351,9 @@ impl Panel {
         };
         let at = pos2(
             desired.x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())),
-            desired.y.clamp(
-                bounds.top(),
-                (bounds.bottom() - if slot && floating { height } else { floating_card_min_height() - 2.0 * FLOATING_GAP }).max(bounds.top()),
-            ),
+            desired.y.clamp(bounds.top(), (bounds.bottom() - if slot && floating { height } else { super::card_header_height() }).max(bounds.top())),
         );
-        let body_height = body_height
-            .min((bounds.bottom() - at.y - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
+        let body_height = body_height.min((bounds.bottom() - at.y - margins.y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
         let t = Tokens::get();
         let shown = egui::Area::new(id)
             .enabled(ui.is_enabled())
@@ -365,15 +364,15 @@ impl Panel {
             .fade_in(false)
             .show(ui.ctx(), |ui| {
                 ui.set_max_height(height);
-                let frame = floating_frame(ui.ctx()).show(ui, |ui| {
-                    ui.set_width(width - floating_frame(ui.ctx()).total_margin().sum().x);
+                let frame = frame.show(ui, |ui| {
+                    ui.set_width(width - margins.x);
                     if slot && !collapsed {
-                        ui.set_min_height((height - floating_frame(ui.ctx()).total_margin().sum().y).max(0.0));
+                        ui.set_min_height((height - margins.y).max(0.0));
                     }
                     ui.spacing_mut().item_spacing.y = t.space_2;
                     let mut collapse = false;
                     ui.horizontal(|ui| {
-                        let header_width = (width - floating_frame(ui.ctx()).total_margin().sum().x).min(ui.available_width());
+                        let header_width = (width - margins.x).min(ui.available_width());
                         let remaining = (header_width - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
                         let (id, header) = ui.allocate_space(vec2(remaining, FLOATING_HEADER));
                         let response = super::panel_header_control(ui, id, header, title, true);
@@ -438,6 +437,10 @@ impl Panel {
                 });
                 if slot && floating && !collapsed {
                     self.resize_edges(ui, id, title, frame.response.rect, canvas);
+                }
+                if compact {
+                    let right = self.state.position == Position::Right;
+                    super::paint_dividers(ui.painter(), frame.response.rect, super::Dividers::edge_card(frame.response.rect, area, right));
                 }
                 frame.inner
             });

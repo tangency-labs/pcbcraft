@@ -88,6 +88,26 @@ pub(super) fn areas(canvas: Rect, browser: Rect, panels: &[Panel; 3], visible: [
     result
 }
 
+/// In the Compact panel style, start a docked card directly beneath the cards already drawn
+/// above it in the same column, instead of at its precomputed share of the column, so a column
+/// reads as one stack with no canvas between its cards. `above` holds the rectangles actually
+/// shown this frame for earlier cards on the same side; empty or hidden ones are ignored. The
+/// slot keeps its bottom edge. Floating style, and slots with nothing above, are unchanged.
+pub(super) fn follow(slot: Rect, above: impl IntoIterator<Item = Rect>, compact: bool) -> Rect {
+    if !compact || !slot.is_positive() {
+        return slot;
+    }
+    match above.into_iter().filter(|rect| rect.is_positive()).map(|rect| rect.bottom()).reduce(f32::max) {
+        Some(bottom) if bottom < slot.bottom() => Rect::from_min_max(egui::pos2(slot.left(), bottom), slot.max),
+        _ => slot,
+    }
+}
+
+/// The shown rectangle of card `index` when it is docked on `side`; nothing otherwise.
+pub(super) fn on_side(panels: &[Panel; 3], index: usize, side: Position, rect: Rect) -> Rect {
+    if panels[index].position() == side && side != Position::Floating { rect } else { Rect::NOTHING }
+}
+
 impl PcbApp {
     /// Apply a card position atomically through the GUI/live shared placement state. Layers
     /// requires a PCB view; Properties also supports definition panes. Unknown panels, bad
@@ -156,4 +176,26 @@ impl PcbApp {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn inspect(panels: &[Panel; 3]) -> Value {
     json!({"layers":panels[LAYERS].saved_state(),"properties":panels[PROPERTIES].saved_state(),"selection_filters":panels[FILTERS].saved_state()})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::pos2;
+
+    /// Compact columns close up under the card drawn above; Floating keeps the shared split.
+    #[test]
+    fn compact_cards_follow_the_card_above() {
+        let slot = Rect::from_min_max(pos2(0., 400.), pos2(300., 800.));
+        let properties = Rect::from_min_max(pos2(40., 0.), pos2(300., 220.));
+        assert_eq!(follow(slot, [properties], true), Rect::from_min_max(pos2(0., 220.), pos2(300., 800.)));
+        assert_eq!(follow(slot, [properties], false), slot, "floating keeps its split");
+        assert_eq!(follow(slot, [Rect::NOTHING], true), slot, "a hidden card above is ignored");
+        assert_eq!(follow(slot, [Rect::from_min_max(pos2(40., 0.), pos2(300., 900.))], true), slot, "never invert the slot");
+        let mut panels = defaults();
+        panels[PROPERTIES].set_position(Position::Right, None);
+        panels[FILTERS].set_position(Position::Left, None);
+        assert_eq!(on_side(&panels, PROPERTIES, Position::Left, properties), Rect::NOTHING);
+        assert_eq!(on_side(&panels, PROPERTIES, Position::Right, properties), properties);
+    }
 }

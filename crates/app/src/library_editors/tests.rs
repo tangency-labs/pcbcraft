@@ -24,7 +24,8 @@ use egui_kittest::{Harness, kittest::Queryable};
 
 mod zoom;
 
-/// Definition panes extend their own canvas palette through the exposed ribbon margins.
+/// Definition panes extend their own canvas palette through the exposed ribbon margins, down to
+/// the pane's top edge, leaving no unpainted band between the ribbon and the canvas.
 #[test]
 fn definition_ribbon_backdrop_matches_the_document_canvas() {
     for kind in [Kind::Footprint, Kind::Symbol] {
@@ -38,7 +39,7 @@ fn definition_ribbon_backdrop_matches_the_document_canvas() {
         assert!(
             h.output().shapes.iter().any(|shape| match &shape.shape {
                 egui::Shape::Vec(shapes) => shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(rect)
-                if rect.fill == fill && rect.rect.bottom() <= pane.top()
+                if rect.fill == fill && (rect.rect.bottom() - pane.top()).abs() < 0.5
                     && (rect.rect.left() - pane.left()).abs() < 0.5
                     && (rect.rect.right() - pane.right()).abs() < 0.5)),
                 _ => false,
