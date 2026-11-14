@@ -72,6 +72,42 @@ fn a_changed_track_selection_discards_an_unfinished_width() {
     assert_eq!(h.state().session.revision(), revision);
 }
 
+/// Mixed track widths show the first width; entering that same value, in any spelling, still
+/// sets every selected track, while focusing and confirming untouched text changes nothing.
+#[test]
+fn an_entered_width_normalizes_mixed_track_widths() {
+    let mut h = routable();
+    h.state_mut().preferences.units = Unit::Mm;
+    let a = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let b = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 5_080_000 }, Point { x_nm: 7_620_000, y_nm: 5_080_000 });
+    // Selected widths in board order: the Properties field shows the first.
+    let widths = |h: &Harness<'_, PcbApp>| tracks(h).iter().filter(|t| [a, b].contains(&t.id)).map(|t| t.width_nm).collect::<Vec<_>>();
+    let second = tracks(&h).into_iter().filter(|t| [a, b].contains(&t.id)).nth(1).unwrap().id;
+    let widen = |h: &mut Harness<'_, PcbApp>| {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::SET_TRACK_WIDTH, &json!({"tracks":[second],"width_nm":500_000,"expected_revision":revision}));
+        h.run();
+        assert_eq!(widths(h), [250_000, 500_000]);
+    };
+    widen(&mut h);
+    h.state_mut().views.active.board.tracks.selected = std::collections::BTreeSet::from([a, b]);
+    h.run();
+    let shown = h.get_by_label("Selected track width").value().unwrap();
+    let revision = h.state().session.revision();
+    h.get_by_label("Selected track width").click();
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!((widths(&h), h.state().session.revision()), (vec![250_000, 500_000], revision));
+    enter(&mut h, "Selected track width", "0.250 mm");
+    assert_eq!((widths(&h), h.state().session.revision()), (vec![250_000, 250_000], revision + 1));
+
+    // Retyping exactly the shown text also counts as an entry while the widths differ.
+    widen(&mut h);
+    enter(&mut h, "Selected track width", &shown);
+    assert_eq!(widths(&h), [250_000, 250_000]);
+}
+
 /// Split views of one board share a Properties panel host but not drafts: text typed while one
 /// view is active is neither submitted from nor shown in the other, and is gone on return.
 #[test]

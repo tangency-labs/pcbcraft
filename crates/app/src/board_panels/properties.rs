@@ -19,12 +19,12 @@ pub(super) fn footprint_transform(
     let (mut x, mut y, mut rotation, mut bottom) = (footprint.position.x_nm, footprint.position.y_nm, footprint.rotation, footprint.bottom);
     let mut changed = false;
     ui.label("X");
-    if let Some(value) = committed_length(ui, ("Footprint X", (view, &footprint.id)), x, -limit..=limit, unit, revision) {
+    if let Some(value) = committed_length(ui, ("Footprint X", (view, &footprint.id)), x, -limit..=limit, unit, revision, false) {
         (x, changed) = (value, true);
     }
     ui.end_row();
     ui.label("Y");
-    if let Some(value) = committed_length(ui, ("Footprint Y", (view, &footprint.id)), y, -limit..=limit, unit, revision) {
+    if let Some(value) = committed_length(ui, ("Footprint Y", (view, &footprint.id)), y, -limit..=limit, unit, revision, false) {
         (y, changed) = (value, true);
     }
     ui.end_row();
@@ -123,9 +123,11 @@ pub(super) fn copper_properties(
             property(ui, "Layer", layer_name(layer, &layers));
         }
         ui.label("Width");
+        // With mixed widths, an entered value equal to the first width still sets every track.
+        let mixed = tracks.iter().any(|track| track.width_nm != first.width_nm);
         if let Some(width) = ui
             .add_enabled_ui(!any_locked, |ui| {
-                committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, revision)
+                committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, revision, mixed)
             })
             .inner
         {
@@ -149,7 +151,7 @@ pub(super) fn copper_properties(
             .add_enabled_ui(!any_locked, |ui| {
                 // The pad must stay larger than the drill; a smaller pad is refused rather than
                 // silently shrinking the drill, matching the drill field's own limit.
-                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, first.drill_nm + 1..=MAX_VIA_DIAMETER_NM, unit, revision)
+                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, first.drill_nm + 1..=MAX_VIA_DIAMETER_NM, unit, revision, false)
             })
             .inner
         {
@@ -159,7 +161,7 @@ pub(super) fn copper_properties(
         ui.label("Via drill");
         if let Some(drill) = ui
             .add_enabled_ui(!any_locked, |ui| {
-                committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit, revision)
+                committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit, revision, false)
             })
             .inner
         {
@@ -181,6 +183,7 @@ struct LengthDraft {
     unit: units::Unit,
     revision: u64,
     pass: u64,
+    edited: bool,
     error: Option<String>,
 }
 
@@ -189,7 +192,9 @@ struct LengthDraft {
 /// focus leaves with changed text that parses inside `range`. Untouched text never re-parses, so
 /// no rounding reaches the model. Escape restores the model value; invalid or out-of-range text
 /// stays editable with an error and submits nothing. A draft from an earlier `revision`, or one
-/// whose field was hidden for a pass, is dropped unsubmitted. The salt's name is the accessible label.
+/// whose field was hidden for a pass, is dropped unsubmitted. When `mixed`, the shown model value
+/// stands for several differing values, so any edited text that parses is returned, even text
+/// equal to it; untouched text still submits nothing. The salt's name is the accessible label.
 fn committed_length(
     ui: &mut Ui,
     salt: (&str, impl std::hash::Hash + std::fmt::Debug),
@@ -197,11 +202,12 @@ fn committed_length(
     range: std::ops::RangeInclusive<i64>,
     unit: units::Unit,
     revision: u64,
+    mixed: bool,
 ) -> Option<i64> {
     let id = ui.scope_id().with(&salt);
     let shown = units::edit_label(model_nm, unit);
     let pass = ui.ctx().cumulative_pass_nr();
-    let fresh = || LengthDraft { text: shown.clone(), model_nm, unit, revision, pass, error: None };
+    let fresh = || LengthDraft { text: shown.clone(), model_nm, unit, revision, pass, edited: false, error: None };
     let mut draft = ui
         .data(|data| data.get_temp::<LengthDraft>(id))
         .filter(|d| (d.model_nm, d.unit, d.revision) == (model_nm, unit, revision) && d.pass + 1 >= pass)
@@ -217,7 +223,7 @@ fn committed_length(
             state.store(ui.ctx(), response.id);
         }
         if response.changed() {
-            draft.error = None;
+            (draft.edited, draft.error) = (true, None);
         }
         // egui drops focus on Escape before this frame's shortcuts run, so the board would also
         // clear its selection. Keep Escape for the field instead: it restores the model value.
@@ -230,7 +236,7 @@ fn committed_length(
             response.surrender_focus();
             draft = fresh();
         } else if response.lost_focus() {
-            if draft.text == shown {
+            if !draft.edited || (draft.text == shown && !mixed) {
                 draft = fresh();
             } else {
                 match units::parse_length(&draft.text, unit) {
@@ -239,7 +245,7 @@ fn committed_length(
                         draft.error = Some(format!("Enter {} to {}", units::label(*range.start(), unit), units::label(*range.end(), unit)));
                     }
                     Ok(nm) => {
-                        committed = (nm != model_nm).then_some(nm);
+                        committed = (nm != model_nm || mixed).then_some(nm);
                         draft = fresh();
                     }
                 }
