@@ -1999,3 +1999,87 @@ fn escape_revokes_a_pending_final_route_before_publication() {
     assert!(tracks(&h).is_empty());
     assert!(!h.state().views.active.board.tracks.routing());
 }
+
+/// Real ribbon selections independently override class preferences and survive subsequent
+/// unclassified pickup. A hard-invalid explicit width is refused without replacement or edits.
+#[test]
+fn explicit_sizes_survive_classified_and_unclassified_pickups() {
+    for (width_override, via_override) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut h = routable();
+        h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+        classify_route(
+            &mut h,
+            "Power",
+            json!({"min_track_width_nm":400000,"preferred_track_width_nm":500000,
+            "preferred_via_diameter_nm":1000000,"preferred_via_drill_nm":500000}),
+        );
+        let line = airwires(&h)[0].clone();
+        if width_override {
+            click(&mut h, "Track / line width");
+            click(&mut h, "0.4 mm");
+        }
+        if via_override {
+            click(&mut h, "Via pad / drill");
+            click(&mut h, "0.8 / 0.4 mm");
+        }
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.from.position);
+        let state = &h.state().views.active.board.tracks;
+        assert_eq!(state.width_nm, if width_override { 400000 } else { 500000 });
+        assert_eq!((state.via_diameter_nm, state.via_drill_nm), if via_override { (800000, 400000) } else { (1000000, 500000) });
+        click(&mut h, "Track / line width");
+        click(&mut h, "0.75 mm");
+        click(&mut h, "Via pad / drill");
+        click(&mut h, "0.8 / 0.4 mm");
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, Point { x_nm: 2540000, y_nm: -2540000 });
+        let state = &h.state().views.active.board.tracks;
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (750000, 800000, 400000));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press_modifiers(Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE }, Key::X);
+        h.run();
+        let revision = h.state().session.revision();
+        click_route(&mut h, line.from.position);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while h.state().session.revision() == revision {
+            assert!(std::time::Instant::now() < deadline, "{:?}", h.state().message);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(h.state().message, None);
+        assert_eq!((vias(&h)[0].diameter_nm, vias(&h)[0].drill_nm), (800000, 400000));
+        h.key_press(Key::Escape);
+        h.run();
+        click(&mut h, "Track / line width");
+        click(&mut h, "0.1 mm");
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.to.position);
+        assert!(!h.state().views.active.board.tracks.routing());
+        assert_eq!(h.state().views.active.board.tracks.width_nm, 100000);
+        assert!(h.state().message.as_ref().is_some_and(|message| message.contains("minimum")));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        let board = h.state().session.project().unwrap().board_target().unwrap().board;
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::SET_RULES,
+            &json!({"board":board,"expected_revision":revision,
+            "rules":pcbcraft_engine::board::rules::Values{clearance_nm:300000,..Default::default()}}),
+        );
+        h.run();
+        assert_eq!(h.state().views.active.board.tracks.width_nm, 250000);
+        click_route(&mut h, line.to.position);
+        assert_eq!(h.state().message, None);
+        assert!(h.state().views.active.board.tracks.routing());
+        let state = &h.state().views.active.board.tracks;
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (500000, 1000000, 500000));
+    }
+}

@@ -28,9 +28,10 @@ net identity or class.
 
 Omitted track/via sizes use the starting contact's effective preferences, falling
 back to board preferences in free space. The GUI adopts those defaults at pickup
-and uses the contacted net's clearance for the existing preview halo. A later
-unclassified pickup restores board defaults. Ribbon size choices made during a
-draft are explicit geometry choices, and every completed candidate is validated
+and uses the contacted net's clearance for the existing preview halo. Explicit
+ribbon choices retain priority independently for width and via sizes until the
+board or its saved defaults change. A later unclassified pickup restores only
+dimensions still using defaults. Every completed candidate is validated
 against its actual membership. Starting in free space and ending on a classified
 net does not silently resize a route; an insufficient width is refused.
 The halo displays the source-net requirement; obstacle-specific pair spacing is
@@ -38,8 +39,10 @@ available from queries and DRC rather than a walkaround router.
 
 Changed classified tracks must satisfy effective minimum width; changed classified
 vias must satisfy diameter, drill and annular-ring bounds. Explicit sizes may
-resolve a preference choice but cannot bypass those hard bounds. Conflicting
-preferences block only omitted defaults that require them, while impossible via
+resolve a preference choice but cannot bypass those hard bounds. Supplying one
+via operand can repair a preferred-pair conflict when the omitted operand has a
+single unambiguous preference; differing class preferences still require an
+explicit choice for that operand. Conflicting preferences block only omitted defaults that require them, while impossible via
 bounds block affected vias rather than unrelated tracks. Empty-rule classifications
 add no dimensional enforcement. Existing copper is not resized: it remains
 inspectable and DRC reports violations. Unclassified copper retains the earlier

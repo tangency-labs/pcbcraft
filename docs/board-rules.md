@@ -55,7 +55,8 @@ The older explicit-clearance query API follows the same resolver.
 Omitting dimensions from `pcb.add_tracks` or `pcb.add_via` uses the corresponding
 board preferences, including layer-change vias, unless the starting contact has
 applicable class preferences. The GUI initializes its sizes from those same
-preferences and adopts the contacted class defaults at pickup. An explicit ribbon preset/custom size overrides the
+preferences and adopts contacted class defaults at pickup for dimensions without
+an explicit ribbon choice. An explicit ribbon preset/custom size overrides the
 upcoming geometry in that view until the board or its saved rules change;
 ordinary edits do not reset that choice. Rule edits invalidate unfinished route
 authority, prepared clearance results and previous DRC reports through the

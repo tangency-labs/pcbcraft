@@ -86,17 +86,28 @@ impl Applied {
     }
 
     /// Defaults and hard limits stay distinct for each via operand. Explicit valid dimensions
-    /// can resolve a preference choice, but cannot bypass diameter, drill or annular-ring bounds.
+    /// can repair a preferred pair using an unambiguous omitted operand, but cannot bypass
+    /// equal-precedence ambiguity, diameter, drill or annular-ring bounds.
     pub fn via_sizes(&self, diameter: Option<i64>, drill: Option<i64>) -> Result<(i64, i64), CommandError> {
         use Property::*;
         self.require(&[MinViaDiameterNm, MaxViaDiameterNm, MinViaDrillNm, MaxViaDrillNm, MinAnnularRingNm])?;
+        let operand = |property, counterpart_explicit| {
+            if counterpart_explicit {
+                self.resolution
+                    .unambiguous_preference(property)
+                    .ok_or_else(|| CommandError::Unavailable(format!("Net-class conflict leaves {} unresolved.", property.as_str())))
+            } else {
+                self.value(property)
+            }
+        };
+        let (explicit_diameter, explicit_drill) = (diameter.is_some(), drill.is_some());
         let diameter = match diameter {
             Some(value) => value,
-            None => self.value(PreferredViaDiameterNm)?,
+            None => operand(PreferredViaDiameterNm, explicit_drill)?,
         };
         let drill = match drill {
             Some(value) => value,
-            None => self.value(PreferredViaDrillNm)?,
+            None => operand(PreferredViaDrillNm, explicit_diameter)?,
         };
         if diameter < self.value(MinViaDiameterNm)?
             || diameter > self.value(MaxViaDiameterNm)?

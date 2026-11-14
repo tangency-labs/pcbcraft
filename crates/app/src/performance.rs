@@ -158,6 +158,32 @@ fn verify_probe(query: &ClearanceQuery, contour: &Contour, layers: &[Uuid], actu
     Ok(())
 }
 
+/// Verify the newly published route by identity, so matching pre-existing geometry cannot
+/// hide an incorrect default. This single-segment workload must add exactly one addressed track.
+fn verify_added_route(
+    before: &BTreeSet<Uuid>,
+    tracks: &[pcbcraft_engine::board::track::Track],
+    start: Point,
+    end: Point,
+    layer: Uuid,
+    width: i64,
+) -> Result<()> {
+    let mut added = tracks.iter().filter(|track| !before.contains(&track.id));
+    let Some(track) = added.next() else {
+        return Err("classified route added no track".into());
+    };
+    if added.next().is_some()
+        || tracks.len() != before.len() + 1
+        || track.start != start
+        || track.end != end
+        || track.layer != layer
+        || track.width_nm != width
+    {
+        return Err("new classified track differs from expected geometry or contact width".into());
+    }
+    Ok(())
+}
+
 /// Validate the envelope and versioned trace before any diagnostic can emit evidence.
 fn load_artifact(artifact_json: &str) -> Result<Artifact> {
     let artifact: Artifact = serde_json::from_str(artifact_json).map_err(|e| e.to_string())?;
@@ -215,9 +241,12 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
                 .map_err(|e| e.to_string())?
                 .ok_or("classified contact lost its policy")?;
             let width = policy.track_width(None).map_err(|e| e.to_string())?;
+            let before: BTreeSet<_> = current_view.tracks().iter().map(|track| track.id).collect();
+            let layer = *object.layers.first().ok_or("classified contact has no copper layer")?;
+            let end = Point { x_nm: at.x_nm, y_nm: at.y_nm - 3_000_000 };
             let mut route = Session::default();
             route.open_snapshot(project.clone());
-            let params = json!({"board":artifact.board.board,"layer":object.layers.first(),"points":[at,Point{x_nm:at.x_nm,y_nm:at.y_nm-3_000_000}],"expected_revision":route.revision()});
+            let params = json!({"board":artifact.board.board,"layer":layer,"points":[at,end],"expected_revision":route.revision()});
             let mut job = timed(&mut samples, "class.route.request_capture", || route.prepare_copper_edit(pcbcraft_engine::ADD_TRACKS, &params))
                 .map_err(|e| e.to_string())?;
             let began = clock_ms();
@@ -247,9 +276,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
             }
             timed(&mut samples, "class.route.atomic_publish", || route.commit_copper_edit(edit)).map_err(|e| e.to_string())?;
             let routed = route.project().and_then(|project| project.board_view(artifact.board)).ok_or("missing routed board")?;
-            if !routed.tracks().iter().any(|track| track.start == at && track.width_nm == width) {
-                return Err("committed classified width differs from contact default".into());
-            }
+            verify_added_route(&before, routed.tracks(), at, end, layer, width)?;
         }
         let object = query.objects().first().ok_or("fixture requires copper")?;
         for (id, start, end) in [
@@ -389,6 +416,24 @@ mod tests {
         for id in ["class.route_rules.contact", "class.route.engine_total", "class.route.atomic_publish"] {
             assert!(report.metrics.iter().any(|metric| metric.id == id));
         }
+    }
+
+    /// A matching old track must not hide an incorrectly sized, misplaced or absent new route.
+    #[test]
+    fn route_oracle_requires_the_new_track_identity_geometry_and_width() {
+        use pcbcraft_engine::board::track::Track;
+        let (start, end) = (Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 0, y_nm: 3000000 });
+        let old = Track { id: Uuid::from_u128(1), locked: false, layer: Uuid::from_u128(3), width_nm: 500000, start, end };
+        let before = BTreeSet::from([old.id]);
+        let mut new = old.clone();
+        new.id = Uuid::from_u128(2);
+        new.width_nm = 250000;
+        assert!(verify_added_route(&before, &[old.clone(), new.clone()], start, end, old.layer, 500000).is_err());
+        new.width_nm = 500000;
+        assert!(verify_added_route(&before, &[old.clone(), new.clone()], start, end, old.layer, 500000).is_ok());
+        new.end.y_nm += 1;
+        assert!(verify_added_route(&before, &[old.clone(), new], start, end, old.layer, 500000).is_err());
+        assert!(verify_added_route(&before, std::slice::from_ref(&old), start, end, old.layer, 500000).is_err());
     }
 
     /// Route diagnostics retain raw lifecycle samples, exact command equivalence and bounded

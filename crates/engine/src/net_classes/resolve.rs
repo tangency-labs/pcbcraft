@@ -106,6 +106,15 @@ pub(super) fn relationships(values: &Rules) -> Vec<(Vec<Property>, &'static str)
 }
 
 impl Resolution {
+    /// Recover a single preferred operand before relationship validation, for a consumer that
+    /// explicitly replaces its counterpart. Equal-precedence ambiguity still has no winner;
+    /// callers must validate the completed pair against every hard limit.
+    pub(crate) fn unambiguous_preference(&self, property: Property) -> Option<i64> {
+        if !property.is_preference() {
+            return None;
+        }
+        preferred_value(self.contributions.get(&property)?)
+    }
     /// Attach full provenance to a diagnostic and mark any implicated preferences unresolved.
     fn conflict(&mut self, properties: Vec<Property>, message: &str) {
         for property in &properties {
@@ -116,6 +125,14 @@ impl Resolution {
         let contributions = properties.iter().filter_map(|p| self.contributions.get(p).map(|c| (*p, c.clone()))).collect();
         self.conflicts.push(Conflict { properties, message: message.into(), contributions });
     }
+}
+
+/// Class preferences replace the baseline only when all equally specific contributors agree.
+/// Relationship validation is separate, so an explicit counterpart can repair a preferred pair.
+fn preferred_value(contributions: &[Contribution]) -> Option<i64> {
+    let preferences: BTreeSet<_> =
+        contributions.iter().filter(|candidate| matches!(candidate.source, Source::Class { .. })).map(|candidate| candidate.value_nm).collect();
+    if preferences.len() > 1 { None } else { preferences.first().copied().or_else(|| contributions.first().map(|candidate| candidate.value_nm)) }
 }
 
 impl Project {
@@ -177,8 +194,7 @@ impl Project {
                     .map(|&value_nm| Contribution { source: Source::Class { rule: class.id, revision: class.revision }, value_nm })
             }));
             let effective = if property.is_preference() {
-                let preferences: BTreeSet<_> = candidates.iter().skip(1).map(|candidate| candidate.value_nm).collect();
-                if preferences.len() > 1 { None } else { Some(preferences.first().copied().unwrap_or(base)) }
+                preferred_value(&candidates)
             } else if property.is_maximum() {
                 candidates.iter().map(|candidate| candidate.value_nm).min()
             } else {

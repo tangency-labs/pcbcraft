@@ -530,3 +530,39 @@ fn classified_preparation_yields_and_cancellation_preserves_the_source() {
     assert!(policies.windows(2).all(|pair| pair[0] == pair[1]));
     assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
 }
+
+/// A single explicit via operand may repair a preferred pair, but cannot select a winner
+/// among differing class preferences or weaken any hard bound. Commands retain the same rule.
+#[test]
+fn explicit_via_operand_repairs_only_unambiguous_preferences() {
+    let (mut session, _, _) = classified();
+    let ring = class(&mut session, "Ring", json!({"min_annular_ring_nm":200000}));
+    assign(&mut session, 0, "1", &[ring]);
+    let at = pad(&session, 0, "1").1;
+    let policy = view(&session).route_rules_at(at, None).unwrap().unwrap();
+    assert!(policy.via_sizes(None, None).is_err());
+    assert_eq!(policy.via_sizes(Some(800000), None).unwrap(), (800000, 300000));
+    assert_eq!(policy.via_sizes(None, Some(200000)).unwrap(), (600000, 200000));
+    assert!(policy.via_sizes(Some(650000), None).is_err());
+    for (operand, value, expected) in [("via_diameter_nm", 800000, (800000, 300000)), ("via_drill_nm", 200000, (600000, 200000))] {
+        let mut params = json!({"at":at});
+        params[operand] = json!(value);
+        apply(&mut session, crate::ADD_VIA, params);
+        let via = &view(&session).vias()[0];
+        assert_eq!((via.diameter_nm, via.drill_nm), expected);
+        reopen(&session);
+        apply(&mut session, "edit.undo", json!({}));
+    }
+    let small = class(&mut session, "Drill A", json!({"preferred_via_drill_nm":200000}));
+    let large = class(&mut session, "Drill B", json!({"preferred_via_drill_nm":300000}));
+    assign(&mut session, 0, "1", &[ring, small, large]);
+    let policy = view(&session).route_rules_at(at, None).unwrap().unwrap();
+    assert!(policy.via_sizes(Some(900000), None).is_err());
+    let before = session.snapshot().unwrap();
+    assert!(session.apply(crate::ADD_VIA, &json!({"at":at,"via_diameter_nm":900000,"expected_revision":session.revision()})).is_err());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    let a = class(&mut session, "Diameter A", json!({"preferred_via_diameter_nm":800000}));
+    let b = class(&mut session, "Diameter B", json!({"preferred_via_diameter_nm":900000}));
+    assign(&mut session, 0, "1", &[ring, a, b]);
+    assert!(view(&session).route_rules_at(at, None).unwrap().unwrap().via_sizes(None, Some(200000)).is_err());
+}

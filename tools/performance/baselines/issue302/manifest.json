@@ -29,6 +29,17 @@
     "visual/capture-correction.json": "2cc8fd8123056533c7a0235947934cf18e5f97e79f55aaa1b2519a87d0efa0d7",
     "visual/inspection.json": "245fc1fc2951472fbf7d03d663700251eedbd24cfaee537e387bfd7cadef4227",
     "visual/class-route-dark.png": "4c709b77df58e2e7883b7ff45a786aa6ce77c5b41316d97779742b31094485be",
-    "visual/class-route-light-compact.png": "916d661bb08c1815aa18ed424e3b342f0f7d80fb670dae828c50812943dcdcb4"
-  }
+    "visual/class-route-light-compact.png": "916d661bb08c1815aa18ed424e3b342f0f7d80fb670dae828c50812943dcdcb4",
+    "review349/checks.json": "7f0227e8d6d9da6edb2f806b74834b2d3708f98069f28d60901aea466620510a",
+    "review349/remaining-checks.json": "0a891ed6e4af2bd17ee23be34d298488bc11ab2efccbe1cbe5dcefa4ccfce8b4",
+    "review349/corrected-checks.json": "356ff3230f77cc3e1325d94e97e67055d5b98daa400fe6f3c511926121d03c30",
+    "review349/counterfactual.json": "47d73fc635d4c8adb8f4c9b4a6f71ac2e2d982c7df6a36ba2fb38ea992ded433",
+    "review349/source.json": "d161893d4dfbcd7fce18064ba5e38125e65713348ddee503cbeec1c5e4095043",
+    "review349/correctness-environment.json": "e6e1027b073ee2e246f574bcfbf5bb64dcd8d28ab7495312f973cec25e58d0d5",
+    "review349/assigned-correctness.json": "eb04de27f78647a7fab8e53dce41280236372d327f543272afc4432215b8d909",
+    "review349/checks.zip": "1046626e3baeffd9820288af1ec0a82a38a395492eb868a985f5a50f0549e6aa",
+    "review349/resolution.json": "17ba065b08637761a66442f7b73ad8be3c544f5c3e204f63841bef58e9ea1bd5",
+    "review349/README.md": "a7d6661807c456b54197260bf8a6929b89fd3ab6fbc0754ad306d22def55b71a"
+  },
+  "review_base": "1f30e82bf57c797463091c34f8ee768ade050fe2"
 }

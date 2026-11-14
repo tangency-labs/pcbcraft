@@ -518,7 +518,8 @@ The separate [net-class catalog](net-classes.md) and
 through MCP. Naming a net does not classify it. Assigned classes now supply
 routing defaults, query spacing and DRC limits through the same resolver; editor
 controls remain under #303. Starting a route on classified copper adopts that
-net's preferred width and clearance halo. Explicit changed widths/vias must meet
+net's preferred width unless you selected an explicit ribbon width, and uses its
+clearance halo. Explicit changed widths/vias must meet
 applicable hard limits, and unresolved defaults report an error without creating
 copper. `pcb.route_rules` inspects a contact's dimensions, sources and conflicts;
 see the [consumer contract](net-class-consumers.md).

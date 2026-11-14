@@ -102,6 +102,9 @@ pub(super) struct State {
     retry_route: Option<Draft>,
     rules_source: Option<(BoardTarget, Option<pcbcraft_engine::board::rules::Settings>)>,
     class_defaults: bool,
+    width_override: Option<i64>,
+    via_diameter_override: Option<i64>,
+    via_drill_override: Option<i64>,
     pub(super) tool: bool,
     /// Place › Via: each click places one standalone via until Esc or right-click.
     pub(super) via_tool: bool,
@@ -142,6 +145,9 @@ impl Default for State {
             retry_route: None,
             rules_source: None,
             class_defaults: false,
+            width_override: None,
+            via_diameter_override: None,
+            via_drill_override: None,
             tool: false,
             via_tool: false,
             width_nm: DEFAULT_WIDTH_NM,
@@ -179,28 +185,41 @@ pub(super) struct Interaction {
 }
 
 impl State {
+    /// Retain an explicit ribbon width across pickups until board/default-rule replacement.
+    pub(super) fn select_width(&mut self, width: i64) {
+        self.width_nm = width;
+        self.width_override = Some(width);
+    }
+    /// The current paired via control explicitly chooses both operands independently of width.
+    pub(super) fn select_via(&mut self, diameter: i64, drill: i64) {
+        self.via_diameter_nm = diameter;
+        self.via_drill_nm = drill;
+        self.via_diameter_override = Some(diameter);
+        self.via_drill_override = Some(drill);
+    }
     /// Adopt the contacted net's defaults once at route pickup, keeping geometry/rule traversal
-    /// outside pointer-motion frames. A later unclassified pickup restores board preferences.
+    /// outside pointer-motion frames. Explicit dimensions retain priority and must meet hard
+    /// limits; a later unclassified pickup restores only dimensions that still use defaults.
     fn contact_defaults(&mut self, board: BoardView<'_>, at: Point, layer: Option<Uuid>, via: bool) -> Result<i64, pcbcraft_engine::CommandError> {
         let base = board.effective_rules().values;
         let policy = board.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions());
         let clearance = if let Some(policy) = &policy {
             if via {
-                (self.via_diameter_nm, self.via_drill_nm) = policy.via_sizes(None, None)?;
+                (self.via_diameter_nm, self.via_drill_nm) = policy.via_sizes(self.via_diameter_override, self.via_drill_override)?;
             } else {
-                self.width_nm = policy.track_width(None)?;
+                self.width_nm = policy.track_width(self.width_override)?;
                 // Vias use explicit local sizes on commit; an unrelated via preference choice
                 // does not prevent starting a track with a resolved width.
-                if let Ok((diameter, drill)) = policy.via_sizes(None, None) {
+                if let Ok((diameter, drill)) = policy.via_sizes(self.via_diameter_override, self.via_drill_override) {
                     (self.via_diameter_nm, self.via_drill_nm) = (diameter, drill);
                 }
             }
             policy.clearance_nm()?
         } else {
             if self.class_defaults {
-                self.width_nm = base.preferred_track_width_nm;
-                self.via_diameter_nm = base.preferred_via_diameter_nm;
-                self.via_drill_nm = base.preferred_via_drill_nm;
+                self.width_nm = self.width_override.unwrap_or(base.preferred_track_width_nm);
+                self.via_diameter_nm = self.via_diameter_override.unwrap_or(base.preferred_via_diameter_nm);
+                self.via_drill_nm = self.via_drill_override.unwrap_or(base.preferred_via_drill_nm);
             }
             base.clearance_nm
         };
@@ -220,6 +239,10 @@ impl State {
             self.width_nm = values.preferred_track_width_nm;
             self.via_diameter_nm = values.preferred_via_diameter_nm;
             self.via_drill_nm = values.preferred_via_drill_nm;
+            self.width_override = None;
+            self.via_diameter_override = None;
+            self.via_drill_override = None;
+            self.class_defaults = false;
         }
         self.rules_source = Some(key);
     }
