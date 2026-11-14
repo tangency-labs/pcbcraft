@@ -1,0 +1,41 @@
+[
+  {
+    "name": "reference-after",
+    "command": [
+      "/home/travisl/projects/PCBcraft/main/target/release/examples/board_perf",
+      "run",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/reference-v1.json",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/environment-after.json",
+      "20",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/reference-after.json"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 1.372
+  },
+  {
+    "name": "channels-after",
+    "command": [
+      "/home/travisl/projects/PCBcraft/main/target/release/examples/board_perf",
+      "run",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/channels-v1.json",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/environment-after.json",
+      "10",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/channels-after.json"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 1.974
+  },
+  {
+    "name": "reference-assigned-after",
+    "command": [
+      "/home/travisl/projects/PCBcraft/main/target/release/examples/board_perf",
+      "run",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/reference-assigned-v1.json",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/environment-after.json",
+      "10",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/reference-assigned-after.json"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 0.719
+  }
+]

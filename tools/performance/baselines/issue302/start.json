@@ -1,0 +1,14 @@
+{
+  "issue": 302,
+  "base": "de49a3c8e6effc76dabee758424d83f3f625a928",
+  "branch": "travle1/net-class-consumers",
+  "worktree": "/home/travisl/projects/PCBcraft/work/net-class-consumers",
+  "scope": "Class-aware route defaults, clearance queries/probes, DRC; no #303 editor authoring, advanced router or new saved vocabulary.",
+  "baseline_question": "Observe costs on unchanged saved reference/channel workloads before/after class-aware consumers; new assigned-net cases need separate correctness/cost evidence because the base refuses them.",
+  "fixtures": {
+    "reference-v1.json": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+    "channels-v1.json": "2bcba0154913f8e396b975f470040edc649342e4ed40bbe77af107c5ae2f0efa"
+  },
+  "source_tree": "f1c47ed941806c335a7c69f50e791747d4163392",
+  "lock_sha256": "d6e9e78410856431f42d1a642c57a9d835c0d332bfca876e2360acc17549bd5e"
+}
