@@ -19,6 +19,8 @@ FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 REFERENCE_DEF = re.compile(r"^ {0,3}\[([^]\n]+)\]:\s*(<[^>\n]+>|\S+)")
 REFERENCE_LABEL = re.compile(r"\[((?:\\[^\n]|[^\[\]\\\n])*)\]")
 INLINE_TOKEN = re.compile(r"<|!?\[")
+# URI autolinks have precedence over bracket grouping (CommonMark section 6.5).
+URI_AUTOLINK = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20\x7f<>]*>")
 # Match complete attributes, including quoted values with spaces, newlines or '>'.
 # Exact attribute names avoid treating data-href or words in titles as links.
 HTML_ATTRIBUTE = re.compile(
@@ -167,9 +169,11 @@ def _label_end(text: str, position: int) -> int | None:
     depth = 1
     while position < len(text):
         if not _escaped(text, position):
-            if text[position] == "<" and (tag := HTML_TAG.match(text, position)):
-                position = tag.end()
-                continue
+            if text[position] == "<":
+                token = URI_AUTOLINK.match(text, position) or HTML_TAG.match(text, position)
+                if token:
+                    position = token.end()
+                    continue
             if text[position] == "[":
                 depth += 1
             elif text[position] == "]":
@@ -280,20 +284,41 @@ def _local_target(repo: Path, source: Path, target: str, *, html_attribute: bool
     return candidate.is_relative_to(repo) and candidate.exists()
 
 
-def _scan_targets(text: str, references: dict[str, str], *, images_only: bool = False) -> list[tuple[int, str, bool]]:
-    """Read links and HTML tags in source order, retaining destination offsets.
+def _scan_targets(text: str, references: dict[str, str]) -> list[tuple[int, str, bool]]:
+    """Read links and HTML tags, retaining destination offsets.
 
-    Consume a complete link before interpreting its destination as HTML or
-    scanning markup inside its title. Scan a link label separately for images
-    (including reference images) and HTML tags, but not nested links.
+    Resolve nested links before accepting enclosing links; images do not
+    prevent a surrounding link. Complete URI autolinks and HTML tags are opaque.
+    Use an explicit stack so nested link candidates cannot exhaust recursion.
     """
     targets: list[tuple[int, str, bool]] = []
+    # Each pending candidate stores the outer scan state and its destination.
+    pending: list[tuple[str, int, int, int, str, int]] = []
     position = 0
-    while (marker := INLINE_TOKEN.search(text, position)) is not None:
+    base = 0
+    has_link = False
+    while True:
+        marker = INLINE_TOKEN.search(text, position)
+        if marker is None:
+            if not pending:
+                return targets
+            inner_has_link = has_link
+            text, base, start, label_end, target, end = pending.pop()
+            if inner_has_link:
+                # The outer candidate is literal. Its suffix can still form a link.
+                position = label_end + 1
+            else:
+                targets.append((base + start, target, False))
+                position = end
+            has_link = True
+            continue
         start = marker.start()
         position = marker.end()
         if marker.group() == "<":
             if _escaped(text, start):
+                continue
+            if autolink := URI_AUTOLINK.match(text, start):
+                position = autolink.end()
                 continue
             tag = HTML_TAG.match(text, start)
             if tag:
@@ -302,13 +327,13 @@ def _scan_targets(text: str, references: dict[str, str], *, images_only: bool = 
                     if attr.group(1).lower() in ("href", "src") and value is not None:
                         if value.startswith(('"', "'")):
                             value = value[1:-1]
-                        targets.append((start + attr.start(1), value, True))
+                        targets.append((base + start + attr.start(1), value, True))
                 position = tag.end()
             continue
         image = marker.group() == "![" and not _escaped(text, start)
         if not image:
             start = marker.end() - 1
-        if _escaped(text, start) or (images_only and not image):
+        if _escaped(text, start):
             continue
         label_end = _label_end(text, position)
         if label_end is None:
@@ -330,12 +355,15 @@ def _scan_targets(text: str, references: dict[str, str], *, images_only: bool = 
             if key not in references:
                 continue
             target = references[key]
-        targets.append((start, target, False))
-        if not image:
-            targets.extend((position + offset, value, is_html)
-                           for offset, value, is_html in _scan_targets(label, references, images_only=True))
-        position = end
-    return targets
+        if image:
+            targets.append((base + start, target, False))
+            position = end
+        else:
+            pending.append((text, base, start, label_end, target, end))
+            base += position
+            text = label
+            position = 0
+            has_link = False
 
 
 def find_broken_links(repo: Path, files: list[Path]) -> list[str]:

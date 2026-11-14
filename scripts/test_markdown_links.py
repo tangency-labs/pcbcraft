@@ -334,9 +334,42 @@ class MarkdownLinkChecks(unittest.TestCase):
             '[<img alt="[a]" src="missing.png">](b.md)\n'), [
             'docs/sub/check.md:1: missing local link target: missing.png'])
 
-    def test_enclosing_link_does_not_create_spurious_shortcut_reference(self):
+    def test_inner_shortcut_reference_takes_precedence_over_enclosing_link(self):
         self.assertEqual(self.check(
-            '[label [asset]](b.md)\n\n[asset]: missing.png\n'), [])
+            '[label [asset]](b.md)\n\n[asset]: missing.png\n'), [
+            'docs/sub/check.md:1: missing local link target: missing.png'])
+
+    def test_uri_autolinks_are_opaque(self):
+        self.assertEqual(self.check(
+            '<https://example.org/[guide](missing.md)>\n'
+            '<MAILTO:someone@example.org> [real](absent.md)\n'), [
+            'docs/sub/check.md:2: missing local link target: absent.md'])
+        self.assertEqual(self.check(
+            '[foo<https://example.com/?search=][ref]>\n\n[ref]: missing.md\n'), [])
+        self.assertEqual(self.check(
+            '<https://example.org/ [real](missing.md)>\n'), [
+            'docs/sub/check.md:1: missing local link target: missing.md'])
+
+    def test_inner_inline_link_takes_precedence_over_enclosing_link(self):
+        self.assertEqual(self.check('[outer [inner](missing.md)](b.md)'), [
+            'docs/sub/check.md:1: missing local link target: missing.md'])
+        self.assertEqual(self.check('[outer [inner](b.md)](missing.md)'), [])
+        self.assertEqual(self.check(
+            '[outer [middle [inner](missing.md)](b.md)](absent.md)'), [
+            'docs/sub/check.md:1: missing local link target: missing.md'])
+        self.assertEqual(self.check(
+            '[outer [inner](https://example.org)](missing.md)'), [])
+
+    def test_inner_link_preserves_following_reference_and_line_offsets(self):
+        self.assertEqual(self.check(
+            '[outer\n[inner](missing.md)][ref]\n\n[ref]: absent.md\n'), [
+            'docs/sub/check.md:2: missing local link target: missing.md',
+            'docs/sub/check.md:2: missing local link target: absent.md'])
+
+    def test_nested_link_candidates_do_not_exhaust_recursion(self):
+        content = '[outer ' * 1100 + '[inner](missing.md)' + '](b.md)' * 1100
+        self.assertEqual(self.check(content), [
+            'docs/sub/check.md:1: missing local link target: missing.md'])
 
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
