@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Open-source electronics design for people and AI agents.</strong><br />
-  Draw schematics, arrange footprints and work alongside an agent in the same editor,<br />
+  Draw schematics, edit PCB layouts and work alongside an agent in the same editor,<br />
   with shared commands and undo history. Built in Rust for desktop and browser.
 </p>
 
@@ -23,32 +23,40 @@
 ## What works
 
 PCBCraft is in early development, with schematic and PCB editing on desktop and
-in the browser. The supported workflow includes reviewed schematic-to-board
-updates, footprint placement, basic track and through-via editing, and shared undo/redo.
+in the browser. You can draw a circuit, assign footprints, review changes before
+applying them to the board, place and edit copper tracks and through vias, and
+save the schematic and board together with shared undo/redo.
 
 - **Schematics:** place and edit symbols, draw and reshape orthogonal wires,
-  move groups, name nets with local/global labels and power/ground symbols, and
-  organize flat or hierarchical sheets with shared undo/redo.
+  move or grab groups, mark unused pins and wire ends, name nets with local/global
+  labels and power/ground symbols, and organize flat or hierarchical sheets.
 - **PCB layout:** assign pinned footprints, review package and connection changes
   before applying them, draw a Board Outline, move/rotate/flip footprints, and
-  place, move and resize basic tracks and through vias. Layer controls, net highlighting
-  and component counterpart highlights help navigate the board; see the
+  place, move and resize tracks and through vias. Layer controls, net highlighting
+  and schematic/PCB component highlights help navigate the board; see the
   [layout guide](docs/pcb-layout-workflow.md).
-- **Checks:** run limited DRC checks for shorts, copper clearance,
+- **Checks:** review DRC findings for shorts, copper clearance,
   track width, via annular rings, unrouted connections, board edges and courtyard
-  overlap. Interactive routing, full ERC/DRC and fabrication workflows remain
-  unfinished; see the [capability table](docs/capabilities.md) for current limits.
+  overlap, using saved board rules and supported dimensional net-class rules.
+- **Outputs:** export supported board geometry as Gerber X2 copper, mask, paste,
+  silkscreen and outline layers, with circular plated holes in an Excellon drill
+  file, together in one archive.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
-- **Library editors:** author native symbol and footprint definitions in independent
-  workspaces, with primitive properties, undo/redo, draft-save/open/export and
-  desktop publication to writable native libraries. Publish can create a library
-  or save a derivative while leaving the original unchanged.
+- **Libraries:** browse built-in, project-pinned and registered native libraries
+  in Parts Library. Place generic or orderable parts, choose packages and assign
+  footprints. Author symbols and footprints in their own workspaces, then publish
+  revisions to writable native folders on desktop.
 - **Projects:** save a Git-friendly project folder or share a `.pc` archive.
   Pinned symbol and footprint definitions travel with the project. The CLI can
   explicitly convert the previous split layout into a new copy.
 - **AI tools:** use the desktop Assistant with an installed agent or model
   endpoint, connect an MCP client to the open editor, or run a headless session.
+
+Full ERC, broader DRC coverage, walkaround/push-and-shove routing, copper-zone fill
+and 3D/STEP workflows remain in development. Footprint slots, non-plated drills
+and independent footprint mask/paste controls are not yet supported. The current
+checks and exporters do not establish manufacturing readiness.
 
 The [capability table](docs/capabilities.md) separates available features from
 remaining work. The [MVP milestone](https://github.com/tangency-labs/pcbcraft/milestone/1)
@@ -65,9 +73,11 @@ cargo build --locked -p pcbcraft -p pcbcraft-cli
 cargo run --locked -p pcbcraft
 ```
 
-The [quickstart](docs/quickstart.md) walks through opening a project, editing a
-schematic, saving and inspecting its board. The [Dual LED example](examples/README.md)
-includes a wired schematic and a shareable archive.
+The [quickstart](docs/quickstart.md) covers opening a project, schematic editing
+and saving, with PCB tools described in the [editor guide](docs/editor-guide.md).
+The [Dual LED example](examples/README.md) includes a wired schematic, placed
+footprints and a shareable archive. It is an editing fixture with an unrouted
+board; the polished end-to-end demo remains part of the MVP work.
 
 <details>
 <summary><strong>Run the browser app locally</strong></summary>
@@ -99,6 +109,11 @@ local connection** and copy the configuration. For a separate headless session:
 ```sh
 cargo run --locked -p pcbcraft-cli -- mcp
 ```
+
+Native live MCP also supports [UI automation](docs/ui-automation.md): locate named
+controls and send clicks, drags, keys, text and scrolling through ordinary editor
+input. Input currently targets the original native window and its split panes;
+headless sessions operate separately from the open editor.
 
 The [AI and MCP guide](docs/mcp.md) covers agent setup, permissions, live
 connections and command examples.
