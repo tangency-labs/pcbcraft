@@ -45,8 +45,9 @@ available for libraries without central part definitions. The native assignment
 chooser also lists external native footprints.
 
 This slice does not include KiCad import, vendor HTTP connectors, supplier stock
-or prices, parametric catalog filtering, library authoring tools or the complete
-manager. Manufacturer records use the same library ingestion and provenance
+or prices, parametric catalog filtering or the complete manager. Native part authoring
+uses session documents in Parts Library, as described in the
+[source guide](native-library-sources.md#generic-and-orderable-part-documents). Manufacturer records use the same library ingestion and provenance
 contracts that a later vendor adapter can produce. No provider is required to
 open or edit a saved project. Footprint geometry and general pad stacks retain
 their existing contracts.

@@ -5,6 +5,39 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Immutable publication contract shared by drawing editors and part documents. Hosts
+/// write these validated bytes and confirm the same capture after uncertain outcomes.
+pub trait Publication {
+    /// One complete validated native record under a portable relative path.
+    fn documents(&self) -> &Documents;
+    /// Exact manifest bytes against which the host must recheck the destination.
+    fn manifest(&self) -> &str;
+    /// Highest known destination revision at preparation.
+    fn latest(&self) -> u32;
+    /// Immutable address reserved by this captured publication.
+    fn reference(&self) -> crate::library::parts::Reference;
+    /// Record kind, independently of its item identity.
+    fn kind(&self) -> crate::library::sources::Kind;
+}
+
+impl Publication for Prepared {
+    fn documents(&self) -> &Documents {
+        &self.documents
+    }
+    fn manifest(&self) -> &str {
+        &self.manifest
+    }
+    fn latest(&self) -> u32 {
+        self.latest
+    }
+    fn reference(&self) -> crate::library::parts::Reference {
+        crate::library::parts::Reference { library: self.published.library.clone(), id: self.published.id.clone(), revision: self.published.revision }
+    }
+    fn kind(&self) -> crate::library::sources::Kind {
+        if self.published.kind == Kind::Symbol { crate::library::sources::Kind::Symbol } else { crate::library::sources::Kind::Footprint }
+    }
+}
+
 /// A published address belongs to the authoring session, independently of its undo stack.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Address {
@@ -24,6 +57,11 @@ pub struct Prepared {
     copy: bool,
 }
 impl Prepared {
+    /// Exact source definition before publication, for explicitly reviewed dependent-part updates.
+    pub fn previous(&self) -> crate::library::parts::Reference {
+        crate::library::parts::Reference { library: self.captured.library.clone(), id: self.captured.id.clone(), revision: self.captured.revision }
+    }
+
     /// Documents contain only one portable native record, never an editor file or absolute path.
     pub fn documents(&self) -> &Documents {
         &self.documents

@@ -246,3 +246,53 @@ publication and catalog refresh remain host responsibilities.
 without filesystem paths. Later live edits remain unsaved when a captured
 publication finishes. Save As changes the edited identity and invalidates
 property drafts or gestures captured for the original, without discarding them.
+
+## Generic and orderable part documents
+
+In **Parts Library**, choose **New → Generic part** to open a part document in
+the Items region. The Browser and Preview remain available, and the Document
+selector switches between Browse and retained part documents. A published symbol
+also offers **Create part from this symbol** in its editor. **Edit** reopens an
+exact published generic or orderable part; **Edit copy** gives the derivative a
+new identity while preserving its licence and source provenance.
+
+Choose a symbol and, optionally, an existing category and its primary quantity
+field. Fixed parameters use the category's typed input parser; Apply value commits
+an entered value, Reset value restores it, and applying an empty field removes
+that fixed requirement. Each package selects an exact footprint revision and
+explicitly assigns every physical pad to a symbol terminal or to Unconnected.
+Several pads can belong to one terminal. Selecting a mapping row highlights its
+pad and corresponding terminal, including a terminal on another symbol unit.
+Units are read-only here and remain editable in the Symbol Editor. The model
+slot is reserved for future package-bound 3D support.
+
+Publish validates the complete symbol, category, typed values and every package
+map, then uses the same native-folder destination, no-clobber write and recovery
+path as drawing publication. Only resolved published records enter placement.
+An incomplete map stays in the document and cannot replace a valid published
+revision. Part documents have their own revision-checked Undo/Redo and are kept
+only in the current application session; closing changed work requires an
+explicit discard decision. They have no persistent draft-file format.
+
+Once the generic part is published with a package, **Add orderable part** opens
+its manufacturer/MPN document, with package, optional datasheet and typed
+specifications. Datasheet links are saved as text and are never fetched on load.
+The exact owning generic part must already resolve before its orderable record
+can publish. Both records use the ordinary Parts Catalog placement and offline
+project-pinning path; plain symbol placement remains available.
+
+Drawing editors show the loaded generic parts that use their published revision.
+Publishing a later drawing revision offers those parts for review. Each selected
+part opens with the exact reference advanced and its existing maps preserved;
+publishing that part is a separate explicit action. Mapping problems must be
+corrected before it can publish. This flow changes reusable source definitions;
+reviewed adoption by already placed project instances belongs to #312.
+
+Live MCP exposes `app.part_new`, `app.part_orderable`, `app.part_edit`,
+`app.part_history` and `app.part_focus`, using explicit document IDs and captured
+revisions from `inspect_editor.library_editors.part_documents`.
+`app.library_publish`, `app.library_catalog_edit` and `app.library_close` also
+accept these documents. `library.prepare_part_publication` prepares validated
+native part/manufacturer documents in a headless session, using already loaded
+exact dependencies and transported destination documents. It accepts no host
+filesystem paths and never confirms a save.

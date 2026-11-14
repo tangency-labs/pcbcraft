@@ -1308,3 +1308,14 @@ identity and folder `basic-components`. Its original licensed records and revisi
 history are retained. Original compatibility code supplies historical `starter`
 addresses without rewriting project-pinned copies or adding duplicate browsing
 entries; no external library data or dependency was introduced.
+
+## Reusable part documents
+
+The generic/orderable part sessions, exact dependency validation and immutable
+publication extension for #309 are original MIT OR Apache-2.0 PCBcraft work over
+the existing native schemas and #308 publisher. The workspace form composes the
+already qualified Craft fields, choices, table, menus and buttons through
+`crates/chrome`; native symbol/pad correspondence highlights use PCBcraft's
+original painters. Tests assemble original bundled connector/header definitions
+and explicitly synthetic manufacturer metadata. No external EDA implementation,
+library data, artwork, new dependency or native format was introduced.

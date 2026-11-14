@@ -450,7 +450,7 @@ impl Editor for LiveEditor<'_> {
             return Some("Wait for the queued UI input to complete, or cancel it, before running another command".into());
         }
         if (app.library_sources.mutating() || app.library_sources.installing())
-            && (command.starts_with("library.") || command.starts_with("app.library_"))
+            && (command.starts_with("library.") || command.starts_with("app.library_") || command.starts_with("app.part_"))
         {
             return Some("Finish the current library folder operation before changing its sources or editors".into());
         }

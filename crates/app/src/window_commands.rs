@@ -131,6 +131,8 @@ mod live {
         View,
         /// A typed engine authoring transaction.
         LibraryAction,
+        PartRecord,
+        PartReference,
         /// A runtime document ID from inspect_editor.library_editors.
         LibraryDocument,
         /// A library document revision from inspect_editor.library_editors.
@@ -173,6 +175,12 @@ mod live {
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
                 Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
+                Self::PartReference => {
+                    json!({"type":"object","properties":{"library":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX}},"required":["library","id","revision"],"additionalProperties":false})
+                }
+                Self::PartRecord => {
+                    json!({"type":"object","description":"A bounded native pcbcraft-part/1 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
+                }
                 Self::LibraryAction => {
                     json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
                 }
@@ -206,6 +214,13 @@ mod live {
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
                         && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
                 }),
+                Self::PartReference => {
+                    serde_json::from_value::<pcbcraft_engine::library::parts::Reference>(value.clone()).is_ok_and(|r| r.validate().is_ok())
+                }
+                Self::PartRecord => {
+                    serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::library::sources::MAX_FILE_BYTES)
+                        && serde_json::from_value::<pcbcraft_engine::part_authoring::Record>(value.clone()).is_ok()
+                }
                 Self::LibraryAction => {
                     serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::authoring::MAX_BYTES)
                         && serde_json::from_value::<pcbcraft_engine::authoring::Action>(value.clone()).is_ok()
@@ -229,6 +244,8 @@ mod live {
             }
             Err(match self {
                 Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
+                Self::PartReference => "must contain an exact native library reference".into(),
+                Self::PartRecord => "must contain a bounded native part or manufacturer record".into(),
                 Self::LibraryAction => "must be a bounded native authoring Action".into(),
                 Self::LibraryDocument => "must be a library document ID from inspect_editor.library_editors".into(),
                 Self::LibraryRevision => "must be the library document revision from inspect_editor.library_editors".into(),
@@ -447,6 +464,44 @@ mod live {
                 setting("pan_x", "Preview horizontal offset in logical points; requires pan_y", Kind::Integer { min: -100000, max: 100000, step: 1 }),
                 setting("pan_y", "Preview vertical offset in logical points; requires pan_x", Kind::Integer { min: -100000, max: 100000, step: 1 }),
             ],
+        },
+        WindowCommand {
+            id: "app.part_new",
+            title: "New Generic Part",
+            summary: "Open a session-only generic part document inside Parts Library, optionally from an exact published symbol.",
+            params: &[Param { name: "symbol", summary: "Exact symbol reference", required: false, kind: Kind::PartReference }],
+        },
+        WindowCommand {
+            id: "app.part_orderable",
+            title: "Add Orderable Part",
+            summary: "Create an orderable draft for an exact resolved published generic part with a package.",
+            params: &[Param { name: "part", summary: "Exact published generic part", required: true, kind: Kind::PartReference }],
+        },
+        WindowCommand {
+            id: "app.part_edit",
+            title: "Edit Part Document",
+            summary: "Replace a captured native part draft through the shared revision-checked engine session; publication validates complete mappings.",
+            params: &[
+                Param { name: "document", summary: "Part document ID from inspection", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current part document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "record", summary: "Native part or manufacturer draft", required: true, kind: Kind::PartRecord },
+            ],
+        },
+        WindowCommand {
+            id: "app.part_history",
+            title: "Part Document History",
+            summary: "Undo or redo a captured part document edit independently of the project.",
+            params: &[
+                Param { name: "document", summary: "Part document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "redo", summary: "Redo instead of Undo", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.part_focus",
+            title: "Focus Part Document",
+            summary: "Resume a retained part document in the existing Parts Library workspace.",
+            params: &[Param { name: "document", summary: "Part document ID", required: true, kind: Kind::LibraryDocument }],
         },
         WindowCommand {
             id: "app.library_new",
@@ -1111,6 +1166,7 @@ mod live {
             "windows": windows,
             "library_editors":app.library_editors.inspect(),
             "library_destinations":app.inspect_library_destinations(),
+            "part_dependency_updates":app.part_updates,
             "views": views,
             "arrangements": {
                 "active": app.arrangements.active(),
@@ -1206,6 +1262,9 @@ mod live {
             }
             if matches!(id, "app.library_source" | "app.library_browse" | "app.library_catalog_edit") {
                 return self.library_workspace_command(ctx, id, params);
+            }
+            if id.starts_with("app.part_") {
+                return self.part_document_command(ctx, id, params);
             }
             if id.starts_with("app.library_") {
                 return self.library_command(ctx, id, params);

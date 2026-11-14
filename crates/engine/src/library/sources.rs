@@ -34,6 +34,8 @@ pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
 pub const PARSE_QUANTITY: &str = "library.parse_quantity";
 /// Prepare validated native revision documents; only a host can confirm a durable publication.
+pub const PREPARE_PART_PUBLICATION: &str = "library.prepare_part_publication";
+/// Prepare drawing documents through the same durable host boundary.
 pub const PREPARE_PUBLICATION: &str = "library.prepare_publication";
 
 /// Accept missing legacy attribution only when every definition field otherwise matches.
@@ -67,7 +69,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 7] = [
+pub(crate) const COMMANDS: [Command; 8] = [
     Command {
         id: PREPARE_PUBLICATION,
         title: "Prepare library publication",
@@ -172,6 +174,28 @@ pub(crate) const COMMANDS: [Command; 7] = [
                 required: true,
                 kind: ParamKind::LibraryQuery,
             },
+        ],
+    },
+    Command {
+        id: PREPARE_PART_PUBLICATION,
+        title: "Prepare part publication",
+        summary: "Resolve a native part or orderable draft and return immutable publication bytes without paths or a project edit.",
+        params: &[
+            Param { name: "record", summary: "Captured native part or manufacturer record", required: true, kind: ParamKind::PartDraft },
+            Param {
+                name: "documents",
+                summary: "Destination native documents including library.json",
+                required: true,
+                kind: ParamKind::LibraryDocuments,
+            },
+            Param {
+                name: "base_revision",
+                summary: "Published revision on which this draft is based",
+                required: false,
+                kind: ParamKind::DefinitionRevision,
+            },
+            Param { name: "allow_older", summary: "Confirm publication without merging a newer revision", required: false, kind: ParamKind::Flag },
+            Param { name: "copy", summary: "Publish a derivative under a fresh item identity", required: false, kind: ParamKind::Flag },
         ],
     },
 ];
@@ -601,6 +625,12 @@ impl Catalog {
     /// Resolve only direct symbol/category/footprint dependencies, so cache initialization cannot recurse.
     fn resolve_part_uncached(&self, reference: &Reference) -> Result<ResolvedPart, String> {
         let part = self.exact(reference, Kind::Part)?.part().ok_or("Expected a part record.")?;
+        self.validate_part(part)
+    }
+
+    /// Validate an unpublished native part against loaded exact dependencies without
+    /// installing it, choosing revisions or changing any project or catalog state.
+    pub fn validate_part(&self, part: Arc<PartDefinition>) -> Result<ResolvedPart, String> {
         let symbol = self.exact(&part.symbol, Kind::Symbol)?.symbol().ok_or("Expected a symbol record.")?;
         let category = part.category.as_ref().map(|binding| self.category(&binding.definition)).transpose()?;
         part.validate_category(category.as_deref())?;
@@ -865,6 +895,35 @@ impl Session {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
         match id {
+            PREPARE_PART_PUBLICATION => {
+                let fail = CommandError::InvalidParams;
+                let record: crate::part_authoring::Record = serde_json::from_value(params["record"].clone()).map_err(|e| fail(e.to_string()))?;
+                let documents: Documents = serde_json::from_value(params["documents"].clone()).map_err(|e| fail(e.to_string()))?;
+                let destination = NativeSource::load(&documents).map_err(fail)?;
+                if !destination.problems().is_empty() {
+                    return Err(fail(destination.problems().join("\n")));
+                }
+                let reference = record.reference();
+                let latest = destination
+                    .items()
+                    .iter()
+                    .filter(|item| item.key.kind == record.kind() && item.key.id == reference.id)
+                    .map(|item| item.key.revision)
+                    .max()
+                    .unwrap_or(0)
+                    .max(self.libraries.highest_revision(destination.library(), record.kind(), &reference.id));
+                crate::part_authoring::prepare_record(
+                    &record,
+                    &self.libraries,
+                    documents.get("library.json").ok_or_else(|| fail("Missing library manifest".into()))?,
+                    latest,
+                    params["base_revision"].as_u64().map(|n| n as u32),
+                    params["allow_older"] == true,
+                    params["copy"] == true,
+                )
+                .map(|p| p.inspect())
+                .map_err(fail)
+            }
             PREPARE_PUBLICATION => {
                 let fail = CommandError::InvalidParams;
                 let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;

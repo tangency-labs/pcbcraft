@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Disposable navigation is copied when opening beside and retained by its own pane.
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
+    pub(crate) part_document: Option<u64>,
     source: Option<String>,
     project: Option<uuid::Uuid>,
     project_library: Option<String>,
@@ -59,7 +60,7 @@ impl State {
     /// Inspect stable source/item identities without granting project edit authority.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"preview_collapsed":self.preview_collapsed,"browser_collapsed":self.browser.collapsed,"browser_width":self.browser.width(),"preview_width":self.preview_width.preferred(),"tree_open":self.opened,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
+        json!({"scope":if self.project.is_some(){"project"}else{"sources"},"project":self.project,"library":self.project_library,"source":self.source,"type":self.kind,"query":self.query,"selected":self.selected,"part_document":self.part_document,"preview_collapsed":self.preview_collapsed,"browser_collapsed":self.browser.collapsed,"browser_width":self.browser.width(),"preview_width":self.preview_width.preferred(),"tree_open":self.opened,"previews":{"symbol":self.symbol_camera.inspect(),"footprint":self.footprint_camera.inspect()},"ribbon_tab":if self.tab==0 {"manage"}else{"view"}})
     }
 }
 
@@ -233,7 +234,7 @@ impl PcbApp {
         let mut acquisition = None;
         let mut authoring_action = None;
         let selected = self.views.active.library.as_ref().and_then(|state| state.selected.as_ref()).is_some_and(|key| {
-            matches!(key.kind, Kind::Symbol | Kind::Footprint)
+            matches!(key.kind, Kind::Symbol | Kind::Footprint | Kind::Part | Kind::ManufacturerPart)
                 && (self.views.active.library.as_ref().is_some_and(|state| state.project.is_some()) || !self.session.libraries().conflicting(key))
         });
         let editable = selected && source.is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source));
@@ -287,7 +288,7 @@ impl PcbApp {
                                 ("Library", ToolIcon::Shared("library"), "Create native library", idle && !crate::IN_BROWSER),
                                 ("Symbol", ToolIcon::Symbol, "New symbol", true),
                                 ("Footprint", ToolIcon::Footprint, "New footprint", true),
-                                ("Generic part", ToolIcon::Bom, "New generic part · Planned", false),
+                                ("Generic part", ToolIcon::Bom, "New generic part", true),
                             ],
                         ),
                         (
@@ -315,7 +316,7 @@ impl PcbApp {
                             })
                             .collect();
                         if let Some(index) = workspace::ribbon_group(ui, title, &entries) {
-                            authoring_action = Some(if group == 0 { index } else { index + 3 });
+                            authoring_action = Some(if group == 0 { index } else { index + 4 });
                         }
                     }
                 }
@@ -338,7 +339,8 @@ impl PcbApp {
                 } else {
                     pcbcraft_engine::authoring::Kind::Footprint
                 }),
-                3 | 4 => self.message = self.edit_catalog_selection(ui.ctx(), action == 4).err(),
+                3 => self.message = self.new_part_document(ui.ctx(), None).map(|_| ()).err(),
+                4 | 5 => self.message = self.edit_catalog_selection(ui.ctx(), action == 5).err(),
                 _ => {}
             }
         }
@@ -467,6 +469,9 @@ impl PcbApp {
             return result;
         }
         let mut state = self.library_navigation(view, params)?;
+        if ["scope", "source", "library", "item", "query", "type"].iter().any(|field| params.get(*field).is_some()) {
+            state.part_document = None;
+        }
         if let Some(width) = params["browser_width"].as_f64() {
             state.browser.set_width(width as f32)?;
         }
@@ -532,6 +537,8 @@ impl PcbApp {
                 .cloned();
             state.selected = None;
         }
+        self.part_update_actions(ui);
+        self.part_document_tabs(ui, &mut state);
         // Move the runtime panel out temporarily: Clone intentionally drops live drags.
         let mut preview = self.views.view_mut(view).map(|v| std::mem::take(&mut v.panels[crate::workspace_panels::PROPERTIES])).unwrap_or_default();
         let mut preview_collapsed = state.preview_collapsed;
@@ -541,10 +548,31 @@ impl PcbApp {
         let mut compact = state.compact;
         let action =
             chrome::workspace(ui, &mut compact, &mut preview, &mut preview_collapsed, &mut browser, &mut preview_width, |ui, region| match region {
-                chrome::Region::Browser => self.library_tree(ui, &mut state, &ids, &loaded),
-                chrome::Region::Items => self.library_items(ui, &mut state, &loaded),
-                chrome::Region::Preview => self.library_item_preview(ui, &mut state),
+                chrome::Region::Browser => {
+                    let before = (state.source.clone(), state.project, state.project_library.clone(), state.kind);
+                    self.library_tree(ui, &mut state, &ids, &loaded);
+                    if before != (state.source.clone(), state.project, state.project_library.clone(), state.kind) {
+                        state.part_document = None;
+                    }
+                }
+                chrome::Region::Items => {
+                    if let Some(id) = state.part_document {
+                        self.part_document_form(ui, id);
+                    } else {
+                        self.library_items(ui, &mut state, &loaded);
+                    }
+                }
+                chrome::Region::Preview => {
+                    if let Some(id) = state.part_document {
+                        self.part_document_preview(ui, id);
+                    } else {
+                        self.library_item_preview(ui, &mut state);
+                    }
+                }
             });
+        if let Some(id) = self.pending_part_navigation.take() {
+            state.part_document = Some(id);
+        }
         if let Some(action) = action {
             self.library_tree_action(&mut state, action);
         }

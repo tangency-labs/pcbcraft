@@ -92,3 +92,17 @@ editors. All five working workspaces use the shared chooser's fixed wide tile
 or fixed compact button at one breakpoint. A title's length and extra ribbon
 control rows do not change that chooser's dimensions. The display name is Parts
 Library; its stable command/layout key remains `library`.
+
+## Part documents (#309)
+
+The New generic part action and Edit/Edit copy for generic and orderable records
+open session documents inside this workspace. Browser keeps its source/project
+navigation; Items shows the association form, while Preview shows the selected
+symbol unit and package footprint. Document switches back to Browse without
+discarding the form. Choosing another source in Browser also returns to Browse.
+The mapping table and document controls compose the pinned Craft table, choices,
+fields and buttons through `crates/chrome`; correspondence highlights reuse
+original electronics geometry. This composition needs no new generic control or
+external asset. Package model bindings and descriptive fields remain with #86
+and #314 respectively. See the [part document workflow](native-library-sources.md#generic-and-orderable-part-documents)
+for publication, close protection and shared commands.

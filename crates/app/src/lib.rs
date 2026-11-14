@@ -49,6 +49,7 @@ mod native_sources;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
+mod part_documents;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
@@ -246,6 +247,8 @@ pub struct PcbApp {
     assistant: assistant::Assistant,
     session: Session,
     library_editors: library_editors::Editors,
+    pending_part_navigation: Option<u64>,
+    part_updates: Vec<part_documents::DependencyUpdate>,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
     #[cfg(not(target_arch = "wasm32"))]
