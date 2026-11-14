@@ -197,6 +197,9 @@ impl PcbApp {
         let changed = &candidate != doc.session.record();
         doc.session.replace(revision, candidate)?;
         if changed {
+            if let ReferenceField::NewPackage { package } = field {
+                doc.package = Some(package.clone());
+            }
             doc.selected_pad = None;
             doc.symbol_camera = Default::default();
             doc.footprint_camera = Default::default();
@@ -356,7 +359,12 @@ fn preview_item(ui: &mut egui::Ui, state: &mut State, catalog: &Catalog) {
     if let Some(part) = item.part() {
         match catalog.resolve_part(&part.reference()) {
             Ok(resolved) => {
-                crate::library_preview::workspace_symbol(ui, &resolved.symbol, &mut state.symbol_camera);
+                if let Some(symbol) = &resolved.symbol {
+                    crate::library_preview::workspace_symbol(ui, symbol, &mut state.symbol_camera);
+                }
+                if let Some(footprint) = resolved.footprints.values().next() {
+                    crate::library_preview::workspace_footprint(ui, footprint, &mut state.footprint_camera);
+                }
                 ui.label(format!("{} packages", part.packages.len()));
             }
             Err(error) => {

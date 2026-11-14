@@ -170,3 +170,64 @@ fn live_reference_choice_and_undo_share_gui_field_semantics() {
     assert_eq!(part.packages["header"].mapping.len(), 2);
     assert_eq!(app.session.inspect(), before);
 }
+
+/// The first footprint action is visible without creating a package first. Cancellation is
+/// read-only; choosing creates one undoable physical package, with no symbol prerequisite.
+#[test]
+fn first_footprint_is_discoverable_atomic_and_bounded_at_wide_and_compact_sizes() {
+    for width in [2735., 620.] {
+        let mut app = PcbApp::default();
+        let id = app.new_part_document(&egui::Context::default(), None).unwrap();
+        let before = app.session.inspect();
+        let draft = app.library_editors.parts[&id].session.inspect();
+        let mut h =
+            Harness::builder().with_max_steps(64).with_size(egui::vec2(width, 950.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        if width < 1050. {
+            crate::tests::click(&mut h, "Items");
+        }
+        assert!(h.get_by_label("Choose symbol").rect().right() < 1100.);
+        h.get_by_label("Add footprint…").click();
+        h.run();
+        assert_eq!(h.state().library_editors.parts[&id].session.inspect(), draft);
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(h.state().library_editors.parts[&id].session.inspect(), draft);
+        h.get_by_label("Add footprint…").click();
+        h.run();
+        h.get_by_label("Choose item basic-components/header-1x02-254 r3").click();
+        h.run();
+        h.get_by_label("Choose").click();
+        h.run();
+        let doc = &h.state().library_editors.parts[&id];
+        let Record::Part(part) = doc.session.record() else { panic!() };
+        assert!(part.symbol.is_none());
+        assert_eq!(part.packages.len(), 1);
+        assert!(doc.session.record().validate(h.state().session.libraries()).is_ok());
+        assert!(h.query_all_by_label("Terminal for pad 1").next().is_none());
+        h.get_by_label("Undo").click();
+        h.run();
+        let Record::Part(part) = h.state().library_editors.parts[&id].session.record() else { panic!() };
+        assert!(part.packages.is_empty());
+        h.get_by_label("Redo").click();
+        h.run();
+        let Record::Part(part) = h.state().library_editors.parts[&id].session.record() else { panic!() };
+        assert_eq!(part.packages.len(), 1);
+        h.get_by_label("Choose symbol").click();
+        h.run();
+        h.get_by_label("Choose item basic-components/connector r2").click();
+        h.run();
+        h.get_by_label("Choose").click();
+        h.run();
+        assert!(h.query_all_by_label("Terminal for pad 1").next().is_some());
+        assert!(h.state().library_editors.parts[&id].session.record().validate(h.state().session.libraries()).is_err());
+        h.get_by_label("Clear symbol").click();
+        h.run();
+        assert!(h.state().library_editors.parts[&id].session.record().validate(h.state().session.libraries()).is_ok());
+        h.get_by_label("Undo").click();
+        h.run();
+        let Record::Part(part) = h.state().library_editors.parts[&id].session.record() else { panic!() };
+        assert!(part.symbol.is_some());
+        assert_eq!(h.state().session.inspect(), before);
+    }
+}

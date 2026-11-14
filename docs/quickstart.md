@@ -745,3 +745,9 @@ part**. These forms live in the Library workspace; drawing changes still use the
 Symbol and Footprint Editors. Unpublished part documents last for the current
 session, so publish finished work before closing. The [source guide](native-library-sources.md#generic-and-orderable-part-documents)
 covers exact revisions, typed values and recovery.
+
+Generic library parts do not require a symbol. In Parts Library, use **Add
+footprint…** to author a footprint-only part, or add the symbol independently with
+Browse. When both are present, complete the pin mapping before publishing.
+Schematic placement requires a symbol; the current placement command does not
+create board-owned symbol-less instances.

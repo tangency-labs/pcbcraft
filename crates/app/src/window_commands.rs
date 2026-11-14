@@ -177,13 +177,13 @@ mod live {
             match self {
                 Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
                 Self::PartReferenceField => {
-                    json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"const":"footprint"},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
+                    json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"enum":["footprint","new_package"]},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
                 }
                 Self::PartReference => {
                     json!({"type":"object","properties":{"library":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX}},"required":["library","id","revision"],"additionalProperties":false})
                 }
                 Self::PartRecord => {
-                    json!({"type":"object","description":"A bounded native pcbcraft-part/1 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
+                    json!({"type":"object","description":"A bounded native pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
                 }
                 Self::LibraryAction => {
                     json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
@@ -511,7 +511,7 @@ mod live {
                 },
                 Param {
                     name: "reference",
-                    summary: "Exact native reference; omit only to clear a category",
+                    summary: "Exact native reference; omit to clear a symbol or category",
                     required: false,
                     kind: Kind::PartReference,
                 },

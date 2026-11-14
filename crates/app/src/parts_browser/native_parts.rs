@@ -15,10 +15,11 @@ impl Entry {
         Self(symbol, None, value)
     }
     /// A native part row derives its visible Value only from explicit primary requirements.
-    fn part(part: Arc<ResolvedPart>) -> Self {
+    fn part(part: Arc<ResolvedPart>) -> Option<Self> {
+        let symbol = part.symbol.clone()?;
         let selection = initial(part.clone());
-        let value = selection.display_primary_value().unwrap_or_else(|| part.symbol.default_value().to_owned());
-        Self(part.symbol.clone(), Some(part), value)
+        let value = selection.display_primary_value().unwrap_or_else(|| symbol.default_value().to_owned());
+        Some(Self(symbol, Some(part), value))
     }
     /// The native part identity stays distinct from its reusable symbol's identity.
     pub(super) fn key(&self) -> Key {
@@ -55,7 +56,7 @@ pub(super) fn entries(query: &str, catalog: &Catalog) -> Vec<Entry> {
         .into_iter()
         .filter_map(|(_, item)| {
             let part = item.part()?;
-            catalog.resolve_part(&part.reference()).ok().map(|part| Entry::part(Arc::new(part.clone())))
+            catalog.resolve_part(&part.reference()).ok().and_then(|part| Entry::part(Arc::new(part.clone())))
         })
         .collect();
     let represented: std::collections::BTreeSet<_> =

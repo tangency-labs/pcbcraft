@@ -1,6 +1,6 @@
 //! Reusable generic parts link schematic, category and physical package definitions.
 use super::{
-    Category, CategoryBinding, PART_FORMAT, Package, Reference, Value,
+    Category, CategoryBinding, LEGACY_PART_FORMAT, PART_FORMAT, Package, Reference, Value,
     codec::{decode, encode, header, unique_map},
     field_id,
 };
@@ -18,7 +18,8 @@ pub struct PartDefinition {
     pub name: String,
     pub license: String,
     pub source: Source,
-    pub symbol: Reference,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "optional_symbol")]
+    pub symbol: Option<Reference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<CategoryBinding>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "unique_map")]
@@ -39,8 +40,14 @@ impl PartDefinition {
     }
     /// Validate closed records and local invariants; empty package/category choices remain valid.
     pub fn validate(&self) -> Result<(), String> {
-        header(&self.format, PART_FORMAT, &self.reference(), &self.name, &self.license)?;
-        self.symbol.validate()?;
+        let expected = if self.format == LEGACY_PART_FORMAT { LEGACY_PART_FORMAT } else { PART_FORMAT };
+        header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
+        if self.format == LEGACY_PART_FORMAT && self.symbol.is_none() {
+            return Err("Format 1 parts require a symbol; use pcbcraft-part/2 for optional drawings.".into());
+        }
+        if let Some(symbol) = &self.symbol {
+            symbol.validate()?;
+        }
         for (name, value, limit) in [
             ("source kind", &self.source.kind, 64),
             ("source reference", &self.source.reference, 2048),
@@ -65,6 +72,12 @@ impl PartDefinition {
         for (id, package) in &self.packages {
             crate::library::check_id(id)?;
             package.validate()?;
+            if self.symbol.is_none() && (!package.mapping.is_empty() || !package.unconnected_pads.is_empty()) {
+                return Err("A part without a symbol has no terminal map; leave mappings and unconnected pads empty.".into());
+            }
+            if self.symbol.is_some() && package.mapping.is_empty() {
+                return Err("A package with a symbol requires a terminal mapping.".into());
+            }
         }
         Ok(())
     }
@@ -89,4 +102,9 @@ impl PartDefinition {
         self.validate()?;
         encode(self)
     }
+}
+
+/// An absent association is optional; explicit null is not an exact reference.
+fn optional_symbol<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Reference>, D::Error> {
+    Reference::deserialize(deserializer).map(Some)
 }

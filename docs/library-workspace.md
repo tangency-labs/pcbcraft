@@ -114,3 +114,10 @@ into a field dropdown. Matching metadata is rebuilt only when the query, filter
 or source generation changes. The shared table's explicit row-reveal API keeps
 keyboard selection visible; narrow hosts use Results/Preview choices inside the
 same bounded chooser and fixed Choose/Cancel footer.
+
+Part documents keep their fields on a bounded reading rail when Items is expanded.
+Symbol is optional and can be cleared. The Footprints section has an **Add
+footprint…** action that opens the searchable chooser; choosing creates one package
+and cancellation leaves the document unchanged. A symbol-less part previews its
+footprint without a blank symbol column. Pin mapping appears only when both a
+symbol and footprint are present.

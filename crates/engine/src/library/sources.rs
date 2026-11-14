@@ -538,15 +538,19 @@ pub struct Catalog {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedPart {
     pub definition: Arc<PartDefinition>,
-    pub symbol: Arc<SymbolDefinition>,
+    pub symbol: Option<Arc<SymbolDefinition>>,
     pub category: Option<Arc<Category>>,
     pub footprints: BTreeMap<String, Arc<FootprintDefinition>>,
 }
 impl ResolvedPart {
+    /// Schematic placement and pinned electrical instances require an explicitly declared symbol.
+    pub fn schematic_symbol(&self) -> Result<&Arc<SymbolDefinition>, String> {
+        self.symbol.as_ref().ok_or_else(|| "This part has no symbol and cannot be placed in a schematic.".into())
+    }
     /// Expose exact native documents for shared GUI/MCP inspection without fetching or changing them.
     fn snapshot(&self) -> Value {
         let footprints: BTreeMap<_, _> = self.footprints.iter().map(|(id, definition)| (id, definition.as_ref())).collect();
-        json!({"part":self.definition.as_ref(),"symbol":saved_copy(&self.symbol),"category":self.category.as_deref(),"footprints":footprints})
+        json!({"part":self.definition.as_ref(),"symbol":self.symbol.as_ref().map(|symbol| saved_copy(symbol)),"category":self.category.as_deref(),"footprints":footprints})
     }
     /// Return immutable native documents and a digest covering the complete dependency closure.
     pub fn inspect(&self) -> Value {
@@ -637,13 +641,19 @@ impl Catalog {
     /// Validate an unpublished native part against loaded exact dependencies without
     /// installing it, choosing revisions or changing any project or catalog state.
     pub fn validate_part(&self, part: Arc<PartDefinition>) -> Result<ResolvedPart, String> {
-        let symbol = self.exact(&part.symbol, Kind::Symbol)?.symbol().ok_or("Expected a symbol record.")?;
+        let symbol = part
+            .symbol
+            .as_ref()
+            .map(|reference| self.exact(reference, Kind::Symbol)?.symbol().ok_or_else(|| "Expected a symbol record.".to_owned()))
+            .transpose()?;
         let category = part.category.as_ref().map(|binding| self.category(&binding.definition)).transpose()?;
         part.validate_category(category.as_deref())?;
         let mut footprints = BTreeMap::new();
         for (id, package) in &part.packages {
             let footprint = self.exact(&package.footprint, Kind::Footprint)?.footprint().ok_or("Expected a footprint record.")?;
-            package.validate_definitions(&symbol, &footprint).map_err(|error| format!("Package {id}: {error}"))?;
+            if let Some(symbol) = &symbol {
+                package.validate_definitions(symbol, &footprint).map_err(|error| format!("Package {id}: {error}"))?;
+            }
             footprints.insert(id.clone(), footprint);
         }
         super::compatibility::migration::resolved_part(ResolvedPart { definition: part, symbol, category, footprints }, self)

@@ -203,7 +203,9 @@ impl ParamKind {
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
-            Self::PartDraft => json!({"type":"object","description":"Bounded pcbcraft-part/1 or pcbcraft-manufacturer-part/1 native draft record"}),
+            Self::PartDraft => {
+                json!({"type":"object","description":"Bounded pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 native draft record"})
+            }
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
             }

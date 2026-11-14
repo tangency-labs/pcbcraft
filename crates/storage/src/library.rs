@@ -112,7 +112,7 @@ mod tests {
         }
         let reference = Reference { library: "parts-demo".into(), id: "dual-amplifier".into(), revision: 1 };
         let result = catalog.resolve_part(&reference).unwrap();
-        assert_eq!(result.symbol.units().len(), 2);
+        assert_eq!(result.symbol.as_ref().unwrap().units().len(), 2);
         assert_eq!(result.footprints.len(), 1);
     }
 

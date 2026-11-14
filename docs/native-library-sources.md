@@ -265,17 +265,20 @@ Opening an already selected older revision retains that exact selection. Results
 are paged in sets of 50, and matching metadata is cached until the search, filter
 or loaded sources change. The form itself shows only its chosen association.
 
-Choose a symbol and, optionally, an existing category and its primary quantity
-field. Fixed parameters use the category's typed input parser; Apply value commits
+Symbol and footprint associations are optional. Use **Clear** to remove a symbol;
+its pin maps clear in the same undoable edit. **Add footprint…** opens the chooser
+and creates a package only when Choose confirms a footprint. Cancel leaves the
+part unchanged. A footprint-only part can publish without a dummy symbol. Choose
+an optional category and its primary quantity field. Fixed parameters use the category's typed input parser; Apply value commits
 an entered value, Reset value restores it, and applying an empty field removes
-that fixed requirement. Each package selects an exact footprint revision and
-explicitly assigns every physical pad to a symbol terminal or to Unconnected.
+that fixed requirement. Each package selects an exact footprint revision. When a symbol is present,
+explicitly assign every physical pad to a symbol terminal or to Unconnected.
 Several pads can belong to one terminal. Selecting a mapping row highlights its
 pad and corresponding terminal, including a terminal on another symbol unit.
 Units are read-only here and remain editable in the Symbol Editor. The model
 slot is reserved for future package-bound 3D support.
 
-Publish validates the complete symbol, category, typed values and every package
+Publish validates each declared symbol, category, typed value and package
 map, then uses the same native-folder destination, no-clobber write and recovery
 path as drawing publication. Only resolved published records enter placement.
 An incomplete map stays in the document and cannot replace a valid published
@@ -307,7 +310,8 @@ exact dependencies and transported destination documents. It accepts no host
 filesystem paths and never confirms a save.
 
 `app.part_reference` chooses a typed association field at the captured document
-revision. A footprint field includes its stable package ID; changing it clears
+revision. A `new_package` field includes a new stable package ID and creates it
+only when an exact footprint is confirmed. A footprint field includes its stable package ID; changing it clears
 that package's old map before explicit remapping. Category and generic-part
 changes clear only their dependent values. Re-selecting the same exact address
 is a no-op. `library.search` accepts `include_older: true` to browse the same

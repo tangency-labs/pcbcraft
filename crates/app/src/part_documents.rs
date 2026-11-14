@@ -62,10 +62,11 @@ impl PcbApp {
         self.views.active.library.as_mut().ok_or("Parts Library pane is unavailable.")?.part_document = Some(id);
         Ok(())
     }
-    /// Create an explicitly chosen symbol association; an unchosen symbol keeps publication disabled.
+    /// Create a reusable definition without requiring a schematic or physical association.
     pub(crate) fn new_part_document(&mut self, ctx: &egui::Context, symbol: Option<Reference>) -> Result<u64, String> {
-        let symbol = symbol.unwrap_or(Reference { library: "user".into(), id: "choose-symbol".into(), revision: 1 });
-        if symbol.library != "user" && self.session.libraries().symbol(&symbol.library, &symbol.id, symbol.revision).is_none() {
+        if let Some(symbol) = &symbol
+            && self.session.libraries().symbol(&symbol.library, &symbol.id, symbol.revision).is_none()
+        {
             return Err("Published symbol is unavailable or conflicting.".into());
         }
         let record = Record::new_part(symbol)?;
@@ -309,7 +310,7 @@ impl PcbApp {
             .into_iter()
             .filter_map(|(_, item)| item.part())
             .filter(|part| match kind {
-                Kind::Symbol => part.symbol == address,
+                Kind::Symbol => part.symbol.as_ref() == Some(&address),
                 Kind::Footprint => part.packages.values().any(|package| package.footprint == address),
                 _ => false,
             })

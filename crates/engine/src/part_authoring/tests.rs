@@ -164,5 +164,77 @@ fn reference_field_choice_preserves_noop_and_unrelated_package_data() {
     assert_eq!(before.reference(), after.reference());
     assert_eq!(before.packages["other"], after.packages["other"]);
     assert!(after.packages["header"].mapping.is_empty());
-    assert!(record.select_reference(&ReferenceField::Symbol, None, &catalog).is_err());
+    assert!(record.select_reference(&ReferenceField::Symbol, None, &catalog).is_ok());
+}
+
+/// Optional drawings resolve independently; native publication and inspection retain exact
+/// footprints without manufacturing a symbol or electrical map, while schematic placement rejects.
+#[test]
+fn footprint_only_publication_resolution_and_schematic_rejection_are_atomic() {
+    let (mut catalog, _, manifest) = fixture();
+    let empty = Record::new_part(None).unwrap();
+    empty.validate(&catalog).unwrap();
+    let footprint = Reference { library: "basic-components".into(), id: "header-1x02-254".into(), revision: 3 };
+    let field = ReferenceField::NewPackage { package: "physical".into() };
+    let physical = empty.select_reference(&field, Some(footprint.clone()), &catalog).unwrap();
+    physical.validate(&catalog).unwrap();
+    assert!(physical.select_reference(&field, Some(footprint), &catalog).is_err());
+    let prepared = Session::new(physical, false).unwrap().prepare(&catalog, &manifest, 0, false, false).unwrap();
+    let mut documents = prepared.documents().clone();
+    documents.insert("library.json".into(), manifest.clone());
+    catalog.install("workshop", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let reference = prepared.reference();
+    let resolved = catalog.resolve_part(&reference).unwrap();
+    assert!(resolved.symbol.is_none());
+    assert_eq!(resolved.footprints.len(), 1);
+    assert!(resolved.inspect()["symbol"].is_null());
+    let mut session = crate::Session::default();
+    session.execute("project.new", &json!({})).unwrap();
+    session.install_library_source("workshop", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let before = session.inspect();
+    let error = session
+        .execute(
+            crate::part_instances::PLACE_PART,
+            &json!({
+                "library":reference.library,"definition":reference.id,"definition_revision":reference.revision,
+                "definition_digest":crate::library::sources::part_digest(resolved),"expected_revision":session.revision(),"x_nm":0,"y_nm":0
+            }),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("no symbol"), "{error}");
+    assert_eq!(session.inspect(), before);
+    let mut orderable = Record::new_orderable(&catalog, reference.clone()).unwrap();
+    let Record::Orderable(record) = &mut orderable else { panic!() };
+    record.manufacturer = "Original test maker".into();
+    record.mpn = "PHYSICAL-TEST".into();
+    orderable.validate(&catalog).unwrap();
+}
+
+/// Old envelopes stay old until a symbol is explicitly removed. Undo restores the complete
+/// electrical map; adding a symbol to a physical part requires explicit terminal assignments.
+#[test]
+fn optional_symbol_transition_preserves_legacy_encoding_and_undo() {
+    let (catalog, mut record, _) = fixture();
+    let Record::Part(part) = &mut record else { panic!() };
+    part.format = crate::library::parts::LEGACY_PART_FORMAT.into();
+    let original_bytes = part.encode().unwrap();
+    assert_eq!(PartDefinition::read(&original_bytes).unwrap().encode().unwrap(), original_bytes);
+    let physical = record.select_reference(&ReferenceField::Symbol, None, &catalog).unwrap();
+    let Record::Part(part) = &physical else { panic!() };
+    assert_eq!(part.format, crate::library::parts::PART_FORMAT);
+    assert!(part.symbol.is_none());
+    assert!(part.packages["header"].mapping.is_empty());
+    physical.validate(&catalog).unwrap();
+    let mut session = Session::new(record.clone(), false).unwrap();
+    session.replace(1, physical.clone()).unwrap();
+    session.history(2, false).unwrap();
+    assert_eq!(session.record(), &record);
+    let logical = physical.select_reference(&ReferenceField::Symbol, record.reference_field(&ReferenceField::Symbol).unwrap(), &catalog).unwrap();
+    assert!(logical.validate(&catalog).is_err());
+    let mut invalid = part.clone();
+    invalid.format = crate::library::parts::LEGACY_PART_FORMAT.into();
+    assert!(invalid.encode().is_err());
+    let mut value = serde_json::to_value(part).unwrap();
+    value["symbol"] = Value::Null;
+    assert!(PartDefinition::read(&value.to_string()).is_err());
 }

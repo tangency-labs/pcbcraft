@@ -304,8 +304,8 @@ fn multiunit_part_resolves_one_symbol_and_whole_package_map() {
     catalog.install("multiunit", source).unwrap();
     let reference = Reference { library: "parts-demo".into(), id: "dual-amplifier".into(), revision: 1 };
     let resolved = catalog.resolve_part(&reference).unwrap();
-    assert_eq!(resolved.symbol.units().len(), 2);
-    assert_eq!(resolved.symbol.pins().len(), 6);
+    assert_eq!(resolved.symbol.as_ref().unwrap().units().len(), 2);
+    assert_eq!(resolved.symbol.as_ref().unwrap().pins().len(), 6);
     assert_eq!(resolved.definition.packages["six-pad"].mapping.len(), 6);
     assert_eq!(resolved.footprints.len(), 1);
     assert_eq!(resolved.inspect()["symbol"]["format"], "pcbcraft-symbol/4");

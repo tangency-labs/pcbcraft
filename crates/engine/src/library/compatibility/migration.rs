@@ -102,18 +102,21 @@ impl Replacements {
     /// Preserve the part's fields and geometry while normalizing only proven dependency addresses.
     fn part(&self, resolved: &ResolvedPart) -> Result<ResolvedPart, String> {
         let mut result = resolved.clone();
-        if let Some(symbol) = self.symbols.get(&symbol_key(&resolved.symbol)) {
-            result.symbol = symbol.clone();
+        if let Some(symbol) = resolved.symbol.as_ref().and_then(|symbol| self.symbols.get(&symbol_key(symbol))) {
+            result.symbol = Some(symbol.clone());
         }
         let definition = Arc::make_mut(&mut result.definition);
-        definition.symbol = Reference { library: result.symbol.library.clone(), id: result.symbol.id.clone(), revision: result.symbol.revision() };
+        definition.symbol =
+            result.symbol.as_ref().map(|symbol| Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision() });
         for (id, footprint) in &mut result.footprints {
             if let Some(target) = self.footprints.get(&footprint_key(footprint)) {
                 *footprint = target.clone();
             }
             let package = definition.packages.get_mut(id).ok_or("Missing pinned package during library migration")?;
             package.footprint = Reference { library: footprint.library.clone(), id: footprint.id.clone(), revision: footprint.revision };
-            package.validate_definitions(&result.symbol, footprint)?;
+            if let Some(symbol) = &result.symbol {
+                package.validate_definitions(symbol, footprint)?;
+            }
         }
         definition.validate()?;
         Ok(result)
@@ -181,13 +184,15 @@ pub(crate) fn project(mut project: Arc<Project>) -> Result<Arc<Project>, String>
 /// can still be reused after Save. Target catalog conflicts remain normal resolution failures.
 pub(crate) fn resolved_part(resolved: ResolvedPart, catalog: &crate::library::sources::Catalog) -> Result<ResolvedPart, String> {
     let mut replacements = Replacements::default();
-    if let Some(target) = symbol_target(&resolved.symbol) {
+    if let Some(symbol) = &resolved.symbol
+        && let Some(target) = symbol_target(symbol)
+    {
         let selected =
             catalog.symbol(&target.library, &target.id, target.revision()).ok_or("Migrated bundled symbol is unavailable or conflicting")?;
         if !matches_pinned(&selected, &target) {
             return Err("Migrated bundled symbol content conflicts".into());
         }
-        replacements.symbols.insert(symbol_key(&resolved.symbol), selected);
+        replacements.symbols.insert(symbol_key(symbol), selected);
     }
     for footprint in resolved.footprints.values() {
         if let Some(target) = footprint_target(footprint) {

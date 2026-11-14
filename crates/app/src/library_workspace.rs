@@ -973,7 +973,7 @@ impl PcbApp {
     /// Resolve geometry without placements. Orderable records choose their exact package;
     /// generic browsing uses the first package. Missing selections never fall back silently.
     fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, package: Option<&str>, references: &mut Vec<Reference>, state: &mut State) {
-        references.push(part.symbol.clone());
+        references.extend(part.symbol.clone());
         if let Some(category) = &part.category {
             references.push(category.definition.clone());
             chrome::detail(ui, "Category", &category.definition.id);
@@ -981,7 +981,9 @@ impl PcbApp {
         chrome::detail(ui, "Source", &part.source.reference);
         match self.library_preview_part(state, &part.reference()) {
             Ok(resolved) => {
-                chrome::detail(ui, "Units", &resolved.symbol.units().len().to_string());
+                if let Some(symbol) = &resolved.symbol {
+                    chrome::detail(ui, "Units", &symbol.units().len().to_string());
+                }
                 let selected = package.map_or_else(|| part.packages.values().next(), |id| part.packages.get(id));
                 if let Some(package) = selected {
                     let footprint = if state.project.is_some() {
@@ -989,16 +991,23 @@ impl PcbApp {
                     } else {
                         self.session.libraries().footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision)
                     };
-                    ui.columns(2, |columns| {
-                        chrome::detail(&mut columns[0], "Symbol", &resolved.symbol.name);
-                        crate::library_preview::workspace_symbol(&mut columns[0], &resolved.symbol, &mut state.symbol_camera);
-                        chrome::detail(&mut columns[1], "Footprint", &package.name);
-                        if let Some(footprint) = footprint {
-                            crate::library_preview::workspace_footprint(&mut columns[1], &footprint, &mut state.footprint_camera);
-                        }
-                    });
+                    if let Some(symbol) = &resolved.symbol {
+                        ui.columns(2, |columns| {
+                            chrome::detail(&mut columns[0], "Symbol", &symbol.name);
+                            crate::library_preview::workspace_symbol(&mut columns[0], symbol, &mut state.symbol_camera);
+                            chrome::detail(&mut columns[1], "Footprint", &package.name);
+                            if let Some(footprint) = footprint {
+                                crate::library_preview::workspace_footprint(&mut columns[1], &footprint, &mut state.footprint_camera);
+                            }
+                        });
+                    } else if let Some(footprint) = footprint {
+                        chrome::detail(ui, "Footprint", &package.name);
+                        crate::library_preview::workspace_footprint(ui, &footprint, &mut state.footprint_camera);
+                    }
                 } else {
-                    crate::library_preview::workspace_symbol(ui, &resolved.symbol, &mut state.symbol_camera);
+                    if let Some(symbol) = &resolved.symbol {
+                        crate::library_preview::workspace_symbol(ui, symbol, &mut state.symbol_camera);
+                    }
                     if let Some(package) = package {
                         ui.label(egui::RichText::new(format!("Package {package} is unavailable")).color(pcbcraft_chrome::Tokens::get().error));
                     }

@@ -215,7 +215,7 @@ fn drawing_publication_opens_reviewed_part_reference_update() {
     app.session.install_library_source("workshop", Arc::new(pcbcraft_storage::library::load(&path).unwrap())).unwrap();
     let mut record = app.library_editors.parts[&id].session.record().clone();
     let Record::Part(p) = &mut record else { panic!() };
-    p.symbol = Reference { library: "workshop".into(), id: "connector".into(), revision: 1 };
+    p.symbol = Some(Reference { library: "workshop".into(), id: "connector".into(), revision: 1 });
     app.replace_part_document(id, 2, record).unwrap();
     app.publish_library_item(&ctx, id, 3, "workshop", false).unwrap();
     finish(&mut app, &ctx);
@@ -233,7 +233,7 @@ fn drawing_publication_opens_reviewed_part_reference_update() {
     let id = app.views.active.library.as_ref().unwrap().part_document.unwrap();
     let doc = &app.library_editors.parts[&id];
     let Record::Part(part) = doc.session.record() else { panic!() };
-    assert_eq!(part.symbol.revision, second.item().revision);
+    assert_eq!(part.symbol.as_ref().unwrap().revision, second.item().revision);
     assert!(doc.dirty());
     assert_eq!(std::fs::read_dir(path.join("parts")).unwrap().count(), 1);
     assert_eq!(app.session.inspect(), before);
@@ -279,4 +279,53 @@ fn mapping_menu_edits_are_explicit_and_undoable() {
     assert!(h.state().library_editors.parts[&id].session.revision() > revision);
     assert!(h.state().library_editors.parts[&id].session.record().validate(h.state().session.libraries()).is_err());
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// A physical-only definition uses the same durable publisher and can own an MPN without
+/// inventing a schematic instance. Reopening native source bytes preserves the absent symbol.
+#[test]
+fn physical_part_and_orderable_publish_reopen_without_a_symbol() {
+    let (mut app, temp, id) = fixture();
+    let ctx = egui::Context::default();
+    let before = app.session.inspect();
+    app.choose_part_reference(id, 2, &ReferenceField::Symbol, None).unwrap();
+    app.publish_library_item(&ctx, id, 3, "workshop", false).unwrap();
+    finish(&mut app, &ctx);
+    let reference = app.library_editors.parts[&id].session.record().reference();
+    let resolved = app.session.libraries().resolve_part(&reference).unwrap();
+    assert!(resolved.symbol.is_none());
+    assert_eq!(resolved.footprints.len(), 1);
+    let orderable = app.new_orderable_document(&ctx, reference.clone()).unwrap();
+    let mut record = app.library_editors.parts[&orderable].session.record().clone();
+    let Record::Orderable(mpn) = &mut record else { panic!() };
+    mpn.manufacturer = "Original test hardware".into();
+    mpn.mpn = "PHYSICAL-ONLY".into();
+    app.replace_part_document(orderable, 1, record).unwrap();
+    app.publish_library_item(&ctx, orderable, 2, "workshop", false).unwrap();
+    finish(&mut app, &ctx);
+    assert!(!app.library_editors.parts[&orderable].dirty());
+    let source = Arc::new(pcbcraft_storage::library::load(&temp.path().join("workshop")).unwrap());
+    assert!(source.problems().is_empty());
+    assert_eq!(source.items().len(), 2);
+    let mut catalog = Catalog::bundled();
+    catalog.install("reopened", source).unwrap();
+    assert!(catalog.resolve_part(&reference).unwrap().symbol.is_none());
+    let mpn = app.library_editors.parts[&orderable].session.record().reference();
+    catalog.manufacturer_part(&mpn).unwrap();
+    assert_eq!(app.session.inspect(), before);
+}
+
+/// Compact hosts may open Preview without ever visiting Items; a physical-only part still
+/// frames its actual footprint instead of relying on the form to initialize package selection.
+#[test]
+fn physical_preview_does_not_require_visiting_items() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _temp, id) = fixture();
+    app.choose_part_reference(id, 2, &ReferenceField::Symbol, None).unwrap();
+    assert!(app.library_editors.parts[&id].package.is_none());
+    let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(620., 850.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    crate::tests::click(&mut h, "Preview");
+    assert!(h.query_all_by_label("Footprint preview").next().is_some());
+    assert!(h.query_all_by_label("Symbol preview").next().is_none());
 }

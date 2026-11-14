@@ -1325,3 +1325,11 @@ selectable table with row reveal, property form, choices and fixed footer. Its
 query cache, exact reference transactions and large-catalog tests are original
 PCBcraft work over the existing native catalog. The generated scale fixture uses
 original authoring primitives, without third-party records or new dependencies.
+
+The optional drawing associations in `pcbcraft-part/2`, retained format-1 codec,
+stage-specific schematic-placement validation and original regression records are
+PCBcraft work following @travle1's November 14 clarification. Compact part forms
+compose the already qualified Craft controls, fields, tables, disclosures and
+scroll regions through chrome. The pinned kit has no part-document composition;
+the bounded content rail and package/association ownership remain host code.
+No dependency, external EDA implementation or library asset was added.

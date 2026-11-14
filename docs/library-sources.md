@@ -70,7 +70,7 @@ The model separates five library record kinds from the placed instance:
 | --- | --- | --- |
 | **Symbol** | Schematic drawing, terminals with stable IDs, units, and an optional explicit default category/primary-value binding | Footprints, pads, MPNs |
 | **Footprint** | Pads, outline, courtyard, silkscreen, paste and mask | Symbols, terminals, MPNs |
-| **Part definition** (generic) | One symbol, plus an optional category with typed parameters and a primary-value field, and zero or more package variants. Each variant is an exact footprint revision with its terminal-to-pad mapping. A part with no category or no variants is valid during schematic work. | Manufacturer identity, drawings or pads of its own |
+| **Part definition** (generic) | An optional symbol, an optional category with typed parameters and a primary-value field, and zero or more package variants. Each variant is an exact footprint revision; terminal-to-pad mapping applies when a symbol is present. Symbol-only, footprint-only and metadata-only definitions are valid library records. | Manufacturer identity, drawings or pads of its own |
 | **Manufacturer part** | Manufacturer, exact MPN, the one part and package variant it is, its specified parameters and a datasheet link | Drawings, pads, supplier prices or stock |
 | **Category schema** | Field IDs, value types and units for a kind of part, such as a capacitor | Values |
 | **Part instance** | One use in a project, such as R1: its reference, its chosen part, package variant and manufacturer part (each possibly unset), and its own parameter values | Library definitions; it points at pinned copies |
@@ -90,7 +90,7 @@ new library records use exact library/item/revision references.
 
 ### Pin maps
 
-A package variant maps symbol terminals to footprint pads. Real packages need
+When a symbol is present, a package variant maps symbol terminals to footprint pads. Without a symbol, its mapping is empty and it asserts no electrical connections. Real packages need
 more than one pad per terminal: a QFN's exposed pad tied to GND, several GND pins
 on one terminal, or shield and mounting pads. So the mapping is:
 

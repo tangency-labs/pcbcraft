@@ -110,7 +110,10 @@ fn manufacturer(session: &Session, params: &Value, selection: &mut Selection) ->
     if source.definition != pinned.definition
         || source.category != pinned.category
         || source.footprints != pinned.footprints
-        || !crate::library::sources::matches_pinned(&pinned.symbol, &source.symbol)
+        || !crate::library::sources::matches_pinned(
+            pinned.schematic_symbol().map_err(CommandError::InvalidParams)?,
+            source.schematic_symbol().map_err(CommandError::InvalidParams)?,
+        )
     {
         return Err(CommandError::InvalidParams("Manufacturer dependencies conflict with the project's pinned part revision.".into()));
     }
@@ -177,13 +180,13 @@ impl Session {
         if let Some(value) = selection.primary_value() {
             symbol_params["value"] = json!(value);
         }
-        transaction.place_symbol(selection.resolved.symbol.clone(), &symbol_params)?;
+        transaction.place_symbol(selection.resolved.schematic_symbol().map_err(CommandError::InvalidParams)?.clone(), &symbol_params)?;
         let mut candidate = transaction.open_project()?.clone();
         let id = candidate.symbols().last().ok_or_else(|| CommandError::InvalidParams("Part placement produced no unit.".into()))?.component;
         // Reuse the project's accepted attribution for an otherwise identical legacy pinned symbol.
         let symbol =
             candidate.components.get(&id).ok_or_else(|| CommandError::InvalidParams("Part instance disappeared.".into()))?.definition.clone();
-        Arc::make_mut(&mut selection.resolved).symbol = symbol;
+        Arc::make_mut(&mut selection.resolved).symbol = Some(symbol);
         Arc::make_mut(&mut candidate.components).get_mut(&id).ok_or_else(|| CommandError::InvalidParams("Unknown new part.".into()))?.part =
             Some(selection);
         // Native selections require the persisted allocation watermark even when no physical package is chosen.

@@ -141,3 +141,9 @@ authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
+
+Generic-part authoring supports independently optional symbols and footprints in
+`pcbcraft-part/2`, including footprint-only and metadata-only definitions. Retained
+format-1 parts remain readable. Parts Library can publish, search and preview
+these definitions and their manufacturer records. Schematic placement requires a
+symbol; direct board-only part placement is not yet implemented.

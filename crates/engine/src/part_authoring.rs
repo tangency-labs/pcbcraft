@@ -19,8 +19,8 @@ pub enum Record {
     Orderable(ManufacturerPart),
 }
 impl Record {
-    /// Create a schematic-only generic draft with an exact, explicitly supplied symbol.
-    pub fn new_part(symbol: Reference) -> Result<Self, String> {
+    /// Create a generic draft with an optional exact symbol; geometry can be associated later.
+    pub fn new_part(symbol: impl Into<Option<Reference>>) -> Result<Self, String> {
         Ok(Self::Part(PartDefinition {
             format: crate::library::parts::PART_FORMAT.into(),
             library: "user".into(),
@@ -29,7 +29,7 @@ impl Record {
             name: "New generic part".into(),
             license: "MIT OR Apache-2.0".into(),
             source: original_source(),
-            symbol,
+            symbol: symbol.into(),
             category: None,
             fixed_parameters: BTreeMap::new(),
             packages: BTreeMap::new(),
@@ -95,9 +95,6 @@ impl Record {
     pub fn validate(&self, catalog: &Catalog) -> Result<(), String> {
         match self {
             Self::Part(p) => {
-                if p.symbol.library == "user" && p.symbol.id == "choose-symbol" {
-                    return Err("Choose a symbol before publishing.".into());
-                }
                 catalog.validate_part(Arc::new(p.clone()))?;
             }
             Self::Orderable(p) => p.validate_part(catalog.resolve_part(&p.part)?)?,
@@ -352,8 +349,8 @@ impl Record {
         };
         let mut part = part.clone();
         let mut changed = false;
-        if kind == Kind::Symbol && part.symbol == *old {
-            part.symbol = new.clone();
+        if kind == Kind::Symbol && part.symbol.as_ref() == Some(old) {
+            part.symbol = Some(new.clone());
             changed = true;
         }
         if kind == Kind::Footprint {
@@ -380,6 +377,7 @@ mod tests;
 pub enum ReferenceField {
     Symbol,
     Footprint { package: String },
+    NewPackage { package: String },
     Category,
     Part,
 }
@@ -388,7 +386,7 @@ impl ReferenceField {
     pub fn kind(&self) -> Kind {
         match self {
             Self::Symbol => Kind::Symbol,
-            Self::Footprint { .. } => Kind::Footprint,
+            Self::Footprint { .. } | Self::NewPackage { .. } => Kind::Footprint,
             Self::Category => Kind::Category,
             Self::Part => Kind::Part,
         }
@@ -398,7 +396,14 @@ impl Record {
     /// Resolve a field on the current draft; wrong document kinds and removed packages fail.
     pub fn reference_field(&self, field: &ReferenceField) -> Result<Option<Reference>, String> {
         match (self, field) {
-            (Self::Part(p), ReferenceField::Symbol) => Ok(Some(p.symbol.clone())),
+            (Self::Part(p), ReferenceField::Symbol) => Ok(p.symbol.clone()),
+            (Self::Part(p), ReferenceField::NewPackage { package }) => {
+                Reference { library: "user".into(), id: package.clone(), revision: 1 }.validate()?;
+                if p.packages.contains_key(package) || p.packages.len() >= 64 {
+                    return Err("Choose a new package identity within the 64-package limit.".into());
+                }
+                Ok(None)
+            }
             (Self::Part(p), ReferenceField::Category) => Ok(p.category.as_ref().map(|c| c.definition.clone())),
             (Self::Part(p), ReferenceField::Footprint { package }) => {
                 p.packages.get(package).map(|p| Some(p.footprint.clone())).ok_or("The package no longer exists.".into())
@@ -423,7 +428,7 @@ impl Record {
                 }
                 _ => {}
             }
-        } else if !matches!(field, ReferenceField::Category) {
+        } else if !matches!(field, ReferenceField::Category | ReferenceField::Symbol) {
             return Err("Choose an exact library definition.".into());
         }
         if current == reference {
@@ -431,10 +436,31 @@ impl Record {
         }
         let mut candidate = self.clone();
         match (&mut candidate, field, reference) {
-            (Self::Part(p), ReferenceField::Symbol, Some(r)) => p.symbol = r,
+            (Self::Part(p), ReferenceField::Symbol, reference) => {
+                p.symbol = reference;
+                if p.symbol.is_none() {
+                    p.format = crate::library::parts::PART_FORMAT.into();
+                    for package in p.packages.values_mut() {
+                        package.mapping.clear();
+                        package.unconnected_pads.clear();
+                    }
+                }
+            }
             (Self::Part(p), ReferenceField::Category, r) => {
                 p.category = r.map(|definition| crate::library::parts::CategoryBinding { definition, primary_value: None });
                 p.fixed_parameters.clear();
+            }
+            (Self::Part(p), ReferenceField::NewPackage { package }, Some(r)) => {
+                let key = crate::library::sources::Key { library: r.library.clone(), id: r.id.clone(), revision: r.revision, kind: Kind::Footprint };
+                p.packages.insert(
+                    package.clone(),
+                    crate::library::parts::Package {
+                        name: catalog.item(&key)?.name.clone(),
+                        footprint: r,
+                        mapping: BTreeMap::new(),
+                        unconnected_pads: Vec::new(),
+                    },
+                );
             }
             (Self::Part(p), ReferenceField::Footprint { package }, Some(r)) => {
                 let package = p.packages.get_mut(package).ok_or("The package no longer exists.")?;

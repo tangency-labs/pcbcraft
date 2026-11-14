@@ -2,6 +2,18 @@
 use egui::Ui;
 use solidcraft_ui_kit as kit;
 
+/// Bound the document's reading width inside a large workspace or maximized Items region.
+/// The host owns document state; the shared field/table adapters retain their narrow layout.
+pub fn document<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let width = ui.available_width().min(760.);
+    ui.allocate_ui_with_layout(egui::vec2(width, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_min_width(width);
+        ui.set_max_width(width);
+        egui::ScrollArea::vertical().id_salt("part_document_fields").auto_shrink([false, true]).show(ui, add).inner
+    })
+    .inner
+}
+
 /// Keep pad identities and terminal choices aligned with the app's shared selectable tables.
 /// The host owns mapping semantics, exact identities and selection.
 pub fn mapping(ui: &mut Ui, pads: &[String], selected: &mut Option<String>, mut edit: impl FnMut(&mut Ui, &str)) {
@@ -32,7 +44,9 @@ pub fn reference(ui: &mut Ui, label: &str, value: &str, clear: bool) -> Referenc
     crate::properties::field(ui, label, |ui| {
         let reserved = if clear { 162. } else { 98. };
         let width = (ui.available_width() - reserved).max(0.);
-        ui.add_sized(egui::vec2(width, crate::Tokens::get().control_height), egui::Label::new(value).truncate()).on_hover_text(value);
+        ui.allocate_ui_with_layout(egui::vec2(width, crate::Tokens::get().control_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(value).truncate()).on_hover_text(value);
+        });
         let response = crate::controls::bounded_button(ui, ("browse", label), "Browse…", 86., true);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Choose {}", label.to_lowercase())));
         if response.clicked() {
