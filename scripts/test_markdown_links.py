@@ -277,6 +277,67 @@ class MarkdownLinkChecks(unittest.TestCase):
             '<a href="../missing.md" title="[not a link](../also-missing.md)">x</a>\n'), [
             'docs/sub/check.md:1: missing local link target: ../missing.md'])
 
+    def test_multiline_html_tags_check_attribute_line(self):
+        self.assertEqual(self.check(
+            '<a\n  href="../missing.md">guide</a>\n'
+            '<img\n  alt="diagram"\n  src="../missing.png">\n'), [
+            'docs/sub/check.md:2: missing local link target: ../missing.md',
+            'docs/sub/check.md:5: missing local link target: ../missing.png'])
+        self.assertEqual(self.check('<a\n  href="../a.md">guide</a>\n'), [])
+
+    def test_angle_bracket_destinations_take_precedence_over_html(self):
+        self.assertEqual(self.check(
+            '[broken](<missing.md>) ![broken](<missing.png>)\n'
+            '[tag-like](<a>)'), [
+            'docs/sub/check.md:1: missing local link target: missing.md',
+            'docs/sub/check.md:1: missing local link target: missing.png',
+            'docs/sub/check.md:2: missing local link target: a'])
+        self.assertEqual(self.check('[valid](<b.md>)\n'), [])
+
+    def test_reference_images_nested_inside_inline_links(self):
+        self.assertEqual(self.check(
+            '[![diagram][asset]](../a.md)\n\n[asset]: ../missing.png\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.png'])
+        self.assertEqual(self.check(
+            '[![asset][]](../missing.md)\n\n[asset]: ../missing.png\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md',
+            'docs/sub/check.md:1: missing local link target: ../missing.png'])
+        self.assertEqual(self.check(
+            '[![asset]](../a.md)\n\n[asset]: <../image with space.png>\n'), [])
+
+    def test_nested_images_and_outer_reference_links(self):
+        self.assertEqual(self.check(
+            '[![diagram](missing.png)][guide]\n\n[guide]: ../missing.md\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.md',
+            'docs/sub/check.md:1: missing local link target: missing.png'])
+        self.assertEqual(self.check(
+            '[![diagram][asset]][guide]\n\n[asset]: ../missing.png\n[guide]: ../a.md\n'), [
+            'docs/sub/check.md:1: missing local link target: ../missing.png'])
+
+    def test_html_attributes_are_exact_and_quoted_values_can_contain_gt(self):
+        self.assertEqual(self.check(
+            '<a data-href="missing.md" title="x > y href=missing.md" href="b.md">ok</a>\n'), [])
+        self.assertEqual(self.check(
+            '<img alt="a > b"\n src=missing.png>\n'), [
+            'docs/sub/check.md:2: missing local link target: missing.png'])
+
+    def test_markup_inside_link_title_is_not_a_separate_link(self):
+        self.assertEqual(self.check(
+            '[ok](b.md "[not a link](missing.md)")\n'
+            "[ok](b.md '<img src=missing.png>')\n"), [])
+        self.assertEqual(self.check(
+            '[ok](b.md) <img src=missing.png>\n'), [
+            'docs/sub/check.md:1: missing local link target: missing.png'])
+
+    def test_html_tag_in_link_label_preserves_image_and_bracket_handling(self):
+        self.assertEqual(self.check(
+            '[<img alt="[a]" src="missing.png">](b.md)\n'), [
+            'docs/sub/check.md:1: missing local link target: missing.png'])
+
+    def test_enclosing_link_does_not_create_spurious_shortcut_reference(self):
+        self.assertEqual(self.check(
+            '[label [asset]](b.md)\n\n[asset]: missing.png\n'), [])
+
     def test_external_urls_fragments_and_root_relative_are_skipped(self):
         self.assertEqual(self.check(
             '[web](https://example.org/x) [email](mailto:help@example.org)\n'

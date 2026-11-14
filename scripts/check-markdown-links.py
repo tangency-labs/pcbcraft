@@ -17,10 +17,14 @@ from urllib.parse import unquote, urlsplit
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 REFERENCE_DEF = re.compile(r"^ {0,3}\[([^]\n]+)\]:\s*(<[^>\n]+>|\S+)")
-REFERENCE_USAGE = re.compile(r"!?\[([^]\n]+)\]\[([^]\n]*)\]")
-SHORTCUT_USAGE = re.compile(r"!?\[([^]\n]+)\]")
-HTML_DEST = re.compile(r"\b(?:href|src)\s*=\s*([\"'])(.*?)\1", re.IGNORECASE)
-HTML_TAG = re.compile(r"<[A-Za-z][^>\n]*>")
+REFERENCE_LABEL = re.compile(r"\[((?:\\[^\n]|[^\[\]\\\n])*)\]")
+INLINE_TOKEN = re.compile(r"<|!?\[")
+# Match complete attributes, including quoted values with spaces, newlines or '>'.
+# Exact attribute names avoid treating data-href or words in titles as links.
+HTML_ATTRIBUTE = re.compile(
+    r"""[ \t\n]+([A-Za-z_:][A-Za-z0-9_.:-]*)(?:[ \t\n]*=[ \t\n]*("[^"]*"|'[^']*'|[^ \t\n"'=<>`]+))?"""
+)
+HTML_TAG = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:" + HTML_ATTRIBUTE.pattern + r")*[ \t\n]*/?>")
 # Unlike forgiving HTML5 entity parsing, CommonMark only decodes entities with ';'.
 MARKDOWN_ENTITY = re.compile(r"&(?:#[0-9]+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]+;)")
 # These interrupt or delimit inline parsing even when no blank line precedes them.
@@ -158,31 +162,22 @@ def _normalized(label: str) -> str:
     return " ".join(label.split()).casefold()
 
 
-def _inline_starts(text: str):
-    """Find inline links, including balanced or escaped brackets in labels.
-
-    The helper only identifies a potential link's opening parenthesis; the
-    destination parser validates the remainder. Escaped opening brackets are
-    ordinary text, not a link.
-    """
-    for marker in re.finditer(r"!?\[", text):
-        start = marker.start()
-        opener = marker.end() - 1
-        if _escaped(text, opener):
-            continue
-        depth = 1
-        position = marker.end()
-        while position < len(text) and text[position] != "\n":
-            if not _escaped(text, position):
-                if text[position] == "[":
-                    depth += 1
-                elif text[position] == "]":
-                    depth -= 1
-                    if depth == 0:
-                        if position + 1 < len(text) and text[position + 1] == "(":
-                            yield start, position + 2
-                        break
-            position += 1
+def _label_end(text: str, position: int) -> int | None:
+    """Find the closing bracket of a balanced, possibly escaped link label."""
+    depth = 1
+    while position < len(text):
+        if not _escaped(text, position):
+            if text[position] == "<" and (tag := HTML_TAG.match(text, position)):
+                position = tag.end()
+                continue
+            if text[position] == "[":
+                depth += 1
+            elif text[position] == "]":
+                depth -= 1
+                if depth == 0:
+                    return position
+        position += 1
+    return None
 
 
 def _link_spaces(text: str, pos: int) -> int | None:
@@ -285,6 +280,64 @@ def _local_target(repo: Path, source: Path, target: str, *, html_attribute: bool
     return candidate.is_relative_to(repo) and candidate.exists()
 
 
+def _scan_targets(text: str, references: dict[str, str], *, images_only: bool = False) -> list[tuple[int, str, bool]]:
+    """Read links and HTML tags in source order, retaining destination offsets.
+
+    Consume a complete link before interpreting its destination as HTML or
+    scanning markup inside its title. Scan a link label separately for images
+    (including reference images) and HTML tags, but not nested links.
+    """
+    targets: list[tuple[int, str, bool]] = []
+    position = 0
+    while (marker := INLINE_TOKEN.search(text, position)) is not None:
+        start = marker.start()
+        position = marker.end()
+        if marker.group() == "<":
+            if _escaped(text, start):
+                continue
+            tag = HTML_TAG.match(text, start)
+            if tag:
+                for attr in HTML_ATTRIBUTE.finditer(tag.group()):
+                    value = attr.group(2)
+                    if attr.group(1).lower() in ("href", "src") and value is not None:
+                        if value.startswith(('"', "'")):
+                            value = value[1:-1]
+                        targets.append((start + attr.start(1), value, True))
+                position = tag.end()
+            continue
+        image = marker.group() == "![" and not _escaped(text, start)
+        if not image:
+            start = marker.end() - 1
+        if _escaped(text, start) or (images_only and not image):
+            continue
+        label_end = _label_end(text, position)
+        if label_end is None:
+            continue
+        label = text[position:label_end]
+        end = label_end + 1
+        found = _destination(text, end + 1) if text[end:end + 1] == "(" else None
+        if found is not None:
+            target, end = found
+        else:
+            reference = REFERENCE_LABEL.match(text, end)
+            if reference:
+                key = _normalized(reference.group(1) or label)
+                end = reference.end()
+            elif REFERENCE_LABEL.fullmatch(text[position - 1:label_end + 1]):
+                key = _normalized(label)
+            else:
+                continue
+            if key not in references:
+                continue
+            target = references[key]
+        targets.append((start, target, False))
+        if not image:
+            targets.extend((position + offset, value, is_html)
+                           for offset, value, is_html in _scan_targets(label, references, images_only=True))
+        position = end
+    return targets
+
+
 def find_broken_links(repo: Path, files: list[Path]) -> list[str]:
     """Return source:line diagnostics, retaining the start of multiline links."""
     repo = repo.resolve()
@@ -307,34 +360,7 @@ def find_broken_links(repo: Path, files: list[Path]) -> list[str]:
             scan_blocks.append((first_line, "\n".join(scan_lines)))
         for first_line, text in scan_blocks:
             newlines = [index for index, char in enumerate(text) if char == "\n"]
-            targets: list[tuple[int, str, bool]] = []
-            masked = list(text)
-            # Markdown punctuation inside an HTML attribute is not a Markdown
-            # link. Collect actual href/src destinations first, then mask tags
-            # so their quoted attributes cannot produce spurious diagnostics.
-            for tag in HTML_TAG.finditer(text):
-                for attr in HTML_DEST.finditer(tag.group()):
-                    targets.append((tag.start() + attr.start(), attr.group(2), True))
-                masked[tag.start():tag.end()] = " " * (tag.end() - tag.start())
-            inline_text = "".join(masked)
-            for start, destination_start in _inline_starts(inline_text):
-                found = _destination(inline_text, destination_start)
-                if not found:
-                    continue
-                target, end = found
-                targets.append((start, target, False))
-                masked[start:end] = " " * (end - start)
-            remainder = "".join(masked)
-            for match in REFERENCE_USAGE.finditer(remainder):
-                label = _normalized(match.group(2) or match.group(1))
-                if label in references:
-                    targets.append((match.start(), references[label], False))
-                masked[match.start():match.end()] = " " * (match.end() - match.start())
-            remainder = "".join(masked)
-            for match in SHORTCUT_USAGE.finditer(remainder):
-                label = _normalized(match.group(1))
-                if label in references:
-                    targets.append((match.start(), references[label], False))
+            targets = _scan_targets(text, references)
             for offset, target, html_attribute in sorted(targets):
                 if not _local_target(repo, source, target, html_attribute=html_attribute):
                     number = first_line + bisect_right(newlines, offset)
