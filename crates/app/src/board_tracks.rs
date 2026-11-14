@@ -994,6 +994,8 @@ pub(super) fn paint(
 /// replaces the system pointer with a live crosshair and marks the target used by the route leg.
 /// While the menu is open the preview stays at its opening point and the system pointer returns.
 /// Paint the clearance envelope behind the draft copper at the same width used by DRC.
+/// The draft retains its layer color while preparation is pending; readiness is status, not
+/// a different copper material that flashes on every pointer change.
 pub(super) fn paint_draft(
     painter: &egui::Painter,
     response: &Response,
@@ -1055,14 +1057,7 @@ pub(super) fn paint_draft(
             pcbcraft_chrome::board::routing_clearance(painter, [path[*index]; 2], via_width.max(4.0), clearance);
         }
         for (pair, layer) in path.windows(2).zip(layers) {
-            pcbcraft_chrome::board::track(
-                painter,
-                [pair[0], pair[1]],
-                width,
-                if state.preparation.ready() { layer_color(view, appearance, layer) } else { pcbcraft_chrome::Tokens::get().text_dim },
-                false,
-                true,
-            );
+            pcbcraft_chrome::board::track(painter, [pair[0], pair[1]], width, layer_color(view, appearance, layer), false, true);
         }
         for (index, _) in &draft.changes {
             pcbcraft_chrome::board::via(painter, path[*index], via_width / 2., width_px(camera, rect, state.via_drill_nm) / 2., false, true, None);

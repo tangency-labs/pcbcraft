@@ -5,6 +5,7 @@ use pcbcraft_engine::{ADD_DRAWING, ADD_TRACKS, INITIALIZE_BOARD_SETUP, INITIALIZ
 use std::sync::Arc;
 
 /// A command-created native package with accepted logical ownership, opened as a physical editor.
+/// The group and split-pane fixtures use an explicit overview scale, independent of startup zoom.
 fn board() -> Harness<'static, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
@@ -29,6 +30,9 @@ fn board() -> Harness<'static, PcbApp> {
     h.state_mut().views.active.board.browser_collapsed = true;
     h.state_mut().views.active.board.properties_collapsed = true;
     h.state_mut().select_all_board();
+    h.run();
+    h.state_mut().views.active.camera.set_zoom(1.0);
+    h.state_mut().views.active.camera.center_on(Point { x_nm: 0, y_nm: 0 });
     h.run();
     h
 }

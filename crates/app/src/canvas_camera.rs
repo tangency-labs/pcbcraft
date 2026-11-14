@@ -13,6 +13,8 @@ const MIN_ZOOM: f32 = 0.005;
 pub(super) const MAX_ZOOM: f32 = 8.0;
 /// Board navigation needs to show fine copper and clearance at a useful scale.
 pub(super) const MAX_BOARD_ZOOM: f32 = 64.0;
+/// Start empty boards at 32 logical points/mm so ordinary copper widths are visible.
+const INITIAL_BOARD_ZOOM: f32 = 4.0;
 /// A wheel notch settles within this interval; live pinch gestures remain immediate.
 const WHEEL_ZOOM_SECONDS: f32 = 0.14;
 
@@ -90,6 +92,12 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Fresh PCB navigation uses a closer physical scale than the schematic. Restored camera
+    /// state and deliberate navigation keep their own scale; this is not a minimum zoom.
+    pub(super) fn board() -> Self {
+        Self { zoom: INITIAL_BOARD_ZOOM, snap_nm: grid::BOARD_SPACING_DEFAULT_NM, ..Self::default() }
+    }
+
     /// Last painted schematic bounds, for prioritizing hovered-object shortcuts before layout.
     /// This disposable rectangle never enters saved camera state or document identity.
     pub(crate) fn schematic_rect(&self) -> Option<Rect> {
@@ -338,6 +346,7 @@ impl Camera {
     /// Navigate and fit resolved board copper/graphics, independently of schematic geometry.
     /// Wheel and pinch can magnify beyond the whole-board Fit range to inspect fine copper.
     /// Fit includes the authored board boundary independently of layer visibility.
+    /// An empty board returns to its initial drawing scale, centered in the uncovered canvas.
     pub(crate) fn navigate_board(
         &mut self,
         response: &Response,
@@ -361,7 +370,12 @@ impl Camera {
                 .fold(Rect::NOTHING, |bounds, point| {
                     bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
                 });
-            self.fit_bounds(bounds, rect, MAX_ZOOM);
+            if bounds.is_finite() {
+                self.fit_bounds(bounds, rect, MAX_ZOOM);
+            } else {
+                self.zoom = INITIAL_BOARD_ZOOM;
+                self.offset = self.uncovered_center();
+            }
         }
         self.interact(response, rect, enabled, navigation, MAX_BOARD_ZOOM);
     }

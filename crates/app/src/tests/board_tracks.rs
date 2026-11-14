@@ -54,6 +54,42 @@ fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos
     })
 }
 
+/// Pointer changes invalidate prepared candidates, but the draft keeps its copper color both
+/// during background preparation and after completion, on either copper side and in both themes.
+#[test]
+fn route_preview_color_does_not_flash_while_preparation_catches_up() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        for layer in ["Top", "Bottom"] {
+            let mut h = routable();
+            h.state_mut().preferences.theme = theme;
+            h.run();
+            click(&mut h, &format!("Activate layer {layer}"));
+            let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            h.key_press(Key::X);
+            h.run();
+            click_route(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 });
+            for x_nm in [3_810_000, 5_080_000, 6_350_000] {
+                let end = at(&h, Point { x_nm, y_nm: 2_540_000 });
+                let color = if layer == "Top" { pcbcraft_chrome::Tokens::get().board_front } else { pcbcraft_chrome::Tokens::get().board_back };
+                h.hover_at(end);
+                h.step();
+                assert_ne!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
+                assert!(preview_ends_at(&h, color, end), "pending {theme:?} {layer}");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while h.state().views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
+                    assert!(std::time::Instant::now() < deadline, "route preparation did not settle");
+                    h.step();
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                assert!(preview_ends_at(&h, color, end), "ready {theme:?} {layer}");
+            }
+            h.key_press(Key::Escape);
+            h.run();
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
+}
+
 /// Whether the real canvas drew the specified track stroke in its effective color.
 fn track_has_color(h: &Harness<'_, PcbApp>, [a, b]: [Point; 2], color: egui::Color32) -> bool {
     let [a, b] = [at(h, a), at(h, b)];
