@@ -12,7 +12,9 @@ use pcbcraft_chrome::{
     workspace::ToolIcon,
 };
 use pcbcraft_engine::{
+    CommandError,
     board::{
+        class_rules::Applied,
         setup::{LayerPurpose, Side},
         track::{DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM, DEFAULT_WIDTH_NM, MAX_PATH_POINTS, Track, Via},
         view::{BoardTarget, BoardView, CopperLayers},
@@ -20,7 +22,7 @@ use pcbcraft_engine::{
     schematic::Point,
 };
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
 mod preparation;
@@ -48,6 +50,9 @@ struct Draft {
     changes: Vec<(usize, String)>,
     /// Captured class spacing for the preview, invalidated with the originating revision.
     clearance_nm: i64,
+    /// Source-contact via policy remains attached to this draft's revision. A track can start
+    /// with unresolved via defaults, but each actual via must resolve them before changing layer.
+    via_rules: Option<Arc<Applied>>,
 }
 
 /// The layer each segment of a `points`-vertex path runs on, starting on `start` and switching at
@@ -200,7 +205,13 @@ impl State {
     /// Adopt the contacted net's defaults once at route pickup, keeping geometry/rule traversal
     /// outside pointer-motion frames. Explicit dimensions retain priority and must meet hard
     /// limits; a later unclassified pickup restores only dimensions that still use defaults.
-    fn contact_defaults(&mut self, board: BoardView<'_>, at: Point, layer: Option<Uuid>, via: bool) -> Result<i64, pcbcraft_engine::CommandError> {
+    fn contact_defaults(
+        &mut self,
+        board: BoardView<'_>,
+        at: Point,
+        layer: Option<Uuid>,
+        via: bool,
+    ) -> Result<(i64, Option<Arc<Applied>>), CommandError> {
         let base = board.effective_rules().values;
         let policy = board.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions());
         let clearance = if let Some(policy) = &policy {
@@ -224,7 +235,7 @@ impl State {
             base.clearance_nm
         };
         self.class_defaults = policy.is_some();
-        Ok(clearance)
+        Ok((clearance, policy.map(Arc::new)))
     }
     /// Refresh preferred sizes when switching boards or changing saved rules. Explicit local
     /// size choices survive ordinary edits; a rule change resets them and invalidates drafts.
@@ -802,6 +813,18 @@ pub(super) fn interact(
             let path = extended(&draft.points, at, state.diagonal_first);
             let index = path.len() - 1;
             if index > 0 && path.len() <= MAX_PATH_POINTS && !draft.changes.iter().any(|(existing, _)| *existing == index) {
+                if let Some(policy) = &draft.via_rules {
+                    match policy.via_sizes(state.via_diameter_override, state.via_drill_override) {
+                        Ok((diameter, drill)) => {
+                            state.via_diameter_nm = diameter;
+                            state.via_drill_nm = drill;
+                        }
+                        Err(error) => {
+                            out.error = Some(error.to_string());
+                            return out;
+                        }
+                    }
+                }
                 draft.points = path;
                 draft.changes.push((index, next.clone()));
                 draft.layer = next.clone();
@@ -826,7 +849,7 @@ pub(super) fn interact(
                     .map_err(|_| "Unknown routing layer.".to_owned())
                     .and_then(|layer| state.contact_defaults(view, at, Some(layer), false).map_err(|error| error.to_string()))
                 {
-                    Ok(clearance_nm) => {
+                    Ok((clearance_nm, via_rules)) => {
                         state.draft = Some(Draft {
                             source,
                             contact,
@@ -835,6 +858,7 @@ pub(super) fn interact(
                             points: vec![at],
                             changes: Vec::new(),
                             clearance_nm,
+                            via_rules,
                         })
                     }
                     Err(error) => out.error = Some(error),

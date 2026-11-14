@@ -2083,3 +2083,102 @@ fn explicit_sizes_survive_classified_and_unclassified_pickups() {
         assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (500000, 1000000, 500000));
     }
 }
+
+/// Unresolved via preferences do not prevent a track-only route, but V, layer keys and the
+/// route menu cannot insert stale sizes. An explicit valid pair resolves only that operation.
+#[test]
+fn unresolved_via_defaults_block_layer_changes_until_explicitly_resolved() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let class = classify_route(
+        &mut h,
+        "Power",
+        json!({"preferred_track_width_nm":500000,"preferred_via_diameter_nm":600000,"preferred_via_drill_nm":300000}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::net_classes::CREATE,
+        &json!({"name":"Alternative via","rules":{"preferred_via_diameter_nm":800000,"preferred_via_drill_nm":400000},"expected_revision":revision}),
+    );
+    let alternative = h.state().session.project().unwrap().net_classes().definitions.iter().find(|definition| definition.id != class).unwrap().id;
+    let anchor = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::nets::SET_CLASSES,
+        &json!({"target":{"kind":"derived","anchor":anchor},"classes":[class,alternative],"expected_revision":revision}),
+    );
+    h.run();
+    let line = airwires(&h)[0].clone();
+    let top = layer_named(&h, "Top");
+    let bottom = layer_named(&h, "Bottom");
+    let first = Point { x_nm: line.from.position.x_nm, y_nm: -2540000 };
+    let last = Point { x_nm: line.to.position.x_nm, y_nm: -2540000 };
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(h.state().views.active.board.tracks.routing());
+    assert_eq!(h.state().message, None);
+    via_at(&mut h, first);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    assert!(h.state().message.as_ref().is_some_and(|message| message.contains("unresolved")));
+    click(&mut h, "Track / line width");
+    click(&mut h, "0.75 mm");
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(h.state().views.active.board.tracks.routing());
+    h.hover_at(at(&h, first));
+    h.run();
+    h.key_press(Key::PageDown);
+    h.run();
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    right_click_route(&mut h, first);
+    click(&mut h, "Place through via");
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert!(h.state().views.active.board.tracks.routing());
+    assert!(vias(&h).is_empty());
+    // Completing a track without a via does not depend on those conflicting preferences.
+    click_route(&mut h, first);
+    click_route(&mut h, last);
+    click_route(&mut h, line.to.position);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while h.state().session.revision() == revision {
+        assert!(std::time::Instant::now() < deadline, "{:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(h.state().message, None);
+    assert!(vias(&h).is_empty());
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(tracks(&h).is_empty());
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    click(&mut h, "Via pad / drill");
+    click(&mut h, "0.8 / 0.4 mm");
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    via_at(&mut h, first);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()));
+    via_at(&mut h, last);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    let revision = h.state().session.revision();
+    click_route(&mut h, line.to.position);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while h.state().session.revision() == revision {
+        assert!(std::time::Instant::now() < deadline, "{:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(h.state().message, None);
+    assert_eq!(vias(&h).len(), 2);
+    assert!(vias(&h).iter().all(|via| via.diameter_nm == 800000 && via.drill_nm == 400000));
+    assert_eq!(h.state().session.revision(), revision + 1);
+}

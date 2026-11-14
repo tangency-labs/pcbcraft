@@ -1,0 +1,24 @@
+{
+  "pr": 349,
+  "base": "66da8e6d18eb5876f9a5727095241c171191094c",
+  "thread": "PRRT_kwDOVjNeEs63i1Te",
+  "comment": 4575608874,
+  "resolution": "Capture the source-contact policy in the revision-qualified draft. Resolve via sizes against current explicit operands before recording any layer change; failure leaves path, changes, active layer and model untouched. A plain track route does not need via preferences.",
+  "source": {
+    "crates/app/src/board_tracks.rs": "631123313bae68b1ce79eea4baf1adb752a3313cb4f8609d9202e401ce47c784",
+    "crates/app/src/tests/board_tracks.rs": "ea2c932cf6d2d8525ffb680d6f094654cf935f9b71caf506c658ad575d44ea9e",
+    "docs/net-class-consumers.md": "92838341226bc6b5c79556647679d64032fac5470998a506379cbaf58157e091"
+  },
+  "checks": {
+    "app_tests_passed": 959,
+    "app_tests_ignored": 9,
+    "harness_tests_passed": 15,
+    "clippy": "workspace and opt-in harness/all-targets pass",
+    "format": "pass",
+    "browser": "app and harness compile pass",
+    "native": "desktop and CLI build pass",
+    "unchanged": "Engine/MCP behavior and dependencies unchanged; previous workspace/WASI/dependency checks retained."
+  },
+  "failure_review": "The draft shares captured immutable class metadata using Arc, without retaining another project snapshot. Existing input/revision cancellation drops the draft, and retry clones share its captured policy. Validation occurs only on via actions, never pointer motion, and returns before route/layer mutation. No worker, queue, blocking I/O or rendering primitive added.",
+  "performance": "No new timing, rendered latency or endurance qualification."
+}

@@ -42,7 +42,10 @@ vias must satisfy diameter, drill and annular-ring bounds. Explicit sizes may
 resolve a preference choice but cannot bypass those hard bounds. Supplying one
 via operand can repair a preferred-pair conflict when the omitted operand has a
 single unambiguous preference; differing class preferences still require an
-explicit choice for that operand. Conflicting preferences block only omitted defaults that require them, while impossible via
+explicit choice for that operand. A track can start while its via defaults are
+unresolved; V, layer keys and the route menu refuse a layer-change via until its
+sizes resolve, including through an explicit valid ribbon pair. Conflicting
+preferences block only omitted defaults that require them, while impossible via
 bounds block affected vias rather than unrelated tracks. Empty-rule classifications
 add no dimensional enforcement. Existing copper is not resized: it remains
 inspectable and DRC reports violations. Unclassified copper retains the earlier

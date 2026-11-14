@@ -39,7 +39,12 @@
     "review349/assigned-correctness.json": "eb04de27f78647a7fab8e53dce41280236372d327f543272afc4432215b8d909",
     "review349/checks.zip": "1046626e3baeffd9820288af1ec0a82a38a395492eb868a985f5a50f0549e6aa",
     "review349/resolution.json": "17ba065b08637761a66442f7b73ad8be3c544f5c3e204f63841bef58e9ea1bd5",
-    "review349/README.md": "a7d6661807c456b54197260bf8a6929b89fd3ab6fbc0754ad306d22def55b71a"
+    "review349/README.md": "a7d6661807c456b54197260bf8a6929b89fd3ab6fbc0754ad306d22def55b71a",
+    "review349-followup/checks.json": "57a244ff7dfa18cc30308728621dd5a9a9c33f764f591ebfad07e9a2274b1981",
+    "review349-followup/counterfactual.json": "46d7c7ac3feb5615f437cd05fb755a6ba13ccb48051d63949c9565acdefe6623",
+    "review349-followup/checks.zip": "d2809edbfd71e008596025f831c6c15ef651b61662ce8175de4e5976147c5c44",
+    "review349-followup/resolution.json": "709a82b2e466cb24c953bc4d2e5346a5b674f2426d357c00ec45dc35be8534b4",
+    "review349-followup/README.md": "3b46ce44cdececf9eb9221a23dfcc046f72e4796795c38a9eb4fb40f95a5fc7a"
   },
   "review_base": "1f30e82bf57c797463091c34f8ee768ade050fe2"
 }
