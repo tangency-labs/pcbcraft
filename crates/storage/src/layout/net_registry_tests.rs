@@ -88,3 +88,29 @@ fn first_board_registry_scope_transfer_recovers_at_every_checkpoint() {
     apply(&mut session, "edit.undo", json!({}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// First class bindings version both metadata homes through the existing journal, including
+/// interruption at every checkpoint and exact Undo publication; physical baseline bytes stay fixed.
+#[test]
+fn first_class_assignment_and_first_board_transfer_recover_at_every_checkpoint() {
+    for board in [false, true] {
+        let mut session = circuit(board);
+        apply(&mut session, pcbcraft_engine::net_classes::CREATE, json!({"name":"Power","rules":{"clearance_nm":500000}}));
+        let class = session.project().unwrap().net_classes().definitions[0].id;
+        let target = json!({"kind":"derived","anchor":session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"]});
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        apply(&mut session, nets::SET_CLASSES, json!({"target":target,"classes":[class]}));
+        let after = encode_documents(session.snapshot().unwrap()).unwrap();
+        interruption_matrix(&before, &after);
+        interruption_matrix(&after, &before);
+        if board {
+            let path = session.project().unwrap().board_document_path().unwrap();
+            assert_eq!(before[&path], after[&path]);
+        } else {
+            apply(&mut session, "pcb.create_board", json!({}));
+            let transferred = encode_documents(session.snapshot().unwrap()).unwrap();
+            interruption_matrix(&after, &transferred);
+            interruption_matrix(&transferred, &after);
+        }
+    }
+}

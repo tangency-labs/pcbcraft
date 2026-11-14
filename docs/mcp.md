@@ -382,5 +382,9 @@ project catalog with `expected_revision`, without creating a physical board.
 explicit `classes` and optional `other_classes` UUID sets with built-ins or an
 explicitly addressed `board`. Both queries return their data with `inspect: false`.
 See the [property, conflict and storage contract](net-classes.md) for examples
-and precedence. These commands do not yet assign classes to nets or change
-routing/DRC behavior.
+and precedence. `nets.inspect_classes` discovers current typed targets without
+promotion; with a target it returns bindings, origins and conflicts.
+`nets.set_classes` replaces the full class set with revision checking and promotes
+an eligible derived target in the same history step. The assignment query retains
+its payload with `inspect: false`. See the [assignment contract](net-class-assignments.md)
+for target shapes, protected removal/rebind and the unsupported-consumer boundary.

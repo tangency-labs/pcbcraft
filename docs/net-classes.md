@@ -3,9 +3,10 @@
 Issue [#300](https://github.com/tangency-labs/pcbcraft/issues/300) supplies a
 project-wide catalog and a resolver for explicitly supplied class sets. Classes
 can be authored in a schematic-only project without creating a board or a
-stackup. This slice does not assign classes to nets, expose an editor form or
-apply class rules to routing, clearance queries or DRC. Those consumers continue
-using [board defaults](board-rules.md) until #301–#303 implement their boundaries.
+stackup. [Persistent assignments](net-class-assignments.md) now bind those IDs to
+meaningful nets through shared commands. Editor controls and class-aware routing,
+clearance queries and DRC remain under #302–#303; dimensional assignments make
+unsupported consumers refuse rather than silently use only board defaults.
 
 ## Authored definitions
 
@@ -96,7 +97,7 @@ only, not pair-specific exceptions or request-local weakening overrides.
 | --- | --- |
 | `net_classes.create` | `expected_revision`, `name`, sparse `rules`; allocates one stable ID at definition revision 1 |
 | `net_classes.update` | `expected_revision`, `class`, `name`, complete replacement sparse `rules`; retains ID, increments definition revision on actual changes |
-| `net_classes.remove` | `expected_revision`, `class`; removes the definition in one undoable transaction |
+| `net_classes.remove` | `expected_revision`, `class`, optional `rebind`; refuses referenced definitions unless all references are atomically rebound to a different existing class |
 | `net_classes.inspect` | No parameters; returns `net_classes` and unchanged session `revision` without preparing connectivity |
 | `net_classes.resolve` | Required `classes` UUID array, optional `board` UUID and optional `other_classes`; returns `resolution` and unchanged session `revision` |
 
@@ -121,12 +122,13 @@ edits rather than reusing the example's number.
 
 ## Storage and follow-on boundaries
 
-Only projects with classes use `pcbcraft-project/20`. Its required nonempty
+Projects with classes but no bindings use `pcbcraft-project/20`; bindings select
+project/21 and board-owned instances/3. The required nonempty
 `net_classes` record is stored in `project.json`, with definitions sorted by UUID
 and one definition per line. It extends the existing folder/occurrence vocabulary
 and permits the supported optional no-connect and persistent-net records
-together. Board, sheet, instance, archive and library formats are unchanged.
-Older project headers reject class records; format 20 rejects missing, null,
+together. Physical board, sheet, archive and library formats are unchanged.
+Older project headers reject class records; formats 20/21 reject missing, null,
 empty or invalid catalogs. The historical single-document encoder refuses to
 discard classes.
 
@@ -137,9 +139,9 @@ encoding. Removing the last class omits the catalog and selects the format neede
 by the remaining data. Canonical folder and `.pc` archive reopen/save preserve
 IDs, revisions and bytes.
 
-#301 should bind stable net identities to sets of class IDs and define removal
-protection/reconciliation; this slice has no saved bindings to orphan. #302
-should reuse this resolver for routing/query/checking consumers, including
+#301's [assignment contract](net-class-assignments.md) defines removal protection,
+origins and topology reconciliation. #302 should reuse this resolver for
+routing/query/checking consumers, including
 snapshot validity and explicit conflicts. #303 owns the shared editor workflow.
 No consumer should infer bindings from class names or treat the present catalog
 as though it already changes DRC or routing behavior.

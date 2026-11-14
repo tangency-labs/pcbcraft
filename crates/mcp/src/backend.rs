@@ -73,7 +73,8 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
             if params["inspect"].as_bool() == Some(false)
                 && !matches!(
                     id,
-                    pcbcraft_engine::net_classes::INSPECT
+                    pcbcraft_engine::nets::INSPECT_CLASSES
+                        | pcbcraft_engine::net_classes::INSPECT
                         | pcbcraft_engine::net_classes::RESOLVE
                         | pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::no_connect::CHECK

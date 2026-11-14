@@ -101,6 +101,9 @@ impl Session {
         if target != context.source.target() || !context.source.is_current(self) {
             return Err(CommandError::InvalidParams("copper preparation source is stale or belongs to another board".into()));
         }
+        if command != crate::DELETE_TRACKS {
+            self.open_project()?.require_supported_class_consumer()?;
+        }
         let command = crate::command(command).ok_or_else(|| CommandError::Unknown(command.into()))?.id;
         Ok(CopperEditJob {
             context: context.clone(),
