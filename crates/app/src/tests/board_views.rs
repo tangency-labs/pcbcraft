@@ -475,7 +475,8 @@ fn mixed_pane_close_buttons_preserve_the_surviving_view() {
 
 /// PCB grid preferences change only board drawing, survive serialization, and preserve snapping
 /// and project state. Off retains the previous style, Cancel restores visibility as well,
-/// and page defaults restore the legacy Off style.
+/// and page defaults restore the legacy Off style. Use an explicit overview zoom to exercise
+/// grid thinning without tying that assertion to the initial PCB camera.
 #[test]
 fn pcb_grid_preferences_are_shared_display_settings() {
     use pcbcraft_chrome::grid::Style;
@@ -485,6 +486,7 @@ fn pcb_grid_preferences_are_shared_display_settings() {
     let board_rect = h.get_by_label("PCB canvas 3").rect();
     click_canvas_at(&mut h, board_rect.center());
     let id = h.state().views.active.id();
+    h.state_mut().views.view_mut(id).unwrap().camera.set_zoom(1.0);
     h.state_mut().views.view_mut(id).unwrap().camera.set_snap_nm(10 * pcbcraft_chrome::grid::NM_PER_MIL);
     h.run();
     let camera = h.state().views.view(id).unwrap().camera.saved_state();
@@ -693,7 +695,8 @@ fn footprint_drag_rotation_and_undo_share_one_command() {
 }
 
 /// Footprint drags snap to the board's 25 mil spacing at several zoom levels without changing
-/// the placement model or needing a different grid rule per scale.
+/// the placement model or needing a different grid rule per scale. Recenter each trial so
+/// the placement stays clear of floating panels after changing zoom.
 #[test]
 fn footprint_drag_snaps_to_board_grid_at_several_zoom_levels() {
     let mut h = board_harness();
@@ -706,6 +709,8 @@ fn footprint_drag_snaps_to_board_grid_at_several_zoom_levels() {
         h.run();
         let before = placement(&h);
         let start = Point { x_nm: before["x_nm"].as_i64().unwrap(), y_nm: before["y_nm"].as_i64().unwrap() };
+        h.state_mut().views.active.camera.center_on(start);
+        h.run();
         let destination = board_point(&h, Point { x_nm: start.x_nm + 2_000_000, y_nm: start.y_nm + 1_000_000 });
         let from = board_point(&h, start);
         h.hover_at(from);

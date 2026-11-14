@@ -1,6 +1,41 @@
 //! Sample real canvas navigation frame by frame instead of waiting for motion to settle.
 use super::*;
 
+/// A new empty PCB has a useful physical drawing scale; empty Fit restores it, while pane
+/// switching, saved-view restoration and ordinary edits preserve deliberate navigation.
+#[test]
+fn empty_boards_start_close_and_keep_remembered_navigation() {
+    let mut h = harness();
+    h.state_mut().start_new_project_in(Workspace::Board);
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 4.0);
+    let initial = h.state().session.snapshot().unwrap();
+    h.state_mut().views.active.camera.set_zoom_with_limit(12.0, crate::canvas_camera::MAX_BOARD_ZOOM);
+    h.state_mut().views.active.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 4_000_000, y_nm: -2_000_000 });
+    let remembered = h.state().views.active.camera.saved_state();
+    let app = h.state_mut();
+    app.views.active.switch(Workspace::Schematic, &app.session);
+    assert_eq!(h.state().views.active.camera.zoom(), 1.0);
+    let app = h.state_mut();
+    app.views.active.switch(Workspace::Board, &app.session);
+    h.run();
+    assert_eq!(h.state().views.active.camera.saved_state(), remembered);
+    let saved = h.state().views.active.saved_state(&h.state().session).unwrap();
+    let restored = crate::editor_view::EditorView::from_state(ViewId(99), &saved, &h.state().session);
+    assert_eq!(restored.camera.saved_state(), remembered);
+    assert!(std::sync::Arc::ptr_eq(&initial, &h.state().session.snapshot().unwrap()));
+    h.state_mut().run("project.rename", &json!({"name":"Still empty"}));
+    h.run();
+    assert_eq!(h.state().views.active.camera.saved_state(), remembered);
+    h.state_mut().views.active.camera.request_fit();
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 4.0);
+    assert_eq!(h.state().views.active.camera.center(), pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
+    h.state_mut().start_new_project_in(Workspace::Board);
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 4.0);
+}
+
 /// Wheel zoom traverses intermediate scales and keeps its anchor fixed in either workspace,
 /// while a pinch follows the fingers in its input frame. Navigation never edits the project.
 #[test]

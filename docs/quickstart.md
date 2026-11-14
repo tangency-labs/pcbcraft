@@ -77,7 +77,9 @@ or **New PCB** on Home. Each opens an **Untitled** project in the chosen workspa
 with an empty sheet. **New Schematic** starts without a physical board; **New PCB**
 creates its one board explicitly. Opening the PCB workspace from a schematic-only
 project shows **Create board**; merely switching workspaces does not create it.
-The compact cards wrap as the window narrows.
+The compact cards wrap as the window narrows. Empty PCBs start at a closer drawing
+scale, which **Fit board** restores until the board contains geometry; saved views
+retain their own zoom and position.
 On the desktop, the
 first **Save** asks for a project folder, and the project takes that folder's name.
 
@@ -500,8 +502,8 @@ closure across drawings, edge clearance or manufacturing validity.
 
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
-The preview uses a lighter shade of the layer color and shows the default
-clearance around it. Starting on a trace brightens its copper and dims the rest
+The preview keeps a lighter shade of the layer color while background preparation
+is pending and shows the default clearance around it. Starting on a trace brightens its copper and dims the rest
 of the board while you route. Hold **Ctrl** to bypass the grid. Click a pad,
 track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.

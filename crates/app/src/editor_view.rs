@@ -402,10 +402,9 @@ impl EditorView {
         let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
         let panels = self.panels.clone();
-        *self = Self::new(self.id);
+        *self = Self::new_in_workspace(self.id, workspace);
         (self.filters, self.filters_collapsed, self.filters_open) = filters;
         self.panels = panels;
-        self.workspace = workspace;
         self.camera.set_snap_nm(snap_nm);
         self.parked_camera.set_snap_nm(parked_snap_nm);
         self.sync(session);
@@ -490,8 +489,7 @@ impl EditorView {
     /// explicit targets retain their snapshot and cannot authorize editing another document.
     /// Filter and card choices restore independently of selection, which always starts empty.
     pub(super) fn from_state(id: ViewId, state: &ViewState, session: &Session) -> Self {
-        let mut view = Self::new(id);
-        view.workspace = state.target.workspace();
+        let mut view = Self::new_in_workspace(id, state.target.workspace());
         view.board.target = state.board;
         view.sheet = state.schematic;
         if let DocumentTarget::Sheet(sheet) = state.target {
@@ -525,19 +523,29 @@ impl EditorView {
 
     /// Create an unbound schematic presentation with fresh navigation and interaction state.
     pub(super) fn new(id: ViewId) -> Self {
+        Self::new_in_workspace(id, Workspace::Schematic)
+    }
+
+    /// Seed fresh navigation for both workspaces, keeping the closer PCB camera in its correct
+    /// active or parked slot when a document binding is created or replaced.
+    fn new_in_workspace(id: ViewId, workspace: Workspace) -> Self {
+        let (camera, parked_camera) = match workspace {
+            Workspace::Schematic => (Camera::default(), Camera::board()),
+            Workspace::Board => (Camera::board(), Camera::default()),
+        };
         Self {
             id,
             binding: None,
             input_epoch: 0,
-            workspace: Workspace::Schematic,
+            workspace,
             filters: crate::selection_filters::Filters::default(),
             filters_collapsed: false,
             filters_open: true,
             panels: crate::workspace_panels::defaults(),
             definition: None,
             library: None,
-            camera: Camera::default(),
-            parked_camera: Camera::default(),
+            camera,
+            parked_camera,
             schematic: SchematicState::default(),
             board: BoardState::default(),
             unavailable: None,
@@ -780,11 +788,10 @@ impl EditorView {
             let sheet = self.sheet;
             let filters = (self.filters, self.filters_collapsed, self.filters_open);
             let panels = self.panels.clone();
-            *self = Self::new(self.id);
+            *self = Self::new_in_workspace(self.id, workspace);
             (self.filters, self.filters_collapsed, self.filters_open) = filters;
             self.panels = panels;
             self.sheet = sheet;
-            self.workspace = workspace;
             self.camera.set_snap_nm(snap_nm);
             self.parked_camera.set_snap_nm(parked_snap_nm);
             self.binding = binding;

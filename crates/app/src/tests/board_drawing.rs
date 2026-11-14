@@ -3,6 +3,7 @@ use super::*;
 use pcbcraft_engine::{ADD_DRAWING, persistence::encode_documents, schematic::Point};
 
 /// An unconfigured board exposes technical layers without inventing any copper topology.
+/// Use an overview scale so the large outline fixtures stay inside the canvas.
 fn board<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
@@ -11,6 +12,9 @@ fn board<'a>() -> Harness<'a, PcbApp> {
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB Layout");
     click(&mut h, "Activate layer Board Outline");
+    h.state_mut().views.active.camera.set_zoom(1.0);
+    h.state_mut().views.active.camera.center_on(Point { x_nm: 0, y_nm: 0 });
+    h.run();
     h
 }
 
