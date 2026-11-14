@@ -43,3 +43,7 @@ snapshot; it is absent from production dependencies. Source maps, complete logs,
 raw native captures and browser artifacts remain under `setup/issue303` in the
 shared development workspace. No user-visible desktop app, remote branch or PR
 was created by this local implementation task.
+
+The [layout follow-up](layout-review/README.md) supersedes the original form
+screenshots after @travle1's local testing feedback, with separate source and
+functional validation records.

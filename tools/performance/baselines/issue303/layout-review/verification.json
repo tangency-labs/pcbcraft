@@ -1,0 +1,165 @@
+{
+  "code": "8d942a1cacc7a0281cf447b40f09b1eee88f81b7",
+  "scope": "Rules modal presentation and display labels; no engine, command, storage or dependency change.",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4211543960263953
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 7.184357471065596
+    },
+    {
+      "name": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace"
+      ],
+      "exit": 0,
+      "seconds": 75.8091354171047
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 3.1965930649312213
+    },
+    {
+      "name": "harness-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 5.313409094000235
+    },
+    {
+      "name": "harness-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "performance::"
+      ],
+      "exit": 0,
+      "seconds": 26.080622990964912
+    },
+    {
+      "name": "web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 29.12039543001447
+    },
+    {
+      "name": "native-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "pcbcraft",
+        "-p",
+        "pcbcraft-cli"
+      ],
+      "exit": 0,
+      "seconds": 0.46748736791778356
+    }
+  ],
+  "workspace": {
+    "passed": 1858,
+    "ignored": 11
+  },
+  "harness_tests": 15,
+  "native_visuals": "GPU readback at 1280x900 dark and 700x760 light; sparse class fields and a 1mm minimum versus inherited 0.25mm preferred-width conflict.",
+  "browser": {
+    "version": "148.0.7778.96",
+    "errors": [],
+    "console": [
+      {
+        "type": "warning",
+        "text": "The `integrity` attribute is currently ignored for preload destinations that do not support subresource integrity. See https://crbug.com/981419 for more information"
+      },
+      {
+        "type": "warning",
+        "text": "No available adapters."
+      },
+      {
+        "type": "warning",
+        "text": "[egui_wgpu] egui-wgpu/src/lib.rs:718: Software rasterizer detected - loss of performance expected. backend: Gl, device_type: Cpu, name: \"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)\", driver_info: \"WebGL 2.0 (OpenGL ES 3.0 Chromium)\", subgroup_size: 4..=128, transient_saves_memory: None, limit_bucket: None"
+      },
+      {
+        "type": "info",
+        "text": "[eframe::web::web_runner] eframe/src/web/web_runner.rs:94: event handlers installed."
+      }
+    ]
+  },
+  "browser_flow": [
+    "Open exact existing command-generated assigned-reference archive",
+    "Choose Power class and inspect real class fields",
+    "Choose current net by R1 pin 1 display alias",
+    "Inspect aligned effective values and source column",
+    "Resize open modal without further pointer input",
+    "Switch Light/mm and inspect compact form",
+    "Wheel-scroll to routing preferences and technical disclosures while footer stays fixed"
+  ],
+  "failure_review": "The pinned selectable table nested horizontal scrolling inside the form and blocked lower-field accessibility reveal. The final adapter composes shared fields in reserved cells under one outer vertical scroll owner. Existing real-control tests pass at 1200, 700 and 400 widths, including lower preferences, invalid text, exact units, revision/view refusal, complete-set assignment and history. No new I/O/queue/lock/worker is introduced. Modal/source authority remains unchanged; viewport identity and requested width keep settling repaints bounded.",
+  "toolkit": "Craft0.41.0 at 73bdb6c; existing settings modal, controls, sections and warning banner composed through chrome. No selectable table or custom painting in the final dimensional form.",
+  "limits": [
+    "Native captures are offscreen GPU readback, not physical window/presentation measurements",
+    "Chrome148 uses WebGL2/ANGLE SwiftShader; WebGPU reports no adapters",
+    "No new CPU replay: this follow-up changes modal presentation/labels; the retained CPU evidence measures ordinary editor paths without Rules open",
+    "Existing dependency/source/license check reused; manifests and lockfile are unchanged"
+  ],
+  "native_build": {
+    "path": "/home/travisl/projects/PCBcraft/main/target/debug/pcbcraft",
+    "sha256": "4d6922bf1a8ac06b11a3e03ff758a083c34abe395c5540511f5eeef641556169",
+    "launched": false
+  },
+  "publication": "Local only; user app/session was not closed or replaced"
+}
