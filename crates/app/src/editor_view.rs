@@ -837,14 +837,8 @@ impl EditorView {
                 self.schematic.selection = Selection::default();
                 self.schematic.selected_sheet_symbol = None;
             }
-            let placed: std::collections::BTreeSet<_> = self
-                .board
-                .target
-                .and_then(|target| project.board_view(target))
-                .into_iter()
-                .flat_map(|board| board.footprints())
-                .map(|footprint| footprint.id)
-                .collect();
+            let placed: std::collections::BTreeSet<_> =
+                self.board.target.and_then(|target| project.board_view(target)).into_iter().flat_map(|board| board.footprint_ids()).collect();
             self.board.selection.retain(|id| placed.contains(id));
             if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
                 self.board.reference = Default::default();

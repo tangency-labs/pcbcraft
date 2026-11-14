@@ -1,7 +1,10 @@
 //! Immutable, board-addressed presentation and correspondence over the native model.
 
 use crate::{Project, schematic::Point, selection::Selection};
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, OnceLock, Weak},
+};
 use uuid::Uuid;
 
 /// A board address distinguishes its project and physical board, independently of names,
@@ -90,7 +93,7 @@ pub struct PadView {
 }
 
 /// A technical footprint rectangle resolved independently of copper visibility and layer ownership.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphicView {
     pub purpose: super::definition::GraphicPurpose,
     /// The board side whose technical layer holds this graphic: the placement's side.
@@ -100,6 +103,29 @@ pub struct GraphicView {
     pub closed: bool,
     /// This path belongs to the generated reference text rather than fixed footprint artwork.
     pub reference: bool,
+}
+
+/// One disposable board presentation cache shared by history and sheet projections. Changing
+/// either immutable input replaces its slots, so history cannot retain a cache per revision.
+/// A worker holding an older slot can finish independently without publishing into a newer slot.
+#[derive(Debug, Default)]
+pub(crate) struct GraphicsCache {
+    board: Weak<super::Board>,
+    components: Weak<BTreeMap<u64, crate::PartInstance>>,
+    slots: BTreeMap<u64, Arc<OnceLock<Vec<GraphicView>>>>,
+}
+
+impl GraphicsCache {
+    /// Capture a per-placement slot under the short cache lock; expensive path generation runs
+    /// after releasing that lock. Weak keys keep allocation identity without retaining history.
+    fn slot(&mut self, project: &Project, id: u64) -> Arc<OnceLock<Vec<GraphicView>>> {
+        if self.board.as_ptr() != Arc::as_ptr(&project.board) || self.components.as_ptr() != Arc::as_ptr(&project.components) {
+            self.board = Arc::downgrade(&project.board);
+            self.components = Arc::downgrade(&project.components);
+            self.slots.clear();
+        }
+        self.slots.entry(id).or_default().clone()
+    }
 }
 
 /// A placement resolved in one addressed board, including its logical component association.
@@ -209,6 +235,27 @@ impl<'a> BoardView<'a> {
         self.project.board.silkscreen.unwrap_or_default()
     }
 
+    /// Enumerate authored placement IDs in board order without resolving pads, net names or
+    /// technical graphics. Pending-removal placements retain their IDs until an authored edit.
+    pub fn footprint_ids(self) -> impl ExactSizeIterator<Item = String> + 'a {
+        self.project.board.footprints().iter().map(|footprint| format!("footprint-{}", footprint.id))
+    }
+
+    /// Resolve one canonical placement ID, generating geometry only for that placement.
+    /// Unknown IDs, other object kinds and noncanonical numeric aliases return `None`.
+    pub fn footprint(self, id: &str) -> Option<FootprintView<'a>> {
+        self.resolve_footprints(self.placement(id).into_iter()).next()
+    }
+
+    /// Resolve canonical selected IDs in their set order, omitting unknown or unresolved IDs.
+    /// The selection shares one accepted-net index instead of rebuilding it per placement.
+    pub fn footprints_for_ids<'s>(self, ids: &'s BTreeSet<String>) -> impl Iterator<Item = FootprintView<'a>> + 's
+    where
+        'a: 's,
+    {
+        self.resolve_footprints(ids.iter().filter_map(move |id| self.placement(id)))
+    }
+
     /// Resolve placements lazily without assuming starter-definition geometry.
     /// Accepted terminal membership is indexed once per traversal, rather than
     /// scanning every net for every pad. The index borrows only this snapshot.
@@ -219,8 +266,29 @@ impl<'a> BoardView<'a> {
     /// Resolve a bounded placement range without constructing skipped footprint graphics.
     /// A resumable checker retains its stable range under one immutable snapshot.
     pub(super) fn footprints_range(self, start: usize, count: usize) -> impl Iterator<Item = FootprintView<'a>> {
-        let accepted = self.project.board.baseline.as_ref().map(|baseline| (baseline, baseline.terminal_net_index()));
-        self.project.board.footprints().iter().skip(start).take(count).filter_map(move |footprint| {
+        self.resolve_footprints(self.project.board.footprints().iter().skip(start).take(count))
+    }
+
+    /// Find a canonical placement without resolving geometry or accepted-net membership.
+    fn placement(self, id: &str) -> Option<&'a super::Footprint> {
+        let ordinal = crate::schematic::wiring::parse_id(id, "footprint-")?;
+        if id != format!("footprint-{ordinal}") {
+            return None;
+        }
+        let placements = self.project.board.footprints();
+        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
+        placements.get(index)
+    }
+
+    /// Resolve only supplied placements against one immutable accepted-net index. Empty or
+    /// entirely unknown selections do no index work; missing logical/history records are omitted.
+    fn resolve_footprints<'s>(self, placements: impl Iterator<Item = &'a super::Footprint> + 's) -> impl Iterator<Item = FootprintView<'a>> + 's
+    where
+        'a: 's,
+    {
+        let mut placements = placements.peekable();
+        let accepted = placements.peek().and(self.project.board.baseline.as_ref()).map(|baseline| (baseline, baseline.terminal_net_index()));
+        placements.filter_map(move |footprint| {
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
@@ -338,9 +406,25 @@ fn net_label(project: &Project, terminal: crate::schematic::Terminal) -> Option<
     Some(if project.sheets.len() > 1 { format!("{}: {name}", sheet.sheet_name) } else { name })
 }
 
-/// Resolve saved technical rectangles and physical silk/reference paths without changing the
-/// pinned definition. Board settings control actual ink dimensions before viewport projection.
+/// Reuse saved technical paths for identical immutable board/component inputs. The short cache
+/// lock only captures a slot; generation and cloning happen outside it. Contention or poisoning
+/// falls back to uncached geometry. Cold readers may duplicate work instead of waiting for
+/// another worker's geometry generation, without changing the pinned definition.
 fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) -> Vec<GraphicView> {
+    let slot = project.board_graphics.try_lock().ok().map(|mut cache| cache.slot(project, footprint.id));
+    if let Some(cached) = slot.as_ref().and_then(|slot| slot.get()) {
+        return cached.clone();
+    }
+    let paths = build_graphics(project, footprint, reference);
+    if let Some(slot) = slot {
+        let _ = slot.set(paths.clone());
+    }
+    paths
+}
+
+/// Generate paths only for a cold placement, a changed immutable input, or a poisoned cache.
+/// Cached and uncached results use exactly the same physical silkscreen/reference geometry.
+fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &str) -> Vec<GraphicView> {
     let Some(definition) = project.board.definition_for(footprint) else { return Vec::new() };
     let style = project.board.silkscreen.unwrap_or_default();
     let side = if footprint.bottom { super::setup::Side::Back } else { super::setup::Side::Front };
@@ -449,6 +533,174 @@ mod tests {
         persistence::{decode_documents, encode_documents},
     };
     use serde_json::json;
+
+    /// A selection shares one baseline index while preserving resolved geometry, pad-net
+    /// labels and the filtered count. Empty/unknown selections must not prepare an index.
+    #[test]
+    fn selected_footprints_share_one_index_and_keep_the_resolved_count() {
+        let session = super::super::track::tests::routed_fixture();
+        let project = session.snapshot().unwrap();
+        let bytes = encode_documents(project.clone()).unwrap();
+        let board = project.boards().next().unwrap();
+        let placed: Vec<_> = board.footprint_ids().collect();
+        let ids = BTreeSet::from([placed[0].clone(), placed[2].clone(), "footprint-999999".into(), "footprint-0003".into(), "symbol-2".into()]);
+        let expected: Vec<_> = ids.iter().filter_map(|id| board.footprint(id)).collect();
+        let builds = &super::super::update::TERMINAL_NET_INDEX_BUILDS;
+        builds.with(|count| count.set(0));
+        let selected: Vec<_> = board.footprints_for_ids(&ids).collect();
+        assert_eq!(builds.with(|count| count.get()), 1);
+        assert_eq!(selected.len(), 2);
+        assert!(selected.len() < ids.len());
+        for (actual, expected) in selected.iter().zip(expected) {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.pads, expected.pads);
+            assert_eq!(actual.graphics, expected.graphics);
+            assert_eq!(actual.reference, expected.reference);
+            assert_eq!(actual.value, expected.value);
+            assert_eq!(actual.reference_appearance, expected.reference_appearance);
+        }
+        for ids in [BTreeSet::new(), BTreeSet::from(["footprint-999999".into(), "symbol-2".into()])] {
+            builds.with(|count| count.set(0));
+            assert_eq!(board.footprints_for_ids(&ids).count(), 0);
+            assert_eq!(builds.with(|count| count.get()), 0);
+        }
+        assert_eq!(encode_documents(project).unwrap(), bytes);
+    }
+
+    /// Compare warm presentation against the uncached generator and prove that cache reads do
+    /// not change serialized documents, including after another history snapshot used the cache.
+    fn check_graphics(project: Arc<Project>) {
+        let bytes = encode_documents(project.clone()).unwrap();
+        let board = project.boards().next().unwrap();
+        for footprint in board.footprints() {
+            let ordinal = crate::schematic::wiring::parse_id(&footprint.id, "footprint-").unwrap();
+            let raw = project.board.footprints().iter().find(|f| f.id == ordinal).unwrap();
+            assert_eq!(footprint.graphics, build_graphics(&project, raw, footprint.reference));
+        }
+        assert_eq!(encode_documents(project).unwrap(), bytes);
+    }
+
+    /// ID enumeration must avoid geometry, and a direct lookup must only warm its addressed slot.
+    #[test]
+    fn placement_identity_queries_do_not_resolve_unrequested_geometry() {
+        let session = super::super::track::tests::routed_fixture();
+        let project = session.snapshot().unwrap();
+        project.board_graphics.lock().unwrap().slots.clear();
+        let board = project.boards().next().unwrap();
+        let ids: Vec<_> = board.footprint_ids().collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(board.footprint_ids().len(), ids.len());
+        assert!(project.board_graphics.lock().unwrap().slots.is_empty());
+        for bad in ["footprint-0", "footprint-999999", "symbol-2", "footprint-0003"] {
+            assert!(board.footprint(bad).is_none());
+        }
+        assert!(project.board_graphics.lock().unwrap().slots.is_empty());
+        let selected = board.footprint(ids.last().unwrap()).unwrap();
+        assert_eq!(project.board_graphics.lock().unwrap().slots.len(), 1);
+        assert_eq!(selected.id, *ids.last().unwrap());
+        let all: Vec<_> = board.footprints().collect();
+        let expected = all.last().unwrap();
+        assert_eq!(selected.pads, expected.pads);
+        assert_eq!(selected.graphics, expected.graphics);
+    }
+
+    /// Reference edits, pose changes, physical ink settings, deletion and history cannot reuse
+    /// another immutable input's paths. Unpublished candidates obey the same identity check.
+    #[test]
+    fn technical_graphics_cache_tracks_inputs_and_history_without_accumulating_revisions() {
+        let mut session = super::super::track::tests::routed_fixture();
+        let original = session.snapshot().unwrap();
+        check_graphics(original.clone());
+        let board = original.boards().next().unwrap();
+        let first = board.footprints().next().unwrap();
+        let id = first.id.clone();
+        let symbol = original.symbols()[0].id();
+        let commands = [
+            (crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R12345","value":"10k"})),
+            (
+                crate::SET_FOOTPRINT_TRANSFORM,
+                json!({"footprint":id,"x_nm":first.position.x_nm+20_000_000,"y_nm":first.position.y_nm,"rotation":90,"side":"back"}),
+            ),
+            (crate::SET_FOOTPRINT_REFERENCE_TEXT, json!({"footprint":id,"appearance":{"visible":false}})),
+            (crate::SET_SILKSCREEN, json!({"settings":{"text_height_nm":1_500_000,"stroke_width_nm":150_000,"pad_clearance_nm":300_000}})),
+            (crate::DELETE_FOOTPRINTS, json!({"footprints":[id]})),
+        ];
+        for (command, mut params) in commands {
+            params["expected_revision"] = json!(session.revision());
+            session.apply(command, &params).unwrap();
+            let current = session.snapshot().unwrap();
+            check_graphics(current.clone());
+            assert_eq!(current.board_graphics.lock().unwrap().slots.len(), current.board.footprints().len());
+            check_graphics(original.clone());
+            check_graphics(current);
+        }
+        for _ in 0..5 {
+            session.apply("edit.undo", &json!({})).unwrap();
+            check_graphics(session.snapshot().unwrap());
+        }
+        for _ in 0..5 {
+            session.apply("edit.redo", &json!({})).unwrap();
+            check_graphics(session.snapshot().unwrap());
+        }
+        let mut preview = Project::clone(&original);
+        Arc::make_mut(&mut preview.board).silkscreen = Some(super::super::silkscreen::Settings { text_height_nm: 2_000_000, ..Default::default() });
+        check_graphics(Arc::new(preview));
+        check_graphics(original);
+    }
+
+    /// Old in-flight work retains its own immutable slot after replacement; publishing its
+    /// paths cannot overwrite the currently addressed input's cache entry.
+    #[test]
+    fn an_old_graphics_slot_cannot_publish_into_a_replacement() {
+        let session = super::super::track::tests::routed_fixture();
+        let project = session.snapshot().unwrap();
+        let ordinal = project.board.footprints()[0].id;
+        let old = project.board_graphics.lock().unwrap().slot(&project, ordinal);
+        let mut candidate = Project::clone(&project);
+        Arc::make_mut(&mut candidate.board).silkscreen = Some(super::super::silkscreen::Settings { text_height_nm: 2_000_000, ..Default::default() });
+        let new = project.board_graphics.lock().unwrap().slot(&candidate, ordinal);
+        assert!(!Arc::ptr_eq(&old, &new));
+        old.get_or_init(Vec::new);
+        assert!(new.get().is_none());
+        check_graphics(Arc::new(candidate));
+    }
+
+    /// A failed cache owner cannot prevent ordinary board rendering or change authored bytes.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn poisoned_graphics_cache_falls_back_to_uncached_paths() {
+        let session = super::super::track::tests::routed_fixture();
+        let project = session.snapshot().unwrap();
+        let cache = project.board_graphics.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = cache.lock().unwrap();
+                panic!("exercise disposable cache poisoning");
+            })
+            .join()
+            .is_err()
+        );
+        check_graphics(project);
+    }
+
+    /// A busy cache cannot block a reader behind another editor or background job.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_contended_graphics_cache_does_not_block_board_reads() {
+        let session = super::super::track::tests::routed_fixture();
+        let project = session.snapshot().unwrap();
+        let guard = project.board_graphics.lock().unwrap();
+        let reader = project.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            check_graphics(reader);
+            send.send(()).unwrap();
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(2));
+        drop(guard);
+        worker.join().unwrap();
+        result.unwrap();
+    }
 
     /// Lock the published compatibility derivation so a refactor cannot silently change addresses.
     #[test]

@@ -7,6 +7,8 @@ mod browser_capture;
 pub mod checker;
 mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod project;
+#[cfg(not(target_arch = "wasm32"))]
 mod remote;
 pub mod rendered;
 mod replay;
@@ -266,6 +268,20 @@ mod tests {
             power: "unknown".into(),
             notes: String::new(),
         }
+    }
+
+    /// Existing-project diagnostics must exercise real zoom/click handling while leaving the
+    /// source archive unchanged; the report identifies the exact immutable input it replayed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn project_navigation_observes_input_without_authoring_edits() {
+        let artifact = load_artifact(&generate("reference-v1", "test").unwrap()).unwrap();
+        let source = decode_packed(&artifact.project).unwrap().project;
+        let original = pcbcraft_engine::persistence::encode_packed(source.clone()).unwrap();
+        let report = project::navigation(source.clone(), environment()).unwrap();
+        assert_eq!(report["project_sha256"], digest(&original));
+        assert_eq!(pcbcraft_engine::persistence::encode_packed(source).unwrap(), original);
+        assert_eq!(report["results"].as_array().unwrap().len(), 2);
     }
 
     /// A successful report requires real route/layer/cancel input, the exhaustive oracle and

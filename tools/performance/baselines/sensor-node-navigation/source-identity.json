@@ -1,0 +1,20 @@
+{
+  "base_commit": "1036ab2cb6a890e0b81350d6073c1d7742704a31",
+  "project_documents_sha256": "40594f057e8ef7ba359e955ad9b1f95eb0bdff459f233da69211e576cf7a947b",
+  "source_project_retained_locally": true,
+  "source_project_included": false,
+  "baseline_binaries": {
+    "project_perf-baseline-final": "9643e9a7fc5608c3889fc9bfc4500ef82eb85614456defec34e60786b5dc1bc7",
+    "board_perf_window-baseline-final": "f4537046cf7ced35c80cedf175947f78531df334f3986ea247b76fbe30e013fb"
+  },
+  "measured_candidate_binaries": {
+    "project_perf": "6166f0d2a66e5f3f960a0245bd65e1be31438d6d05cf79d5a99c14d3b1793fc7",
+    "board_perf_window": "9df358f4daaab0f973728959e875ab56d56ce8d3844337470d068dc4637f80cc"
+  },
+  "test_desktop_sha256": "8cbee9204a6dfd9f78d3bd3669b889cec1d0d7b3d994939d917a633764968f90",
+  "post_measurement_change": "Cold-cache concurrency review replaced blocking cache acquisition and get_or_init generation with try_lock and generation outside slot initialization. Warm cache results and paths are unchanged; the final engine suite includes a contended-reader regression. The measured release binaries precede this cold-path change.",
+  "zoom_baseline_binary_sha256": "44931b6a6051edcefc7c42a46bf7aaa7bd003226c1576b164bd8f6b4e656e4bc",
+  "zoom_final_binary_sha256": "163b74359667be2ea15542bba45c5ecdd27254a4e668b04ebb5851e9774e53ab",
+  "zoom_test_desktop_sha256": "00aa03f12ad450df3e344ed487ad8055c69c4849b14ca52da612bde0cc3814d2",
+  "zoom_capture_scope": "Eight actual GPU captures at fit/zoom, Sensors and PCB, dark/light; source project images retained locally."
+}

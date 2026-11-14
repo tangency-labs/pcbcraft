@@ -1419,8 +1419,7 @@ mod live {
                         .zip(self.session.project())
                         .and_then(|(target, project)| project.board_view(target))
                         .into_iter()
-                        .flat_map(|board| board.footprints())
-                        .map(|footprint| footprint.id)
+                        .flat_map(|board| board.footprint_ids())
                         .collect();
                     if !wanted.is_subset(&placed) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());

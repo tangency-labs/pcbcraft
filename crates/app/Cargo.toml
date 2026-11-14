@@ -18,6 +18,10 @@ name = "board_perf"
 required-features = ["performance-harness"]
 
 [[example]]
+name = "project_perf"
+required-features = ["performance-harness"]
+
+[[example]]
 name = "board_perf_web"
 crate-type = ["cdylib"]
 required-features = ["performance-harness"]

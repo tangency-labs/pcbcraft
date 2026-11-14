@@ -1972,6 +1972,8 @@ pub struct Project {
     board: Arc<Board>,
     /// Project-wide name resolution shared by all immutable sheet projections.
     named_graph: Arc<OnceLock<Connectivity>>,
+    /// Disposable technical graphics, keyed to immutable board and component allocations.
+    board_graphics: Arc<std::sync::Mutex<board::view::GraphicsCache>>,
     /// The older format this snapshot was migrated from when it was opened, if any.
     upgraded_from: Option<u32>,
     /// Versioned project storage metadata; absent for untouched flat-board files.
@@ -2682,6 +2684,7 @@ impl Session {
                 schematic_packages: Arc::default(),
                 board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
                 named_graph: Arc::default(),
+                board_graphics: Arc::default(),
                 upgraded_from: None,
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),

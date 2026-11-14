@@ -338,6 +338,18 @@ Every fifth mark stays visible, matching the next coarser grid at the transition
 Canvas and ribbon backgrounds use the same geometry and fade; actual snap spacing
 and all authored dimensions remain unchanged.
 
+## Canvas text during zoom
+
+The pinned 0.41 toolkit supplies interface text painting and shared font definitions,
+but no adapter for continuously scaled document text with bounded raster sizes.
+`crates/chrome/src/canvas_text.rs` composes those installed fonts with egui's
+existing text-mesh transform. Canvas text layouts share a small set of raster
+sizes while their meshes and visual hit bounds scale continuously. This avoids
+repeated glyph rasterization during smooth camera animation; interface controls
+keep the toolkit's ordinary pixel-aligned text. Schematic fields, pin/body text,
+net labels and PCB pad annotations use the adapter for both painting and bounds.
+At sizes above the largest raster bucket, the same mesh continues scaling.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface

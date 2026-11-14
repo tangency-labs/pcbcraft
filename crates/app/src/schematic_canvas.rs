@@ -1350,7 +1350,7 @@ fn paint_symbol(
             }
             Shape::Text(at, text, align) => {
                 if let Some(font) = drawing_text_font(step) {
-                    painter.text(xy(at), text_anchor(*align, turns, mirrored), text, font, color);
+                    pcbcraft_chrome::canvas_text::paint(painter, xy(at), text_anchor(*align, turns, mirrored), text.clone(), font, color);
                 }
             }
         }

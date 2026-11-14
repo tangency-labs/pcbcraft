@@ -1,6 +1,6 @@
 //! Board selection and transform previews over resolved engine geometry; commands own edits.
 use crate::{
-    board_appearance::CopperFocus,
+    board_appearance::{CopperFocus, FootprintColors},
     canvas_camera::Camera,
     editor_view::{BoardState, ViewInput},
     preferences::Navigation,
@@ -170,10 +170,11 @@ pub(super) fn show(
     let visible = copper.is_none_or(|layer| layer.is_some());
     let color = board::copper_color(copper.flatten().and_then(|layer| layer.side.map(|side| side == Side::Front)));
     let footprints: Vec<_> = project.footprints().collect();
+    let colors = FootprintColors::new(appearance, project, state.active_layer.as_deref(), &state.hidden_layers);
     let hit_bounds: Vec<_> = footprints
         .iter()
         .map(|footprint| {
-            let (pads, graphics) = drawing(footprint, camera, rect, project, state, visible, appearance);
+            let (pads, graphics) = drawing(footprint, camera, rect, visible, &colors);
             if pads.is_empty() && graphics.is_empty() {
                 egui::Rect::NOTHING
             } else {
@@ -508,7 +509,7 @@ pub(super) fn show(
             }
         }
         let center = camera.screen(footprint.position, rect);
-        let (mut pads, graphics) = drawing(&footprint, camera, rect, project, state, visible, appearance);
+        let (mut pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
         let bounds = board::footprint_bounds(&pads, &graphics, center);
         let shift = reference_shift(&footprint, camera, rect);
         let label_visible = if footprint.physical_reference {
@@ -563,7 +564,7 @@ pub(super) fn show(
     {
         let window = egui::Rect::from_two_pos(drag.start, pointer);
         let crossing = pointer.x < drag.start.x;
-        debug_assert_eq!(hit_bounds.len(), project.footprints().count());
+        debug_assert_eq!(hit_bounds.len(), project.footprint_ids().len());
         let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
         hits.footprints = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
         pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
@@ -675,6 +676,7 @@ fn place_group(
                 );
             }
         }
+        let colors = FootprintColors::new(appearance, board, state.active_layer.as_deref(), &state.hidden_layers);
         for mut footprint in board.footprints().filter(|f| ids.contains(&f.id)) {
             for pad in &mut footprint.pads {
                 pad.center = transform(pad.center);
@@ -685,7 +687,7 @@ fn place_group(
             }
             footprint.position = transform(footprint.position);
             footprint.rotation = placement.rotation;
-            let (pads, graphics) = drawing(&footprint, camera, response.rect, board, state, visible, appearance);
+            let (pads, graphics) = drawing(&footprint, camera, response.rect, visible, &colors);
             pcbcraft_chrome::board::footprint(
                 ui.painter(),
                 &pads,
@@ -712,11 +714,10 @@ fn place_group(
 /// `bounds` must contain one entry per `project.footprints()` item in the same iteration order.
 fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egui::Rect, crossing: bool, enabled: bool) -> BTreeSet<String> {
     project
-        .footprints()
+        .footprint_ids()
         .zip(bounds)
-        .filter_map(|(footprint, bounds)| {
-            (enabled && bounds.is_positive() && if crossing { window.intersects(*bounds) } else { window.contains_rect(*bounds) })
-                .then_some(footprint.id)
+        .filter_map(|(id, bounds)| {
+            (enabled && bounds.is_positive() && if crossing { window.intersects(*bounds) } else { window.contains_rect(*bounds) }).then_some(id)
         })
         .collect()
 }
@@ -883,19 +884,14 @@ fn drawing(
     footprint: &FootprintView<'_>,
     camera: &Camera,
     rect: egui::Rect,
-    project: BoardView<'_>,
-    state: &BoardState,
     legacy_visible: bool,
-    appearance: &crate::board_appearance::Appearance,
+    colors: &FootprintColors,
 ) -> (Vec<board::PadDrawing>, Vec<board::GraphicDrawing>) {
     let pads = footprint
         .pads
         .iter()
         .filter_map(|pad| {
-            let color = pad
-                .copper_layers
-                .as_ref()
-                .and_then(|membership| appearance.copper(project, membership, state.active_layer.as_deref(), &state.hidden_layers));
+            let color = pad.copper_layers.as_ref().and_then(|membership| colors.copper(membership));
             if (pad.copper.is_some() && color.is_none()) || (pad.copper.is_none() && !legacy_visible) {
                 return None;
             }
@@ -934,17 +930,15 @@ fn drawing(
                 GraphicPurpose::Silkscreen => (LayerPurpose::Silkscreen, board::GraphicStyle::Silkscreen),
                 GraphicPurpose::Courtyard => (LayerPurpose::Courtyard, board::GraphicStyle::Courtyard),
             };
-            appearance.technical(project, purpose, graphic.side, state.active_layer.as_deref(), &state.hidden_layers).map(|color| {
-                board::GraphicDrawing {
-                    points: graphic.points.iter().map(|p| camera.screen(*p, rect)).collect(),
-                    style,
-                    color: Some(color),
-                    closed: graphic.closed,
-                    reference: graphic.reference,
-                    stroke_width: graphic.stroke_nm.map(|width| {
-                        (camera.screen(Point { x_nm: width, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length()
-                    }),
-                }
+            colors.technical(purpose, graphic.side).map(|color| board::GraphicDrawing {
+                points: graphic.points.iter().map(|p| camera.screen(*p, rect)).collect(),
+                style,
+                color: Some(color),
+                closed: graphic.closed,
+                reference: graphic.reference,
+                stroke_width: graphic
+                    .stroke_nm
+                    .map(|width| (camera.screen(Point { x_nm: width, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length()),
             })
         })
         .collect();
@@ -1044,10 +1038,11 @@ pub(super) fn all_visible(
         .is_none_or(|s| s.layers().iter().any(|l| l.purpose == LayerPurpose::Copper && !state.hidden_layers.contains(&l.id.to_string())));
     let mut selected = geometry_for_box(project, &camera, rect, state, filters, egui::Rect::EVERYTHING, false);
     if filters.footprints {
+        let colors = FootprintColors::new(appearance, project, state.active_layer.as_deref(), &state.hidden_layers);
         selected.footprints = project
             .footprints()
             .filter(|f| {
-                let (pads, graphics) = drawing(f, &camera, rect, project, state, visible, appearance);
+                let (pads, graphics) = drawing(f, &camera, rect, visible, &colors);
                 !pads.is_empty() || !graphics.is_empty()
             })
             .map(|f| f.id)

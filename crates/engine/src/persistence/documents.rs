@@ -542,6 +542,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         schematic_packages: Arc::default(),
         board: Arc::default(),
         named_graph: Arc::default(),
+        board_graphics: Arc::default(),
         upgraded_from: None,
         layout: None,
         circuit_use: None,

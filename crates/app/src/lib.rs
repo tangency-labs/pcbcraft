@@ -1163,7 +1163,7 @@ impl PcbApp {
                 }
             }),
             Action::Footprint { board, id, .. } => {
-                project.board_view(*board).is_some_and(|board| board.footprints().any(|footprint| footprint.id == *id))
+                project.board_view(*board).is_some_and(|board| board.footprint_ids().any(|footprint| footprint == *id))
             }
         };
         if !valid {

@@ -271,11 +271,8 @@ impl PcbApp {
     pub(super) fn hide_selected_reference(&mut self) -> bool {
         let Some(id) = self.views.active.board.reference.selected.clone() else { return false };
         let Some(source) = self.views.active.input(&self.session) else { return true };
-        let footprint = self
-            .session
-            .project()
-            .and_then(|project| project.board_view(self.views.active.board.target?))
-            .and_then(|board| board.footprints().find(|footprint| footprint.id == id));
+        let footprint =
+            self.session.project().and_then(|project| project.board_view(self.views.active.board.target?)).and_then(|board| board.footprint(&id));
         if let Some(footprint) = footprint {
             let mut appearance = footprint.reference_text.clone().unwrap_or_default();
             appearance.visible = Some(false);
