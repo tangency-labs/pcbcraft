@@ -1,0 +1,158 @@
+{
+  "runtime_commit": "e8d8c7cb9b3c64970246b717d3fcca8f719e9a7c",
+  "base_commit": "a5c72a9dc5b551120f540cbdd89aa67c1098e963",
+  "fixture": "tools/performance/fixtures/reference-v1.json",
+  "fixture_sha256": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+  "files": {
+    "verification.json.gz": {
+      "original_name": "verification.json",
+      "uncompressed_sha256": "4b4ad401f0896f7cb5d4fe9bcb9c931a8afd257fc332347290da6200e02d592b",
+      "uncompressed_bytes": 5456
+    },
+    "baseline-source.json.gz": {
+      "original_name": "baseline-source.json",
+      "uncompressed_sha256": "7372558e0643d6c4ad1457da09cb9f91c57e2eb3535a89849a9af7722b7e40f6",
+      "uncompressed_bytes": 1002
+    },
+    "zoom-before.log.gz": {
+      "original_name": "zoom-before.log",
+      "uncompressed_sha256": "b86ad94e4e8101973ad596480acee5597aa80b74eb7016567a5da550d3af8853",
+      "uncompressed_bytes": 1005
+    },
+    "preview-before.log.gz": {
+      "original_name": "preview-before.log",
+      "uncompressed_sha256": "7597b63a2dc5ac8bbf3b736fde33885969059514316983e87aee4e9a7716505a",
+      "uncompressed_bytes": 936
+    },
+    "zoom-after.log.gz": {
+      "original_name": "zoom-after.log",
+      "uncompressed_sha256": "e767a3c30b7de2f68ad6402cb666be0877ad06433f457ca510ac4215ddcf1de9",
+      "uncompressed_bytes": 840
+    },
+    "preview-after.log.gz": {
+      "original_name": "preview-after.log",
+      "uncompressed_sha256": "1c77ce271a795547548f69016f7524a2f6cbb34c4208b4a2e87661ecde00a10d",
+      "uncompressed_bytes": 403
+    },
+    "app-tests-final.log.gz": {
+      "original_name": "app-tests-final.log",
+      "uncompressed_sha256": "d3b2a5066d07bf196f82dd3e6f9b8a5d595cdf2e324c4c3034bba4da7b0a5d25",
+      "uncompressed_bytes": 84788
+    },
+    "clippy-final.log.gz": {
+      "original_name": "clippy-final.log",
+      "uncompressed_sha256": "00d16edcdfda8a443efc6d55c95cbd4ab7be1c0950f74b3e0d22dd216483980d",
+      "uncompressed_bytes": 173
+    },
+    "wasm-check.log.gz": {
+      "original_name": "wasm-check.log",
+      "uncompressed_sha256": "603fe013107e01fa6476619b21713ca1ec801e932f19425c4acb75d0c919147a",
+      "uncompressed_bytes": 699
+    },
+    "deny.log.gz": {
+      "original_name": "deny.log",
+      "uncompressed_sha256": "ef8317b369b8527e06290941bfada84d1f8e45b2b8c311d5e1fec1558e00a7be",
+      "uncompressed_bytes": 33
+    },
+    "desktop-build.log.gz": {
+      "original_name": "desktop-build.log",
+      "uncompressed_sha256": "4f1a4772546be3434b1bd3a702d3f807d98e998d64796060522e85491eeb60cb",
+      "uncompressed_bytes": 172
+    },
+    "before-build.log.gz": {
+      "original_name": "before-build.log",
+      "uncompressed_sha256": "388b84fb3f8a08de734b1d7bf6e6809c61dd965618dd784edd42198ac0648633",
+      "uncompressed_bytes": 3244
+    },
+    "before-wasm-build.log.gz": {
+      "original_name": "before-wasm-build.log",
+      "uncompressed_sha256": "b8d7d01c7776c945bf0e44bffb2d089877f0ede75066601109f01801787761b7",
+      "uncompressed_bytes": 8299
+    },
+    "after-build.log.gz": {
+      "original_name": "after-build.log",
+      "uncompressed_sha256": "685e3c9f262f922844c450f9573a0dbce74d62ffed99f791b515726ede7523a8",
+      "uncompressed_bytes": 164
+    },
+    "native-env-before.json.gz": {
+      "original_name": "native-env-before.json",
+      "uncompressed_sha256": "5c8087b25b21836576ae95df9bc1f8345d71b2cc0c87a8c43ba31ce71ccb43d9",
+      "uncompressed_bytes": 825
+    },
+    "native-env-after.json.gz": {
+      "original_name": "native-env-after.json",
+      "uncompressed_sha256": "16acb9de3b65ef0dfa7fbaf7529434d7e383e572036b15a206afe4fba15b0616",
+      "uncompressed_bytes": 825
+    },
+    "native-before.json.gz": {
+      "original_name": "native-before.json",
+      "uncompressed_sha256": "f2710c615c525673d57194113de288c16bf8be1ab2b6b8bfe1c0e144e016a3b5",
+      "uncompressed_bytes": 47914
+    },
+    "native-after.json.gz": {
+      "original_name": "native-after.json",
+      "uncompressed_sha256": "714b474398f4ed146356a9b53e82d1198a257021bd496e6493ee8ca058cf465f",
+      "uncompressed_bytes": 48098
+    },
+    "native-before.log.gz": {
+      "original_name": "native-before.log",
+      "uncompressed_sha256": "11d0706c2bd8cfb7998deae9df68c4c8abf6a89bc89b6f7859bd5534fc7f5288",
+      "uncompressed_bytes": 10402
+    },
+    "native-after.log.gz": {
+      "original_name": "native-after.log",
+      "uncompressed_sha256": "d696e2b65dbcaab034104d63f47f3090815ec1eb430416100f96c26f6c198a9f",
+      "uncompressed_bytes": 10488
+    },
+    "native-comparison.md.gz": {
+      "original_name": "native-comparison.md",
+      "uncompressed_sha256": "e6ffe8941154e01e4001152550b93d437068b45a1d312f7037a36cf946ba3e0f",
+      "uncompressed_bytes": 15584
+    },
+    "visual-before.log.gz": {
+      "original_name": "visual-before.log",
+      "uncompressed_sha256": "219350caa711474e3e4de01a5009c4b37077415ff7c45b4555fff9e1dc7f8839",
+      "uncompressed_bytes": 1859
+    },
+    "visual-after.log.gz": {
+      "original_name": "visual-after.log",
+      "uncompressed_sha256": "a2f862d03704797dadbf5d3c4a1923dd66ff892d3f3e4451b5cddf73f1985ce6",
+      "uncompressed_bytes": 1859
+    },
+    "before-pending-dark-wide.png": {
+      "original_name": "visual-before/route-pending-dark-wide.png",
+      "sha256": "7639bc6075507667bcf045bcb99acae0db34e118c0e80368570d17ece37e28b1",
+      "bytes": 100881
+    },
+    "before-pending-light-compact.png": {
+      "original_name": "visual-before/route-pending-light-compact.png",
+      "sha256": "14cd2fae6468af8542fcf4996a12790761f422e888c366c90a9ff30f3eb662e2",
+      "bytes": 87354
+    },
+    "after-pending-dark-wide.png": {
+      "original_name": "visual-after/route-pending-dark-wide.png",
+      "sha256": "6aabef3247814dbe34f61dac9104e2c363dfd2616132c40c35aea653a9e517f5",
+      "bytes": 100830
+    },
+    "after-pending-light-compact.png": {
+      "original_name": "visual-after/route-pending-light-compact.png",
+      "sha256": "0ca46573bad5d3cf75d0c75fad98de34ae1ab3c4f4fce46572716ec8e3fd2602",
+      "bytes": 87325
+    },
+    "submission.json.gz": {
+      "original_name": "submission.json",
+      "uncompressed_sha256": "d6009e254e8dac287ae19fa14ac43681abce4006ca370fb389c04384c04a5f28",
+      "uncompressed_bytes": 646
+    },
+    "submission-clippy.log.gz": {
+      "original_name": "submission-clippy.log",
+      "uncompressed_sha256": "0ec1109ccfdb341a116789e4ca97d9746b47a6cfc485bde408dafc736ce711ad",
+      "uncompressed_bytes": 1140
+    },
+    "submission-tests.log.gz": {
+      "original_name": "submission-tests.log",
+      "uncompressed_sha256": "a9cd4cbb60b16a407ad7fcf4f2256abbd76db22aa3b6a4be71b404950b69c003",
+      "uncompressed_bytes": 159326
+    }
+  }
+}
