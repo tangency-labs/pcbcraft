@@ -12,7 +12,9 @@ use pcbcraft_chrome::{
     workspace::ToolIcon,
 };
 use pcbcraft_engine::{
+    CommandError,
     board::{
+        class_rules::Applied,
         setup::{LayerPurpose, Side},
         track::{DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM, DEFAULT_WIDTH_NM, MAX_PATH_POINTS, Track, Via},
         view::{BoardTarget, BoardView, CopperLayers},
@@ -20,7 +22,7 @@ use pcbcraft_engine::{
     schematic::Point,
 };
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
 mod preparation;
@@ -46,6 +48,11 @@ struct Draft {
     points: Vec<Point>,
     /// Vias at vertex indices, in increasing order, each switching to the given layer.
     changes: Vec<(usize, String)>,
+    /// Captured class spacing for the preview, invalidated with the originating revision.
+    clearance_nm: i64,
+    /// Source-contact via policy remains attached to this draft's revision. A track can start
+    /// with unresolved via defaults, but each actual via must resolve them before changing layer.
+    via_rules: Option<Arc<Applied>>,
 }
 
 /// The layer each segment of a `points`-vertex path runs on, starting on `start` and switching at
@@ -99,6 +106,10 @@ pub(super) struct State {
     preparation: preparation::Preparation,
     retry_route: Option<Draft>,
     rules_source: Option<(BoardTarget, Option<pcbcraft_engine::board::rules::Settings>)>,
+    class_defaults: bool,
+    width_override: Option<i64>,
+    via_diameter_override: Option<i64>,
+    via_drill_override: Option<i64>,
     pub(super) tool: bool,
     /// Place › Via: each click places one standalone via until Esc or right-click.
     pub(super) via_tool: bool,
@@ -138,6 +149,10 @@ impl Default for State {
             preparation: Default::default(),
             retry_route: None,
             rules_source: None,
+            class_defaults: false,
+            width_override: None,
+            via_diameter_override: None,
+            via_drill_override: None,
             tool: false,
             via_tool: false,
             width_nm: DEFAULT_WIDTH_NM,
@@ -171,9 +186,57 @@ pub(super) struct Interaction {
     pub(super) consumed: bool,
     pub(super) command: Option<Command>,
     pub(super) switch_layer: Option<String>,
+    pub(super) error: Option<String>,
 }
 
 impl State {
+    /// Retain an explicit ribbon width across pickups until board/default-rule replacement.
+    pub(super) fn select_width(&mut self, width: i64) {
+        self.width_nm = width;
+        self.width_override = Some(width);
+    }
+    /// The current paired via control explicitly chooses both operands independently of width.
+    pub(super) fn select_via(&mut self, diameter: i64, drill: i64) {
+        self.via_diameter_nm = diameter;
+        self.via_drill_nm = drill;
+        self.via_diameter_override = Some(diameter);
+        self.via_drill_override = Some(drill);
+    }
+    /// Adopt the contacted net's defaults once at route pickup, keeping geometry/rule traversal
+    /// outside pointer-motion frames. Explicit dimensions retain priority and must meet hard
+    /// limits; a later unclassified pickup restores only dimensions that still use defaults.
+    fn contact_defaults(
+        &mut self,
+        board: BoardView<'_>,
+        at: Point,
+        layer: Option<Uuid>,
+        via: bool,
+    ) -> Result<(i64, Option<Arc<Applied>>), CommandError> {
+        let base = board.effective_rules().values;
+        let policy = board.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions());
+        let clearance = if let Some(policy) = &policy {
+            if via {
+                (self.via_diameter_nm, self.via_drill_nm) = policy.via_sizes(self.via_diameter_override, self.via_drill_override)?;
+            } else {
+                self.width_nm = policy.track_width(self.width_override)?;
+                // Vias use explicit local sizes on commit; an unrelated via preference choice
+                // does not prevent starting a track with a resolved width.
+                if let Ok((diameter, drill)) = policy.via_sizes(self.via_diameter_override, self.via_drill_override) {
+                    (self.via_diameter_nm, self.via_drill_nm) = (diameter, drill);
+                }
+            }
+            policy.clearance_nm()?
+        } else {
+            if self.class_defaults {
+                self.width_nm = self.width_override.unwrap_or(base.preferred_track_width_nm);
+                self.via_diameter_nm = self.via_diameter_override.unwrap_or(base.preferred_via_diameter_nm);
+                self.via_drill_nm = self.via_drill_override.unwrap_or(base.preferred_via_drill_nm);
+            }
+            base.clearance_nm
+        };
+        self.class_defaults = policy.is_some();
+        Ok((clearance, policy.map(Arc::new)))
+    }
     /// Refresh preferred sizes when switching boards or changing saved rules. Explicit local
     /// size choices survive ordinary edits; a rule change resets them and invalidates drafts.
     pub(super) fn sync_rules(&mut self, board: BoardView<'_>) {
@@ -187,6 +250,10 @@ impl State {
             self.width_nm = values.preferred_track_width_nm;
             self.via_diameter_nm = values.preferred_via_diameter_nm;
             self.via_drill_nm = values.preferred_via_drill_nm;
+            self.width_override = None;
+            self.via_diameter_override = None;
+            self.via_drill_override = None;
+            self.class_defaults = false;
         }
         self.rules_source = Some(key);
     }
@@ -676,6 +743,10 @@ pub(super) fn interact(
             && let Some(pointer) = pointer
         {
             let at = copper_target(pointer, camera, rect, view);
+            if let Err(error) = state.contact_defaults(view, at, None, true) {
+                out.error = Some(error.to_string());
+                return out;
+            }
             state.committed = Some(Committed {
                 width_nm: state.width_nm,
                 via_diameter_nm: state.via_diameter_nm,
@@ -742,6 +813,18 @@ pub(super) fn interact(
             let path = extended(&draft.points, at, state.diagonal_first);
             let index = path.len() - 1;
             if index > 0 && path.len() <= MAX_PATH_POINTS && !draft.changes.iter().any(|(existing, _)| *existing == index) {
+                if let Some(policy) = &draft.via_rules {
+                    match policy.via_sizes(state.via_diameter_override, state.via_drill_override) {
+                        Ok((diameter, drill)) => {
+                            state.via_diameter_nm = diameter;
+                            state.via_drill_nm = drill;
+                        }
+                        Err(error) => {
+                            out.error = Some(error.to_string());
+                            return out;
+                        }
+                    }
+                }
                 draft.points = path;
                 draft.changes.push((index, next.clone()));
                 draft.layer = next.clone();
@@ -762,7 +845,24 @@ pub(super) fn interact(
         let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
         match state.draft.take() {
             None => {
-                state.draft = Some(Draft { source, contact, start: layer.to_owned(), layer: layer.to_owned(), points: vec![at], changes: Vec::new() })
+                match Uuid::parse_str(layer)
+                    .map_err(|_| "Unknown routing layer.".to_owned())
+                    .and_then(|layer| state.contact_defaults(view, at, Some(layer), false).map_err(|error| error.to_string()))
+                {
+                    Ok((clearance_nm, via_rules)) => {
+                        state.draft = Some(Draft {
+                            source,
+                            contact,
+                            start: layer.to_owned(),
+                            layer: layer.to_owned(),
+                            points: vec![at],
+                            changes: Vec::new(),
+                            clearance_nm,
+                            via_rules,
+                        })
+                    }
+                    Err(error) => out.error = Some(error),
+                }
             }
             Some(mut draft) => {
                 let path = extended(&draft.points, at, state.diagonal_first);
@@ -1048,7 +1148,7 @@ pub(super) fn paint_draft(
         let layers = segment_layers(&draft.start, &draft.changes, path.len());
         let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
         let width = width_px(camera, rect, state.width_nm);
-        let clearance = width_px(camera, rect, view.effective_rules().values.clearance_nm);
+        let clearance = width_px(camera, rect, draft.clearance_nm);
         let via_width = width_px(camera, rect, state.via_diameter_nm);
         for pair in path.windows(2) {
             pcbcraft_chrome::board::routing_clearance(painter, [pair[0], pair[1]], width, clearance);

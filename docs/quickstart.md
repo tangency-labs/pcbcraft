@@ -503,7 +503,7 @@ closure across drawings, edge clearance or manufacturing validity.
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
 The preview keeps a lighter shade of the layer color while background preparation
-is pending and shows the default clearance around it. Starting on a trace brightens its copper and dims the rest
+is pending and shows the starting contact's effective clearance around it. Starting on a trace brightens its copper and dims the rest
 of the board while you route. Hold **Ctrl** to bypass the grid. Click a pad,
 track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.
@@ -515,9 +515,14 @@ the built-in values. New routes use those preferences, while existing copper
 keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
 The separate [net-class catalog](net-classes.md) and
 [persistent assignments](net-class-assignments.md) can be authored and inspected
-through MCP. Naming a net does not classify it. Editor controls remain under #303;
-until #302 integrates routing/DRC, dimensional assignments make those operations
-unavailable rather than accepting a board-default-only result.
+through MCP. Naming a net does not classify it. Assigned classes now supply
+routing defaults, query spacing and DRC limits through the same resolver; editor
+controls remain under #303. Starting a route on classified copper adopts that
+net's preferred width unless you selected an explicit ribbon width, and uses its
+clearance halo. Explicit changed widths/vias must meet
+applicable hard limits, and unresolved defaults report an error without creating
+copper. `pcb.route_rules` inspects a contact's dimensions, sources and conflicts;
+see the [consumer contract](net-class-consumers.md).
 
 Run **Analyze → DRC** to check the board. The check shows its current stage while
 pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops

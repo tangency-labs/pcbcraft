@@ -1,0 +1,17 @@
+{
+  "accepted": [
+    "class-route-dark.png",
+    "class-route-light-compact.png"
+  ],
+  "inspection": "Visible route preview, 0.5 mm (19.685 mil) class width and class clearance halo in dark 1400x900 and light 960x640; existing responsive ribbon/panels retained. Real-pointer hover preserved.",
+  "rejected": "invalid-no-pointer captures cleared hover when removing test pointer; see capture-correction.json.",
+  "unqualified": [
+    "native window/compositor timing",
+    "physical input-to-visible",
+    "Wayland exposure/endurance"
+  ],
+  "hashes": {
+    "class-route-dark.png": "4c709b77df58e2e7883b7ff45a786aa6ce77c5b41316d97779742b31094485be",
+    "class-route-light-compact.png": "916d661bb08c1815aa18ed424e3b342f0f7d80fb670dae828c50812943dcdcb4"
+  }
+}

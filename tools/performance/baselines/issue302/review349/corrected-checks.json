@@ -1,0 +1,121 @@
+[
+  {
+    "name": "harness-loopback-case",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "failed_capture_cannot_produce_a_passing_report"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 0.369
+  },
+  {
+    "name": "wasi-board",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-engine",
+      "--target",
+      "wasm32-wasip1",
+      "--lib",
+      "board::",
+      "--",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 30.106
+  },
+  {
+    "name": "wasi-net-classes",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-engine",
+      "--target",
+      "wasm32-wasip1",
+      "--lib",
+      "net_classes::",
+      "--",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 0.751
+  },
+  {
+    "name": "web-check",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 3.183
+  },
+  {
+    "name": "web-harness",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--example",
+      "board_perf_web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 2.773
+  },
+  {
+    "name": "native-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "pcbcraft",
+      "-p",
+      "pcbcraft-cli"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 0.508
+  },
+  {
+    "name": "saved-artifact-correctness",
+    "command": [
+      "cargo",
+      "run",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--example",
+      "board_perf",
+      "--",
+      "run",
+      "/home/travisl/projects/PCBcraft/setup/issue302/performance/reference-assigned-v1.json",
+      "/home/travisl/projects/PCBcraft/setup/issue302/review349/correctness-environment.json",
+      "1",
+      "/home/travisl/projects/PCBcraft/setup/issue302/review349/assigned-correctness.json"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 15.223
+  }
+]

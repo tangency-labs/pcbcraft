@@ -8,6 +8,7 @@ use std::{
 };
 
 pub mod assignment;
+pub mod class_rules;
 pub mod clearance;
 pub mod clipboard;
 pub mod definition;

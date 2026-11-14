@@ -1,0 +1,46 @@
+{
+  "format": "pcbcraft-issue302-verification/1",
+  "issue": 302,
+  "base": "de49a3c8e6effc76dabee758424d83f3f625a928",
+  "implementation_commit": "d6ce94a271e6197c33903f5e322058c4dc86117d",
+  "branch": "travle1/net-class-consumers",
+  "publication": "Local only; no push, PR or app launch performed.",
+  "checks": {
+    "workspace": {
+      "passed": 1844,
+      "ignored": 11,
+      "method": "Initial workspace run passed unaffected crates/app; obsolete #301 deferred-error assertion fixed, then engine and remaining crates plus all workspace doctests passed. Additional reviewed-update assertion passed natively and under WASI. Original failures and reruns retained in checks.zip."
+    },
+    "clippy": "workspace/all-targets and performance harness pass; final affected engine Clippy pass",
+    "fmt": "pass",
+    "harness_tests": 14,
+    "python_performance_tests": 18,
+    "node_performance_tests": 7,
+    "wasi": {
+      "board": 269,
+      "net_classes": 11,
+      "nets": 32,
+      "reviewed_update_affected_rerun": 1,
+      "runner": "pass"
+    },
+    "web": "browser app and performance example compile passed; packaged/browser interaction not qualified",
+    "native": "desktop and CLI build passed",
+    "dependencies": "cargo deny licenses/sources/bans passed; no dependency changes"
+  },
+  "performance": {
+    "reference_samples": 20,
+    "channels_samples": 10,
+    "assigned_candidate_only_samples": 10,
+    "comparisons": "Both official CPU comparators accepted exact fixture/boundary/environment metadata. All geometry/replay/committed-width oracles passed.",
+    "scope": "Shared-host short CPU measurements only; raw slowdowns retained. No repeated broad run, memory claim, statistical tail/presentation/endurance certification.",
+    "source": "Exact measured source fingerprint and executable hash in performance/source-after.json; final-source-doc-comments.json records three subsequent documentation-only source changes."
+  },
+  "visual": "Accepted dark 1400x900 and light 960x640 GPU headless captures inspected; rejected no-hover captures retained under setup/issue302/visual/invalid-no-pointer.",
+  "limits": [
+    "No #303 class editor controls",
+    "No routing obstacle clearance enforcement, walkaround/shove, zones, impedance or advanced intent",
+    "No repeated-instance/board-transfer qualification",
+    "No native-window/compositor or browser rendered latency qualification",
+    "No large-class capacity/allocation/Wayland endurance claim"
+  ]
+}

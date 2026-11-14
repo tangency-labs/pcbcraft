@@ -14,11 +14,13 @@ clearance. It validates the target and existing coordinate-range rule bounds
 without editing project state. `Results::authority.is_current(session)` rejects
 results after an edit, Undo/Redo, reopen or snapshot replacement, including a
 second session opened on the same `Arc<Project>`. A changed request-local rule
-requires a new query; its captured clearance is available on the authority.
+requires a new query; its conservative broad-phase clearance is available on the
+authority, while each decision reports its actual pair threshold.
 Callers must check that authority before adopting a result into a current preview
 or proposed edit. The ordinary command's revision and short validation still
-apply at commit. No new worker, command, persisted net binding or saved format is
-introduced by this engine API.
+apply at commit. No new worker, persisted membership graph or saved format is introduced by this
+engine API. [Assigned net classes](net-class-consumers.md) supply per-object
+requirements and inspectable provenance to pairs, probes, overlays and DRC.
 
 `objects()` supplies source copper in pad/track/via order with resolved copper
 layers, contours, item references and intended membership. A mapped pad retains

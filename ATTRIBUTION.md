@@ -1371,3 +1371,14 @@ regressions are original MIT OR Apache-2.0 PCBcraft work. They reuse the existin
 sparse registry, class resolver and native publication infrastructure. Test and
 CPU fixtures were generated through native commands and production codecs; no
 external EDA implementation, asset, library data or dependency was introduced.
+
+## Net-class routing, query and DRC consumers
+
+The #302 contact-policy projection, class-aware copper validation, query/overlay
+spacing and DRC provenance are original MIT OR Apache-2.0 PCBcraft work. They
+reuse the existing class resolver, sparse net registry, accepted connectivity,
+bounded jobs and represented contours. The GUI reuses the qualified Craft
+routing halo, ribbon dimensions and existing message surface through chrome;
+no new generic control or toolkit gap was required. Command-built tests use
+original PCBcraft parts and production codecs. No external EDA implementation,
+asset, dependency or toolkit revision was introduced.

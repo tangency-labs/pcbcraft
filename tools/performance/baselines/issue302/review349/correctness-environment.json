@@ -1,0 +1,10 @@
+{
+  "revision": "pr349-review-76960d34b136",
+  "hardware": "AMD Ryzen 9 7950X 16-Core Processor; MemTotal:       65006780 kB",
+  "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "runtime": "native CPU correctness replay",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "profile": "debug correctness-only",
+  "power": "Shared development host; CPU exclusivity, power and thermal state not controlled.",
+  "notes": "One iteration of the exact retained assigned artifact checks strengthened new-track oracle after review. Timings are diagnostic only, with no comparison, budget or performance claim."
+}

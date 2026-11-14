@@ -1,0 +1,120 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 1.386
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 4.368
+  },
+  {
+    "name": "app-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--lib"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 51.692
+  },
+  {
+    "name": "harness-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 4.099
+  },
+  {
+    "name": "harness-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "performance::"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 24.686
+  },
+  {
+    "name": "web-check",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 1.736
+  },
+  {
+    "name": "web-harness",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--example",
+      "board_perf_web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 1.282
+  },
+  {
+    "name": "native-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "pcbcraft",
+      "-p",
+      "pcbcraft-cli"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 9.804
+  }
+]

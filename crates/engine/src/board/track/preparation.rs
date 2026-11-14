@@ -44,8 +44,14 @@ pub struct PreparedCopperEdit {
     source: Source,
     candidate: Option<Arc<Project>>,
     command: &'static str,
+    class_rules: Option<crate::board::class_rules::Context>,
 }
 impl PreparedCopperEdit {
+    /// Captured policies explain changed-copper validation, with source identities and conflicts.
+    /// Unchanged copper is not certified by this edit and may retain existing violations.
+    pub fn class_rules(&self) -> Option<&crate::board::class_rules::Context> {
+        self.class_rules.as_ref()
+    }
     /// The board and revision validated during preparation.
     pub fn source(&self) -> &Source {
         &self.source
@@ -69,6 +75,7 @@ pub struct CopperEditJob {
     builder: Option<IslandBuilder>,
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
+    class_islands: Option<(Copper, Vec<Vec<usize>>)>,
 }
 
 impl Session {
@@ -101,9 +108,6 @@ impl Session {
         if target != context.source.target() || !context.source.is_current(self) {
             return Err(CommandError::InvalidParams("copper preparation source is stale or belongs to another board".into()));
         }
-        if command != crate::DELETE_TRACKS {
-            self.open_project()?.require_supported_class_consumer()?;
-        }
         let command = crate::command(command).ok_or_else(|| CommandError::Unknown(command.into()))?.id;
         Ok(CopperEditJob {
             context: context.clone(),
@@ -116,6 +120,7 @@ impl Session {
             builder: None,
             work: 0,
             result: None,
+            class_islands: None,
         })
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
@@ -191,8 +196,12 @@ impl CopperEditJob {
                 self.candidate = candidate.map(Arc::new);
                 if self.candidate.is_none() || self.added.is_empty() {
                     self.phase = 4;
-                    self.result =
-                        Some(Ok(PreparedCopperEdit { source: self.context.source.clone(), candidate: self.candidate.take(), command: self.command }));
+                    self.result = Some(Ok(PreparedCopperEdit {
+                        source: self.context.source.clone(),
+                        candidate: self.candidate.take(),
+                        command: self.command,
+                        class_rules: None,
+                    }));
                     return Ok(true);
                 }
             }
@@ -225,17 +234,65 @@ impl CopperEditJob {
                     return Ok(false);
                 }
                 if let (Some(builder), Some(lands), Some(candidate)) = (self.builder.take(), &self.lands, &self.candidate) {
-                    let (_, members) = builder.finish(lands, &candidate.board.tracks, &candidate.board.vias);
+                    let (copper, members) = builder.finish(lands, &candidate.board.tracks, &candidate.board.vias);
                     if let Some((a, b)) =
                         short_from_members(lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
                     {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
+                    if candidate.has_dimensional_net_classes() {
+                        self.builder = Some(IslandBuilder::pad_contacts(lands, &candidate.board.tracks, &candidate.board.vias, &members));
+                        self.class_islands = Some((copper, members));
+                    }
                 }
             }
             3 => {
-                self.result =
-                    Some(Ok(PreparedCopperEdit { source: self.context.source.clone(), candidate: self.candidate.take(), command: self.command }));
+                if let Some(lands) = &self.lands
+                    && self.class_islands.is_some()
+                    && !self.builder.as_mut().is_some_and(|builder| builder.step_pads(lands.len(), budget))
+                {
+                    self.work = self.work.saturating_add(budget);
+                    return Ok(false);
+                }
+                let class_rules = if let (Some(candidate), Some(lands), Some(builder), Some((copper, members))) =
+                    (&self.candidate, &self.lands, self.builder.take(), self.class_islands.take())
+                {
+                    let view =
+                        candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+                    let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
+                    let geometry = crate::board::clearance::BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
+                    let context = crate::board::class_rules::NetRules::new(view, self.context.source.effective.clone())?
+                        .map(|rules| rules.capture(view, &geometry))
+                        .transpose()?;
+                    if let Some(context) = &context {
+                        for item in &geometry.items {
+                            let Ok(id) = Uuid::parse_str(&item.name) else { continue };
+                            if !self.added.contains(&id) {
+                                continue;
+                            }
+                            if item.intended_nets.len() > 1 {
+                                return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
+                            }
+                            if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
+                                if let Some(track) = view.tracks().iter().find(|track| track.id == id) {
+                                    policy.track_width(Some(track.width_nm))?;
+                                }
+                                if let Some(via) = view.vias().iter().find(|via| via.id == id) {
+                                    policy.via_sizes(Some(via.diameter_nm), Some(via.drill_nm))?;
+                                }
+                            }
+                        }
+                    }
+                    context
+                } else {
+                    None
+                };
+                self.result = Some(Ok(PreparedCopperEdit {
+                    source: self.context.source.clone(),
+                    candidate: self.candidate.take(),
+                    command: self.command,
+                    class_rules,
+                }));
             }
             _ => {}
         }

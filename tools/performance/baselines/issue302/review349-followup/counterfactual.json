@@ -1,0 +1,13 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "pcbcraft-app",
+    "--lib",
+    "unresolved_via_defaults"
+  ],
+  "exit_code": 101,
+  "expected_test_failure": true
+}

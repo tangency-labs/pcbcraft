@@ -278,11 +278,8 @@ impl PcbApp {
 /// Apply a validated preset without changing the project, undo history or another view's tool.
 fn set_size(tracks: &mut crate::board_tracks::State, value: Size) {
     match value {
-        Size::Width(width) => tracks.width_nm = width,
-        Size::Via([pad, drill]) => {
-            tracks.via_diameter_nm = pad;
-            tracks.via_drill_nm = drill;
-        }
+        Size::Width(width) => tracks.select_width(width),
+        Size::Via([pad, drill]) => tracks.select_via(pad, drill),
     }
 }
 

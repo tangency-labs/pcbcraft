@@ -90,11 +90,9 @@ existing encoding; removing the last live binding only lowers the version when
 no historical binding remains. Native folder/archive reopen and interrupted
 forward/inverse publication preserve the same authority.
 
-Class-aware routing, geometry queries and DRC remain under #302, while #303 owns
-editor controls. Until those consumers support classes, a current dimensional
-assignment makes those rule-dependent operations unavailable instead of allowing
-a board-default-only pass. Direct snapshot DRC reports `UnsupportedNetClasses`.
-Deleting tracks remains possible, and an empty-rule classification adds no
-dimensional requirement. Naming or inspecting ordinary unclassified nets does
-not invoke the class resolver. This slice adds no editor form or automatic
-classification by name.
+[Class-aware routing, geometry queries and DRC](net-class-consumers.md) consume
+current assignments through the shared resolver. Unresolved dimensions affect
+only dependent operations, with provenance retained in queries and reports.
+Editor controls remain under #303. Empty-rule classifications add no dimensional
+requirement, and unclassified nets skip class graph preparation. Naming a net
+does not classify it.

@@ -158,3 +158,17 @@ logic-only callbacks and cancellation on drop. Code review additionally covered
 bounded socket I/O and queues, reply size, exact revision guards, callback cancellation, one capture in
 flight, endpoint retirement and stopping only the collector's own child. No UI
 callback joins a worker or waits on its socket.
+
+## Assigned net-class consumers (#302)
+
+[The retained evidence](../tools/performance/baselines/issue302/README.md) compares
+the exact reference/channel CPU artifacts before and after consumer integration
+with 20/10 samples. It also records ten candidate-only samples for contact defaults,
+bounded classified route preparation and publication on a command-generated
+assigned derivative, checking committed width and exhaustive per-object spacing.
+Reference preparation/DRC was roughly 0.04–0.05 ms slower at p95, while the larger
+channel observations were mixed; the raw samples remain visible without repeated
+broad replay. These short shared-host runs do not qualify statistical tails,
+native-window/browser rendered latency, allocation, large-class capacity or
+Wayland endurance. Headless dark/light GPU images verify the reused route halo;
+WASI correctness and browser compilation cover separate boundaries.
