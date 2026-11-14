@@ -34,7 +34,9 @@ and rotation. Routing, full ERC/DRC and fabrication output are still planned.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
 - **Library editors:** author native symbol and footprint definitions in independent
-  workspaces, with primitive properties, undo/redo and save-copy/open/export.
+  workspaces, with primitive properties, undo/redo, draft-save/open/export and
+  desktop publication to writable native libraries. Publish can create a library
+  or save a derivative while leaving the original unchanged.
 - **Projects:** save a Git-friendly project folder or share a `.pc` archive.
   Pinned symbol and footprint definitions travel with the project. The CLI can
   explicitly convert the previous split layout into a new copy.

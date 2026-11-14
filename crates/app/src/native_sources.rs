@@ -255,6 +255,12 @@ impl Sources {
         self.job.is_some()
     }
 
+    /// Folder deletion owns separate mutation authority; an immutable publication can coexist
+    /// with definition edits while still excluding competing source writes.
+    pub(crate) fn mutating(&self) -> bool {
+        self.mutation.is_some()
+    }
+
     /// Remove registration immediately but retain an in-flight slot; late results cannot restore it.
     pub(super) fn remove(&mut self, source: &str, session: &mut pcbcraft_engine::Session) {
         self.registered.retain(|r| r.source != source);
@@ -386,7 +392,9 @@ impl PcbApp {
     pub(super) fn poll_library_sources(&mut self, ctx: &egui::Context) {
         self.poll_library_mutation(ctx);
         let generation = self.session.libraries().generation();
-        self.library_sources.poll(&mut self.session, ctx);
+        if !self.library_editors.publisher.busy() {
+            self.library_sources.poll(&mut self.session, ctx);
+        }
         #[cfg(target_arch = "wasm32")]
         if let Err(error) = self.library_sources.persist_browser() {
             self.message = Some(error);

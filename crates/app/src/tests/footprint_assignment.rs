@@ -30,7 +30,7 @@ fn component_harness() -> Harness<'static, PcbApp> {
 
 /// Choose a package through the actual UI; every pad remains explicit rather than guessed.
 fn choose_resistor(h: &mut Harness<'_, PcbApp>) {
-    click(h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(h, "basic-components / Resistor 0402 (1005 metric) · r4");
     h.get_by_label("Terminal 1").scroll_to_me();
     h.run();
     click(h, "Terminal 1");
@@ -92,7 +92,7 @@ fn footprint_assignment_invalid_cancel_and_stale_dialog_preserve_state() {
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     h.state_mut().begin_footprint_assignment(None);
     h.run();
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Terminal 1");
     click(&mut h, "Pad 2");
     click(&mut h, "Assign");
@@ -164,7 +164,7 @@ fn live_assignment_uses_modal_ownership_and_shared_history() {
     let mut h = component_harness();
     let component = h.state().session.inspect()["project"]["components"][0]["id"].clone();
     let request = json!({"method":"engine.execute","params":{"command":ASSIGN_FOOTPRINT,"params":{
-        "component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,
+        "component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,
         "mapping":{"1":"2","2":"1"},"expected_revision":h.state().session.revision()}}});
     h.state_mut().begin_footprint_assignment(None);
     h.run();
@@ -193,14 +193,14 @@ fn footprint_browser_filters_and_preview_leave_assignment_untouched() {
     h.state_mut().begin_footprint_assignment(None);
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    click(&mut h, "starter");
+    click(&mut h, "basic-components");
     click(&mut h, "Search footprints");
     h.get_by_label("Search footprints").type_text("resistor 0603");
     h.run();
-    h.get_by_label("starter / Resistor 0603 (1608 metric) · r4");
-    assert!(h.query_by_label("starter / Resistor 0402 (1005 metric) · r4").is_none());
-    click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
-    let row = h.get_by_label("starter / Resistor 0603 (1608 metric) · r4").rect();
+    h.get_by_label("basic-components / Resistor 0603 (1608 metric) · r4");
+    assert!(h.query_by_label("basic-components / Resistor 0402 (1005 metric) · r4").is_none());
+    click(&mut h, "basic-components / Resistor 0603 (1608 metric) · r4");
+    let row = h.get_by_label("basic-components / Resistor 0603 (1608 metric) · r4").rect();
     let rendered = h
         .output()
         .shapes
@@ -247,10 +247,10 @@ fn footprint_browser_filters_and_preview_leave_assignment_untouched() {
     click(&mut h, "Through hole");
     h.get_by_label("No footprints match");
     click(&mut h, "Clear filters");
-    h.get_by_label("starter / Resistor 0402 (1005 metric) · r4");
-    h.get_by_label("starter / SOT-23 (TO-236AB) · r4");
+    h.get_by_label("basic-components / Resistor 0402 (1005 metric) · r4");
+    h.get_by_label("basic-components / SOT-23 (TO-236AB) · r4");
     click(&mut h, "Match pin count");
-    assert!(h.query_by_label("starter / SOT-23 (TO-236AB) · r4").is_none());
+    assert!(h.query_by_label("basic-components / SOT-23 (TO-236AB) · r4").is_none());
     click(&mut h, "All libraries");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     click(&mut h, "Close");
@@ -264,7 +264,7 @@ fn browsing_another_package_cannot_silently_place_or_replace_the_saved_assignmen
     h.set_size(egui::vec2(1440., 1000.));
     h.state_mut().begin_footprint_assignment(None);
     h.run();
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Match numbers");
     click(&mut h, "Assign");
     click(&mut h, "Close");
@@ -274,7 +274,7 @@ fn browsing_another_package_cannot_silently_place_or_replace_the_saved_assignmen
     app.views.active.open_document(crate::editor_view::DocumentTarget::Board(target), &app.session);
     app.begin_footprint_assignment(None);
     h.run();
-    click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0603 (1608 metric) · r4");
     assert!(h.get_by_label("Place on board").accesskit_node().is_disabled());
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     click(&mut h, "Terminal 1");
@@ -302,7 +302,7 @@ fn component_browser_searches_large_projects_and_contextual_assignment_stays_foc
     h.run();
     click(&mut h, "R64 · R");
     h.get_by_label("R64");
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Match numbers");
     click(&mut h, "Assign");
     click(&mut h, "Close");
@@ -328,9 +328,9 @@ fn narrow_footprint_browser_can_show_the_preview_and_mapping() {
     let component = h.state().session.project().unwrap().components().next().unwrap().id();
     h.state_mut().begin_footprint_assignment(Some(component));
     h.run();
-    h.get_by_label("starter / Resistor 0402 (1005 metric) · r4").scroll_to_me();
+    h.get_by_label("basic-components / Resistor 0402 (1005 metric) · r4").scroll_to_me();
     h.run();
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     h.get_by_label("Footprint preview").scroll_to_me();
     h.run();
     let rect = h.get_by_label("Footprint preview").rect();

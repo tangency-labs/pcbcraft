@@ -5,12 +5,12 @@ use std::sync::{Arc, mpsc::Sender};
 use js_sys::{Promise, Uint8Array};
 use pcbcraft_engine::{
     Project,
-    persistence::{Documents, DocumentsEncoder, Encoding, MAX_ARCHIVE_BYTES, PackedEncoder, decode_packed},
+    persistence::{Documents, Encoding, MAX_ARCHIVE_BYTES, PackedEncoder, decode_packed},
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use super::{Outcome, Saved};
+use super::{Outcome, Saved, download};
 
 #[wasm_bindgen(inline_js = "
 export function pickProject(zipLimit) {
@@ -92,7 +92,7 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
     }
     let packed = decode_packed(&bytes)?;
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
-    Ok(Outcome::Opened(Saved { snapshot, bytes, encoding, needs_manifest, documents }))
+    Saved { snapshot, opened: None, bytes, encoding, needs_manifest, documents }.prepare_open().map(Outcome::Opened)
 }
 
 pub(super) struct Download {
@@ -103,7 +103,7 @@ pub(super) struct Download {
 }
 
 enum DownloadSource {
-    Encode(DocumentsEncoder, Option<Arc<Documents>>, Option<String>),
+    Encode(download::Encoder),
     Archive(PackedEncoder),
     Unchanged(Arc<[u8]>),
     Documents(Arc<Documents>),
@@ -122,29 +122,18 @@ impl Download {
     pub(super) fn new(
         snapshot: Arc<Project>,
         unchanged: Option<Arc<[u8]>>,
-        documents: Option<Arc<Documents>>,
+        original: Option<download::Original>,
         result: Sender<Result<Outcome, String>>,
     ) -> Result<Self, String> {
         let name = super::download_file_name(&snapshot.name);
-        // A download cannot confirm durable publication or adopt session metadata. Its copy
-        // nevertheless uses the current layout, including an unchanged uploaded flat project.
-        let migrating = snapshot.layout_root().is_none() || !snapshot.has_sheet_occurrences();
-        let old_board = snapshot.board_document_path();
-        let snapshot = if migrating {
-            let prepared = if snapshot.layout_root().is_none() { snapshot.with_board_folders(".")? } else { Project::clone(&snapshot) };
-            Arc::new(prepared.with_sheet_occurrences()?)
+        let source = if download::needs_layout(&snapshot) {
+            DownloadSource::Encode(download::Encoder::new(snapshot, original)?)
+        } else if let Some(bytes) = unchanged {
+            DownloadSource::Unchanged(bytes)
+        } else if let Some(documents) = original.as_ref().and_then(|source| source.unchanged(&snapshot)) {
+            DownloadSource::Documents(documents)
         } else {
-            snapshot
-        };
-        let source = if migrating {
-            DownloadSource::Encode(DocumentsEncoder::new(snapshot), documents, old_board)
-        } else {
-            match unchanged {
-                Some(bytes) => DownloadSource::Unchanged(bytes),
-                None => {
-                    documents.map(DownloadSource::Documents).unwrap_or_else(|| DownloadSource::Encode(DocumentsEncoder::new(snapshot), None, None))
-                }
-            }
+            DownloadSource::Encode(download::Encoder::new(snapshot, original)?)
         };
         Ok(Self { source, name, result })
     }
@@ -160,38 +149,14 @@ impl Download {
                 Err(error) => Err(error),
             },
             DownloadSource::Unchanged(bytes) => send_download(bytes, &self.name),
-            DownloadSource::Encode(encoder, original, old_board) => match encoder.step(256) {
-                Ok(Some(mut documents)) => {
-                    if let Some(original) = original {
-                        // The retained documents belong to this unchanged uploaded snapshot.
-                        // Reuse existing payload bytes; entry metadata, board paths and a newly
-                        // owned instance document come from the prepared current-format copy.
-                        let new_board = pcbcraft_engine::persistence::project_board_path(&documents[pcbcraft_engine::persistence::ENTRY_POINT]);
-                        let new_board = match new_board {
-                            Ok(path) => path,
-                            Err(error) => {
-                                let _ = self.result.send(Err(error));
-                                return;
-                            }
-                        };
-                        for (path, bytes) in &mut documents {
-                            if path == pcbcraft_engine::persistence::ENTRY_POINT {
-                                continue;
-                            }
-                            let source = if Some(path.as_str()) == new_board.as_deref() { old_board.as_deref().unwrap_or(path) } else { path };
-                            if let Some(retained) = original.get(source) {
-                                bytes.clone_from(retained);
-                            }
-                        }
+            DownloadSource::Encode(encoder) => match encoder.step(256) {
+                Ok(Some(documents)) => match PackedEncoder::new(documents) {
+                    Ok(archive) => {
+                        self.source = DownloadSource::Archive(archive);
+                        return;
                     }
-                    match PackedEncoder::new(documents) {
-                        Ok(archive) => {
-                            self.source = DownloadSource::Archive(archive);
-                            return;
-                        }
-                        Err(error) => Err(error),
-                    }
-                }
+                    Err(error) => Err(error),
+                },
                 Ok(None) => return,
                 Err(error) => Err(error),
             },

@@ -81,7 +81,7 @@ fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
         });
         h.run();
     }
-    assert_eq!(h.state().views.active.camera.zoom(), 64.0);
+    assert_eq!(h.state().views.active.camera.zoom(), crate::canvas_camera::MAX_ZOOM);
     assert!(h.state().views.active.camera.screen(anchor, rect).distance(pointer) < 0.01);
 
     let restore = |view: &crate::editor_view::EditorView, session: &pcbcraft_engine::Session| {
@@ -91,7 +91,7 @@ fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
         crate::editor_view::EditorView::from_state(ViewId(900), &decoded, session)
     };
     let restored = restore(&h.state().views.active, &h.state().session);
-    assert_eq!(restored.camera.zoom(), 64.0);
+    assert_eq!(restored.camera.zoom(), crate::canvas_camera::MAX_ZOOM);
     assert!(restored.camera.screen(anchor, rect).distance(pointer) < 0.01);
 
     let ctx = h.ctx.clone();
@@ -108,7 +108,8 @@ fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
     click(&mut h, "Choose workspace");
     click(&mut h, "Schematic");
     let view = h.state().views.active.id().0;
-    assert!(h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view,"zoom_percent":3200})).is_err());
+    h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view,"zoom_percent":3200})).unwrap();
+    assert_eq!(h.state().views.active.camera.zoom(), 32.0);
 
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB Layout");
@@ -705,7 +706,7 @@ fn footprint_drag_snaps_to_board_grid_at_several_zoom_levels() {
     let id = h.state().views.active.id();
     h.state_mut().set_view_grid(id, 25 * pcbcraft_chrome::grid::NM_PER_MIL);
     for zoom in [0.5, 1.0, 2.0] {
-        h.state_mut().views.active.camera.set_zoom_with_limit(zoom, crate::canvas_camera::MAX_BOARD_ZOOM);
+        h.state_mut().views.active.camera.set_zoom(zoom);
         h.run();
         let before = placement(&h);
         let start = Point { x_nm: before["x_nm"].as_i64().unwrap(), y_nm: before["y_nm"].as_i64().unwrap() };

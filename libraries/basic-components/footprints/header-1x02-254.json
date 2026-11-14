@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-footprint/1",
-  "library": "starter",
+  "library": "basic-components",
   "id": "header-1x02-254",
   "revision": 3,
   "name": "Pin header 1x02, 2.54 mm",

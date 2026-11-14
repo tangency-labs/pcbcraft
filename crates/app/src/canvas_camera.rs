@@ -10,9 +10,10 @@ use crate::preferences::{Navigation, ScrollAction, ZoomAround};
 use crate::schematic_canvas::grid_bounds;
 
 const MIN_ZOOM: f32 = 0.005;
-pub(super) const MAX_ZOOM: f32 = 8.0;
-/// Board navigation needs to show fine copper and clearance at a useful scale.
-pub(super) const MAX_BOARD_ZOOM: f32 = 64.0;
+/// One manual navigation range for project and definition editors.
+pub(super) const MAX_ZOOM: f32 = 1024.0;
+/// Whole-board automatic framing retains its useful overview scale.
+const BOARD_FIT_MAX_ZOOM: f32 = 8.0;
 /// Start empty boards at 32 logical points/mm so ordinary copper widths are visible.
 const INITIAL_BOARD_ZOOM: f32 = 4.0;
 /// A wheel notch settles within this interval; live pinch gestures remain immediate.
@@ -26,7 +27,6 @@ struct WheelZoom {
     elapsed: f32,
     anchor: Vec2,
     navigation: Navigation,
-    max_zoom: f32,
 }
 
 /// Persistent navigation excludes viewport geometry and pending input.
@@ -39,9 +39,9 @@ pub(super) struct CameraState {
 }
 
 impl CameraState {
-    /// Validate navigation against the saved workspace's zoom limit before restoring it.
-    pub(super) fn valid(&self, max_zoom: f32) -> bool {
-        (MIN_ZOOM..=max_zoom).contains(&self.zoom)
+    /// Validate navigation against the shared editor range before restoring it.
+    pub(super) fn valid(&self) -> bool {
+        (MIN_ZOOM..=MAX_ZOOM).contains(&self.zoom)
             && grid::SPACING_RANGE_NM.contains(&self.snap_nm)
             && self.center_nm.iter().all(|n| n.is_finite() && n.abs() <= (MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f64 + 1.0)
     }
@@ -283,19 +283,12 @@ impl Camera {
         Point { x_nm: (self.sign() * center.x).round() as i64, y_nm: center.y.round() as i64 }
     }
 
-    /// Zoom about the uncovered canvas center within the definition and schematic limits.
-    /// Cancels a pending fit, like any navigation.
+    /// Zoom about the uncovered canvas center within the shared editor range.
+    /// Cancels pending Fit and centering, as other explicit navigation does.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_zoom(&mut self, zoom: f32) {
-        self.set_zoom_with_limit(zoom, MAX_ZOOM);
-    }
-
-    /// Zoom about the uncovered canvas center, clamped to the target workspace's limits.
-    /// Cancels a pending fit, like any navigation.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn set_zoom_with_limit(&mut self, zoom: f32, max_zoom: f32) {
         let center = self.center();
-        self.zoom = zoom.clamp(MIN_ZOOM, max_zoom);
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         self.center_on(center);
     }
 
@@ -340,7 +333,7 @@ impl Camera {
         if std::mem::take(&mut self.fit_requested) {
             self.fit(project, rect);
         }
-        self.interact(response, rect, enabled, navigation, MAX_ZOOM);
+        self.interact(response, rect, enabled, navigation);
     }
 
     /// Navigate and fit resolved board copper/graphics, independently of schematic geometry.
@@ -371,17 +364,19 @@ impl Camera {
                     bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
                 });
             if bounds.is_finite() {
-                self.fit_bounds(bounds, rect, MAX_ZOOM);
+                self.fit_bounds(bounds, rect, BOARD_FIT_MAX_ZOOM);
             } else {
                 self.zoom = INITIAL_BOARD_ZOOM;
                 self.offset = self.uncovered_center();
             }
         }
-        self.interact(response, rect, enabled, navigation, MAX_BOARD_ZOOM);
+        self.interact(response, rect, enabled, navigation);
     }
 
     /// Fit native library primitives and navigate without a project, sheet or placed board.
     /// Caller-provided extents use integer nanometres in the definition's local coordinates.
+    /// Fit reserves its margin in screen space, so tiny artwork can fill the usable canvas;
+    /// wheel and pinch use the same manual range as the project editors.
     pub(crate) fn navigate_definition(
         &mut self,
         response: &Response,
@@ -393,12 +388,11 @@ impl Camera {
         self.schematic_rect = Some(rect);
         if std::mem::take(&mut self.fit_requested) {
             *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
-            let bounds = points.fold(Rect::NOTHING, |bounds, point| {
-                bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
-            });
+            let bounds =
+                points.fold(Rect::NOTHING, |bounds, point| bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2())));
             self.fit_bounds(bounds, rect, MAX_ZOOM);
         }
-        self.interact(response, rect, enabled, navigation, MAX_ZOOM);
+        self.interact(response, rect, enabled, navigation);
     }
 
     /// Reveal selected board placements in their own coordinate space without changing zoom.
@@ -416,22 +410,22 @@ impl Camera {
     }
 
     /// Apply a scale about a canvas-relative anchor, preserving its model point even in a mirrored view.
-    fn zoom_at(&mut self, zoom: f32, anchor: Vec2, max_zoom: f32) {
+    fn zoom_at(&mut self, zoom: f32, anchor: Vec2) {
         let before = (anchor - self.offset) / self.zoom;
-        self.zoom = zoom.clamp(MIN_ZOOM, max_zoom);
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         self.offset = anchor - before * self.zoom;
     }
 
     /// Accumulate wheel notches toward a bounded target. Reversal or changed settings replace
     /// outstanding motion so the camera responds immediately in the new direction.
-    fn wheel_target(&mut self, delta: f32, anchor: Vec2, navigation: Navigation, max_zoom: f32) {
+    fn wheel_target(&mut self, delta: f32, anchor: Vec2, navigation: Navigation) {
         let base = self
             .wheel_zoom
             .as_ref()
             .filter(|motion| motion.navigation == navigation && (motion.target - self.zoom).signum() == delta.signum())
             .map_or(self.zoom, |motion| motion.target);
-        let target = (base * delta.clamp(-2.0, 2.0).exp()).clamp(MIN_ZOOM, max_zoom);
-        self.wheel_zoom = (target != self.zoom).then_some(WheelZoom { from: self.zoom, target, elapsed: 0.0, anchor, navigation, max_zoom });
+        let target = (base * delta.clamp(-2.0, 2.0).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.wheel_zoom = (target != self.zoom).then_some(WheelZoom { from: self.zoom, target, elapsed: 0.0, anchor, navigation });
     }
 
     /// Advance a finite, eased transition in logarithmic scale. Return whether another frame
@@ -447,7 +441,7 @@ impl Camera {
             let eased = 1.0 - (1.0 - progress).powi(3);
             (motion.from.ln() + (motion.target.ln() - motion.from.ln()) * eased).exp()
         };
-        self.zoom_at(zoom, motion.anchor, motion.max_zoom);
+        self.zoom_at(zoom, motion.anchor);
         if progress < 1.0 {
             self.wheel_zoom = Some(motion);
             true
@@ -459,7 +453,7 @@ impl Camera {
     /// Apply navigation once per native viewport frame. Wheel motion eases while this canvas
     /// owns input; pinch and pan stay direct. A click, focus loss, blocked input or leaving the
     /// canvas stops the transition, so motion cannot leak into another pane or an editing click.
-    fn interact(&mut self, response: &Response, rect: Rect, enabled: bool, navigation: Navigation, max_zoom: f32) {
+    fn interact(&mut self, response: &Response, rect: Rect, enabled: bool, navigation: Navigation) {
         let frame = (response.ctx.viewport_id(), response.ctx.cumulative_frame_nr());
         if self.navigation_frame == Some(frame) {
             return;
@@ -485,7 +479,7 @@ impl Camera {
                 self.center_requested = None;
             }
             self.offset += pan;
-            if pan != Vec2::ZERO || self.wheel_zoom.as_ref().is_some_and(|motion| motion.navigation != navigation || motion.max_zoom != max_zoom) {
+            if pan != Vec2::ZERO || self.wheel_zoom.as_ref().is_some_and(|motion| motion.navigation != navigation) {
                 self.cancel_zoom();
             }
             let anchor = match navigation.zoom_around {
@@ -494,9 +488,9 @@ impl Camera {
             };
             if pinch != 0.0 {
                 self.cancel_zoom();
-                self.zoom_at(self.zoom * (zoom + pinch).clamp(-2.0, 2.0).exp(), anchor, max_zoom);
+                self.zoom_at(self.zoom * (zoom + pinch).clamp(-2.0, 2.0).exp(), anchor);
             } else if zoom != 0.0 {
-                self.wheel_target(zoom, anchor, navigation, max_zoom);
+                self.wheel_target(zoom, anchor, navigation);
             }
             if self.advance_zoom(response.ctx.input(|input| input.stable_dt)) {
                 response.ctx.request_repaint();
@@ -689,7 +683,7 @@ mod tests {
                     let mut camera = Camera { zoom: 0.6, offset: vec2(12., 30.), mirrored, ..Camera::default() };
                     let point = (anchor - camera.offset) / camera.zoom;
                     let target = camera.zoom * 0.32_f32.exp();
-                    camera.wheel_target(0.32, anchor, Navigation::default(), MAX_ZOOM);
+                    camera.wheel_target(0.32, anchor, Navigation::default());
                     let mut frames = 0;
                     while camera.wheel_zoom.is_some() {
                         let before = camera.zoom;
@@ -711,17 +705,17 @@ mod tests {
     #[test]
     fn wheel_motion_accumulates_reverses_and_clamps() {
         let mut camera = Camera::default();
-        camera.wheel_target(0.16, Vec2::ZERO, Navigation::default(), MAX_ZOOM);
+        camera.wheel_target(0.16, Vec2::ZERO, Navigation::default());
         camera.advance_zoom(1. / 60.);
-        camera.wheel_target(0.16, Vec2::ZERO, Navigation::default(), MAX_ZOOM);
+        camera.wheel_target(0.16, Vec2::ZERO, Navigation::default());
         assert!((camera.wheel_zoom.as_ref().unwrap().target - 0.32_f32.exp()).abs() < 1e-6);
         let before = camera.zoom;
-        camera.wheel_target(-0.16, Vec2::ZERO, Navigation::default(), MAX_ZOOM);
+        camera.wheel_target(-0.16, Vec2::ZERO, Navigation::default());
         camera.advance_zoom(1. / 60.);
         assert!(camera.zoom < before);
         for (zoom, delta) in [(MAX_ZOOM, 0.16), (MIN_ZOOM, -0.16)] {
             camera.zoom = zoom;
-            camera.wheel_target(delta, Vec2::ZERO, Navigation::default(), MAX_ZOOM);
+            camera.wheel_target(delta, Vec2::ZERO, Navigation::default());
             assert!(camera.wheel_zoom.is_none());
         }
     }
@@ -731,7 +725,7 @@ mod tests {
     #[test]
     fn wheel_motion_is_not_saved_or_inherited_by_another_view() {
         let mut camera = Camera::default();
-        camera.wheel_target(0.32, vec2(50., 30.), Navigation::default(), MAX_ZOOM);
+        camera.wheel_target(0.32, vec2(50., 30.), Navigation::default());
         camera.advance_zoom(1. / 60.);
         let restored = Camera::from_state(&camera.saved_state());
         assert_eq!(restored.zoom, camera.zoom);
@@ -739,10 +733,10 @@ mod tests {
         let fork = camera.fork_navigation();
         assert_eq!(fork.zoom, camera.zoom);
         assert!(camera.wheel_zoom.is_none() && fork.wheel_zoom.is_none());
-        camera.wheel_target(0.32, Vec2::ZERO, Navigation::default(), MAX_ZOOM);
+        camera.wheel_target(0.32, Vec2::ZERO, Navigation::default());
         camera.request_fit();
         assert!(camera.wheel_zoom.is_none());
-        camera.wheel_target(0.32, Vec2::ZERO, Navigation::default(), MAX_ZOOM);
+        camera.wheel_target(0.32, Vec2::ZERO, Navigation::default());
         camera.center_on(Point { x_nm: 0, y_nm: 0 });
         assert!(camera.wheel_zoom.is_none());
     }

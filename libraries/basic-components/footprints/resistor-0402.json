@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-footprint/1",
-  "library": "starter",
+  "library": "basic-components",
   "id": "resistor-0402",
   "revision": 4,
   "name": "Resistor 0402 (1005 metric)",

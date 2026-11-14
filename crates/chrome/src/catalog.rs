@@ -83,6 +83,20 @@ pub fn parts_form(ctx: &egui::Context, enabled: bool, active: bool, add: impl Fn
 /// Keep the shared property actions visible while fields scroll. The caller handles field
 /// submission and validation; Escape and backdrop clicks dismiss the dialog.
 pub fn property_form(ctx: &egui::Context, id: &'static str, title: &str, width: f32, primary: &str, add: impl FnOnce(&mut Ui)) -> FormAction {
+    property_form_enabled(ctx, id, title, width, primary, true, add)
+}
+
+/// The shared property form can disable its fixed primary action while retaining editable fields
+/// and cancellation. Validation stays in the host; no separate modal/footer presentation is drawn.
+pub fn property_form_enabled(
+    ctx: &egui::Context,
+    id: &'static str,
+    title: &str,
+    width: f32,
+    primary: &str,
+    enabled: bool,
+    add: impl FnOnce(&mut Ui),
+) -> FormAction {
     let t = Tokens::get();
     let id = egui::Id::unique(id);
     let window = Window::new(id, "settings", title).fields().actions(primary, "Cancel", None);
@@ -92,7 +106,7 @@ pub fn property_form(ctx: &egui::Context, id: &'static str, title: &str, width: 
         let field_style = ui.style().clone();
         window.content(
             ui,
-            true,
+            enabled,
             |ui| {
                 ui.set_style(field_style);
                 add(ui);

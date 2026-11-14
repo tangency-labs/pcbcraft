@@ -3,6 +3,7 @@ mod canvas;
 pub(super) mod editing;
 mod form;
 mod io;
+pub(super) mod publishing;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -27,6 +28,7 @@ pub(super) struct Editors {
     last_focused: [Option<u64>; 2],
     last_active: Option<u64>,
     files: io::Files,
+    pub(crate) publisher: publishing::Publisher,
     notice: Option<String>,
     pending_document: Option<u64>,
     open_target: Option<crate::ViewId>,
@@ -34,6 +36,7 @@ pub(super) struct Editors {
 #[derive(Debug)]
 struct Document {
     session: Session,
+    publish_source: Option<String>,
     /// The library reference preview is derived once per authoring revision.
     reference_preview: Option<(u64, std::sync::Arc<[Vec<pcbcraft_engine::schematic::Point>]>)>,
     bound_view: Option<crate::ViewId>,
@@ -54,13 +57,33 @@ struct Document {
     error: Option<String>,
 }
 impl Editors {
+    /// Destination suggestions are document-local and do not bind an identity before publication.
+    pub(crate) fn suggest_destination(&mut self, id: u64, source: Option<String>) {
+        if let Some(doc) = self.documents.get_mut(&id)
+            && doc.publish_source.is_none()
+            && doc.session.published().is_none()
+        {
+            doc.publish_source = source;
+        }
+    }
+    /// Shared service notices remain visible when creation finishes in the Parts Library workspace.
+    pub(crate) fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+    /// An uncertain publication needs a close decision even when its separate draft file was saved.
+    fn document_unsaved(&self, id: u64) -> bool {
+        self.publisher.unconfirmed() == Some(id) || self.documents.get(&id).is_some_and(Document::unsaved)
+    }
     /// Unpublished geometry and unapplied fields both prevent deleting their origin library.
     pub(crate) fn unpublished_in(&self, library: &str) -> bool {
-        self.documents.values().any(|doc| doc.session.snapshot().library == library && doc.unsaved())
+        self.publisher.unconfirmed_in(library)
+            || self.documents.values().any(|doc| {
+                doc.session.snapshot().library == library && (doc.unsaved() || (doc.session.published().is_some() && doc.session.publication_dirty()))
+            })
     }
     /// A bounded change stamp wakes all views when a definition edit or dirty-state transition occurs.
     pub(super) fn stamp(&self) -> Vec<(u64, u64, bool)> {
-        self.documents.iter().map(|(id, doc)| (*id, doc.session.revision(), doc.unsaved())).collect()
+        self.documents.iter().map(|(id, doc)| (*id, doc.session.revision(), self.document_unsaved(*id))).collect()
     }
     /// The active document determines its workspace, independent of the parked project view.
     pub(super) fn active_kind(&self) -> Option<Kind> {
@@ -112,16 +135,16 @@ impl Editors {
     }
     /// Include unapplied field input in leave/close protection, independently of the project.
     pub(super) fn unsaved(&self) -> bool {
-        self.documents.values().any(Document::unsaved)
+        self.publisher.unconfirmed().is_some() || self.documents.values().any(Document::unsaved)
     }
     /// Only one bounded picker/publication owns resources at a time.
     pub(super) fn busy(&self) -> bool {
-        self.files.busy()
+        self.files.busy() || self.publisher.busy()
     }
     /// Inspection identifies each document and its own revision, never the project revision.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"active":self.active,"file_operation":self.busy(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        json!({"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
@@ -131,7 +154,7 @@ impl Editors {
         }
         if self.documents.values().any(|doc| {
             let old = doc.session.snapshot();
-            old.library == item.library && old.id == item.id
+            old.kind == item.kind && old.library == item.library && old.id == item.id
         }) {
             return Err("This library item is already open; its current edits were kept.".into());
         }
@@ -145,6 +168,7 @@ impl Editors {
             Document {
                 reference_preview: None,
                 session: Session::new(item, saved)?,
+                publish_source: None,
                 bound_view: None,
                 presentations: BTreeMap::new(),
                 selected: None,
@@ -179,10 +203,11 @@ impl Editors {
             return Err("Finish the library file operation before closing a document.".into());
         }
         let doc = self.documents.get(&id).ok_or("Unknown library document ID.")?;
-        if doc.unsaved() && !discard {
+        if (doc.unsaved() || self.publisher.unconfirmed() == Some(id)) && !discard {
             return Err("Library item has unsaved changes.".into());
         }
         self.documents.remove(&id);
+        self.publisher.discard(id);
         if self.active == Some(id) {
             self.focus(self.documents.keys().next_back().copied())?;
         }
@@ -429,8 +454,10 @@ impl Document {
 impl PcbApp {
     /// Create a definition document without requiring or modifying a project.
     pub(super) fn new_library_item(&mut self, kind: Kind) {
+        let preferred = self.preferred_library_source();
         self.message = Item::new(kind)
             .and_then(|item| self.library_editors.open(item, false))
+            .inspect(|id| self.library_editors.suggest_destination(*id, preferred))
             .and_then(|id| self.place_library_document(&Context::default(), id, pcbcraft_chrome::workspace::Placement::Here))
             .err();
     }
@@ -489,7 +516,7 @@ impl PcbApp {
         let enabled = matches!(self.dialog, Dialog::None)
             && !self.files.busy()
             && !self.project_action_pending()
-            && !self.library_mutation_busy()
+            && !self.library_sources.mutating()
             && !self.library_sources.installing()
             && (main || !self.home);
         let active = self.library_editors.active;
@@ -497,18 +524,22 @@ impl PcbApp {
         let can_save = available.is_some_and(|doc| !doc.pending_any()) && !self.library_editors.busy();
         let can_undo = available.is_some_and(|doc| !doc.pending() && doc.session.can_undo());
         let can_redo = available.is_some_and(|doc| !doc.pending() && doc.session.can_redo());
-        let title = active.and_then(|id| self.library_editors.documents.get(&id)).map(|doc| (doc.session.snapshot().name.clone(), doc.unsaved()));
+        let title = active.and_then(|id| {
+            self.library_editors.documents.get(&id).map(|doc| (doc.session.snapshot().name.clone(), self.library_editors.document_unsaved(id)))
+        });
         let tabs: Vec<_> = self
             .library_editors
             .documents
             .iter()
             .filter(|(_, doc)| Some(doc.session.snapshot().kind) == self.library_editors.active_kind())
-            .map(|(id, doc)| (*id, format!("{}{}", doc.session.snapshot().name, if doc.unsaved() { " *" } else { "" })))
+            .map(|(id, doc)| (*id, format!("{}{}", doc.session.snapshot().name, if self.library_editors.document_unsaved(*id) { " *" } else { "" })))
             .collect();
         enum Intent {
             Home,
             Open,
             Save(bool),
+            Publish,
+            Copy,
             Undo,
             Redo,
             Focus(u64),
@@ -541,7 +572,9 @@ impl PcbApp {
                     }
                     if pcbcraft_chrome::MenuItem::new(if IN_BROWSER { "Download Library Item…" } else { "Save Library Copy…" })
                         .enabled(can_save)
-                        .show(ui)
+                        .show_response(ui)
+                        .on_hover_text("Save an unfinished draft file; this does not publish it to the catalog.")
+                        .clicked()
                     {
                         intents.borrow_mut().push(Intent::Save(false));
                     }
@@ -555,10 +588,26 @@ impl PcbApp {
                         intents.borrow_mut().push(Intent::Quit);
                     }
                 });
-                if menu::quick_action(ui, MenuIcon::Save, if IN_BROWSER { "Download Library Item" } else { "Save Library Copy" }, "", can_save)
+                menu::library(ui, |ui| {
+                    if pcbcraft_chrome::MenuItem::new("Publish…").enabled(can_save && !IN_BROWSER).show(ui) {
+                        intents.borrow_mut().push(Intent::Publish);
+                    }
+                    if pcbcraft_chrome::MenuItem::new("Edit copy").enabled(can_save).show(ui) {
+                        intents.borrow_mut().push(Intent::Copy);
+                    }
+                    if pcbcraft_chrome::MenuItem::new("Save Library Copy…")
+                        .enabled(can_save)
+                        .show_response(ui)
+                        .on_hover_text("Save an unfinished draft file; this does not publish it to the catalog.")
+                        .clicked()
+                    {
+                        intents.borrow_mut().push(Intent::Save(false));
+                    }
+                });
+                if menu::quick_action(ui, MenuIcon::Save, if IN_BROWSER { "Download Library Item" } else { "Publish Library Item" }, "", can_save)
                     .clicked()
                 {
-                    intents.borrow_mut().push(Intent::Save(false));
+                    intents.borrow_mut().push(if IN_BROWSER { Intent::Save(false) } else { Intent::Publish });
                 }
                 for (icon, label, intent, available) in
                     [(MenuIcon::Undo, "Undo Library Edit", Intent::Undo, can_undo), (MenuIcon::Redo, "Redo Library Edit", Intent::Redo, can_redo)]
@@ -601,7 +650,7 @@ impl PcbApp {
         }
         if enabled && !ctx.egui_wants_keyboard_input() {
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_S)) {
-                intents.borrow_mut().push(Intent::Save(false));
+                intents.borrow_mut().push(if IN_BROWSER { Intent::Save(false) } else { Intent::Publish });
             }
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Z)) {
                 intents.borrow_mut().push(Intent::Undo);
@@ -621,6 +670,8 @@ impl PcbApp {
                     Ok(())
                 }
                 Intent::Open => self.open_library_picker(&ctx),
+                Intent::Publish => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_publish(id)),
+                Intent::Copy => active.ok_or("No active library item.".into()).and_then(|id| self.copy_library_document(&ctx, id)),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
                 history @ (Intent::Undo | Intent::Redo) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
@@ -630,7 +681,7 @@ impl PcbApp {
                 Intent::Focus(id) => self.place_library_document(&ctx, id, pcbcraft_chrome::workspace::Placement::Here),
                 Intent::Close => {
                     if let Some(id) = active {
-                        if self.library_editors.documents.get(&id).is_some_and(Document::unsaved) {
+                        if self.library_editors.document_unsaved(id) {
                             self.dialog = Dialog::LibraryClose(Some(id));
                         } else {
                             if let Err(error) = self.library_editors.close(id, false) {
@@ -654,6 +705,17 @@ impl PcbApp {
             ui.label(notice);
         }
         ui.add_enabled_ui(enabled, |ui| {
+            if let Some((library, state)) = active.and_then(|id| self.library_publication_status(id)) {
+                shell::status_bar(
+                    ui,
+                    |ui| {
+                        ui.label(library);
+                    },
+                    |ui| {
+                        ui.label(state);
+                    },
+                );
+            }
             let area = ui.available_rect_before_wrap();
             self.editor_workspace(ui, area);
         });
@@ -726,7 +788,9 @@ impl PcbApp {
                     let tools = [
                         (ToolIcon::Sheet, "New", "New definition", true),
                         (ToolIcon::Browser, "Open", "Open library item", !self.library_editors.files.busy()),
-                        (ToolIcon::Sheet, "Save copy", "Save library copy", can_save),
+                        (ToolIcon::Shared("save"), "Publish", "Publish item to a native library", can_save && !IN_BROWSER),
+                        (ToolIcon::Shared("copy"), "Edit copy", "Edit under a new item identity", can_save),
+                        (ToolIcon::Sheet, "Save copy", "Save unfinished draft; does not publish to the catalog", can_save),
                         (ToolIcon::Sheet, "Export", "Export native definition", can_save),
                     ]
                     .map(|(icon, label, description, enabled)| RibbonTool {
@@ -764,7 +828,9 @@ impl PcbApp {
                     self.message.take()
                 }
                 1 => self.open_library_picker(ui.ctx()).err(),
-                _ => self.library_editors.save(ui.ctx(), id, action == 3).err(),
+                2 => self.begin_library_publish(id).err(),
+                3 => self.copy_library_document(ui.ctx(), id).err(),
+                _ => self.library_editors.save(ui.ctx(), id, action == 5).err(),
             };
         }
         response.background
@@ -775,7 +841,7 @@ impl PcbApp {
         let busy = self.library_editors.busy();
         if !busy {
             if let Some(id) = id
-                && self.library_editors.documents.get(&id).is_some_and(|doc| !doc.unsaved())
+                && !self.library_editors.document_unsaved(id)
             {
                 self.message = self.library_editors.close(id, false).err();
                 return;
@@ -787,7 +853,13 @@ impl PcbApp {
         }
         let (mut discard, mut review, mut cancel) = (false, false, false);
         let dismissed = shell::dialog(ctx, "library_close", if id.is_some() { "Close library item?" } else { "Unsaved library items" }, |ui| {
-            ui.label(if busy { "Finish the library file operation before closing." } else { "Unsaved library edits will be lost." });
+            ui.label(if busy {
+                "Finish the library file operation before closing."
+            } else if self.library_editors.publisher.unconfirmed().is_some() {
+                "A publication is unconfirmed. Discard closes its recovery state and leaves any published revision on disk."
+            } else {
+                "Unsaved library edits will be lost."
+            });
             ui.horizontal(|ui| {
                 review = pcbcraft_chrome::controls::button(ui, "Review edits").clicked();
                 discard = pcbcraft_chrome::controls::enabled_button(ui, !busy, "Discard library edits").clicked();
@@ -799,6 +871,7 @@ impl PcbApp {
                 self.message = self.library_editors.close(id, true).err();
             } else {
                 self.library_editors.documents.clear();
+                self.library_editors.publisher = Default::default();
                 self.library_editors.active = None;
                 self.begin_project_close(ctx);
             }
@@ -834,8 +907,10 @@ impl PcbApp {
         let document = || params["document"].as_u64().ok_or("A library document ID is required.");
         match id {
             "app.library_new" => {
+                let preferred = self.preferred_library_source();
                 let item = Item::new(kind())?;
                 let document = self.library_editors.open(item, false)?;
+                self.library_editors.suggest_destination(document, preferred);
                 self.place_library_document(ctx, document, pcbcraft_chrome::workspace::Placement::Here)?;
             }
             "app.library_fork_selected" => {
@@ -930,6 +1005,18 @@ impl PcbApp {
             "app.library_close" => self.library_editors.close(document()?, params["discard"] == true)?,
             "app.library_open" => self.open_library_picker(ctx)?,
             "app.library_save" => self.library_editors.save(ctx, document()?, params["export"] == true)?,
+            "app.library_publish" => {
+                let revision = params["expected_revision"].as_u64().ok_or("A library document revision is required.")?;
+                self.publish_library_item_as(
+                    ctx,
+                    document()?,
+                    revision,
+                    params["source"].as_str().ok_or("A destination source is required.")?,
+                    params["allow_older"] == true,
+                    params["copy"] == true,
+                )?;
+            }
+            "app.library_copy" => self.copy_library_document(ctx, document()?)?,
             _ => return Err("Unknown library command.".into()),
         }
         self.sync_library_bindings();

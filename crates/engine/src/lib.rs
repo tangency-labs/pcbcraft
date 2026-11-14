@@ -94,6 +94,7 @@ enum ParamKind {
     NetLabelId,
     LibrarySource,
     LibraryDocuments,
+    AuthoringItem,
     LibraryQuery,
     LibraryKind,
     LibraryQuantity,
@@ -200,6 +201,9 @@ impl ParamKind {
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
+            Self::AuthoringItem => {
+                json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
+            }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -258,7 +262,7 @@ impl ParamKind {
             Self::ResolveExistingFootprints => json!({"type":"boolean"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => {
-                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
+                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::BASIC_COMPONENT_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
                 json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
@@ -401,11 +405,13 @@ impl ParamKind {
             Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
+            Self::AuthoringItem if serde_json::to_vec(value).is_ok_and(|bytes| authoring::Item::decode(&bytes).is_ok()) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
             Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
             Self::LibraryQuantity => Err("must name a supported physical quantity"),
@@ -507,7 +513,7 @@ impl ParamKind {
             }
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition
-                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::STARTER_IDS.contains(&id)) =>
+                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::BASIC_COMPONENT_IDS.contains(&id)) =>
             {
                 Ok(())
             }
@@ -1092,7 +1098,7 @@ const CATALOG: &[Command] = &[
                 summary: "SHA-256 digest from library.search; required for explicit library selections",
                 kind: ParamKind::LibraryDigest,
             },
-            Param { required: false, name: "library", summary: "Native library ID; omit for the embedded starter", kind: ParamKind::LibrarySource },
+            Param { required: false, name: "library", summary: "Native library ID; omit for Basic components", kind: ParamKind::LibrarySource },
             Param {
                 required: false,
                 name: "definition_revision",
@@ -1607,6 +1613,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[3],
     library::sources::COMMANDS[4],
     library::sources::COMMANDS[5],
+    library::sources::COMMANDS[6],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2334,7 +2341,8 @@ impl Session {
             | library::sources::LIST
             | library::sources::SEARCH
             | library::sources::RESOLVE_PART
-            | library::sources::PARSE_QUANTITY => true,
+            | library::sources::PARSE_QUANTITY
+            | library::sources::PREPARE_PUBLICATION => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -2707,8 +2715,8 @@ impl Session {
             PLACE_RESISTOR => {
                 let resistor = self
                     .libraries
-                    .latest_symbol("starter", "resistor")
-                    .ok_or_else(|| CommandError::Unavailable("the default library has no resistor symbol".to_owned()))?;
+                    .latest_symbol("basic-components", "resistor")
+                    .ok_or_else(|| CommandError::Unavailable("Basic components has no resistor symbol".to_owned()))?;
                 self.place_symbol(resistor, params)?;
             }
             part_instances::PLACE_PART => self.place_library_part(params)?,
@@ -2723,7 +2731,7 @@ impl Session {
                 self.place_symbol(component.definition.clone(), params)?;
             }
             PLACE_SYMBOL => {
-                let library = params["library"].as_str().unwrap_or("starter");
+                let library = params["library"].as_str().unwrap_or("basic-components");
                 let id = params["definition"].as_str().unwrap_or_default();
                 let revision = params.get("definition_revision").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
                 let legacy = ["library", "definition_revision", "definition_digest"].iter().all(|name| params.get(*name).is_none());
@@ -3128,7 +3136,8 @@ impl Session {
             };
             footprint.pin_1_pad = first;
         } else {
-            let definition = board::definition::starter(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
+            let definition =
+                board::definition::basic_components(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
             let key = definition.key();
             if project.board.definitions.get(&key).is_some_and(|pinned| pinned.as_ref() != definition.as_ref()) {
                 return Err(CommandError::InvalidParams("footprint identity/revision conflicts with its pinned copy".into()));
@@ -3660,7 +3669,7 @@ mod tests {
     /// named `main`. The placement command and saved unit record preserve that identity.
     #[test]
     fn placement_preserves_the_library_unit_identity() {
-        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
+        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/basic-components/symbols/resistor.json")).unwrap();
         file["units"][0]["id"] = json!("body");
         let mut definition = library::parse_symbol(&file.to_string()).unwrap();
         definition.library = "unit-identity-fixture".into();

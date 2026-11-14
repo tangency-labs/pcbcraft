@@ -283,13 +283,13 @@ PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apach
 | PCBCraft file | PCBcraft Next source | What changed |
 |---|---|---|
 | `crates/engine/src/wire.rs`, `crates/engine/src/schematic/wiring.rs`, `crates/app/src/schematic_canvas/wires.rs`, `crates/app/src/lib.rs` | `docs/wire-editing.md`, `docs/desktop-guide.md` (behavior only) | Followed free-space route starts, orthogonal corners, elbow flipping, cancellation and placement/hover rotation. The explicit endpoint graph, format 3 codec and shared commands are new implementation; no prototype implementation was copied for this change. |
-| `libraries/starter/symbols/led.json`, `crates/engine/src/schematic.rs` | `src/document.rs`, `src/definitions.rs`, `src/desktop/canvas.rs` | Adapted the original generic LED definition and drawing to the shared placement command. Preserved numbered terminals and identified their polarity in inspection. The drawing now lives in the starter library as nanometer strokes. |
-| `libraries/starter/symbols/capacitor.json`, `libraries/starter/symbols/connector.json` | `src/document.rs`, `src/desktop/canvas.rs` | Added the original generic capacitor and two-pin connector with their names, reference prefixes and default values. Converted their point drawings to nanometer strokes in the starter library. |
+| `libraries/basic-components/symbols/led.json`, `crates/engine/src/schematic.rs` | `src/document.rs`, `src/definitions.rs`, `src/desktop/canvas.rs` | Adapted the original generic LED definition and drawing to the shared placement command. Preserved numbered terminals and identified their polarity in inspection. The drawing now lives in the starter library as nanometer strokes. |
+| `libraries/basic-components/symbols/capacitor.json`, `libraries/basic-components/symbols/connector.json` | `src/document.rs`, `src/desktop/canvas.rs` | Added the original generic capacitor and two-pin connector with their names, reference prefixes and default values. Converted their point drawings to nanometer strokes in the starter library. |
 | `crates/engine/src/lib.rs`, `crates/app/src/schematic_canvas.rs`, `crates/app/src/lib.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's select, rotate, delete and reference/value editing behavior with new engine commands, a format 2 schema and canvas code. No prototype implementation was copied. |
 | `crates/app/src/project_browser.rs`, `crates/chrome/src/workspace.rs`, `crates/app/src/lib.rs` | `docs/sheet-workflows.md`, `docs/desktop-guide.md`, `docs/ui-audit.md` (behavior only) | Followed the prototype's Browser tree (Project › Sheets › sheet › Symbols / Nets), with fold arrows separate from row clicks, sheet-local item lists that select without opening a drawer, and Capture/View ribbon tabs where tab changes never edit the project. The tree, tab strip, row glyphs and pick-to-center are new code; no prototype implementation was copied. Sheet creation and hierarchy now have independent upstream implementations. |
 | `crates/app/src/parts_browser.rs`, `crates/chrome/src/workspace.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's searchable parts browser with Small/Medium/Large/List views, click-to-place and drag-to-sheet placement. The card, thumbnails and drag handling are new code over the existing canvas painter; floating and snapping the panel are not ported. |
 | `crates/engine/src/schematic/wiring.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/netlist.rs` | Adapted explicit terminal references and net traversal to the existing command session. This slice supports direct pin links on one schematic. |
-| `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs`, `libraries/starter/symbols/resistor.json` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. The resistor drawing now lives in the starter library. |
+| `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs`, `libraries/basic-components/symbols/resistor.json` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. The resistor drawing now lives in the starter library. |
 | `crates/app/src/schematic_canvas.rs` | `src/desktop/canvas.rs` | Adapted the schematic grid and resistor zigzag for the shared desktop and browser canvas. Pin endpoints come from the engine and drawing metrics live in `crates/chrome`. |
 | `crates/app/src/schematic_canvas/camera.rs`, `crates/app/src/schematic_canvas.rs` | `src/desktop/canvas.rs`, `src/desktop/page.rs` | Adapted the viewport transform, pointer-anchored zoom, middle-button pan, and fit behavior to Tangency’s canvas and chrome. |
 | `crates/app/src/schematic_canvas/wires.rs`, `crates/app/src/lib.rs` | `src/desktop/canvas.rs`, `src/desktop/mod.rs`, `src/desktop/wire_geometry.rs` | Adapted pin hit testing, the Wire tool shortcut, the cancelable preview, and a symmetric subset of the orthogonal display routes. Completed routes now dispatch through the shared `schematic.draw_wire` command. |
@@ -592,7 +592,7 @@ implementation source or artwork was used.
 
 ## Original starter SMD footprints and NPN symbol
 
-`libraries/starter/footprints/*.json`, `libraries/starter/symbols/npn.json`,
+`libraries/basic-components/footprints/*.json`, `libraries/basic-components/symbols/npn.json`,
 their engine definition/validation/persistence code and physical pad rendering
 are original upstream work under MIT OR Apache-2.0. The regenerated Dual LED
 example pins these definitions through shared engine commands.
@@ -878,7 +878,7 @@ or implementation source are included; unavailable synchronization options are
 not represented as operational controls.
 
 The editable footprint-mapping defaults are original PCBcraft code and library
-data. `libraries/starter/footprint-mapping-defaults.json` records the exact
+data. `libraries/basic-components/footprint-mapping-defaults.json` records the exact
 starter LED symbol revisions 1/2 and footprint revision 4 pairing, using their
 already qualified terminal and pad polarity contracts documented in
 `docs/footprint-library.md`. Generic number matching uses stable terminal/pad IDs;
@@ -1288,3 +1288,23 @@ metrics. PCBcraft retains its original electronics glyphs and accessible picker
 response, with wrapped titles composed inside the existing Craft card. The
 shared toolkit's retained Brand and Interface notice continues to apply; no
 source implementation, asset or dependency was added.
+
+## Native library publication
+
+The filesystem-free draft preparation, published-session binding, reserved external
+library identities and immutable native-folder publication are original PCBcraft
+work for #308 under MIT OR Apache-2.0. They reuse existing native record formats,
+original connector/header fixtures, bounded source validation and verified directory
+handles. New library and Publish forms compose the pinned Craft property-form,
+fields, choices and fixed action footer through `crates/chrome`; authoring actions
+reuse the app's menus, ribbon and workspace host. The existing value-only selector has no creation action, so chrome composes the
+shared dropdown and aligned menu rows for collection selection and New library.
+Save As copies and destination/status presentation follow @travle1's explicit
+workflow clarification. No dependency, external EDA implementation, artwork or
+library asset was introduced.
+
+The former bundled Default collection is now Basic components, with the native
+identity and folder `basic-components`. Its original licensed records and revision
+history are retained. Original compatibility code supplies historical `starter`
+addresses without rewriting project-pinned copies or adding duplicate browsing
+entries; no external library data or dependency was introduced.

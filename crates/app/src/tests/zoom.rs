@@ -10,7 +10,7 @@ fn empty_boards_start_close_and_keep_remembered_navigation() {
     h.run();
     assert_eq!(h.state().views.active.camera.zoom(), 4.0);
     let initial = h.state().session.snapshot().unwrap();
-    h.state_mut().views.active.camera.set_zoom_with_limit(12.0, crate::canvas_camera::MAX_BOARD_ZOOM);
+    h.state_mut().views.active.camera.set_zoom(12.0);
     h.state_mut().views.active.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 4_000_000, y_nm: -2_000_000 });
     let remembered = h.state().views.active.camera.saved_state();
     let app = h.state_mut();

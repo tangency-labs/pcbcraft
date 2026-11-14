@@ -210,7 +210,7 @@ fn occurrence_migration_preserves_components_ratsnest_and_accepted_board_state()
         apply(
             &mut s,
             crate::ASSIGN_FOOTPRINT,
-            json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
+            json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
         );
     }
     apply(&mut s, crate::board::update::INITIALIZE_BASELINE, json!({"board":board}));

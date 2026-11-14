@@ -85,6 +85,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::clipboard_text::OUTLINE
                         | pcbcraft_engine::library::sources::RESOLVE_PART
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
+                        | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())

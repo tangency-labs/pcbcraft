@@ -117,7 +117,7 @@ mod live {
     use crate::{
         Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
-        canvas_camera::MAX_BOARD_ZOOM,
+        canvas_camera::MAX_ZOOM,
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -380,7 +380,7 @@ mod live {
                     name: "action",
                     summary: "Source operation",
                     required: true,
-                    kind: Kind::Choice(&["add", "refresh", "relocate", "remove", "delete"]),
+                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete"]),
                 },
                 Param { name: "source", summary: "Registration ID, defaults to selected source", required: false, kind: Kind::Name },
             ],
@@ -388,11 +388,41 @@ mod live {
         WindowCommand {
             id: "app.library_browse",
             title: "Browse Library",
-            summary: "Change a Library pane's source, Type, search or selected item without changing project revision/history. Inspect its selection through inspect_editor.",
+            summary: "Browse registered sources or exact project pins without changing project revision/history. Inspect its selection through inspect_editor.",
             params: &[
                 VIEW,
+                Param {
+                    name: "scope",
+                    summary: "Browse sources or the current project's pinned definitions",
+                    required: false,
+                    kind: Kind::Choice(&["sources", "project"]),
+                },
+                Param {
+                    name: "library",
+                    summary: "Project collection ID, project-only, or empty for all; requires project scope",
+                    required: false,
+                    kind: Kind::Query,
+                },
                 Param { name: "source", summary: "Registration ID", required: false, kind: Kind::Name },
+                Param {
+                    name: "tree_action",
+                    summary: "Expand or collapse all Browser branches without changing selection",
+                    required: false,
+                    kind: Kind::Choice(&["expand_all", "collapse_all"]),
+                },
+                Param {
+                    name: "browser_width",
+                    summary: "Requested Browser width in logical points; compact hosts retain it for wider layouts",
+                    required: false,
+                    kind: Kind::Integer { min: 180, max: 640, step: 1 },
+                },
                 Param { name: "query", summary: "Search text; empty clears it", required: false, kind: Kind::Query },
+                Param {
+                    name: "preview_width",
+                    summary: "Preferred docked Preview column width in logical points",
+                    required: false,
+                    kind: Kind::Integer { min: 240, max: 640, step: 1 },
+                },
                 Param {
                     name: "type",
                     summary: "0 all, 1 symbols, 2 footprints, 3 generic parts, 4 orderable parts",
@@ -400,6 +430,12 @@ mod live {
                     kind: Kind::Integer { min: 0, max: 4, step: 1 },
                 },
                 Param { name: "item", summary: "Item ID within selected source and Type", required: false, kind: Kind::Name },
+                Param {
+                    name: "definition_revision",
+                    summary: "Exact published revision; requires item, defaults to latest",
+                    required: false,
+                    kind: Kind::Integer { min: 1, max: u32::MAX as i64, step: 1 },
+                },
                 Param {
                     name: "preview",
                     summary: "Independent read-only geometry camera",
@@ -417,6 +453,43 @@ mod live {
             title: "New Library Item",
             summary: "Create an independent symbol or footprint definition workspace without editing project instances.",
             params: &[Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_catalog_edit",
+            title: "Open Published Library Item",
+            summary: "Edit the exact selected symbol or footprint in a Parts Library pane; copy explicitly creates a derivative identity.",
+            params: &[
+                VIEW,
+                Param { name: "copy", summary: "Create a copy instead of retaining the published address", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_publish",
+            title: "Publish Library Item",
+            summary: "Publish a captured editor draft to a registered writable native source. No arbitrary filesystem paths; host confirmation binds its identity.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current authoring document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "source", summary: "Registered writable destination source ID", required: true, kind: Kind::Name },
+                Param {
+                    name: "allow_older",
+                    summary: "Confirm publishing an older edit may omit intervening changes",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+                Param {
+                    name: "copy",
+                    summary: "Publish under a new item identity; a different library always creates a copy",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_copy",
+            title: "Copy Library Draft",
+            summary: "Create a derivative draft under a fresh item identity using the same editor Edit copy action.",
+            params: &[Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument }],
         },
         WindowCommand {
             id: "app.library_fork_selected",
@@ -469,7 +542,12 @@ mod live {
                 Param { name: "ribbon_tab", summary: "Authoring ribbon tab", required: false, kind: Kind::Choice(&["draw", "library", "view"]) },
                 Param { name: "browser", summary: "Whether the definition Browser is visible", required: false, kind: Kind::Bool },
                 Param { name: "properties", summary: "Whether compact Properties is visible", required: false, kind: Kind::Bool },
-                Param { name: "zoom_percent", summary: "Camera zoom percentage", required: false, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param {
+                    name: "zoom_percent",
+                    summary: "Definition detail zoom percentage",
+                    required: false,
+                    kind: Kind::Integer { min: 1, max: (MAX_ZOOM * 100.) as i64, step: 1 },
+                },
                 Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
                 Param {
                     name: "grid_spacing_nm",
@@ -573,14 +651,14 @@ mod live {
         WindowCommand {
             id: "view.zoom",
             title: "Zoom",
-            summary: "Zoom about the view center. The limit is 6400% in PCB layout and 800% in the schematic.",
+            summary: "Zoom about the view center within the shared editor range.",
             params: &[
                 VIEW,
                 Param {
                     name: "zoom_percent",
                     summary: "The zoom in percent",
                     required: true,
-                    kind: Kind::Integer { min: 1, max: (MAX_BOARD_ZOOM * 100.0) as i64, step: 1 },
+                    kind: Kind::Integer { min: 1, max: (MAX_ZOOM * 100.0) as i64, step: 1 },
                 },
             ],
         },
@@ -989,7 +1067,7 @@ mod live {
                     "workspace": if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
                     "definition":view.definition,
                     "library_view":app.inspect_library_view(id),
-                    "library_workspace":view.library.as_ref().map(|state|state.inspect()),
+                    "library_workspace":view.library.as_ref().map(|state|app.inspect_library_workspace(state)),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
@@ -1032,6 +1110,7 @@ mod live {
             "message": app.message,
             "windows": windows,
             "library_editors":app.library_editors.inspect(),
+            "library_destinations":app.inspect_library_destinations(),
             "views": views,
             "arrangements": {
                 "active": app.arrangements.active(),
@@ -1125,7 +1204,7 @@ mod live {
                 self.bind_editor_host(self.views.main);
                 return result;
             }
-            if matches!(id, "app.library_source" | "app.library_browse") {
+            if matches!(id, "app.library_source" | "app.library_browse" | "app.library_catalog_edit") {
                 return self.library_workspace_command(ctx, id, params);
             }
             if id.starts_with("app.library_") {
@@ -1250,12 +1329,7 @@ mod live {
                 ("view.zoom", Some((view, _)), _) => {
                     let percent = params["zoom_percent"].as_u64().unwrap_or(100);
                     if let Some(view) = self.views.view_mut(view) {
-                        let max_zoom = view.workspace.max_zoom();
-                        let max_percent = (max_zoom * 100.0) as u64;
-                        if percent > max_percent {
-                            return Err(format!("`zoom_percent` must be at most {max_percent} for this workspace."));
-                        }
-                        view.camera.set_zoom_with_limit(percent as f32 / 100.0, max_zoom);
+                        view.camera.set_zoom(percent as f32 / 100.0);
                     }
                 }
                 ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,

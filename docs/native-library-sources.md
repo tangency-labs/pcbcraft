@@ -7,9 +7,21 @@ Native footprints are available in the assignment chooser, and manufacturer
 records can be selected with their exact generic part and package. Registering, refreshing or removing a source
 does not change the project, its revision, dirty state or undo history.
 
-Open the **Library** workspace from the workspace picker or **Libraries → Sources**.
-The Browser groups loaded sources under **Built-in** and **Libraries**, with
+Open **Parts Library** from the workspace picker or **Libraries → Sources**.
+The Browser separates **Project**, **Built-in** and **Sources**, with
 Symbols, Footprints, Generic parts and Orderable parts under each library.
+Project shows the exact definitions saved with the open project, grouped by their
+original library, with deliberate local variants under **Project-only**. Its list
+retains every pinned revision and shows usage and source status. Offline or
+conflicting sources do not replace the project preview. **Edit copy** opens the
+pinned symbol or footprint as an independent draft; reviewed application to
+existing instances remains separate work. Refresh, Relocate, Remove and Delete
+operate on source registrations, not Project rows.
+Library folders start collapsed, and item types with no entries are hidden.
+The Browser header menu offers **Expand all** and **Collapse all**. Drag the
+Browser's right edge or the divider beside docked Preview to change their
+widths; both use the shared splitter and support Escape cancellation. Compact hosts use the full pane and
+retain that width for wider layouts. The tree does not scroll horizontally.
 The central list has search and a **Type** choice. Generic parts expand to their
 orderable records; Orderable parts shows the same records as a flat table.
 Select an item to inspect its native drawing or summary, license, available
@@ -86,6 +98,59 @@ Personal source IDs and machine paths are not copied into project documents.
 Previously saved symbols without attribution retain their original encoding.
 Opening a project never searches or refreshes a library to replace its geometry.
 
+## Edit and publish native items
+
+On desktop, **New → Library** creates a native library in an unused folder and
+registers it after its manifest is durably written. Choose its name, portable
+library ID and license before selecting the folder. The `user` placeholder,
+`project-` IDs and bundled identities cannot be publishing destinations. External
+source manifests claiming `project-` IDs are refused; existing project-pinned
+records keep their addresses.
+
+Select a symbol or footprint in a writable library and choose **Edit** to open
+that exact revision in its existing editor. **Edit copy** creates a derivative
+under a fresh item identity and is also available for read-only libraries.
+**New → Symbol / Footprint** starts an independent draft. Generic-part authoring,
+comparison, export and Git/remote connections remain separate work.
+Both definition editors use the shared editor zoom range up to 102400%, with the
+same pointer anchoring and pan controls as PCB layout. Fit uses the available
+canvas around panels without magnifying its screen margin with tiny artwork.
+
+In either editor, **Library → Publish…** (or Ctrl/Cmd+S) chooses a writable
+registered native folder. The first successful publication binds the editor to
+that library and item; later changed publications retain its identity and add
+immutable revisions. A known newer revision requires confirmation because the
+older draft may omit intervening changes; publishing does not merge them.
+A reopened draft without a recorded published base also requires confirmation
+when the item already exists. The editor status bar shows its collection and
+publication state. New items inherit the writable collection selected in Parts
+Library, and their Publish dialog can change that suggestion.
+
+Choose another collection in Publish to use **Publish copy**, or select
+**Save as → New item** to make a derivative within the same collection. The
+original stays unchanged, and the editor continues on the copy after a successful
+write. **New library…** is in the collection selector; creation returns to Publish
+with that collection selected. Cancelling or failing a copy leaves the original
+editor identity and all published records intact. The separate **Edit copy**
+action remains available when an independent draft workspace is preferred.
+Symbols inherit the manifest license, so their recorded license must match the
+destination; footprint records retain their own license.
+
+Preparation validates captured geometry and returns native documents without
+confirming a save. The host rechecks the manifest and latest disk revision before
+publishing complete, synced bytes under an unused filename. Write failures leave
+the draft and old revisions intact. A successful write followed by a failed
+refresh is reported separately and does not republish the record. If durable
+confirmation is uncertain, Publish verifies or resumes that same captured
+revision before allowing another publication. Newer edits remain unsaved.
+Publication and source refresh never change placed definitions or project history.
+
+**Save Library Copy** saves an unfinished `.pcitem.json` draft outside the catalog;
+it does not publish it. Published records have no companion editor file. Opening
+a published item reconstructs repeatable session primitive IDs in native record
+order while preserving terminal, pad and unit IDs. Browser editing and downloads
+remain available; publishing and native library creation are desktop-only.
+
 ## Shared commands
 
 GUI source loading and MCP use the same validated catalog transaction. Native
@@ -116,7 +181,7 @@ reader. Project commands and editing remain independent of the reader.
 
 Native part/category definitions and exact dependency resolution are described
 in [part-schema.md](part-schema.md). Native part selection pins its complete dependency closure into project
-instances. Project source tables, library authoring tools, Git/providers and
+instances. Reviewed project updates, additional library authoring tools, Git/providers and
 external-format imports remain separate work. The native source, assignment and
 offline handoff behavior is the bounded library MVP in #92.
 
@@ -158,5 +223,26 @@ and `placement: "here"`, `"beside"` or `"window"`. `inspect_editor` reports
 Type, query and selected exact key. `app.library_browse` changes those view-only
 choices; `type` is 0 All, 1 Symbol, 2 Footprint, 3 Generic part, 4 Orderable part.
 `app.library_source` uses the same source actions as the ribbon: `add`, `refresh`,
-`relocate`, `remove`, `delete`. Add/relocate open host pickers, and Delete retains
+`relocate`, `remove`, `delete`, and desktop `new` (a metadata form and folder picker). Add/relocate open host pickers, and Delete retains
 the ordinary confirmation. Source folder I/O never runs on the editor thread.
+
+`app.library_catalog_edit` addresses a Parts Library `view` and opens its selected
+exact symbol/footprint; `copy: true` creates a new identity. `app.library_browse`
+accepts `definition_revision` with `item` to select an older revision explicitly.
+`app.library_publish` takes `document`, `expected_revision`, a registered writable
+`source`, and optional `allow_older` or `copy`. A different destination library
+creates a new item identity; `copy: true` does the same within one library. These live commands share the GUI handlers.
+`app.library_copy` creates an independent copy of an open draft.
+
+Headless or live MCP can call `library.prepare_publication` with the captured
+`item` envelope, transported destination `documents` (including `library.json`),
+optional `base_revision`, `allow_older` and `copy`. It returns an address, native document
+text and `saved: false`, including with `inspect: false`. It accepts no filesystem
+path and neither writes nor binds an editor. Destination resolution, durable
+publication and catalog refresh remain host responsibilities.
+
+`inspect_editor.library_destinations` reports writable host source IDs, and
+`library_editors.publication` reports in-flight or unconfirmed save ownership
+without filesystem paths. Later live edits remain unsaved when a captured
+publication finishes. Save As changes the edited identity and invalidates
+property drafts or gestures captured for the original, without discarding them.

@@ -1,41 +1,41 @@
 {
   "format": "pcbcraft-footprint/1",
-  "library": "starter",
-  "id": "capacitor-0402",
+  "library": "basic-components",
+  "id": "resistor-0603",
   "revision": 4,
-  "name": "Capacitor 0402 (1005 metric)",
+  "name": "Resistor 0603 (1608 metric)",
   "license": "MIT OR Apache-2.0",
   "source": {
     "kind": "original",
-    "reference": "https://ele.kyocera.com/en/product/capacitor/ceramic/mlcc-handling/mounting-01/",
-    "locator": "1005 / EIA 0402, nominal L=1.0 mm; a=0.4, b=0.4, c=0.5 mm; original rounded corners, radius 25% of shorter pad dimension; original silk centerlines and pcbcraft-technical-1 reference lettering"
+    "reference": "https://www.vishay.com/docs/20035/dcrcwe3.pdf",
+    "locator": "20035, 14-Apr-2026, p. 11, reflow dimensions; original rounded corners, radius 25% of shorter pad dimension; original silk centerlines and pcbcraft-technical-1 reference lettering"
   },
   "pads": [
     {
       "number": "1",
       "center": {
-        "x_nm": -400000,
+        "x_nm": -750000,
         "y_nm": 0
       },
-      "width_nm": 400000,
-      "height_nm": 500000,
+      "width_nm": 750000,
+      "height_nm": 1000000,
       "rotation": 0,
       "shape": "rounded_rectangle",
       "copper": "component_side",
-      "corner_radius_nm": 100000
+      "corner_radius_nm": 187500
     },
     {
       "number": "2",
       "center": {
-        "x_nm": 400000,
+        "x_nm": 750000,
         "y_nm": 0
       },
-      "width_nm": 400000,
-      "height_nm": 500000,
+      "width_nm": 750000,
+      "height_nm": 1000000,
       "rotation": 0,
       "shape": "rounded_rectangle",
       "copper": "component_side",
-      "corner_radius_nm": 100000
+      "corner_radius_nm": 187500
     }
   ],
   "graphics": [
@@ -45,8 +45,8 @@
         "x_nm": 0,
         "y_nm": 0
       },
-      "width_nm": 1000000,
-      "height_nm": 500000,
+      "width_nm": 1550000,
+      "height_nm": 850000,
       "rotation": 0
     },
     {
@@ -55,8 +55,8 @@
         "x_nm": 0,
         "y_nm": 0
       },
-      "width_nm": 1700000,
-      "height_nm": 1000000,
+      "width_nm": 2750000,
+      "height_nm": 1500000,
       "rotation": 0
     }
   ],
@@ -66,11 +66,11 @@
       "points": [
         {
           "x_nm": -400000,
-          "y_nm": -600000
+          "y_nm": -850000
         },
         {
           "x_nm": 400000,
-          "y_nm": -600000
+          "y_nm": -850000
         }
       ],
       "closed": false
@@ -79,11 +79,11 @@
       "points": [
         {
           "x_nm": -400000,
-          "y_nm": 600000
+          "y_nm": 850000
         },
         {
           "x_nm": 400000,
-          "y_nm": 600000
+          "y_nm": 850000
         }
       ],
       "closed": false

@@ -116,7 +116,7 @@ the same `VCC` net name, which can be changed before placement.
    to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
    to the preserved wire ends.
 2. Press **A** to open the **Parts Catalog** and focus search. The bundled
-   **Default** and **Power** libraries load through the same native source path
+   **Basic components** and **Power** libraries load through the same native source path
    as added libraries. Sources marks them **Built-in** and keeps their registrations
    read-only; external sources remain removable. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose
@@ -653,6 +653,8 @@ Library and View ribbon tabs, canvas, Browser and Properties. Switch back to
 and pending fields remain available when you return. Select a primitive
 on the canvas or in Browser, edit its Properties and choose **Apply**.
 **More properties…** expands the same draft; lengths accept mm, mil or inches.
+All four editors share wheel/pinch zoom up to 102400%; **View → Fit**
+frames the definition in the canvas clear of the panels.
 The picker’s split and window icons open a definition beside the current pane
 or in its own native window. Within either editor, **View → Split** creates a
 second pane, and **Detach / Dock** moves the focused pane between windows.
@@ -663,7 +665,20 @@ For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
 
-On desktop, **Save Library Copy** chooses a new `.pcitem.json` filename; an
+On desktop, **Parts Library → New → Library** creates a writable native folder.
+Create a symbol or footprint and publish it to that collection first, or choose an
+existing populated writable collection. Select a published item and choose **Edit**, then change its
+geometry in the matching editor. **Library → Publish…** (Ctrl/Cmd+S) adds an
+immutable revision of the same item. New drafts inherit the selected writable collection and bind to it after their
+first successful publication. Publish shows the destination and offers **New
+library…** in its selector. Choosing another collection switches to **Publish
+copy**; **Save as → New item** makes a derivative in the same collection.
+The original stays unchanged, and the editor follows the new copy after saving.
+**Edit copy** also opens an independent draft under a new identity;
+publishing an older base requires confirmation and does not merge newer changes.
+Publishing makes the item discoverable without updating placed project copies.
+
+**Save Library Copy** keeps unfinished work outside the catalog and chooses a new `.pcitem.json` filename; an
 existing file is never overwritten. Reopen it through the editor’s **Library → Open**, or
 through **File → Open Library Item…** inside a definition editor.
 The browser downloads the same editable format and retains its leave warning.

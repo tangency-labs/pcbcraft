@@ -102,7 +102,7 @@ fn initial_update_apply_undo_reopen_and_noop_use_the_real_dialog() {
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
     open(&mut h);
-    h.get_by_label("Add footprint R1: starter / resistor-0402 · r4.");
+    h.get_by_label("Add footprint R1: basic-components / resistor-0402 · r4.");
     assert_eq!(h.state().session.revision(), revision);
     click(&mut h, "Update PCB");
     assert!(matches!(h.state().dialog, Dialog::None));
@@ -142,7 +142,7 @@ fn package_blocker_chooser_returns_to_review_without_partial_apply() {
     h.get_by_label("Total warnings: 0, errors: 1.");
     assert!(h.get_by_label("Update PCB").accesskit_node().is_disabled());
     click(&mut h, "Assign footprint to R1");
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     // Equal numbers are preselected, but a manually invalid map must remain an atomic refusal.
     click(&mut h, "Terminal 1");
     click(&mut h, "Pad 2");
@@ -223,7 +223,7 @@ fn placed_package_choice_waits_for_update_and_preserves_layout() {
     let component = h.state().session.project().unwrap().components().next().unwrap().id();
     h.state_mut().begin_footprint_assignment(Some(component));
     h.run();
-    click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0603 (1608 metric) · r4");
     click(&mut h, "Terminal 1");
     click(&mut h, "Pad 2");
     click(&mut h, "Terminal 2");
@@ -233,8 +233,8 @@ fn placed_package_choice_waits_for_update_and_preserves_layout() {
     assert_eq!(h.state().session.inspect()["project"]["board"]["footprints"][0]["definition"], original["definition"]);
     click(&mut h, "Close");
     open(&mut h);
-    h.get_by_label("Replace footprint for R1: starter / resistor-0603 · r4.");
-    h.get_by_label("Previous footprint for R1: starter / resistor-0402 · r4. Previous mapping: Pin 1 → pad 1, Pin 2 → pad 2.");
+    h.get_by_label("Replace footprint for R1: basic-components / resistor-0603 · r4.");
+    h.get_by_label("Previous footprint for R1: basic-components / resistor-0402 · r4. Previous mapping: Pin 1 → pad 1, Pin 2 → pad 2.");
     click(&mut h, "Update PCB");
     assert!(matches!(h.state().dialog, Dialog::None));
     let replaced = h.state().session.inspect()["project"]["board"]["footprints"][0].clone();
@@ -256,7 +256,7 @@ fn package_change_from_applied_result_requires_review_before_placement() {
     let component = h.state().session.project().unwrap().components().next().unwrap().id();
     h.state_mut().begin_footprint_assignment(Some(component));
     h.run();
-    click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0603 (1608 metric) · r4");
     click(&mut h, "Assign");
     assert!(h.get_by_label("Place on board").accesskit_node().is_disabled());
     click(&mut h, "Close");
@@ -359,7 +359,7 @@ fn legacy_assignment_handoff_preserves_initialization_phase() {
     open(&mut h);
     assert!(h.get_by_label("Use current state").accesskit_node().is_disabled());
     click(&mut h, "Assign footprint to R2");
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Match numbers");
     click(&mut h, "Assign");
     assert!(!h.get_by_label("Use current state").accesskit_node().is_disabled());
@@ -395,7 +395,7 @@ fn legacy_initialization_scrolls_to_last_missing_assignment() {
     );
     h.get_by_label("Assign footprint to R21").click();
     h.run();
-    h.get_by_label("starter / Resistor 0402 (1005 metric) · r4");
+    h.get_by_label("basic-components / Resistor 0402 (1005 metric) · r4");
 }
 
 /// Reviewed removal remains visible, but retained excluded package intent is never a placement handoff.
@@ -533,7 +533,7 @@ fn named_terminals_receive_editable_defaults_including_known_led_polarity() {
     let before = h.state().session.snapshot().unwrap();
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
     h.run();
-    click(&mut h, "starter / Capacitor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Capacitor 0402 (1005 metric) · r4");
     let anode = h.get_by_label("Terminal 1 · Anode").rect();
     let cathode = h.get_by_label("Terminal 2 · Cathode").rect();
     assert_eq!(anode.x_range(), cathode.x_range(), "Named terminals share one pad-selector column");
@@ -542,7 +542,7 @@ fn named_terminals_receive_editable_defaults_including_known_led_polarity() {
     click(&mut h, "Assign");
     let assignment = h.state().session.project().unwrap().footprint_assignments().into_iter().find(|a| a["component"] == component).unwrap();
     assert_eq!(assignment["mapping"], json!({"1":"1","2":"2"}));
-    click(&mut h, "starter / LED 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / LED 0402 (1005 metric) · r4");
     click(&mut h, "Assign");
     let assignment = h.state().session.project().unwrap().footprint_assignments().into_iter().find(|a| a["component"] == component).unwrap();
     assert_eq!(assignment["mapping"], json!({"1":"2","2":"1"}));
@@ -555,8 +555,8 @@ fn named_terminals_receive_editable_defaults_including_known_led_polarity() {
     click(&mut h, "Close");
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
     h.run();
-    click(&mut h, "starter / Capacitor 0402 (1005 metric) · r4");
-    click(&mut h, "starter / LED 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Capacitor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / LED 0402 (1005 metric) · r4");
     click(&mut h, "Assign");
     let assignment = h.state().session.project().unwrap().footprint_assignments().into_iter().find(|a| a["component"] == component).unwrap();
     assert_eq!(assignment["mapping"], json!({"1":"1","2":"2"}), "A saved custom mapping takes precedence over the library default");

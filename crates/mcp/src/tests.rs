@@ -89,6 +89,30 @@ fn server() -> Server {
     Server::new(Box::new(Headless::default()))
 }
 
+/// Native publication preparation returns transported documents even with inspection disabled;
+/// it never accepts a filesystem destination or reports a successful durable save.
+#[test]
+fn publication_preparation_mcp_returns_documents_without_paths_or_project_changes() {
+    let mut s = server();
+    let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
+    let manifest = pcbcraft_engine::authoring::publishing::new_library("workshop", "Workshop", &item.license).unwrap();
+    let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let params = json!({"item":item,"documents":{"library.json":manifest}});
+    let result = body(&call(&mut s, "execute", json!({"command":"library.prepare_publication","params":params,"inspect":false})));
+    assert_eq!(result["saved"], false);
+    assert_eq!(result["address"]["library"], "workshop");
+    assert_eq!(result["documents"].as_object().unwrap().len(), 1);
+    let mut copy_params = params.clone();
+    copy_params["copy"] = json!(true);
+    let copied = body(&call(&mut s, "execute", json!({"command":"library.prepare_publication","params":copy_params,"inspect":false})));
+    assert_eq!(copied["copy"], true);
+    assert_ne!(copied["address"]["id"], result["address"]["id"]);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), initial);
+    let mut invalid = params;
+    invalid["path"] = json!("/tmp/forbidden-destination");
+    assert_eq!(call(&mut s, "execute", json!({"command":"library.prepare_publication","params":invalid}))["isError"], true);
+}
+
 fn rpc(server: &mut Server, method: &str, params: Value) -> Value {
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
     let reply = server.handle_line(&line).unwrap();
@@ -468,7 +492,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 6);
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 7);
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);

@@ -40,7 +40,7 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
         (schema["$id"], Resource.from_contents(schema)) for schema in schemas
     )
     validators = [Draft202012Validator(schema, registry=registry) for schema in schemas]
-    bundled = sorted((root / "libraries/starter/footprints").glob("*.json"))
+    bundled = sorted((root / "libraries/basic-components/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")
     for validator, paths in zip(validators[:2], [bundled + definitions, placements], strict=True):

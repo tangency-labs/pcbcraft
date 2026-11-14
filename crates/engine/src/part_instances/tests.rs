@@ -10,6 +10,51 @@ use serde_json::json;
 
 mod retained;
 
+/// Inventory mirrors native Save's complete pinned closure and remains authoritative offline.
+#[test]
+fn project_inventory_matches_native_dependency_closure_and_deduplicates_uses() {
+    use crate::library::sources::inventory::Inventory;
+    for board in [false, true] {
+        let mut session = fixture(board);
+        for x in [0, 5_000_000] {
+            let mut params = placement(&session, true);
+            params["x_nm"] = json!(x);
+            apply(&mut session, PLACE_PART, params);
+        }
+        let before = session.snapshot().unwrap();
+        let inspect = session.inspect();
+        let inventory = Inventory::from_project(&before).unwrap();
+        assert_eq!(inventory.entries().count(), 5);
+        assert!(inventory.entries().all(|entry| entry.used_by.len() == 2));
+        assert!(inventory.entries().all(|entry| inventory.status(&entry.item, session.libraries()) == "Matches source"));
+        let documents = encode_documents(before.clone()).unwrap();
+        let paths: std::collections::BTreeSet<_> = inventory
+            .entries()
+            .map(|entry| {
+                let key = &entry.item.key;
+                let kind = match key.kind {
+                    sources::Kind::Symbol => "symbols",
+                    sources::Kind::Footprint => "footprints",
+                    sources::Kind::Part => "parts",
+                    sources::Kind::Category => "categories",
+                    sources::Kind::ManufacturerPart => "manufacturer-parts",
+                };
+                format!("library/{kind}/{}/{}.r{}.json", key.library, key.id, key.revision)
+            })
+            .collect();
+        assert_eq!(paths, documents.keys().filter(|path| path.starts_with("library/")).cloned().collect());
+        session.execute(sources::REMOVE, &json!({"source":"native-parts"})).unwrap();
+        assert!(inventory.entries().all(|entry| inventory.status(&entry.item, session.libraries()) == "Source unavailable"));
+        let reopened = Inventory::from_project(&decode_documents(&documents).unwrap()).unwrap();
+        assert_eq!(
+            reopened.entries().map(|entry| entry.item.inspect()).collect::<Vec<_>>(),
+            inventory.entries().map(|entry| entry.item.inspect()).collect::<Vec<_>>()
+        );
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(inspect["project"], session.inspect()["project"]);
+    }
+}
+
 /// Transport the same original native source data that folder and browser bundle loading use.
 fn documents() -> sources::Documents {
     [
@@ -211,7 +256,7 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({}));
     let project = session.snapshot().unwrap();
     let baseline = project.board.baseline.as_ref().unwrap();
-    let definition = project.footprint_catalog().into_iter().find(|d| d.id == "resistor-0603").unwrap();
+    let definition = project.footprint_catalog().into_iter().find(|d| d.library == "parts-demo" && d.id == "resistor-0603").unwrap();
     assert_eq!(project.default_footprint_mapping(&component, &definition).unwrap(), project.board.footprints()[0].mapping.clone().unwrap());
     assert_eq!(baseline.format, "pcbcraft-board-baseline/2");
     let ratsnest = project.board_view(project.board_target().unwrap()).unwrap().ratsnest().unwrap();

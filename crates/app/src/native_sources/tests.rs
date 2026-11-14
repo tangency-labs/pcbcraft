@@ -12,7 +12,8 @@ use pcbcraft_engine::{
 /// Original native symbol data uses a distinct manifest identity and human-readable search name.
 fn documents() -> sources::Documents {
     let mut symbol: serde_json::Value =
-        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor-v2.json"))).unwrap();
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components/symbols/resistor-v2.json")))
+            .unwrap();
     symbol["name"] = json!("Workshop resistor");
     sources::Documents::from([
         ("library.json".into(), json!({"format":"pcbcraft-library/1","id":"workshop","name":"Workshop","license":"MIT OR Apache-2.0"}).to_string()),

@@ -1,5 +1,9 @@
 //! Library workspace adapters over the pinned Craft tree, table and panel primitives.
+mod browser;
+mod column;
 use crate::{Tokens, controls};
+pub use browser::Browser;
+pub use column::ColumnWidth;
 use egui::{Align, Layout, Rect, RichText, Ui, UiBuilder, pos2, vec2};
 use solidcraft_ui_kit as kit;
 
@@ -11,6 +15,13 @@ pub enum Region {
     Preview,
 }
 
+/// Tree actions change only host-owned navigation, never model or source state.
+#[derive(Clone, Copy)]
+pub enum TreeAction {
+    ExpandAll,
+    CollapseAll,
+}
+
 /// Keep three useful columns on wide hosts and expose the same regions through shared choices
 /// on compact hosts. Every region clips and scrolls independently of the ribbon and pane header.
 pub fn workspace(
@@ -18,12 +29,16 @@ pub fn workspace(
     compact: &mut usize,
     preview: &mut crate::workspace::panels::Panel,
     collapsed: &mut bool,
-    browser_collapsed: &mut bool,
+    browser: &mut Browser,
+    preview_width: &mut ColumnWidth,
     mut draw: impl FnMut(&mut Ui, Region),
-) {
+) -> Option<TreeAction> {
+    let mut action = None;
     let t = Tokens::get();
     let mut area = ui.available_rect_before_wrap().shrink(t.space_8);
     if area.width() < 1050.0 {
+        browser.cancel_resize();
+        preview_width.cancel_resize();
         kit::segmented(ui, compact, &["Browser", "Items", "Preview"], kit::Segments { small: true, ..Default::default() });
         area.min.y = ui.cursor().min.y + t.space_8;
         let region = [Region::Browser, Region::Items, Region::Preview][(*compact).min(2)];
@@ -35,26 +50,46 @@ pub fn workspace(
                 preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, area, *collapsed, |ui| draw(ui, region));
             *collapsed ^= toggle;
         } else {
-            card(ui, area, region, if matches!(region, Region::Browser) { Some(browser_collapsed) } else { None }, &mut draw);
+            action = card(ui, area, region, if matches!(region, Region::Browser) { Some(&mut browser.collapsed) } else { None }, &mut draw);
         }
     } else {
         let gap = t.space_12;
-        let left = 230.0_f32.min(area.width() * 0.2);
-        let right = (area.width() * 0.29).clamp(300.0, 440.0);
-        let browser = Rect::from_min_max(area.min, pos2(area.left() + left, area.bottom()));
+        let default_right = (area.width() * 0.29).clamp(300.0, 440.0);
+        let mut right = preview_width.width(default_right).clamp(240.0, (area.width() - 180.0 - gap * 2.0 - 360.0).clamp(240.0, 640.0));
         let floating = preview.position() == crate::workspace::panels::Position::Floating;
+        let left = browser.resize(ui, area, area.width() - if floating { 0.0 } else { right + gap } - gap - 360.0);
+        let browser_rect = Rect::from_min_max(area.min, pos2(area.left() + left, area.bottom()));
         let on_left = preview.position() == crate::workspace::panels::Position::Left;
+        if floating {
+            preview_width.cancel_resize();
+        } else {
+            let x = if on_left { browser_rect.right() + gap + right + gap / 2.0 } else { area.right() - right - gap / 2.0 };
+            let bounds = Rect::from_min_max(pos2(x - t.space_6 / 2.0, area.top()), pos2(x + t.space_6 / 2.0, area.bottom()));
+            right = preview_width.resize(
+                ui,
+                ui.make_persistent_id("library_preview_width"),
+                default_right,
+                column::Sash {
+                    bounds,
+                    name: "Resize Preview column width",
+                    min: 240.0,
+                    max: (area.width() - left - gap * 2.0 - 360.0).clamp(240.0, 640.0),
+                    leading: !on_left,
+                },
+            );
+        }
         let preview_rect = if on_left {
-            Rect::from_min_max(pos2(browser.right() + gap, area.top()), pos2(browser.right() + gap + right, area.bottom()))
+            Rect::from_min_max(pos2(browser_rect.right() + gap, area.top()), pos2(browser_rect.right() + gap + right, area.bottom()))
         } else {
             Rect::from_min_max(pos2(area.right() - right, area.top()), area.max)
         };
         let items = Rect::from_min_max(
-            pos2(if on_left && !floating { preview_rect.right() + gap } else { browser.right() + gap }, area.top()),
+            pos2(if on_left && !floating { preview_rect.right() + gap } else { browser_rect.right() + gap }, area.top()),
             pos2(if !on_left && !floating { preview_rect.left() - gap } else { area.right() }, area.bottom()),
         );
-        for (rect, region) in [(browser, Region::Browser), (items, Region::Items)] {
-            card(ui, rect, region, if matches!(region, Region::Browser) { Some(browser_collapsed) } else { None }, &mut draw);
+        for (rect, region) in [(browser_rect, Region::Browser), (items, Region::Items)] {
+            action =
+                card(ui, rect, region, if matches!(region, Region::Browser) { Some(&mut browser.collapsed) } else { None }, &mut draw).or(action);
         }
         let (_, toggle) =
             preview.show_in_slot(ui, ui.scope_id().with("library_preview"), "Preview", area, preview_rect.shrink(1.0), *collapsed, |ui| {
@@ -63,10 +98,12 @@ pub fn workspace(
         *collapsed ^= toggle;
     }
     ui.advance_cursor_after_rect(area);
+    action
 }
 
 /// A card uses the same toolkit surface and font roles as the existing Browser and Properties.
-fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool>, draw: &mut impl FnMut(&mut Ui, Region)) {
+fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool>, draw: &mut impl FnMut(&mut Ui, Region)) -> Option<TreeAction> {
+    let mut action = None;
     let id = match region {
         Region::Browser => "library_browser",
         Region::Items => "library_items",
@@ -91,6 +128,16 @@ fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool
                     {
                         *collapsed = !*collapsed;
                     }
+                    let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_24, Tokens::get().space_24));
+                    let more = kit::button_at(ui, "library_browser_actions", rect, "…", kit::Button::Ghost).accessible_name("Browser tree actions");
+                    egui::Popup::menu(&more).frame(crate::menu::frame()).show(|ui| {
+                        for (label, choice) in [("Expand all", TreeAction::ExpandAll), ("Collapse all", TreeAction::CollapseAll)] {
+                            if crate::MenuItem::new(label).show(ui) {
+                                action = Some(choice);
+                                ui.close();
+                            }
+                        }
+                    });
                 });
             });
         } else if matches!(region, Region::Preview) {
@@ -101,6 +148,7 @@ fn card(ui: &mut Ui, rect: Rect, region: Region, mut collapsed: Option<&mut bool
             draw(ui, region);
         }
     });
+    action
 }
 
 /// Host-owned Browser metadata, with a qualified icon and an optional accessible path.

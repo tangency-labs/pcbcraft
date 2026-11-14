@@ -6,6 +6,8 @@ use egui_kittest::{
 };
 use pcbcraft_engine::library::sources;
 use std::sync::Arc;
+mod browser;
+mod project;
 
 /// Real native records exercise browsing independently of starter identities.
 #[allow(clippy::unwrap_used)]
@@ -17,6 +19,10 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
     app.place_library_workspace(&egui::Context::default(), Placement::Here).unwrap();
     let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(width, 950.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
     h.run();
+    // Keep external rows visible as the tree gains a separate Project branch.
+    click(&mut h, "Built-in");
+    h.key_press(egui::Key::ArrowLeft);
+    h.run();
     h
 }
 
@@ -25,6 +31,8 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
 fn browse_select_expand_and_flat_view_preserve_project_state() {
     for width in [1800., 620.] {
         let mut h = fixture(width);
+        h.state_mut().views.active.library.as_mut().unwrap().opened.insert("example-parts".into());
+        h.run();
         let before = h.state().session.inspect();
         let project = h.state().session.snapshot().unwrap();
         click(&mut h, "Native Parts Demo");
@@ -188,7 +196,7 @@ fn source_diagnostics_and_browser_collapse_use_real_source_state() {
             "library.json".into(),
             json!({"format":"pcbcraft-library/1","id":"test-diag","name":"Diagnostic fixture","license":"MIT OR Apache-2.0"}).to_string(),
         ),
-        ("symbols/resistor.json".into(), include_str!("../../../../libraries/starter/symbols/resistor.json").into()),
+        ("symbols/resistor.json".into(), include_str!("../../../../libraries/basic-components/symbols/resistor.json").into()),
         ("symbols/bad.json".into(), "invalid native fixture".into()),
     ]);
     let source = Arc::new(sources::NativeSource::load(&documents).unwrap());
@@ -212,9 +220,9 @@ fn source_diagnostics_and_browser_collapse_use_real_source_state() {
         h.get_by_label(problem.as_str().unwrap());
     }
     click(&mut h, "Collapse Browser");
-    assert!(h.state().views.active.library.as_ref().unwrap().browser_collapsed);
+    assert!(h.state().views.active.library.as_ref().unwrap().browser.collapsed);
     click(&mut h, "Expand Browser");
-    assert!(!h.state().views.active.library.as_ref().unwrap().browser_collapsed);
+    assert!(!h.state().views.active.library.as_ref().unwrap().browser.collapsed);
 }
 
 /// A short empty preview still owns a full-height column, and a live header drag

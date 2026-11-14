@@ -50,6 +50,9 @@ similar control in another Craft app is a reason to check for a shared component
 Prefer an existing adapter or a thin adapter around the toolkit component.
 Reuse its controls, icon masters, surfaces, typography, tokens and interaction
 behavior, including focus, disabled states, accessibility and narrow layouts.
+Canvas editors share one manual zoom range by default. Keep initial framing,
+Fit and snap grids appropriate to the content; introduce a workspace-specific
+manual zoom limit only for a documented concrete constraint.
 Keep PCBcraft commands, electronics data and view ownership in the host. Standard
 buttons, menus, toolbars, tabs, tables and panel chrome should use those shared
 components when feasible instead of being drawn from scratch.

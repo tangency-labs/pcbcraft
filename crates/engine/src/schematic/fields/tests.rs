@@ -94,7 +94,7 @@ fn invalid_fields_never_partially_edit_content_or_geometry() {
 #[test]
 fn neutral_generic_defaults_preserve_older_revisions() {
     for (id, value, old) in [("resistor", "R", "1k"), ("capacitor", "C", "100nF")] {
-        let library = crate::library::starter();
+        let library = crate::library::basic_components();
         assert_eq!(library.symbol(id).unwrap().default_value(), value);
         for revision in [1, 2] {
             assert_eq!(library.symbol_revision(id, revision).unwrap().default_value(), old);

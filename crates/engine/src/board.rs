@@ -16,6 +16,7 @@ pub mod drc;
 pub mod fabrication;
 pub mod geometry;
 pub mod identity;
+mod library_migration;
 pub mod materials;
 pub mod outline;
 pub mod ratsnest;

@@ -8,14 +8,14 @@ links the two later, by assigning a footprint and a pin-to-pad mapping (issue
 
 ## Bundled libraries
 
-PCBcraft ships **Default** (`libraries/starter`, retaining the stable `starter` ID)
+PCBcraft ships **Basic components** (`libraries/basic-components`, ID `basic-components`)
 and **Power** (`libraries/power`). Both use the native source loader, catalog and
 ordinary symbol instances. Build-time embedding supplies their native documents
 to desktop and browser; folder and portable-bundle loading use the same parser.
 The definitions are original work under MIT OR Apache-2.0.
 
 ```text
-libraries/starter/
+libraries/basic-components/
   library.json        manifest: format, id, name, license
   symbols/
     capacitor.json    latest symbol revision
@@ -30,7 +30,7 @@ libraries/starter/
 The manifest:
 
 ```json
-{"format": "pcbcraft-library/1", "id": "starter", "name": "Default", "license": "MIT OR Apache-2.0"}
+{"format": "pcbcraft-library/1", "id": "basic-components", "name": "Basic components", "license": "MIT OR Apache-2.0"}
 ```
 
 New placements use the highest loaded revision of each symbol ID. The browser

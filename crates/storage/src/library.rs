@@ -1,11 +1,20 @@
 //! Read-only, bounded native library folders. Call from a worker, never the editor loop.
 use pcbcraft_engine::library::sources::{Documents, MAX_FILE_BYTES, MAX_FILES, MAX_SOURCE_BYTES, NativeSource, is_document_path};
 use std::{fs, io::Read, path::Path};
+pub mod publishing;
 
 /// Read only library.json and flat native item directories. Symlinks and special
 /// files are refused. Bad item files become individual diagnostics; a bad manifest or source
 /// exceeding aggregate bounds fails without returning a partial snapshot. No locks or writes occur.
 pub fn load(root: &Path) -> Result<NativeSource, String> {
+    let (documents, problems) = read_documents(root)?;
+    let mut source = NativeSource::load(&documents)?;
+    source.add_adapter_problems(problems);
+    Ok(source)
+}
+
+/// Retain bounded original text for pre-publication capacity checks without re-encoding prior revisions.
+fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
     let metadata = fs::symlink_metadata(root).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
         return Err("Library source must be a directory, not a symlink or special file".into());
@@ -57,9 +66,7 @@ pub fn load(root: &Path) -> Result<NativeSource, String> {
             }
         }
     }
-    let mut source = NativeSource::load(&documents)?;
-    source.add_adapter_problems(problems);
-    Ok(source)
+    Ok((documents, problems))
 }
 
 /// Bound regular-file reads even if a file grows after metadata was checked; invalid UTF-8 fails.
@@ -125,7 +132,7 @@ mod tests {
             r#"{"format":"pcbcraft-library/1","id":"local-demo","name":"Local demo","license":"MIT OR Apache-2.0"}"#,
         )
         .unwrap();
-        fs::write(root.join("symbols/resistor.json"), include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
+        fs::write(root.join("symbols/resistor.json"), include_str!("../../../libraries/basic-components/symbols/resistor.json")).unwrap();
     }
 
     /// Folder moves retain identities; bad files don't hide good ones, and no source file is written.
@@ -255,7 +262,7 @@ mod installation_tests {
                 "library.json".into(),
                 r#"{"format":"pcbcraft-library/1","id":"install-demo","name":"Install demo","license":"MIT OR Apache-2.0"}"#.into(),
             ),
-            ("symbols/resistor.json".into(), include_str!("../../../libraries/starter/symbols/resistor.json").into()),
+            ("symbols/resistor.json".into(), include_str!("../../../libraries/basic-components/symbols/resistor.json").into()),
         ]);
         serde_json::to_vec(&serde_json::json!({"format":"pcbcraft-library-bundle/1","documents":documents})).unwrap()
     }

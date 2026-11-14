@@ -280,7 +280,7 @@ mod migration_tests {
             }
             if version == 13 {
                 let component = session.project().unwrap().components().next().unwrap().id();
-                session.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":session.revision()})).unwrap();
+                session.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":session.revision()})).unwrap();
             }
             // Recreate a historical storage mode in memory, then use production codecs throughout.
             let mut historical = session.snapshot().unwrap();

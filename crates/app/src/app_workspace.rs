@@ -51,8 +51,10 @@ impl PcbApp {
                     return Err("Native windows are unavailable in the browser.".into());
                 }
                 let kind = if key == "symbol_editor" { Kind::Symbol } else { Kind::Footprint };
+                let preferred = self.preferred_library_source();
                 self.library_editors.enter(kind)?;
                 let id = self.library_editors.active.ok_or("No library document is open.")?;
+                self.library_editors.suggest_destination(id, preferred);
                 self.place_library_document(ctx, id, placement)?;
             }
             "schematic" | "board" => {

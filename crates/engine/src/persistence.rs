@@ -28,6 +28,13 @@ mod packed;
 mod power_migration;
 pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
 pub use power_migration::migrate_power_markers;
+
+/// Prepare an opened native project for current bundled addresses without touching source bytes.
+/// Raw codecs remain byte-preserving for journal validation and other migrations. Hosts retain
+/// the original saved snapshot until ordinary Save durably publishes this upgraded candidate.
+pub fn migrate_bundled_libraries(project: Arc<Project>) -> Result<Arc<Project>, String> {
+    crate::library::compatibility::migration::project(project)
+}
 #[cfg(test)]
 mod split_tests;
 
@@ -277,7 +284,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
     let mut components = Vec::with_capacity(legacy.sheet.symbols.len());
     let mut symbols = Vec::with_capacity(legacy.sheet.symbols.len());
     for record in legacy.sheet.symbols {
-        let definition = crate::library::starter()
+        let definition = crate::library::compatibility::starter()
             .symbol_revision(&record.definition, record.definition_revision)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
         components.push(ComponentRecord2 {
@@ -358,7 +365,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
     let mut used = BTreeMap::new();
     let mut components = Vec::with_capacity(document.components.len());
     for record in document.components {
-        let definition = crate::library::starter()
+        let definition = crate::library::compatibility::starter()
             .symbol_revision(&record.definition, record.definition_revision)
             .cloned()
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
@@ -1108,7 +1115,7 @@ mod tests {
     fn every_library_symbol_places_and_round_trips() {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "All parts", "create_board":true})).unwrap();
-        for (index, definition) in crate::library::starter().symbols().iter().enumerate() {
+        for (index, definition) in crate::library::basic_components().symbols().iter().enumerate() {
             let x_nm = index as i64 * 25_400_000;
             session
                 .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
@@ -1245,12 +1252,12 @@ mod tests {
 
     /// A project opens from its own saved copies: a copy that differs from the starter library,
     /// or comes from a library this build doesn't have, opens and saves back byte for byte.
-    /// Placing another part with the same library, ID and revision reuses the project's copy.
+    /// A new placement at the renamed address remains separate from the historical address.
     #[test]
     fn projects_open_from_their_saved_symbol_copies() {
         let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
         // Save the copy at the starter library's current revision, so new placements match it.
-        let current = crate::library::starter().symbol("resistor").unwrap().revision();
+        let current = crate::library::basic_components().symbol("resistor").unwrap().revision();
         document["symbol_definitions"][0]["revision"] = json!(current);
         for component in document["components"].as_array_mut().unwrap() {
             component["definition_revision"] = json!(current);
@@ -1267,9 +1274,9 @@ mod tests {
         let place = json!({"definition": "resistor", "x_nm": 50_800_000, "y_nm": 0, "expected_revision": session.revision()});
         session.apply(PLACE_SYMBOL, &place).unwrap();
         let names: Vec<_> = session.project().unwrap().components().map(|component| component.definition.name.as_str()).collect();
-        assert_eq!(names, ["Resistor, as saved"; 3]);
+        assert_eq!(names, ["Resistor, as saved", "Resistor, as saved", "Resistor"]);
         let text = String::from_utf8(encode(session.snapshot().unwrap()).unwrap()).unwrap();
-        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 1, "one saved copy for all three resistors");
+        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 2, "the renamed selection does not rewrite historical pinned copies");
 
         // An older saved revision stays as it is, and a new placement saves the current one beside it.
         let mut session = Session::default();
@@ -1298,6 +1305,29 @@ mod tests {
         let weak = std::sync::Arc::downgrade(&session.project().unwrap().components().next().unwrap().definition);
         drop(session);
         assert!(weak.upgrade().is_none(), "the team-passives copy is freed with the last project using it");
+    }
+
+    /// Same-address placements reuse the project's saved definition, even when its display name
+    /// differs from the installed source. The rename must not weaken native pin reuse coverage.
+    #[test]
+    fn same_address_placements_reuse_the_saved_symbol_copy() {
+        let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
+        let revision = crate::library::basic_components().symbol("resistor").unwrap().revision();
+        document["symbol_definitions"][0]["library"] = json!("basic-components");
+        document["symbol_definitions"][0]["revision"] = json!(revision);
+        document["symbol_definitions"][0]["name"] = json!("Resistor, as saved");
+        for component in document["components"].as_array_mut().unwrap() {
+            component["library"] = json!("basic-components");
+            component["definition_revision"] = json!(revision);
+        }
+        let mut session = Session::default();
+        session.open_snapshot(decode(&serde_json::to_vec(&document).unwrap()).unwrap());
+        session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":50_800_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        let project = session.snapshot().unwrap();
+        assert_eq!(project.components().count(), 3);
+        assert!(project.components().all(|component| component.definition.name == "Resistor, as saved"));
+        let text = String::from_utf8(encode(project).unwrap()).unwrap();
+        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 1);
     }
 
     /// A saved copy spans lines like a library file, one per terminal, stroke and pin, so changing

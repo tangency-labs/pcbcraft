@@ -15,7 +15,7 @@ fn flag(session: &mut Session, id: u64, name: &str, enabled: bool) {
 
 /// Select an exact original catalog package using the normal assignment command.
 fn assign(session: &mut Session, id: u64, name: &str) {
-    let definition = crate::board::definition::starter(name).unwrap();
+    let definition = crate::board::definition::basic_components(name).unwrap();
     edit(
         session,
         ASSIGN_FOOTPRINT,

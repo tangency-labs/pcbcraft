@@ -15,7 +15,7 @@ fn fixture() -> Session {
 
 /// Use a deliberately swapped map so tests detect accidental matching by pin number.
 fn choice(s: &Session) -> Value {
-    json!({"component":"component-1", "library":"starter", "definition":"resistor-0402",
+    json!({"component":"component-1", "library":"basic-components", "definition":"resistor-0402",
         "definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})
 }
 
@@ -127,7 +127,7 @@ fn unavailable_source_is_not_needed_for_pinned_assignment_or_placement() {
     assigned.library = "offline-fixture".into();
     assigned.definition = "custom-passive".into();
     assigned.definition_revision = 19;
-    assert!(super::definition::starter("custom-passive").is_none());
+    assert!(super::definition::basic_components("custom-passive").is_none());
     let bytes = encode_documents(Arc::new(project)).unwrap();
     s.open_snapshot(decode_documents(&bytes).unwrap());
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
@@ -193,7 +193,7 @@ fn child_sheet_assignment_round_trips_and_deletes_with_its_component() {
 #[test]
 fn alphanumeric_pad_ids_roundtrip_through_assignment_and_board_views() {
     let mut s = fixture();
-    let mut definition = definition::starter("resistor-0402").unwrap().as_ref().clone();
+    let mut definition = definition::basic_components("resistor-0402").unwrap().as_ref().clone();
     definition.library = "authoring-test".into();
     definition.id = "alpha-pads".into();
     definition.pads[0].number = "A1".into();
@@ -358,7 +358,7 @@ fn group_placement_refuses_pending_package_choices() {
 fn footprint_mapping_defaults_preserve_saved_choices_without_authoring_edits() {
     let mut session = fixture();
     let component = session.project().unwrap().components().next().unwrap().id();
-    let package = definition::starter("resistor-0402").unwrap();
+    let package = definition::basic_components("resistor-0402").unwrap();
     let before = session.snapshot().unwrap();
     assert_eq!(
         session.project().unwrap().default_footprint_mapping(&component, &package),
@@ -366,7 +366,7 @@ fn footprint_mapping_defaults_preserve_saved_choices_without_authoring_edits() {
     );
     assert!(session.project().unwrap().default_footprint_mapping("component-999999", &package).is_none());
     assert!(session.project().unwrap().default_footprint_mapping("component-01", &package).is_none());
-    assert!(session.project().unwrap().default_footprint_mapping(&component, &definition::starter("sot23").unwrap()).is_none());
+    assert!(session.project().unwrap().default_footprint_mapping(&component, &definition::basic_components("sot23").unwrap()).is_none());
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     let mut params = choice(&session);
     params["component"] = json!(component);
@@ -384,23 +384,23 @@ fn named_pin_defaults_use_revision_qualified_library_mappings() {
     for revision in [1, 2] {
         let mut session = Session::default();
         session.apply("project.new", &json!({"create_board":true})).unwrap();
-        let symbol = session.libraries().symbol("starter", "led", revision).unwrap();
+        let symbol = session.libraries().symbol("basic-components", "led", revision).unwrap();
         let digest = crate::library::sources::symbol_digest(&symbol).unwrap();
         session
             .apply(
                 crate::PLACE_SYMBOL,
-                &json!({"library":"starter","definition":"led","definition_revision":revision,"definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
+                &json!({"library":"basic-components","definition":"led","definition_revision":revision,"definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
             )
             .unwrap();
         let component = session.project().unwrap().components().next().unwrap().id();
         let project = session.project().unwrap();
         assert_eq!(project.components().next().unwrap().definition.revision(), revision);
         assert_eq!(
-            project.default_footprint_mapping(&component, &definition::starter("led-0402").unwrap()),
+            project.default_footprint_mapping(&component, &definition::basic_components("led-0402").unwrap()),
             Some(BTreeMap::from([("1".into(), "2".into()), ("2".into(), "1".into())]))
         );
         assert_eq!(
-            project.default_footprint_mapping(&component, &definition::starter("capacitor-0402").unwrap()),
+            project.default_footprint_mapping(&component, &definition::basic_components("capacitor-0402").unwrap()),
             Some(BTreeMap::from([("1".into(), "1".into()), ("2".into(), "2".into())]))
         );
         assert!(project.footprint_assignments().is_empty());

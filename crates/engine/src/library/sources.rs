@@ -1,4 +1,5 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
+pub mod inventory;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
@@ -32,6 +33,8 @@ pub const SEARCH: &str = "library.search";
 pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
 pub const PARSE_QUANTITY: &str = "library.parse_quantity";
+/// Prepare validated native revision documents; only a host can confirm a durable publication.
+pub const PREPARE_PUBLICATION: &str = "library.prepare_publication";
 
 /// Accept missing legacy attribution only when every definition field otherwise matches.
 /// Complete source definitions still compare their full content, including provenance.
@@ -64,7 +67,39 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 6] = [
+pub(crate) const COMMANDS: [Command; 7] = [
+    Command {
+        id: PREPARE_PUBLICATION,
+        title: "Prepare library publication",
+        summary: "Validate a captured authoring draft and return immutable native documents. No files are written and no save is confirmed.",
+        params: &[
+            Param { name: "item", summary: "Captured native authoring envelope", required: true, kind: ParamKind::AuthoringItem },
+            Param {
+                name: "documents",
+                summary: "Transported destination documents including library.json; no filesystem paths",
+                required: true,
+                kind: ParamKind::LibraryDocuments,
+            },
+            Param {
+                name: "base_revision",
+                summary: "Published revision on which this edit is based",
+                required: false,
+                kind: ParamKind::DefinitionRevision,
+            },
+            Param {
+                name: "allow_older",
+                summary: "Confirm that publishing an older edit may omit intervening changes",
+                required: false,
+                kind: ParamKind::Flag,
+            },
+            Param {
+                name: "copy",
+                summary: "Prepare a derivative under a new identity, preserving the original published item",
+                required: false,
+                kind: ParamKind::Flag,
+            },
+        ],
+    },
     Command {
         id: LOAD,
         title: "Load library source",
@@ -176,7 +211,7 @@ pub struct Key {
     pub revision: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Definition {
     Symbol(Arc<SymbolDefinition>),
     Footprint(Arc<FootprintDefinition>),
@@ -289,6 +324,9 @@ impl NativeSource {
         check_documents(documents)?;
         let manifest =
             parse_manifest(documents.get("library.json").ok_or("library.json: missing manifest")?).map_err(|e| format!("library.json: {e}"))?;
+        if manifest.id.starts_with("project-") {
+            return Err("library.json: project- library IDs are reserved for pinned project records".into());
+        }
         let mut source = Self { library: manifest.id, name: manifest.name, license: manifest.license, items: Vec::new(), problems: Vec::new() };
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
             match source.parse_item(path, text) {
@@ -496,6 +534,16 @@ pub fn manufacturer_digest(part: &ManufacturerPart) -> String {
     format!("{:x}", Sha256::digest(serde_json::to_value(part).unwrap_or(Value::Null).to_string().as_bytes()))
 }
 impl Catalog {
+    /// Keep allocation above every known revision, including unavailable or quarantined copies.
+    pub fn highest_revision(&self, library: &str, kind: Kind, id: &str) -> u32 {
+        self.sources
+            .values()
+            .flat_map(|source| &source.items)
+            .filter(|item| item.key.library == library && item.key.kind == kind && item.key.id == id)
+            .map(|item| item.key.revision)
+            .max()
+            .unwrap_or(0)
+    }
     /// Resolve an exact item, refusing missing, conflicting and unavailable definitions without fallback.
     fn exact(&self, reference: &Reference, kind: Kind) -> Result<&Item, String> {
         reference.validate()?;
@@ -562,7 +610,7 @@ impl Catalog {
             package.validate_definitions(&symbol, &footprint).map_err(|error| format!("Package {id}: {error}"))?;
             footprints.insert(id.clone(), footprint);
         }
-        Ok(ResolvedPart { definition: part, symbol, category, footprints })
+        super::compatibility::migration::resolved_part(ResolvedPart { definition: part, symbol, category, footprints }, self)
     }
     /// Install read-only embedded registrations through the ordinary validator and conflict index.
     /// Broken bundled manifests remain visible as unavailable registrations rather than hiding
@@ -582,16 +630,24 @@ impl Catalog {
             catalog.builtin.insert(source_id.clone());
             catalog.sources.insert(source_id, Arc::new(source));
         }
+        catalog.builtin.insert(super::compatibility::SOURCE.into());
+        if let Ok(legacy) = NativeSource::load(&super::compatibility::documents()) {
+            catalog.sources.insert(super::compatibility::SOURCE.into(), Arc::new(legacy));
+        }
         catalog.rebuild_conflicts();
         catalog.generation = 0;
         catalog
     }
     /// Resolve the latest unambiguous native symbol through the same index as an exact revision.
     pub fn latest_symbol(&self, library: &str, id: &str) -> Option<Arc<SymbolDefinition>> {
-        self.search("", Some(Kind::Symbol))
-            .into_iter()
-            .find(|(_, item)| item.key.library == library && item.key.id == id)
-            .and_then(|(_, item)| item.symbol())
+        self.sources
+            .iter()
+            .filter(|(source, _)| !self.unavailable.contains(*source))
+            .flat_map(|(_, source)| &source.items)
+            .filter(|item| item.key.kind == Kind::Symbol && item.key.library == library && item.key.id == id)
+            .max_by_key(|item| item.key.revision)
+            .filter(|item| !self.conflicts.contains(&item.key))
+            .and_then(Item::symbol)
     }
     /// A session-local load/removal generation for rejecting delayed background source results.
     pub fn generation(&self) -> u64 {
@@ -609,7 +665,8 @@ impl Catalog {
         if !crate::board::definition::valid_id(id) {
             return Err("Invalid or reserved source ID".into());
         }
-        if !self.sources.contains_key(id) && self.sources.len() >= MAX_SOURCES {
+        if !self.sources.contains_key(id) && self.sources.len() - usize::from(self.sources.contains_key(super::compatibility::SOURCE)) >= MAX_SOURCES
+        {
             return Err("At most 18 native sources may be loaded".into());
         }
         let mut changed = self.changed.get(id).cloned().unwrap_or_default();
@@ -696,7 +753,7 @@ impl Catalog {
         for (source, item) in self
             .sources
             .iter()
-            .filter(|(id, _)| !self.unavailable.contains(*id))
+            .filter(|(id, _)| !self.unavailable.contains(*id) && id.as_str() != super::compatibility::SOURCE)
             .flat_map(|(id, source)| source.items.iter().map(move |item| (id.as_str(), item)))
         {
             if kind.is_some_and(|kind| kind != item.key.kind) {
@@ -757,7 +814,7 @@ impl Catalog {
     pub fn inspect(&self) -> Value {
         let conflicts = &self.conflicts;
         let mut sources = Vec::new();
-        sources.extend(self.sources.iter().map(|(id,source)| {
+        sources.extend(self.sources.iter().filter(|(id, _)| id.as_str() != super::compatibility::SOURCE).map(|(id,source)| {
             let mut problems = source.problems.clone();
             for item in &source.items {
                 if conflicts.contains(&item.key) { problems.push(format!("{}: conflicting {:?} {}/{} revision {}; use a new revision",item.file,item.key.kind,item.key.library,item.key.id,item.key.revision)); }
@@ -808,6 +865,38 @@ impl Session {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
         match id {
+            PREPARE_PUBLICATION => {
+                let fail = CommandError::InvalidParams;
+                let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;
+                let documents: Documents = serde_json::from_value(params["documents"].clone()).map_err(|e| fail(e.to_string()))?;
+                let destination = NativeSource::load(&documents).map_err(fail)?;
+                let kind = if item.kind == crate::authoring::Kind::Symbol { Kind::Symbol } else { Kind::Footprint };
+                let latest = destination
+                    .items()
+                    .iter()
+                    .filter(|record| record.key.kind == kind && record.key.id == item.id)
+                    .map(|record| record.key.revision)
+                    .max()
+                    .unwrap_or(0)
+                    .max(self.libraries.highest_revision(destination.library(), kind, &item.id));
+                if params["copy"] == true {
+                    return crate::authoring::publishing::prepare_copy(
+                        Arc::new(item),
+                        documents.get("library.json").ok_or_else(|| fail("Missing library manifest".into()))?,
+                    )
+                    .map(|prepared| prepared.inspect())
+                    .map_err(fail);
+                }
+                crate::authoring::publishing::prepare(
+                    Arc::new(item),
+                    documents.get("library.json").ok_or_else(|| fail("Missing library manifest".into()))?,
+                    latest,
+                    params["base_revision"].as_u64().map(|n| n as u32),
+                    params["allow_older"] == true,
+                )
+                .map(|prepared| prepared.inspect())
+                .map_err(fail)
+            }
             LOAD => {
                 let documents: Documents =
                     serde_json::from_value(params["documents"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;

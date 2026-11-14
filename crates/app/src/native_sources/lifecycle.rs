@@ -37,7 +37,7 @@ enum Outcome {
 impl PcbApp {
     /// Source writes/deletion never overlap a source reader or another destructive operation.
     pub(crate) fn library_mutation_busy(&self) -> bool {
-        self.library_sources.mutation.is_some()
+        self.library_sources.mutating() || self.library_editors.publisher.busy()
     }
     /// Command and ribbon-caption acquisition choices use the standard menu surface.
     /// Pointer position is captured once so the menu remains anchored while it is open.
@@ -236,7 +236,7 @@ mod tests {
                 "library.json".into(),
                 json!({"format":"pcbcraft-library/1","id":"user","name":"Delete fixture","license":"MIT OR Apache-2.0"}).to_string(),
             ),
-            ("symbols/resistor.json".into(), include_str!("../../../../libraries/starter/symbols/resistor.json").into()),
+            ("symbols/resistor.json".into(), include_str!("../../../../libraries/basic-components/symbols/resistor.json").into()),
         ]);
         let bundle = serde_json::to_vec(&json!({"format":"pcbcraft-library-bundle/1","documents":documents})).unwrap();
         let source = pcbcraft_storage::library::install_bundle(&bundle, &path).unwrap();

@@ -96,7 +96,7 @@ impl PcbApp {
     /// Review selects a live pane with pending fields, or recovers a closed pane's retained
     /// fields into the current host. It never silently discards a second view's draft.
     pub(crate) fn review_library_edits(&mut self, ctx: &Context, requested: Option<u64>) {
-        let id = requested.or_else(|| self.library_editors.documents.iter().find(|(_, doc)| doc.unsaved()).map(|(id, _)| *id));
+        let id = requested.or_else(|| self.library_editors.documents.keys().find(|id| self.library_editors.document_unsaved(**id)).copied());
         let Some(id) = id else { return };
         let pending =
             self.library_editors.documents.get(&id).and_then(|doc| {
@@ -279,7 +279,7 @@ impl PcbApp {
         let Some(id) = self.bind_library_view(view) else { return };
         // Mixed hosts can be framed by a project or Library workspace rather than
         // library_frame, so enforce the source mutation boundary here as well.
-        if self.library_mutation_busy() || self.library_sources.installing() {
+        if self.library_sources.mutating() || self.library_sources.installing() {
             ui.disable();
         }
         if self.views.active.id() == view && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx()) {

@@ -22,7 +22,7 @@ class FootprintSchemaTests(unittest.TestCase):
         """Load the published schema and an existing native library definition."""
         cls.schema = json.loads((ROOT / "docs/schemas/footprint-v1.schema.json").read_text())
         cls.validator = Draft202012Validator(cls.schema)
-        cls.definition = json.loads((ROOT / "libraries/starter/footprints/resistor-0402.json").read_text())
+        cls.definition = json.loads((ROOT / "libraries/basic-components/footprints/resistor-0402.json").read_text())
 
     def test_reference_metadata_and_pad_identifiers_reject_control_characters(self):
         """Catch newline suffixes that Python's dollar anchor previously accepted."""

@@ -87,15 +87,17 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     }
     let packed = decode_packed(&bytes)?;
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
-    Ok(Saved { snapshot, target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, added_manifest: false } })
+    Saved { snapshot, opened: None, target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, added_manifest: false } }
+        .prepare_open()
 }
 
 /// Read and cross-validate all folder documents before returning an adoptable snapshot.
 fn load_folder(root: &Path) -> Result<Saved, String> {
     let documents = folder::load(root)?;
     let snapshot = decode_documents(&documents)?;
-    Ok(Saved {
+    Saved {
         snapshot,
+        opened: None,
         target: Target {
             path: root.to_owned(),
             bytes: Arc::from([]),
@@ -104,7 +106,8 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
             needs_manifest: false,
             added_manifest: false,
         },
-    })
+    }
+    .prepare_open()
 }
 
 /// Save the existing target in place when no format is requested. Otherwise ask for a new
@@ -175,7 +178,7 @@ pub(super) fn save_new(
         folder::save(&target.path, None, &documents, &mut |_| Ok(()))?;
     }
     target.documents = Some(Arc::new(documents));
-    Ok(Outcome::Saved(Saved { snapshot, target }, renamed))
+    Ok(Outcome::Saved(Saved { snapshot, opened: None, target }, renamed))
 }
 
 /// Strip a project extension from a folder or archive file name.
@@ -250,7 +253,7 @@ fn save_target(
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
         target.documents = Some(Arc::new(documents));
     }
-    Ok(Outcome::Saved(Saved { snapshot, target }, adopted))
+    Ok(Outcome::Saved(Saved { snapshot, opened: None, target }, adopted))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.

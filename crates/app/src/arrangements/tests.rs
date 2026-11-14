@@ -38,6 +38,59 @@ fn harness() -> Harness<'static, PcbApp> {
     h
 }
 
+/// Project views use the same manual range as definition editors, including real input and
+/// restoration of both the active and parked camera without changing electrical state.
+#[test]
+fn shared_zoom_range_survives_workspace_switches_and_arrangement_restore() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let before = h.state().session.snapshot().unwrap();
+    for workspace in ["schematic", "board"] {
+        h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"workspace":workspace})).unwrap();
+        h.run();
+        let view = h.state().views.active.id();
+        h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view.0,"zoom_percent":102400})).unwrap();
+        h.run();
+        assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+        assert!(h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view.0,"zoom_percent":102401})).is_err());
+        assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+        h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view.0,"zoom_percent":6400})).unwrap();
+        h.run();
+        let area = h.get_by_label(if workspace == "board" { "PCB canvas" } else { "Schematic canvas" }).rect();
+        let camera = &h.state().views.active.camera;
+        let pointer = camera.screen(camera.center(), area) + egui::vec2(17., -11.);
+        let anchor = camera.unsnapped(pointer, area);
+        h.hover_at(pointer);
+        h.run();
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0., 4.),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        assert!(h.state().views.active.camera.zoom() > 64.);
+        for _ in 0..4 {
+            h.event(egui::Event::Zoom(4.));
+            h.run();
+        }
+        assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+        let after = h.state().views.active.camera.unsnapped(pointer, area);
+        assert!((after.x_nm - anchor.x_nm).abs() <= 100 && (after.y_nm - anchor.y_nm).abs() <= 100);
+    }
+    let snapshot = h.state().arrangement_snapshot().unwrap();
+    let encoded = serde_json::to_vec(&snapshot).unwrap();
+    let restored = serde_json::from_slice(&encoded).unwrap();
+    assert!(h.state_mut().restore_arrangement(&restored, &ctx));
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"workspace":"schematic"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Run an arrangement intent through the deferred path used by the tab strip and future MCP.
 fn action(h: &mut Harness<'_, PcbApp>, action: Action) {
     h.state_mut().queue_arrangement(&egui::Context::default(), action);

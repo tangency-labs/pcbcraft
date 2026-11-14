@@ -449,10 +449,15 @@ impl Editor for LiveEditor<'_> {
         if app.automation.busy() {
             return Some("Wait for the queued UI input to complete, or cancel it, before running another command".into());
         }
-        if (app.library_mutation_busy() || app.library_sources.installing())
+        if (app.library_sources.mutating() || app.library_sources.installing())
             && (command.starts_with("library.") || command.starts_with("app.library_"))
         {
             return Some("Finish the current library folder operation before changing its sources or editors".into());
+        }
+        if app.library_editors.publisher.busy()
+            && matches!(command, pcbcraft_engine::library::sources::LOAD | pcbcraft_engine::library::sources::REMOVE | "app.library_source")
+        {
+            return Some("Finish the current publication before changing library sources".into());
         }
         if app.views.editing_text() {
             return Some(format!("Finish the current text edit before running `{command}`"));
