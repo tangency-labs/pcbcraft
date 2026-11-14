@@ -79,6 +79,7 @@ impl PcbApp {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
         let unit = self.preferences.units;
+        let revision = self.session.revision();
         // The ratsnest for this revision, through the same per-input cache the canvas reads.
         let unrouted = state.ratsnest(target, input).map(|ratsnest| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
@@ -113,7 +114,7 @@ impl PcbApp {
                             reference_pick = Some(footprint.id.clone());
                         }
                         ui.end_row();
-                        copper_edit = footprint_transform(ui, footprint, unit);
+                        copper_edit = footprint_transform(ui, footprint, unit, view_id, revision);
                         property(
                             ui,
                             if footprint.pads.iter().any(|pad| pad.copper.is_some()) { "Pads" } else { "Pad centers" },
@@ -124,7 +125,7 @@ impl PcbApp {
                         if state.tracks.committing() {
                             ui.disable();
                         }
-                        copper_edit = copper_properties(ui, target, &state.tracks.selected, unit);
+                        copper_edit = copper_properties(ui, target, &state.tracks.selected, unit, view_id, revision);
                     }
                     [] => {
                         property(ui, "Board", target.name());

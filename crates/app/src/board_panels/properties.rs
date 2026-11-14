@@ -6,22 +6,25 @@ use pcbcraft_chrome::units;
 
 /// Edit one footprint's X, Y, rotation and side in place. Each field submits the full transform
 /// through `pcb.set_footprint_transform` once, on release or confirmation, keeping the other
-/// values; the caller adds the board and revision. Unchanged values submit nothing.
+/// values; the caller adds the board and `revision`. Length drafts belong to `view` and
+/// `revision`, so another view or a newer revision never submits them. Unchanged values submit nothing.
 pub(super) fn footprint_transform(
     ui: &mut Ui,
     footprint: &pcbcraft_engine::board::view::FootprintView<'_>,
     unit: units::Unit,
+    view: crate::editor_view::ViewId,
+    revision: u64,
 ) -> Option<(&'static str, serde_json::Value)> {
     let limit = pcbcraft_engine::schematic::MAX_CENTER_NM;
     let (mut x, mut y, mut rotation, mut bottom) = (footprint.position.x_nm, footprint.position.y_nm, footprint.rotation, footprint.bottom);
     let mut changed = false;
     ui.label("X");
-    if let Some(value) = committed_length(ui, ("Footprint X", &footprint.id), x, -limit..=limit, unit) {
+    if let Some(value) = committed_length(ui, ("Footprint X", (view, &footprint.id)), x, -limit..=limit, unit, revision) {
         (x, changed) = (value, true);
     }
     ui.end_row();
     ui.label("Y");
-    if let Some(value) = committed_length(ui, ("Footprint Y", &footprint.id), y, -limit..=limit, unit) {
+    if let Some(value) = committed_length(ui, ("Footprint Y", (view, &footprint.id)), y, -limit..=limit, unit, revision) {
         (y, changed) = (value, true);
     }
     ui.end_row();
@@ -66,18 +69,22 @@ fn committed_degrees(ui: &mut Ui, salt: (&str, impl std::hash::Hash + std::fmt::
 
 /// Inspect selected copper and atomically change its lock state; locked or mixed-locked selections keep sizes read-only.
 /// Returns at most one command, submitted when a field is released or confirmed; the caller adds
-/// the board and revision. Mixed track widths show the first width and set all of them; vias
+/// the board and `revision`. Length drafts belong to `view`, `revision` and the whole selection.
+/// Mixed track widths show the first width and set all of them; vias
 /// of different sizes show "Mixed" and stay read-only, since each via field sends both sizes.
 pub(super) fn copper_properties(
     ui: &mut Ui,
     target: pcbcraft_engine::board::view::BoardView<'_>,
     selected: &std::collections::BTreeSet<uuid::Uuid>,
     unit: units::Unit,
+    view: crate::editor_view::ViewId,
+    revision: u64,
 ) -> Option<(&'static str, serde_json::Value)> {
     use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MAX_WIDTH_NM, MIN_VIA_DRILL_NM, MIN_WIDTH_NM};
     let tracks: Vec<_> = target.tracks().iter().filter(|track| selected.contains(&track.id)).collect();
     let vias: Vec<_> = target.vias().iter().filter(|via| selected.contains(&via.id)).collect();
-    let salt = selected.iter().next().copied().unwrap_or_default();
+    // The whole selection: a draft typed for some tracks never applies to a grown selection.
+    let salt = (view, selected);
     let mut edit = None;
     property(ui, "Selected tracks", &tracks.len().to_string());
     property(ui, "Selected vias", &vias.len().to_string());
@@ -117,7 +124,9 @@ pub(super) fn copper_properties(
         }
         ui.label("Width");
         if let Some(width) = ui
-            .add_enabled_ui(!any_locked, |ui| committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit))
+            .add_enabled_ui(!any_locked, |ui| {
+                committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, revision)
+            })
             .inner
         {
             edit = Some((
@@ -140,7 +149,7 @@ pub(super) fn copper_properties(
             .add_enabled_ui(!any_locked, |ui| {
                 // The pad must stay larger than the drill; a smaller pad is refused rather than
                 // silently shrinking the drill, matching the drill field's own limit.
-                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, first.drill_nm + 1..=MAX_VIA_DIAMETER_NM, unit)
+                committed_length(ui, ("Selected via pad", salt), first.diameter_nm, first.drill_nm + 1..=MAX_VIA_DIAMETER_NM, unit, revision)
             })
             .inner
         {
@@ -150,7 +159,7 @@ pub(super) fn copper_properties(
         ui.label("Via drill");
         if let Some(drill) = ui
             .add_enabled_ui(!any_locked, |ui| {
-                committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit)
+                committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit, revision)
             })
             .inner
         {
@@ -161,13 +170,17 @@ pub(super) fn copper_properties(
     edit
 }
 
-/// An in-progress length edit, tied to the model value and display unit it started from so a
-/// changed selection, undo or unit switch discards it instead of publishing stale text.
+/// An in-progress length edit, tied to the model value, display unit and project revision it
+/// started from, and to a field shown in every pass since. A changed selection or view, any
+/// other edit (including a peer's), undo or a unit switch discards it instead of submitting
+/// stale text against the new revision.
 #[derive(Clone, Debug)]
 struct LengthDraft {
     text: String,
     model_nm: i64,
     unit: units::Unit,
+    revision: u64,
+    pass: u64,
     error: Option<String>,
 }
 
@@ -175,18 +188,25 @@ struct LengthDraft {
 /// accepts `mil`, `mm` or `in` suffixes over that default, and returns whole nanometres once, when
 /// focus leaves with changed text that parses inside `range`. Untouched text never re-parses, so
 /// no rounding reaches the model. Escape restores the model value; invalid or out-of-range text
-/// stays editable with an error and submits nothing. The salt's name is the accessible label.
+/// stays editable with an error and submits nothing. A draft from an earlier `revision`, or one
+/// whose field was hidden for a pass, is dropped unsubmitted. The salt's name is the accessible label.
 fn committed_length(
     ui: &mut Ui,
     salt: (&str, impl std::hash::Hash + std::fmt::Debug),
     model_nm: i64,
     range: std::ops::RangeInclusive<i64>,
     unit: units::Unit,
+    revision: u64,
 ) -> Option<i64> {
     let id = ui.scope_id().with(&salt);
     let shown = units::edit_label(model_nm, unit);
-    let fresh = || LengthDraft { text: shown.clone(), model_nm, unit, error: None };
-    let mut draft = ui.data(|data| data.get_temp::<LengthDraft>(id)).filter(|d| (d.model_nm, d.unit) == (model_nm, unit)).unwrap_or_else(fresh);
+    let pass = ui.ctx().cumulative_pass_nr();
+    let fresh = || LengthDraft { text: shown.clone(), model_nm, unit, revision, pass, error: None };
+    let mut draft = ui
+        .data(|data| data.get_temp::<LengthDraft>(id))
+        .filter(|d| (d.model_nm, d.unit, d.revision) == (model_nm, unit, revision) && d.pass + 1 >= pass)
+        .unwrap_or_else(fresh);
+    draft.pass = pass;
     let mut committed = None;
     ui.vertical(|ui| {
         let response = pcbcraft_chrome::controls::text(ui, &mut draft.text).accessible_name(salt.0);

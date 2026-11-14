@@ -13,6 +13,7 @@ use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
 use super::*;
 use crate::editor_layout::HostId;
 
+mod board_properties;
 mod pane_drag;
 
 #[derive(Default)]

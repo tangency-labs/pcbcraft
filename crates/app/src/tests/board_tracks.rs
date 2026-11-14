@@ -9,7 +9,7 @@ use pcbcraft_engine::{
 
 /// Two 0402 resistors whose first terminals share an accepted net, on a two-layer board,
 /// opened in the PCB layout with the Top copper layer active.
-fn routable<'a>() -> Harness<'a, PcbApp> {
+pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
     h.state_mut().run("project.new", &json!({"create_board":true}));
@@ -41,7 +41,7 @@ fn routable<'a>() -> Harness<'a, PcbApp> {
     h
 }
 
-fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
+pub(super) fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
     h.state().session.project().unwrap().boards().next().unwrap().tracks().to_vec()
 }
 
@@ -67,7 +67,7 @@ fn airwires(h: &Harness<'_, PcbApp>) -> Vec<Airwire> {
     h.state().session.project().unwrap().boards().next().unwrap().ratsnest().unwrap().lines
 }
 
-fn at(h: &Harness<'_, PcbApp>, point: Point) -> egui::Pos2 {
+pub(super) fn at(h: &Harness<'_, PcbApp>, point: Point) -> egui::Pos2 {
     h.state().views.active.camera.screen(point, h.get_by_label("PCB canvas").rect())
 }
 
@@ -363,7 +363,7 @@ fn routing_requires_a_visible_copper_layer() {
     assert!(tracks(&h).is_empty());
 }
 
-fn vias(h: &Harness<'_, PcbApp>) -> Vec<pcbcraft_engine::board::track::Via> {
+pub(super) fn vias(h: &Harness<'_, PcbApp>) -> Vec<pcbcraft_engine::board::track::Via> {
     h.state().session.project().unwrap().boards().next().unwrap().vias().to_vec()
 }
 
@@ -530,7 +530,7 @@ fn place_via_tool_drops_vias_until_escape() {
 }
 
 /// Add a straight front track through the shared command and return its ID.
-fn add_track(h: &mut Harness<'_, PcbApp>, from: Point, to: Point) -> uuid::Uuid {
+pub(super) fn add_track(h: &mut Harness<'_, PcbApp>, from: Point, to: Point) -> uuid::Uuid {
     let top = layer_named(h, "Top");
     let revision = h.state().session.revision();
     h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":[from, to],"expected_revision":revision}));

@@ -445,6 +445,9 @@ precision and overflow errors. Board Properties footprint X/Y, track width and
 via pad/drill fields use the same parser (#281): they show exact editable text,
 never re-enter untouched text, and refuse unknown units or values outside the
 field's limits with an error instead of clamping. Escape restores the model value.
+Unfinished text belongs to its view, selection and project revision: another
+view, a changed selection or any newer revision (including a peer's edit) drops
+it unsubmitted.
 Canonical command payloads and persisted records can continue to use `_nm`
 integers, which do not require a display preference.
 
