@@ -154,6 +154,7 @@ struct Moved {
     name: String,
 }
 /// Restore only unused source names, keeping raced-in replacements and durable recovery copies.
+/// Cleanup failures name the retained folder even after all reviewed records were restored.
 fn restore(archive: &Directory, moved: &[Moved], recovery: &PathBuf, error: String) -> String {
     let mut retained = false;
     for moved in moved.iter().rev() {
@@ -172,12 +173,13 @@ fn restore(archive: &Directory, moved: &[Moved], recovery: &PathBuf, error: Stri
             }
         }
         if !retained {
-            let _ = archive.remove_file("library.json");
-            let _ = std::fs::remove_dir(recovery);
+            let manifest_cleanup = archive.remove_file("library.json");
+            let folder_cleanup = std::fs::remove_dir(recovery);
+            retained = manifest_cleanup.is_err() || folder_cleanup.is_err();
         }
     }
     if retained {
-        format!("{error}. Recovery records are retained at {}. Refresh before retrying.", recovery.display())
+        format!("{error}. Recovery folder retained at {}. Refresh before retrying.", recovery.display())
     } else {
         format!("{error}. Reviewed records were restored; refresh before retrying.")
     }
@@ -273,7 +275,7 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(std::fs::read_to_string(collision).unwrap(), "external replacement");
-        assert!(error.contains("Recovery records are retained"));
+        assert!(error.contains("Recovery folder retained"));
         let recovery = std::fs::read_dir(&root)
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -429,5 +431,40 @@ mod tests {
         }
         std::fs::remove_dir_all(&recovery).unwrap();
         assert!(super::super::load(&root).unwrap().problems().is_empty());
+    }
+    /// Even after record restoration succeeds, failed metadata or directory cleanup must name
+    /// the retained folder while preserving the original trash failure and external contents.
+    #[test]
+    fn cleanup_failures_report_retained_folder_and_original_error() {
+        for marker_failure in [true, false] {
+            let (_temp, root, key) = fixture();
+            let before = super::super::read_documents(&root).unwrap().0;
+            let plan = prepare(&root, &key).unwrap();
+            let error = execute_with(&root, &plan, |archive| {
+                if marker_failure {
+                    std::fs::remove_file(archive.join("library.json")).unwrap();
+                    std::fs::create_dir(archive.join("library.json")).unwrap();
+                } else {
+                    std::fs::write(archive.join("external-note"), "preserved external contents").unwrap();
+                }
+                Err("Simulated trash failure".into())
+            })
+            .unwrap_err();
+            let recovery = std::fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.file_name().unwrap().to_str().unwrap().starts_with(RECOVERY_PREFIX))
+                .unwrap();
+            assert!(error.contains("Simulated trash failure"));
+            assert!(error.contains("Recovery folder retained"));
+            assert!(error.contains(recovery.to_str().unwrap()));
+            assert_eq!(super::super::read_documents(&root).unwrap().0, before);
+            assert!(super::super::load(&root).unwrap().problems().iter().any(|problem| problem.contains("Pending part-deletion recovery")));
+            if marker_failure {
+                assert!(recovery.join("library.json").is_dir());
+            } else {
+                assert_eq!(std::fs::read_to_string(recovery.join("external-note")).unwrap(), "preserved external contents");
+            }
+        }
     }
 }
