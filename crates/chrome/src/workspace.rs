@@ -10,10 +10,12 @@ use crate::{Tokens, fonts, menu::CheckKind};
 pub mod catalog;
 pub mod panels;
 
-/// The card is tall enough for the tabs, the groups and PCBcraft Next's 5 point gutter under them.
-const RIBBON_HEIGHT: f32 = 135.0;
-/// Every workspace uses the same tile, including long editor names.
-const WORKSPACE_WIDTH: f32 = 120.0;
+/// Shared tab/group metrics plus the host's horizontal scroll gutter.
+const RIBBON_HEIGHT: f32 = solidcraft_ui_kit::ribbon::TAB_ROW_HEIGHT + solidcraft_ui_kit::ribbon::GROUP_HEIGHT + 1.0 + RIBBON_SCROLL_GUTTER;
+/// Match SolidCraft's compact workspace card; long editor names wrap inside it.
+const WORKSPACE_WIDTH: f32 = 88.0;
+/// The single-line picker in narrow ribbons retains room for editor names and its caret.
+const WORKSPACE_COMPACT_WIDTH: f32 = 120.0;
 const RIBBON_COMPACT_WIDTH: f32 = 1000.0;
 
 /// Compact ribbons promote working tools while retaining planned controls in their group menus.
@@ -287,6 +289,7 @@ pub enum RibbonSection {
 
 /// Compose a tab ribbon with persistent fields at the right. At narrow widths fields wrap
 /// below the commands, staying visible while only the tab's command strip scrolls horizontally.
+/// The workspace card follows the ribbon's measured outer height, including wrapped rows.
 pub fn ribbon_with_controls(
     ui: &mut Ui,
     workspace: &str,
@@ -316,12 +319,14 @@ pub fn ribbon_with_controls(
     let control_rows = pinned_fields.div_ceil(columns);
     let compact_height = t.control_height + t.font_small + t.space_8;
     let controls_height = control_rows as f32 * (compact_height + 1.0);
-    let extra_controls = if pinned_fields > 0 && !side_controls { controls_height + t.space_24 } else { 0.0 };
+    // Wrapped fields need their caption and the card's bottom padding below the shared group.
+    let extra_controls = if pinned_fields > 0 && !side_controls { controls_height + t.space_24 + t.space_12 + 1.0 } else { 0.0 };
     let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 } + extra_tab_rows * t.control_height + extra_controls;
     let painter = ui.painter().clone();
     let background = painter.add(Shape::Noop);
     let panel = Panel::top("workspace_ribbon")
-        .exact_size(height + 2.0 * t.space_6)
+        .default_size(height + 2.0 * t.space_6)
+        .min_size(height + 2.0 * t.space_6)
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(Color32::TRANSPARENT).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)))
@@ -329,30 +334,16 @@ pub fn ribbon_with_controls(
             let mut picked = None;
             let mut quick_pick = None;
             ui.horizontal_top(|ui| {
-                if wide {
-                    // Read before the tile can toggle it, so the picker knows the frame it opens on.
-                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                    let tile = card(ui.ctx(), t.space_8)
-                        .show(ui, |ui| {
-                            workspace_tile(
-                                ui,
-                                workspace,
-                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
-                                RIBBON_HEIGHT,
-                            )
-                        })
-                        .inner;
-                    picked = picker(ui, &tile, workspaces, !was_open);
-                }
-
-                card(ui.ctx(), t.space_4).show(ui, |ui| {
+                // Reserve the leading column, then measure the command card before drawing its peer.
+                let workspace_rect = wide.then(|| ui.allocate_space(vec2(WORKSPACE_WIDTH, height)).1);
+                let ribbon_card = card(ui.ctx(), t.space_4).show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
                         if !wide {
                             let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                            let (rect, _) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH, t.space_24), Sense::hover());
-                            let tile = solidcraft_ui_kit::button_at(ui, workspace, rect, "", solidcraft_ui_kit::Button::Small);
+                            let (rect, _) = ui.allocate_exact_size(vec2(WORKSPACE_COMPACT_WIDTH, t.space_24), Sense::hover());
+                            let tile = solidcraft_ui_kit::button_at(ui, workspace, rect, workspace, solidcraft_ui_kit::Button::Small);
                             let c = tile.rect.right_center() - vec2(t.space_6, 0.0);
                             ui.painter()
                                 .add(Shape::line(vec![c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], Stroke::new(1.0, t.text_dim)));
@@ -452,6 +443,23 @@ pub fn ribbon_with_controls(
                         }
                     });
                 });
+                if let Some(mut rect) = workspace_rect {
+                    rect.max.y = ribbon_card.response.rect.bottom();
+                    let mut workspace_ui =
+                        ui.new_child(egui::UiBuilder::new().id_salt("workspace_card").max_rect(rect).layout(Layout::top_down(Align::Min)));
+                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
+                    let tile = card(ui.ctx(), t.space_8)
+                        .show(&mut workspace_ui, |ui| {
+                            workspace_tile(
+                                ui,
+                                workspace,
+                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
+                                ribbon_card.response.rect.height(),
+                            )
+                        })
+                        .inner;
+                    picked = picker(ui, &tile, workspaces, !was_open);
+                }
             });
             (picked, quick_pick)
         });
@@ -463,8 +471,9 @@ pub fn ribbon_with_controls(
 }
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
-/// a caret that points up while the picker is open. Its shared fixed dimensions do not
-/// depend on the active workspace's title or extra ribbon control rows.
+/// a caret that points up while the picker is open. Its width is fixed; `height` follows
+/// the measured ribbon card, including wrapped control rows. Long titles wrap within
+/// the tile while the caption retains its own line.
 fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;
@@ -477,11 +486,14 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32
         p.rect_filled(rect.expand(inset - 1.0), t.radius_md, t.hover);
     }
     p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
-    paint_workspace_glyph(p, icon, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
-    p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
+    paint_workspace_glyph(p, icon, center - vec2(0.0, t.space_24), t.control_height + t.space_2, t, true);
+    let mut title = egui::text::LayoutJob::simple(workspace.to_owned(), fonts::interface_heading(ui, t.font_button), t.text, rect.width());
+    title.halign = Align::Center;
+    let title = p.layout_job(title);
+    p.galley(pos2(center.x, center.y + t.space_12 - t.space_2 - title.size().y / 2.0), title, t.text);
     let caption = p.layout_no_wrap("Workspace".to_owned(), FontId::proportional(t.font_small), t.text_dim);
     let caret = t.space_4 + t.space_3;
-    let caption_center = center + vec2(-caret / 2.0, t.space_24 + t.space_8);
+    let caption_center = center + vec2(-caret / 2.0, t.space_24 + t.space_12);
     let tip = caption_center + vec2(caption.size().x / 2.0 + caret, 0.0);
     p.galley(caption_center - caption.size() / 2.0, caption, t.text_dim);
     let direction = if open { -1.0 } else { 1.0 };

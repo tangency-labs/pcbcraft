@@ -519,3 +519,15 @@ supports side anchoring and an inner width rail; free floating in two dimensions
 height resizing and full-host expansion remain composed in PCBcraft's existing
 shared Panel adapter using the toolkit's accessible sashes, surfaces and menus.
 This update does not import SolidCraft's application or modelling session.
+
+## Compact workspace card
+
+The workspace card uses SolidCraft 0.41.0's 88-point width and shared ribbon
+height metrics as a minimum, with PCBcraft's existing scroll gutter. Both cards
+share the ribbon's measured outer height, including wrapped tabs and PCB fields,
+and the shell reserves the resulting space above the canvas. Long workspace titles
+wrap within the card. The pinned `app_bar::switcher` accepts a named kit icon
+and returns only a click boolean; it cannot draw the host's electronics glyphs
+or return the response needed by the existing accessible popup. The chrome
+adapter therefore retains its shared card, theme and font composition and
+viewport-scoped popup rather than replacing that interaction.

@@ -556,22 +556,25 @@ fn preview_commands_share_state_and_reject_partial_updates() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
-/// Workspace titles and picker order follow the host catalogue, while every working
-/// workspace shares identical wide/compact chooser dimensions even with wrapped tools.
+/// Workspace titles and picker order follow the host catalogue. Floating cards share a
+/// width while adapting their heights to the ribbon; narrow chooser buttons share both dimensions.
 #[test]
-fn workspace_names_order_and_standard_tile_sizes() {
+fn workspace_names_order_and_consistent_tile_widths() {
     let order: Vec<_> = crate::WORKSPACES.entries.iter().map(|e| (e.id, e.title)).collect();
     assert_eq!(&order[..3], &[("schematic", "Schematic"), ("board", "PCB Layout"), ("library", "Parts Library")]);
     for width in [1800., 620., 520.] {
         let mut h = fixture(width);
         let ctx = h.ctx.clone();
-        let mut expected = None;
+        let mut expected: Option<egui::Vec2> = None;
         for key in ["schematic", "board", "library", "symbol_editor", "footprint_editor"] {
             h.state_mut().enter_workspace(&ctx, key, Placement::Here).unwrap();
             h.run();
             let size = h.get_by_label("Choose workspace").rect().size();
             if let Some(expected) = expected {
-                assert_eq!(size, expected, "{key}, width={width}");
+                assert_eq!(size.x, expected.x, "{key}, width={width}");
+                if width < 600. {
+                    assert_eq!(size.y, expected.y, "compact {key}, width={width}");
+                }
             } else {
                 expected = Some(size);
             }
