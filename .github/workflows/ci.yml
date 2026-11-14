@@ -99,7 +99,8 @@ jobs:
       - name: Run net-class catalog and resolver tests as WebAssembly
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
-        run: cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib net_classes:: -- --test-threads=1
+        run: |
+          cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib net_classes:: -- --test-threads=1
       - name: Run shared length parser tests as WebAssembly
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
