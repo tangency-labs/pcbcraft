@@ -1382,3 +1382,13 @@ routing halo, ribbon dimensions and existing message surface through chrome;
 no new generic control or toolkit gap was required. Command-built tests use
 original PCBcraft parts and production codecs. No external EDA implementation,
 asset, dependency or toolkit revision was introduced.
+
+## Shared net-class editor
+
+The #303 Rules workflow, current-selection projection and regressions are original
+MIT OR Apache-2.0 PCBcraft work. The form composes the pinned Craft settings modal,
+segmented tabs, choices, search, checkboxes, fields and footer through existing
+`crates/chrome` adapters. Hard/preference grouping, sparse opinions and provenance
+remain host domain composition; the toolkit does not provide an electronics rule
+editor. No custom generic control, dependency upgrade, external EDA implementation,
+library asset or native format change was introduced.

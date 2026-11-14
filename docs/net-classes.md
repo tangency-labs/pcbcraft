@@ -5,7 +5,8 @@ project-wide catalog and a resolver for explicitly supplied class sets. Classes
 can be authored in a schematic-only project without creating a board or a
 stackup. [Persistent assignments](net-class-assignments.md) now bind those IDs to
 meaningful nets through shared commands. [Routing, clearance queries and DRC](net-class-consumers.md)
-consume those assignments; editor controls remain under #303.
+consume those assignments; the [shared editor workflow](net-class-editor.md) authors
+and inspects them from schematic and PCB views.
 
 ## Authored definitions
 
@@ -140,7 +141,7 @@ IDs, revisions and bytes.
 
 #301's [assignment contract](net-class-assignments.md) defines removal protection,
 origins and topology reconciliation. #302's [routing, query and DRC consumers](net-class-consumers.md)
-use this resolver with snapshot validity and explicit conflicts; #303 owns the
-remaining shared editor workflow. Definitions alone do not assign classes to nets:
-consumers use persistent assignments rather than inferring bindings from class
-names.
+use this resolver with snapshot validity and explicit conflicts; #303 adds the
+[shared editor workflow](net-class-editor.md). Definitions alone do not assign
+classes to nets: consumers use persistent assignments rather than inferring
+bindings from class names.

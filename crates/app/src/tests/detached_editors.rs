@@ -2057,3 +2057,23 @@ fn main_window_title_names_its_document_like_a_detached_window() {
     assert!(h.state().views.hosts.contains_key(&HostId::ROOT), "the arrangement recreates the main window");
     assert_eq!(titles, [titled.as_str()]);
 }
+
+/// Closing the originating detached editor expires its shared Rules draft without authoring
+/// or retargeting it to the still-open root editor.
+#[test]
+fn closing_detached_editor_expires_net_class_rules() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let root = h.state().views.active.id();
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    h.state_mut().views.bind(child);
+    h.state_mut().begin_rules();
+    h.state_mut().views.bind(root);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Rules(_)));
+    let before = h.state().session.inspect();
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
+}

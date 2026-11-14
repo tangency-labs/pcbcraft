@@ -55,12 +55,21 @@ impl Edit {
 
 impl PcbApp {
     /// Open the physical board's rules from either editor without mutating the design.
+    #[cfg(test)]
     pub(super) fn begin_board_rules(&mut self) {
         if !matches!(self.dialog, Dialog::None) || self.files.busy() || self.project_action_pending() {
             return;
         }
         let Some(source) = self.views.active.input(&self.session) else { return };
-        let Some(project) = self.views.active.snapshot(&self.session) else { return };
+        self.begin_board_rules_from(source);
+    }
+
+    /// Keep a shared Rules transition bound to its original view, including split/detached hosts.
+    pub(super) fn begin_board_rules_from(&mut self, source: ViewInput) {
+        if !matches!(self.dialog, Dialog::None) || !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session)) {
+            return;
+        }
+        let Some(project) = self.views.view(source.view()).and_then(|view| view.snapshot(&self.session)) else { return };
         let Some(board) = project.board_target().and_then(|t| project.board_view(t)) else { return };
         let unit = self.preferences.units;
         let values = json!(board.effective_rules().values);
@@ -197,7 +206,8 @@ mod tests {
             h.state_mut().preferences.units = units::Unit::Mil;
             let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
             click(&mut h, "Analyze");
-            click(&mut h, "Edit board defaults and routing preferences");
+            click(&mut h, "Edit net classes, assignments and board defaults.");
+            click(&mut h, "Board defaults…");
             click(&mut h, "Cancel");
             assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
             h.state_mut().begin_board_rules();

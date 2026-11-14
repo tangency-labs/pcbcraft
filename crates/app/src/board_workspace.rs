@@ -329,7 +329,7 @@ impl PcbApp {
         self.board_size_controls(ui, enabled, compact);
     }
 
-    /// Analysis opens DRC, measurement and counterpart tools, plus Rules for editing saved board defaults.
+    /// Analysis opens DRC, measurement and counterpart tools, plus the shared class/default Rules form.
     fn board_analyze_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let checks = [
@@ -345,7 +345,7 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Rules,
                 label: "Rules",
-                description: "Edit board defaults and routing preferences",
+                description: "Edit net classes, assignments and board defaults.",
                 shortcut: "",
                 enabled,
                 active: false,
@@ -354,7 +354,7 @@ impl PcbApp {
         ];
         match workspace::ribbon_group(ui, "Checks", &checks) {
             Some(0) => self.run_drc(),
-            Some(1) => self.begin_board_rules(),
+            Some(1) => self.begin_rules(),
             _ => {}
         }
         workspace::ribbon_separator(ui);

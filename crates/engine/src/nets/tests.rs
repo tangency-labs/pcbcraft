@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 mod codec;
+mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
 fn apply(session: &mut Session, command: &str, mut params: Value) {

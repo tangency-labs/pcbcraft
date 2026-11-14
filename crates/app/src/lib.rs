@@ -46,6 +46,7 @@ mod library_workspace;
 mod live_control;
 mod native_part_properties;
 mod native_sources;
+mod net_class_editor;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
@@ -204,6 +205,7 @@ enum Dialog {
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
+    Rules(Box<net_class_editor::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -2187,6 +2189,7 @@ impl PcbApp {
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
+            Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
