@@ -1344,3 +1344,11 @@ No dependency, external asset or saved native format changed in this follow-up.
 The tab adapter binds the kit's scoped panel palette to the workspace text,
 selection and hover tokens, since the title-bar palette has different light-mode
 contrast. The override is local to painting these tabs and their existing menus.
+
+Per-part removal planning, directory-bound review tokens, reversible native-record
+staging and failure regressions are original PCBcraft work. The implementation
+reuses the existing publisher lock, handle-bound storage primitives and platform
+trash adapters without new dependencies or native formats. Delete part uses the
+already qualified Craft ribbon action and confirmation form through chrome;
+Preview resizing reuses the existing shared sash and panel surface. No external
+EDA sources, records, icons or artwork were consulted or added.

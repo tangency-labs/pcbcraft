@@ -129,3 +129,15 @@ to Items; Browse and source-tree navigation retain the open session document.
 The part form keeps its primary Publish action in a fixed footer outside the
 scrolling fields. A single footprint needs no package selector; package naming
 and the reserved model slot are in Package details.
+
+The docked Preview width is limited by the available workspace rather than a
+fixed 640-point cap. Its sash leaves at least 360 logical points for Items and
+the Browser's current width; narrower hosts still use the existing compact
+Browser/Items/Preview choices. `app.library_browse preview_width` accepts a
+preferred width from 240 through 65535 logical points, clamped to the current
+viewport during rendering. Browser width and project contents are unaffected.
+
+**Item › Delete part** removes the selected generic/orderable identity's revisions
+from a writable external folder, after review and dependency checks. **Delete
+library** remains a separate source action. See the [source guide](native-library-sources.md)
+for trash recovery and platform limits.

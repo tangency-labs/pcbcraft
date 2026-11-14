@@ -131,3 +131,35 @@ fn preview_column_width_commands_are_atomic_and_pane_local() {
         assert_eq!(app.views.view(other).unwrap().library.as_ref().unwrap().inspect(), before);
     }
 }
+
+/// Preview uses the remaining host width instead of a 640-point ceiling, while Browser and
+/// Items retain useful space. Both docked edges share real pointer and keyboard behavior.
+#[test]
+fn preview_can_grow_beyond_640_without_changing_browser_or_project() {
+    use crate::workspace_panels::PROPERTIES;
+    use pcbcraft_chrome::workspace::panels::Position;
+    for side in [Position::Left, Position::Right] {
+        let mut h = fixture(3200.);
+        h.state_mut().views.active.panels[PROPERTIES].set_position(side, None);
+        h.run();
+        let snapshot = h.state().session.snapshot().unwrap();
+        let browser = h.state().views.active.library.as_ref().unwrap().browser.width();
+        let edge = h.get_by_label("Resize Preview column width").rect();
+        let delta = if side == Position::Left { 1000. } else { -1000. };
+        h.drag_at(edge.center());
+        h.run();
+        h.hover_at(edge.center() + egui::vec2(delta, 0.));
+        h.run();
+        h.drop_at(edge.center() + egui::vec2(delta, 0.));
+        h.run();
+        let width = h.state().views.active.library.as_ref().unwrap().preview_width.width(440.);
+        assert!(width > 1300., "width={width}");
+        assert_eq!(h.state().views.active.library.as_ref().unwrap().browser.width(), browser);
+        let ctx = h.ctx.clone();
+        let view = h.state().views.active.id();
+        h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":view.0,"preview_width":2000})).unwrap();
+        h.run();
+        assert_eq!(h.state().views.active.library.as_ref().unwrap().preview_width.preferred(), Some(2000.));
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    }
+}

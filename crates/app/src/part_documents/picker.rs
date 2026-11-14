@@ -171,6 +171,9 @@ impl State {
 impl PcbApp {
     /// Open reference browsing after capturing a stable package/field identity and draft revision.
     pub(crate) fn begin_part_reference(&mut self, ctx: &egui::Context, document: u64, field: ReferenceField) -> Result<(), String> {
+        if self.library_sources.mutating() {
+            return Err("Finish the library folder operation before choosing a definition.".into());
+        }
         let doc = self.library_editors.parts.get(&document).ok_or("Unknown part document.")?;
         if !doc.pending.is_empty() {
             return Err("Apply or reset typed fields before choosing another definition.".into());
@@ -189,6 +192,9 @@ impl PcbApp {
         field: &ReferenceField,
         reference: Option<Reference>,
     ) -> Result<(), String> {
+        if self.library_sources.mutating() {
+            return Err("Finish the library folder operation before choosing a definition.".into());
+        }
         let doc = self.library_editors.parts.get_mut(&document).ok_or("The part document closed.")?;
         if !doc.pending.is_empty() {
             return Err("Apply or reset typed fields before choosing another definition.".into());

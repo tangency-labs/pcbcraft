@@ -1,8 +1,10 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
+mod deletion;
 pub mod inventory;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
+pub use deletion::ItemRemoval;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

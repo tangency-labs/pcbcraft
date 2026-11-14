@@ -412,6 +412,26 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "app.library_delete_part",
+            title: "Delete Library Part",
+            summary: "Prepare deletion of all revisions of a selected generic/orderable part in a writable folder. Inspect the token, then explicitly confirm; project pins and drawing dependencies are retained.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "phase",
+                    summary: "Prepare, confirm the reviewed token, or cancel without deleting",
+                    required: false,
+                    kind: Kind::Choice(&["prepare", "confirm", "cancel"]),
+                },
+                Param {
+                    name: "token",
+                    summary: "Exact confirmation token from inspect_editor.library_item_deletion",
+                    required: false,
+                    kind: Kind::Query,
+                },
+            ],
+        },
+        WindowCommand {
             id: "app.library_browse",
             title: "Browse Library",
             summary: "Browse registered sources or exact project pins without changing project revision/history. Inspect its selection through inspect_editor.",
@@ -447,7 +467,7 @@ mod live {
                     name: "preview_width",
                     summary: "Preferred docked Preview column width in logical points",
                     required: false,
-                    kind: Kind::Integer { min: 240, max: 640, step: 1 },
+                    kind: Kind::Integer { min: 240, max: 65535, step: 1 },
                 },
                 Param {
                     name: "type",
@@ -1196,6 +1216,7 @@ mod live {
             "windows": windows,
             "library_editors":app.library_editors.inspect(),
             "library_destinations":app.inspect_library_destinations(),
+            "library_item_deletion":app.inspect_library_item_deletion(),
             "part_dependency_updates":app.part_updates,
             "views": views,
             "arrangements": {
@@ -1290,7 +1311,7 @@ mod live {
                 self.bind_editor_host(self.views.main);
                 return result;
             }
-            if matches!(id, "app.library_source" | "app.library_browse" | "app.library_catalog_edit") {
+            if matches!(id, "app.library_source" | "app.library_browse" | "app.library_catalog_edit" | "app.library_delete_part") {
                 return self.library_workspace_command(ctx, id, params);
             }
             if id.starts_with("app.part_") {

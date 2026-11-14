@@ -31,7 +31,7 @@ impl std::fmt::Display for Failure {
 
 /// A process lock keeps simultaneous cooperating publishers from allocating different snapshots
 /// of the same next revision. Crash/shutdown releases the OS lock; its empty file is reusable.
-struct Lock(File);
+pub(super) struct Lock(pub(super) File);
 impl Drop for Lock {
     /// Explicitly release the advisory lock on every staging and publication failure path.
     fn drop(&mut self) {

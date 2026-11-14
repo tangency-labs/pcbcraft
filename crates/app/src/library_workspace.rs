@@ -218,7 +218,13 @@ impl PcbApp {
                 "Remove library registration",
                 external && idle,
             ),
-            (Action::Delete, ToolIcon::Delete, "Delete", "Delete library folder", external && folder && writable && idle && !crate::IN_BROWSER),
+            (
+                Action::Delete,
+                ToolIcon::Delete,
+                "Delete library",
+                "Delete library folder",
+                external && folder && writable && idle && !crate::IN_BROWSER,
+            ),
         ];
         let layouts = [
             (Action::Split, ToolIcon::SplitView, "Split", "Split Library workspace", true),
@@ -238,7 +244,7 @@ impl PcbApp {
             matches!(key.kind, Kind::Symbol | Kind::Footprint | Kind::Part | Kind::ManufacturerPart)
                 && (self.views.active.library.as_ref().is_some_and(|state| state.project.is_some()) || !self.session.libraries().conflicting(key))
         });
-        let editable = selected && source.is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source));
+        let editable = selected && idle && source.is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source));
         let response = workspace::ribbon(
             ui,
             "Parts Library",
@@ -298,6 +304,19 @@ impl PcbApp {
                             vec![
                                 ("Edit", ToolIcon::Shared("edit"), "Edit published item", editable),
                                 ("Edit copy", ToolIcon::Shared("copy"), "Edit a copy under a new identity", selected),
+                                (
+                                    "Delete part",
+                                    ToolIcon::Delete,
+                                    "Delete selected part",
+                                    editable
+                                        && idle
+                                        && cfg!(unix)
+                                        && !crate::IN_BROWSER
+                                        && self.views.active.library.as_ref().is_some_and(|s| {
+                                            s.project.is_none()
+                                                && s.selected.as_ref().is_some_and(|k| matches!(k.kind, Kind::Part | Kind::ManufacturerPart))
+                                        }),
+                                ),
                                 ("Compare", ToolIcon::Shared("compare"), "Compare items · Planned", false),
                             ],
                         ),
@@ -342,6 +361,12 @@ impl PcbApp {
                 }),
                 3 => self.message = self.new_part_document(ui.ctx(), None).map(|_| ()).err(),
                 4 | 5 => self.message = self.edit_catalog_selection(ui.ctx(), action == 5).err(),
+                6 => {
+                    let target = self.views.active.library.as_ref().and_then(|state| state.source.clone().zip(state.selected.clone()));
+                    if let Some((source, key)) = target {
+                        self.message = self.begin_library_item_delete(ui.ctx(), &source, &key).err();
+                    }
+                }
                 _ => {}
             }
         }
@@ -442,6 +467,24 @@ impl PcbApp {
         if self.views.view(view).is_none_or(|view| view.library.is_none()) {
             return Err("Choose the Library workspace in this pane first".into());
         }
+        if id == "app.library_delete_part" {
+            if params["phase"].as_str().unwrap_or("prepare") != "prepare" {
+                return self.library_item_delete_phase(ctx, params["phase"].as_str().unwrap_or_default(), params["token"].as_str());
+            }
+            if !matches!(self.dialog, crate::Dialog::None) {
+                return Err("Confirm or cancel the current deletion review first.".into());
+            }
+            let state = self.views.view(view).and_then(|v| v.library.as_ref()).ok_or("Choose a Library pane.")?;
+            if state.project.is_some() || state.part_document.is_some() {
+                return Err(
+                    "Choose Browse and a published part in an external library. Delete part applies to external folder libraries, not project pins."
+                        .into(),
+                );
+            }
+            let source = state.source.clone().ok_or("Select a library folder.")?;
+            let key = state.selected.clone().ok_or("Select a generic or orderable part.")?;
+            return self.begin_library_item_delete(ctx, &source, &key);
+        }
         if id == "app.library_source" {
             let action = match params["action"].as_str() {
                 Some("new") => Action::NewLibrary,
@@ -477,7 +520,7 @@ impl PcbApp {
             state.browser.set_width(width as f32)?;
         }
         if let Some(width) = params["preview_width"].as_f64() {
-            state.preview_width.set_width(width as f32)?;
+            state.preview_width.set_preview_width(width as f32)?;
         }
         if let Some(action) = params["tree_action"].as_str() {
             self.library_tree_action(
@@ -759,6 +802,10 @@ impl PcbApp {
         }
         let catalog = self.session.libraries();
         let all = catalog.source_items(source);
+        if state.selected.as_ref().is_some_and(|key| !all.iter().any(|item| item.key == *key)) {
+            state.selected = None;
+            state.sync_preview();
+        }
         let mut latest: BTreeMap<(Kind, &str), &Item> = BTreeMap::new();
         for item in all.iter().filter(|i| i.key.kind != Kind::Category) {
             let key = (item.key.kind, item.key.id.as_str());

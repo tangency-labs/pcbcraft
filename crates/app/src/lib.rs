@@ -175,6 +175,8 @@ enum Dialog {
     NoConnects(Box<no_connect::Inspection>),
     AddLibrary(Option<String>),
     DeleteLibrary(native_sources::lifecycle::DeleteDraft),
+    #[cfg(not(target_arch = "wasm32"))]
+    DeleteLibraryItem(Box<native_sources::items::Draft>),
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
@@ -2130,6 +2132,8 @@ impl PcbApp {
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
             Dialog::AddLibrary(source) => self.add_library_dialog(ctx, source),
             Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {

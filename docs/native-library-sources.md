@@ -55,7 +55,7 @@ its folder again. A saved project retains its pinned definitions and opens
 without reopening the library. There is no separate session-upload group or
 Upload bundle entry point.
 
-**Remove** forgets the registration/cache and leaves its files intact. **Delete**
+**Remove** forgets the registration/cache and leaves its files intact. **Delete library**
 is desktop-only for writable registered folders. Its confirmation names the
 folder, counts native item revisions and explains that projects keep their
 pinned copies. Pending editor changes from that library block deletion. The
@@ -64,6 +64,31 @@ retains the registration and reports an error. Linux/FreeBSD use the desktop
 `gio trash` service, macOS uses Finder, and Windows uses the recycle-bin API
 through PowerShell. An unavailable service has no permanent-delete fallback.
 Built-in libraries cannot be refreshed, relocated, removed or deleted.
+
+For an individual generic or orderable part, return to **Browse**, select its row
+in a writable folder library, and choose **Item › Delete part**. Close that
+part's authoring document first, including a clean published document. The
+confirmation covers every revision of that identity in the selected folder;
+symbols, footprints, categories and existing project-pinned copies are retained.
+Known orderable references in loaded libraries and dependent open drafts block
+removal. Libraries that are not loaded cannot be checked.
+
+The host captures the native files, rechecks them under the publisher lock, and
+stages the reviewed records as a small native library folder before sending that
+folder to system trash. A failed trash operation restores unused source names;
+if a newer file prevents restoration, the error identifies the retained recovery
+folder. There is no permanent-delete fallback. The library refreshes after the
+operation, including failure. This per-part path currently requires a Unix
+desktop; Windows and browser per-part deletion remain unavailable. A folder
+restored from trash contains the original manifest and deleted native records;
+there is no in-app undelete or project-Undo operation for library deletion.
+
+Live clients prepare `app.library_delete_part` in the addressed Library pane,
+then read `library_item_deletion` from editor inspection. Confirmation requires
+`phase: "confirm"` and the reviewed `token`; `phase: "cancel"` dismisses the
+review. The token binds the target, captured files and actual directory, and a
+catalog change requires a new review. These phases share GUI validation and the
+single native source-operation worker slot.
 
 To try the original MIT OR Apache-2.0 examples, add `examples/native-library`
 or `examples/native-parts`, or package one for transfer:

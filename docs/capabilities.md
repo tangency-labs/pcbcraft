@@ -132,10 +132,12 @@ removal. Older and untyped history retains its stored text; see the
 The **Parts Library** workspace browses native libraries with search/Type, nested and
 flat orderable parts, native previews, revisions and dependencies. Desktop source
 actions include remembered folders, refresh/relocate, bundle installation into
-unused folders, removal and confirmed system-trash deletion. Browser folder/bundle
+unused folders, removal and confirmed system-trash deletion of whole libraries, plus individual
+generic/orderable identities on Unix desktop with dependency and open-document
+guards. Browser folder/bundle
 reads remember names that need reopening after reload. See
 [native library sources](native-library-sources.md) for platform limits. Disabled
-planned controls do not yet provide generic-part authoring, export, comparison or connections.
+planned controls do not yet provide export, comparison or connections.
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
