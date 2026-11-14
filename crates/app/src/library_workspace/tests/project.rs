@@ -8,6 +8,37 @@ fn place(app: &mut PcbApp) {
     app.session.apply(pcbcraft_engine::part_instances::PLACE_PART, &json!({"library":"parts-demo","definition":"resistor","definition_revision":1,"definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()})).unwrap();
 }
 
+/// Live inspection returns the same visible kinds, query matches and ordering as Project rows.
+#[test]
+fn inspected_project_rows_follow_type_query_and_category_visibility() {
+    let mut h = fixture(1800.);
+    place(h.state_mut());
+    let before = h.state().session.snapshot().unwrap();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id();
+    for (kind, query, count) in [(0, "", 3), (2, "", 1), (0, "  R1  ", 3), (1, "RESISTOR", 1), (2, "Generic", 0), (4, "", 0)] {
+        h.state_mut()
+            .run_window_command(
+                &ctx,
+                "app.library_browse",
+                &json!({"view":view.0,"scope":"project","library":"parts-demo","type":kind,"query":query}),
+            )
+            .unwrap();
+        h.run();
+        let app = h.state();
+        let state = app.views.active.library.as_ref().unwrap();
+        let inspected = app.inspect_library_workspace(state);
+        let rows = inspected["items"].as_array().unwrap();
+        assert_eq!(rows.len(), count, "type={kind}, query={query}, rows={rows:?}");
+        assert!(rows.iter().all(|row| row["item"]["key"]["kind"] != "category"));
+        if kind == 2 && count == 1 {
+            assert_eq!(rows[0]["item"]["key"]["id"], "resistor-0603");
+            h.get_by_label("Project Footprint parts-demo/resistor-0603 r1");
+        }
+    }
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Shared tree rows and project previews work in both themes and compact/wide layouts offline.
 #[test]
 fn project_tree_browses_pins_without_mutating_or_requiring_a_source() {

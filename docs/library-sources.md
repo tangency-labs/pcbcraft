@@ -26,8 +26,11 @@ manager's implementation details each get their own design (see
   resistors and capacitors, an 0402 LED, SOT-23 and a plated two-pin header.
 - **Exact copies pinned into projects.** A project keeps a full copy of every
   symbol and footprint it uses, so it opens without the library (see
-  [native-project-storage.md](native-project-storage.md)). Opening a project
-  never upgrades those copies.
+  [native-project-storage.md](native-project-storage.md)). Opening does not adopt
+  newer source content. It can normalize recognized, unchanged historical
+  `starter` pins to `basic-components` in memory; ordinary Save publishes those
+  addresses. Customized pins and conflicting destinations keep their original
+  identities. See the [bundled address migration](native-project-storage.md#bundled-library-address-migration).
 - **Explicit package assignment.** A shared schematic/PCB chooser assigns an
   exact footprint and a validated terminal-to-pad mapping to a part instance, then
   places it on the board as a separate step.
@@ -358,7 +361,9 @@ same defaults with no download. The crate version names a distribution. Each ite
 and schema in it keeps its own ID and revision, so changing an item means a new
 revision even inside an app update. Basic components uses the `basic-components` identity. Historical `starter`
 references remain readable through a compatibility registration hidden from browsing;
-saved project copies retain their original addresses. Code uses the shared library
+customized project pins and conflicting target addresses retain their original
+identities. Recognized unchanged bundled pins normalize to `basic-components` on
+native open, with files changed only by ordinary Save. Code uses the shared library
 contract rather than assuming particular bundled items exist. Bundling third-party libraries is not part of
 this proposal.
 
@@ -591,8 +596,10 @@ These need their own documents and must respect the boundaries above:
   converted. Keep a namespaced custom field separate. Report two schemas claiming
   one identity and revision with different content.
 - **Bundled library upgrade:** save with one default-library version and reopen
-  with a newer one. Pinned meanings and no-op save bytes stay unchanged until an
-  explicit update.
+  with a newer one. New source revisions do not replace pinned meanings without
+  an explicit update. The qualified `starter`-to-`basic-components` address
+  migration preserves those meanings and can change bytes on the first Save;
+  subsequent no-op saves retain their bytes.
 - **Completeness rules:** check board transfer and assembly-BOM requirements
   under a permissive profile and an MPN-required one, through GUI and MCP.
   Direct assembly BOM export under either profile reports a fitted part instance

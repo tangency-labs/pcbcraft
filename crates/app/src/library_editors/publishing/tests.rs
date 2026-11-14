@@ -29,6 +29,30 @@ fn fixture() -> (PcbApp, tempfile::TempDir) {
     (app, temp)
 }
 
+/// A writable external registration of bundled content remains copy-only by library identity.
+#[test]
+fn reserved_external_libraries_are_not_publication_destinations() {
+    let (mut app, _temp) = fixture();
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components"));
+    app.session.install_library_source("external-basic", Arc::new(pcbcraft_storage::library::load(root).unwrap())).unwrap();
+    app.library_sources.registered.push(crate::native_sources::Registration {
+        source: "external-basic".into(),
+        path: root.to_str().unwrap().into(),
+        name: "External basic".into(),
+        writable: true,
+    });
+    assert!(app.writable_libraries().iter().all(|(source, _)| source != "external-basic"));
+    assert!(app.inspect_library_destinations().as_array().unwrap().iter().all(|source| source["library"] != "basic-components"));
+    let ctx = Context::default();
+    let view = app.views.active.id();
+    app.run_window_command(&ctx, "app.library_browse", &json!({"view":view.0,"source":"external-basic","type":1,"item":"connector"})).unwrap();
+    let before = app.session.snapshot().unwrap();
+    assert!(app.edit_catalog_selection(&ctx, false).is_err());
+    app.edit_catalog_selection(&ctx, true).unwrap();
+    assert_eq!(app.library_editors.documents[&app.library_editors.active.unwrap()].session.snapshot().library, "user");
+    assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+}
+
 /// Opening an older revision warns before writing, while Edit copy gets a separate identity.
 #[test]
 fn older_catalog_edit_requires_consent_and_copy_is_explicit() {

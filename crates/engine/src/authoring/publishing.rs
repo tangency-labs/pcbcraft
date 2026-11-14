@@ -59,10 +59,16 @@ pub fn new_library(id: &str, name: &str, license: &str) -> Result<String, String
 /// Return manifest identity after applying normal source validation and reserved-name policy.
 pub fn destination(manifest: &str) -> Result<String, String> {
     let manifest = library::parse_manifest(manifest)?;
-    if manifest.id == "user" || manifest.id.starts_with("project-") || matches!(manifest.id.as_str(), "basic-components" | "starter" | "power") {
+    if reserved_destination(&manifest.id) {
         return Err("Choose a writable personal library; user, project- and bundled identities are reserved.".into());
     }
     Ok(manifest.id)
+}
+
+/// Reserved library identities cannot become publication destinations, even in writable
+/// external folders. Hosts use this same policy after ordinary source-manifest validation.
+pub fn reserved_destination(library: &str) -> bool {
+    library == "user" || library.starts_with("project-") || matches!(library, "basic-components" | "starter" | "power")
 }
 
 /// Validate a captured draft and allocate an unused later revision without mutating the session.
@@ -132,7 +138,7 @@ impl Item {
         copy.library = "user".into();
         copy.revision = 1;
         copy.allocation.revision = 1;
-        copy.name = format!("{} copy", self.name).chars().take(64).collect();
+        copy.name = super::copy_name(&self.name);
         copy.source = super::bounded_text(format!("Fork of {}/{} r{}; {}", self.library, self.id, self.revision, self.source), 1024);
         copy.validate()?;
         Ok(copy)

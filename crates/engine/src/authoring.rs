@@ -462,7 +462,7 @@ impl Item {
     fn read_symbol(definition: &SymbolDefinition, fork: bool) -> Result<Self, String> {
         let mut item = Self::new(Kind::Symbol)?;
         item.objects.clear();
-        item.name = format!("{} copy", definition.name).chars().take(64).collect();
+        item.name = copy_name(&definition.name);
         item.source = format!("Fork of {}/{} at revision {}", definition.library, definition.id, definition.revision());
         let original = if definition.library == "starter" { library::compatibility::starter() } else { library::basic_components() }
             .symbol(&definition.id)
@@ -536,7 +536,7 @@ impl Item {
     /// Fork physical data while retaining its license and source; the original receives no writes.
     pub fn from_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
         let mut item = Self::read_footprint(definition)?;
-        item.name = bounded_text(format!("{} copy", definition.name), 64);
+        item.name = copy_name(&definition.name);
         item.source =
             bounded_text(format!("Fork of {}/{} r{}; {}", definition.library, definition.id, definition.revision, definition.source.reference), 2048);
         item.validate()?;
@@ -1000,6 +1000,12 @@ fn restored(item: &Arc<Item>, allocation: Allocation) -> Result<Arc<Item>, Strin
     item.allocation = allocation;
     item.validate()?;
     Ok(Arc::new(item))
+}
+
+/// Keep a bounded, unpadded copy label with the complete suffix and valid UTF-8 in both editors.
+fn copy_name(name: &str) -> String {
+    let prefix = bounded_text(name.to_owned(), 64 - " copy".len());
+    format!("{} copy", prefix.trim_end())
 }
 
 /// Bound UTF-8 text by bytes while retaining complete code points.

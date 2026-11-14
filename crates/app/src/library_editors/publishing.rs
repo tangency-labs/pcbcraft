@@ -168,7 +168,7 @@ impl PcbApp {
                 .collect::<Vec<_>>()
         )
     }
-    /// Only available, registered native folders advertise writable destination capability.
+    /// Only available, registered native folders with nonreserved identities advertise publication.
     pub(crate) fn writable_libraries(&self) -> Vec<(String, String)> {
         let loaded = self.session.libraries().inspect();
         self.library_sources
@@ -180,7 +180,7 @@ impl PcbApp {
                     .iter()
                     .find(|source| source["source"] == registration.source && source["available"] == true && source["builtin"] == false)?;
                 let library = source["library"].as_str()?;
-                (registration.writable && !registration.path.is_empty() && library != "user" && !library.starts_with("project-"))
+                (registration.writable && !registration.path.is_empty() && !engine::reserved_destination(library))
                     .then(|| (registration.source.clone(), source["name"].as_str().unwrap_or(library).to_owned()))
             })
             .collect()

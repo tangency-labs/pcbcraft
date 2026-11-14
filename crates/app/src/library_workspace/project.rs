@@ -1,6 +1,9 @@
 //! Project-owned library browsing shares source presentation without inventing registrations.
 use super::*;
-use pcbcraft_engine::{Project, library::sources::inventory::Inventory};
+use pcbcraft_engine::{
+    Project,
+    library::sources::inventory::{Entry, Inventory},
+};
 use std::sync::{Arc, Weak};
 
 /// Share one inventory across panes, invalidated by immutable snapshot identity (including Undo).
@@ -43,7 +46,7 @@ impl PcbApp {
         let mut value = state.inspect();
         if state.project.is_some() && state.project == self.session.project().map(|project| project.id()) {
             match self.project_library_inventory() {
-                Ok(inventory) => value["items"] = json!(inventory.entries().filter(|entry| state.includes_project(&entry.item.key)).map(|entry| {
+                Ok(inventory) => value["items"] = json!(project_rows(state, &inventory).into_iter().map(|entry| {
                     json!({"item":entry.item.inspect(),"used_by":entry.used_by,"source_status":inventory.status(&entry.item,self.session.libraries())})
                 }).collect::<Vec<_>>()),
                 Err(error) => value["error"] = json!(error),
@@ -303,20 +306,7 @@ impl PcbApp {
         if state.kind != previous_kind {
             state.selected = None;
         }
-        let query = state.query.trim().to_lowercase();
-        let mut entries: Vec<_> = inventory
-            .entries()
-            .filter(|entry| {
-                let item = &entry.item;
-                item.key.kind != Kind::Category
-                    && state.includes_project(&item.key)
-                    && (state.kind == 0 || state.kind == kind_index(item.key.kind))
-                    && format!("{} {} {} {}", item.name, item.key.library, item.key.id, entry.used_by.iter().cloned().collect::<Vec<_>>().join(" "))
-                        .to_lowercase()
-                        .contains(&query)
-            })
-            .collect();
-        entries.sort_by_key(|entry| (entry.item.name.to_lowercase(), entry.item.key.clone()));
+        let entries = project_rows(state, &inventory);
         let rows: Vec<_> = entries
             .iter()
             .map(|entry| {
@@ -364,6 +354,25 @@ impl State {
     fn includes_project(&self, key: &Key) -> bool {
         self.project_library.as_deref().is_none_or(|library| key.library == library || project_group(&key.library) == library)
     }
+}
+
+/// Share category visibility, collection/type/search filtering and row order with live inspection.
+fn project_rows<'a>(state: &State, inventory: &'a Inventory) -> Vec<&'a Entry> {
+    let query = state.query.trim().to_lowercase();
+    let mut entries: Vec<_> = inventory
+        .entries()
+        .filter(|entry| {
+            let item = &entry.item;
+            item.key.kind != Kind::Category
+                && state.includes_project(&item.key)
+                && (state.kind == 0 || state.kind == kind_index(item.key.kind))
+                && format!("{} {} {} {}", item.name, item.key.library, item.key.id, entry.used_by.iter().cloned().collect::<Vec<_>>().join(" "))
+                    .to_lowercase()
+                    .contains(&query)
+        })
+        .collect();
+    entries.sort_by_key(|entry| (entry.item.name.to_lowercase(), entry.item.key.clone()));
+    entries
 }
 
 /// The reserved native namespace, rather than source availability, identifies deliberate variants.

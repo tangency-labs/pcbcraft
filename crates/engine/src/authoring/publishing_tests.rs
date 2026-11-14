@@ -30,6 +30,33 @@ fn edit_copy_bounds_multibyte_source_and_preserves_the_original() {
     }
 }
 
+/// A native name near the copy-label boundary stays valid through every copy entry point.
+#[test]
+fn copy_names_reserve_a_complete_suffix_without_trailing_whitespace() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for name in ["a".repeat(63), "a".repeat(64), format!("{} z", "a".repeat(58)), "é".repeat(64)] {
+            let mut item = Item::new(kind).unwrap();
+            item.name = name;
+            let before = item.encode().unwrap();
+            let check = |copy: Item| {
+                assert!(copy.name.ends_with(" copy"), "{}", copy.name);
+                assert_eq!(copy.name.trim(), copy.name);
+                assert!(copy.name.len() <= 64);
+                copy.validate().unwrap();
+            };
+            check(item.edit_copy().unwrap());
+            match kind {
+                Kind::Symbol => check(Item::from_symbol(&item.symbol().unwrap()).unwrap()),
+                Kind::Footprint => check(Item::from_footprint(&item.footprint().unwrap()).unwrap()),
+            }
+            let manifest = new_library("workshop", "Workshop", &item.license).unwrap();
+            let prepared = publishing::prepare_copy(Arc::new(item.clone()), &manifest).unwrap();
+            assert_eq!(prepared.item().name, item.name, "Save As retains the requested original name");
+            assert_eq!(item.encode().unwrap(), before);
+        }
+    }
+}
+
 /// Legacy bundled definitions without embedded attribution retain the bundled license on copy.
 #[test]
 fn legacy_starter_copy_infers_recorded_license() {

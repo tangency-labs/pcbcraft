@@ -100,6 +100,7 @@ impl Inventory {
 
     /// Distinguish deliberate project variants, source absence and same-address content conflicts.
     /// Newer source revisions are information only; this method never adopts an update.
+    /// Exact and latest-revision lookups use the catalog index without scanning unrelated records.
     pub fn status(&self, item: &Item, catalog: &Catalog) -> &'static str {
         if item.key.library.starts_with("project-") {
             return "Project-only";
@@ -107,17 +108,12 @@ impl Inventory {
         if catalog.conflicting(&item.key) {
             return "Conflict";
         }
-        let candidates = catalog.index.values().map(|(source, index)| &catalog.sources[source].items[*index]);
-        let mut highest = 0;
-        let mut exact = None;
-        for candidate in candidates
-            .filter(|candidate| candidate.key.library == item.key.library && candidate.key.kind == item.key.kind && candidate.key.id == item.key.id)
-        {
-            highest = highest.max(candidate.key.revision);
-            if candidate.key == item.key {
-                exact = Some(candidate);
-            }
-        }
+        let mut first = item.key.clone();
+        first.revision = 0;
+        let mut last = item.key.clone();
+        last.revision = u32::MAX;
+        let highest = catalog.index.range(first..=last).next_back().map_or(0, |(key, _)| key.revision);
+        let exact = catalog.index.get(&item.key).and_then(|(source, index)| catalog.sources.get(source)?.items.get(*index));
         if let Some(candidate) = exact {
             let matches = match (&item.definition, &candidate.definition) {
                 (Definition::Symbol(pinned), Definition::Symbol(source)) => matches_pinned(pinned, source),
