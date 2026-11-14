@@ -13,6 +13,8 @@ files remain future work. See the [single-board codec](single-board-storage.md)
 and [occurrence codec](sheet-occurrence-storage.md) for the supported boundaries.
 Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
+Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
+in the entry point; only projects with authored classes select that version.
 
 ## File encodings and save behavior
 

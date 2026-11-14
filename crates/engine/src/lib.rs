@@ -15,6 +15,7 @@ pub mod hierarchy;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
+pub mod net_classes;
 pub mod net_labels;
 pub mod nets;
 pub mod no_connect;
@@ -146,6 +147,9 @@ enum ParamKind {
     BoardSide,
     RuleLength,
     BoardRules,
+    ClassRules,
+    ClassSet,
+    ClassId,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -224,6 +228,9 @@ impl ParamKind {
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
+            Self::ClassRules => net_classes::rules_schema(),
+            Self::ClassSet => net_classes::set_schema(),
+            Self::ClassId => json!({"type":"string","format":"uuid"}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
             Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
@@ -465,6 +472,15 @@ impl ParamKind {
             Self::ViaDrill if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM..board::track::MAX_VIA_DIAMETER_NM).contains(&n)) => {
                 Ok(())
             }
+            Self::ClassRules => serde_json::from_value::<net_classes::Rules>(value.clone())
+                .map_err(|_| "must contain supported integer-nanometre class rules")
+                .and_then(|rules| net_classes::validate_rules(&rules).map_err(|_| "class dimensions are invalid or contradictory")),
+            Self::ClassSet => net_classes::parse_set(value).map(|_| ()).map_err(|_| "must contain a bounded set of unique non-nil class UUIDs"),
+            Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
+                .ok()
+                .filter(|id| !id.is_nil())
+                .map(|_| ())
+                .ok_or("must identify a class by non-nil UUID"),
             Self::BoardRules if value.is_null() || serde_json::from_value::<board::rules::Values>(value.clone()).is_ok() => Ok(()),
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
@@ -1922,6 +1938,69 @@ const CATALOG: &[Command] = &[
             Param { name: "anchor", kind: ParamKind::NetTarget, required: true, summary: "A terminal, label or port on the selected current branch" },
         ],
     },
+    Command {
+        id: net_classes::CREATE,
+        title: "Create Net Class",
+        summary: "Create a project-wide dimensional class without assigning nets or allocating a board.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name; identity is an independent UUID" },
+            Param {
+                name: "rules",
+                kind: ParamKind::ClassRules,
+                required: true,
+                summary: "Sparse dimensional requirements/preferences in integer nanometres",
+            },
+        ],
+    },
+    Command {
+        id: net_classes::UPDATE,
+        title: "Update Net Class",
+        summary: "Replace a class name and complete sparse rule set, preserving its UUID and incrementing its definition revision only on change.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable class UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name" },
+            Param {
+                name: "rules",
+                kind: ParamKind::ClassRules,
+                required: true,
+                summary: "Complete replacement sparse dimensions; omitted properties have no class opinion",
+            },
+        ],
+    },
+    Command {
+        id: net_classes::REMOVE,
+        title: "Remove Net Class",
+        summary: "Remove a project class in one undoable transaction; net bindings are not implemented in this slice.",
+        params: &[EXPECTED_REVISION, Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable class UUID from inspection" }],
+    },
+    Command {
+        id: net_classes::INSPECT,
+        title: "Inspect Net Classes",
+        summary: "Read the class catalog without preparing connectivity or changing history.",
+        params: &[],
+    },
+    Command {
+        id: net_classes::RESOLVE,
+        title: "Resolve Net Class Rules",
+        summary: "Intersect explicit classes with built-ins or an addressed board's defaults, returning contributions and conflicts. A second set resolves a symmetric object pair.",
+        params: &[
+            BOARD,
+            Param {
+                name: "classes",
+                kind: ParamKind::ClassSet,
+                required: true,
+                summary: "Explicit class UUID set, including an empty set for defaults",
+            },
+            Param {
+                name: "other_classes",
+                kind: ParamKind::ClassSet,
+                required: false,
+                summary: "Second object's explicit class set for symmetric clearance resolution",
+            },
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -1995,6 +2074,8 @@ pub struct Project {
     circuit_use: Option<uuid::Uuid>,
     /// Sparse identity authority; current connectivity remains derived from the schematic.
     net_registry: Arc<nets::Registry>,
+    /// Authored dimensional class definitions, independent of net assignments and boards.
+    net_classes: Arc<net_classes::Catalog>,
 }
 
 impl Project {
@@ -2377,6 +2458,11 @@ impl Session {
             | "project.rename"
             | no_connect::SET
             | no_connect::CHECK
+            | net_classes::CREATE
+            | net_classes::UPDATE
+            | net_classes::REMOVE
+            | net_classes::INSPECT
+            | net_classes::RESOLVE
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2479,6 +2565,7 @@ impl Session {
                 "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
+            if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -2547,6 +2634,10 @@ impl Session {
         if id == EXPORT_FABRICATION {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
+        }
+        if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
+            self.validate_project_command(id, params)?;
+            return self.net_class_query(id, params);
         }
         self.apply(id, params)?;
         if id == no_connect::CHECK {
@@ -2630,6 +2721,11 @@ impl Session {
                 | "project.rename"
                 | no_connect::SET
                 | no_connect::CHECK
+                | net_classes::CREATE
+                | net_classes::UPDATE
+                | net_classes::REMOVE
+                | net_classes::INSPECT
+                | net_classes::RESOLVE
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -2703,6 +2799,7 @@ impl Session {
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
                 net_registry: Arc::default(),
+                net_classes: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -2716,6 +2813,10 @@ impl Session {
             no_connect::SET => self.set_no_connect(params)?,
             no_connect::CHECK => {
                 self.open_project()?;
+            }
+            net_classes::CREATE | net_classes::UPDATE | net_classes::REMOVE => self.edit_net_class(id, params)?,
+            net_classes::INSPECT | net_classes::RESOLVE => {
+                self.net_class_query(id, params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,

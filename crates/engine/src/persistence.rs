@@ -480,6 +480,9 @@ impl Encoder {
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
     /// drawings, rotation and occurrence IDs require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if !project.net_classes.definitions.is_empty() {
+            return Err("Net classes require split documents or a packed archive.".into());
+        }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
         }
@@ -1011,6 +1014,7 @@ fn validate_with_hierarchy(
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_classes: Arc::default(),
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;

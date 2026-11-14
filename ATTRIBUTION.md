@@ -1352,3 +1352,13 @@ trash adapters without new dependencies or native formats. Delete part uses the
 already qualified Craft ribbon action and confirmation form through chrome;
 Preview resizing reuses the existing shared sash and panel surface. No external
 EDA sources, records, icons or artwork were consulted or added.
+
+## Project net-class catalog and dimensional resolution
+
+The versioned class catalog, explicit-set dimensional resolver, shared commands,
+project/20 storage extension and regression cases are original MIT OR Apache-2.0
+PCBcraft work for #300, following the repository's rule and net-identity contracts.
+They reuse the delivered board-default vocabulary and existing serialization,
+UUID and history infrastructure. Fixtures are authored with native commands and
+production folder/archive codecs. No external EDA implementation, library data,
+artwork, dependency or toolkit change was introduced.

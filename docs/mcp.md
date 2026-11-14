@@ -372,3 +372,15 @@ atomically with “Remove the no-connect marker before connecting a wire.” Thi
 also covers coordinate and wire/at aliases. Remove the mark through the same
 commands or Delete before connecting; saved conflicts from older projects are
 preserved and remain reportable.
+
+
+## Explicit net-class rules
+
+`net_classes.create`, `net_classes.update` and `net_classes.remove` author the
+project catalog with `expected_revision`, without creating a physical board.
+`net_classes.inspect` reads that catalog, while `net_classes.resolve` combines
+explicit `classes` and optional `other_classes` UUID sets with built-ins or an
+explicitly addressed `board`. Both queries return their data with `inspect: false`.
+See the [property, conflict and storage contract](net-classes.md) for examples
+and precedence. These commands do not yet assign classes to nets or change
+routing/DRC behavior.

@@ -167,6 +167,31 @@ fn board_rules_mcp_discovery_authorship_and_diagnostics_agree() {
     assert_ne!(description["isError"], true, "{description}");
 }
 
+/// Real JSON-RPC tool dispatch preserves class query data when full inspection is suppressed.
+#[test]
+fn net_class_mcp_tools_author_inspect_resolve_and_reject_stale_edits() {
+    use pcbcraft_engine::net_classes as classes;
+    let mut s = server();
+    let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let created = call(
+        &mut s,
+        "execute",
+        json!({"command":classes::CREATE,"params":{"expected_revision":initial["revision"],"name":"Power","rules":{"clearance_nm":500_000}}}),
+    );
+    assert_ne!(created["isError"], true, "{created}");
+    let created = body(&created);
+    let class = created["project"]["net_classes"]["definitions"][0]["id"].clone();
+    let inspected = body(&call(&mut s, "execute", json!({"command":classes::INSPECT,"params":{},"inspect":false})));
+    assert_eq!(inspected["net_classes"], created["project"]["net_classes"]);
+    let resolved = body(&call(&mut s, "execute", json!({"command":classes::RESOLVE,"params":{"classes":[class]},"inspect":false})));
+    assert_eq!(resolved["resolution"]["values"]["clearance_nm"], 500_000);
+    assert_eq!(resolved["revision"], created["revision"]);
+    let stale = call(&mut s, "execute", json!({"command":classes::REMOVE,"params":{"class":class,"expected_revision":initial["revision"]}}));
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), created);
+    assert_ne!(call(&mut s, "describe_command", json!({"command":classes::RESOLVE}))["isError"], true);
+}
+
 /// MCP uses the native record resolver and exact quantity normalizer without an open project.
 #[test]
 fn native_part_resolution_and_units_are_available_through_mcp() {

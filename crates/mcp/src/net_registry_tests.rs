@@ -6,6 +6,49 @@ use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, Session, nets, selection::Se
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Catalog edits and explicit-class reads share live/headless authority, including modal refusal,
+/// query results with inspection disabled, stale revisions and the editor's ordinary Undo history.
+#[test]
+fn net_class_commands_share_live_and_headless_revision_and_query_behavior() {
+    use pcbcraft_engine::net_classes as classes;
+    let mut setup = Session::default();
+    apply(&mut setup, "project.new", json!({}));
+    apply(&mut setup, classes::CREATE, json!({"name":"Power","rules":{"clearance_nm":500_000}}));
+    let id = setup.project().unwrap().net_classes().definitions[0].id;
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live_session = Session::default();
+    live_session.open_snapshot(snapshot.clone());
+    let mut editor = OpenEditor { session: live_session, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    for command in [classes::CREATE, classes::UPDATE, classes::REMOVE, classes::INSPECT, classes::RESOLVE] {
+        assert!(catalog.as_array().unwrap().iter().any(|entry| entry["id"] == command));
+    }
+    let revision = editor.session.revision();
+    let edit = json!({"command":classes::UPDATE,"inspect":false,"params":{"class":id,"name":"Supply","rules":{"clearance_nm":700_000},"expected_revision":revision}});
+    editor.blocked = true;
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap_err().contains("dialog"));
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    editor.blocked = false;
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap();
+    assert_eq!(live, headless.call("engine.execute", edit.clone()).unwrap());
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).is_err());
+    assert!(headless.call("engine.execute", edit).is_err());
+    let saved = editor.session.snapshot().unwrap();
+    for params in [
+        json!({"command":classes::INSPECT,"inspect":false,"params":{}}),
+        json!({"command":classes::RESOLVE,"inspect":false,"params":{"classes":[id],"other_classes":[]}}),
+    ] {
+        let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap();
+        assert_eq!(live, headless.call("engine.execute", params).unwrap());
+        assert!(live.get("net_classes").is_some() || live.get("resolution").is_some());
+    }
+    assert!(Arc::ptr_eq(&saved, &editor.session.snapshot().unwrap()));
+    call_editor(&mut editor, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    assert_eq!(editor.session.project().unwrap().net_classes(), snapshot.net_classes());
+    assert!(editor.session.project().unwrap().board_target().is_none());
+}
+
 /// Model the real live adapter's ownership/refusal boundary without opening an OS window.
 struct OpenEditor {
     session: Session,
