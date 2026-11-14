@@ -3,15 +3,23 @@ use egui::Ui;
 use solidcraft_ui_kit as kit;
 
 /// Bound the document's reading width inside a large workspace or maximized Items region.
-/// The host owns document state; the shared field/table adapters retain their narrow layout.
-pub fn document<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// Calls the host for its scrolling body (`false`) and then fixed footer (`true`), using
+/// the kit's measured catalog layout. Field/table adapters retain their narrow layout.
+pub fn document(ui: &mut Ui, mut add: impl FnMut(&mut Ui, bool)) {
     let width = ui.available_width().min(760.);
     ui.allocate_ui_with_layout(egui::vec2(width, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_min_width(width);
         ui.set_max_width(width);
-        egui::ScrollArea::vertical().id_salt("part_document_fields").auto_shrink([false, true]).show(ui, add).inner
-    })
-    .inner
+        let layout = kit::CatalogLayout::new(ui, "part_document_fields", 1);
+        layout.body(ui, |ui| add(ui, false));
+        layout.footer(ui, |ui| add(ui, true));
+    });
+}
+
+/// Use the shared primary action band after the fields; it stays outside the scrolling body.
+/// An empty Cancel label omits that action because document closing belongs to the workspace.
+pub fn publication(ui: &mut Ui, status: &str, enabled: bool) -> bool {
+    kit::footer(ui, "Publish…", "", enabled, kit::Footer { status: Some(status), confirm: true, ..Default::default() }) == kit::Action::Ok
 }
 
 /// Keep pad identities and terminal choices aligned with the app's shared selectable tables.
@@ -114,14 +122,14 @@ pub fn chooser_body(ui: &mut Ui, height: f32, compact: &mut usize, mut draw: imp
 
 /// Compose the shared selectable table, revealing keyboard selections through the kit's
 /// explicit row-reveal contract instead of constructing an unbounded list of widgets.
-pub fn reference_results(ui: &mut Ui, rows: &[crate::library_workspace::TableEntry], reveal: bool) -> Option<usize> {
+pub fn reference_results(ui: &mut Ui, rows: &[crate::library_workspace::TableEntry], reveal: bool, empty: &str) -> Option<usize> {
     let columns = [
         kit::Column::new("Name", 2.).flex().min_content_width(160.),
         kit::Column::new("Library", 1.).flex().min_content_width(95.),
         kit::Column::new("Rev", 0.5).flex().min_content_width(48.),
     ];
     let mut picked = None;
-    kit::table_custom(ui, "reference_results", &columns, "No matching items", |ui, table| {
+    kit::table_custom(ui, "reference_results", &columns, empty, |ui, table| {
         table.headers(ui, |_, _| false);
         for (index, entry) in rows.iter().enumerate() {
             let response = table.row_visible(ui, &entry.key, entry.selected, entry.selected && reveal, |row| {
@@ -140,4 +148,77 @@ pub fn reference_results(ui: &mut Ui, rows: &[crate::library_workspace::TableEnt
         }
     });
     picked
+}
+
+/// Library browsing stays available beside the pinned kit's document tabs. The host maps
+/// tab indices to stable document IDs and owns selection, closing, creation and ordering.
+pub fn documents(ui: &mut Ui, documents: &[(String, bool, String)], selected: Option<usize>) -> Vec<DocumentAction> {
+    use kit::app_bar::{self, DocTab, TabAction, TabHandles, TabStrip};
+    let t = crate::Tokens::get();
+    // These document tabs are embedded in a workspace, whose background differs from the
+    // title bar. Bind the kit's tab ink/surfaces to that host palette without changing menus.
+    let mut palette = solidcraft_theme::Tokens::get();
+    palette.app_bar_text = t.text;
+    palette.app_bar_tab_active = t.selected_bg;
+    palette.app_bar_hover = t.hover;
+    palette.app_bar_hover_strong = t.hover;
+    let _palette = solidcraft_theme::scoped_panel_tokens(palette);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), t.control_height + t.space_8), egui::Sense::hover());
+    let browse = egui::Rect::from_min_size(rect.min, egui::vec2(94., rect.height()));
+    let mut actions = Vec::new();
+    if kit::button_at(ui, "browse_library", browse, "Browse", if selected.is_none() { kit::Button::SmallSelected } else { kit::Button::Ghost })
+        .accessible_name("Browse library")
+        .clicked()
+    {
+        actions.push(DocumentAction::Browse);
+    }
+    let mut strip = TabStrip {
+        tabs: documents.iter().map(|(name, dirty, place)| DocTab { name, list_name: name, dirty: *dirty, place }).collect(),
+        selected: selected.unwrap_or(0),
+        shown_selected: selected,
+        title_bar: false,
+        double_click_renames: false,
+        rename: None,
+        menu: &[app_bar::TabMenuRow { id: "close", label: "Close", key_on_selected: "", needs_others: false }],
+        close_name: "Close document",
+        close_tip: "Close document",
+        more_tip: "Open part documents",
+        new_tip: "New part document",
+        id: ui.make_persistent_id("part_document_tabs"),
+        handles: TabHandles {
+            tab: "part-tab:",
+            close: "part-close:",
+            more: "part-tabs-more",
+            new: "part-tab-new",
+            rename: "part-tab-rename",
+            menu_row: "part-tab-menu:",
+            more_row: "part-tab-more:",
+        },
+    };
+    let events = app_bar::tabs(ui, &mut strip, rect, browse.right() + t.space_8, rect.right());
+    for (index, (name, _, _)) in documents.iter().enumerate() {
+        if let Some(response) = ui.ctx().read_response(ui.scope_id().with(("doc_tab", index))) {
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, ui.is_enabled(), selected == Some(index), name));
+            crate::automation::publish(ui, &response, format!("part-tab:{index}"));
+        }
+    }
+    for action in events {
+        match action {
+            TabAction::Select(index) => actions.push(DocumentAction::Select(index)),
+            TabAction::Close(index) => actions.push(DocumentAction::Close(index)),
+            TabAction::Menu { tab, id } if id == "close" => actions.push(DocumentAction::Close(tab)),
+            TabAction::Reorder { from, to } => actions.push(DocumentAction::Reorder { from, to }),
+            TabAction::New => actions.push(DocumentAction::New),
+            _ => {}
+        }
+    }
+    actions
+}
+/// Presentation events retain no document state and never discard an edit themselves.
+pub enum DocumentAction {
+    Browse,
+    Select(usize),
+    Close(usize),
+    Reorder { from: usize, to: usize },
+    New,
 }

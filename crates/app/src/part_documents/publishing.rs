@@ -84,14 +84,19 @@ impl PcbApp {
             verifying || (!draft.source.is_empty() && (dirty || draft.copy || different) && (!older || draft.allow_older)),
             |ui| {
                 let before = draft.source.clone();
-                create = properties::choice_with_action(
-                    ui,
-                    "Library",
-                    ui.scope_id().with("part_destination"),
-                    &mut draft.source,
-                    &destinations.iter().map(|(id, name)| (id.as_str(), name.clone())).collect::<Vec<_>>(),
-                    "New library…",
-                );
+                if destinations.is_empty() {
+                    ui.label("Create a library folder to store this part.");
+                    create = ui.add(pcbcraft_chrome::controls::action("New library…", true)).clicked();
+                } else {
+                    create = properties::choice_with_action(
+                        ui,
+                        "Library",
+                        ui.scope_id().with("part_destination"),
+                        &mut draft.source,
+                        &destinations.iter().map(|(id, name)| (id.as_str(), name.clone())).collect::<Vec<_>>(),
+                        "New library…",
+                    );
+                }
                 if before != draft.source {
                     draft.allow_older = false;
                     draft.error = None;

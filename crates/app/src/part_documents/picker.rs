@@ -310,7 +310,12 @@ fn result_items(ui: &mut egui::Ui, state: &mut State) {
         .collect();
     let mut chosen = None;
     ui.push_id(state.page, |ui| {
-        chosen = chrome::reference_results(ui, &entries, std::mem::take(&mut state.reveal));
+        let empty = if state.field.kind() == Kind::Category && state.query.trim().is_empty() && state.library.is_empty() {
+            "No category definitions loaded"
+        } else {
+            "No matching items"
+        };
+        chosen = chrome::reference_results(ui, &entries, std::mem::take(&mut state.reveal), empty);
     });
     if let Some(index) = chosen {
         state.select(state.page * PAGE_SIZE + index);

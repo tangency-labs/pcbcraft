@@ -1333,3 +1333,14 @@ compose the already qualified Craft controls, fields, tables, disclosures and
 scroll regions through chrome. The pinned kit has no part-document composition;
 the bounded content rail and package/association ownership remain host code.
 No dependency, external EDA implementation or library asset was added.
+
+The part-document footer and tabs reuse the pinned Craft `CatalogLayout`, action
+footer and `app_bar::tabs` components through chrome. The shared document strip
+has no non-closeable navigation tab and does not attach accessible names to its
+painted document rows, so the host composes Browse beside it and adds response
+metadata without replacing its painting, overflow, menu or drag behavior. Draft
+identity, ordering and close protection remain PCBcraft-owned runtime state.
+No dependency, external asset or saved native format changed in this follow-up.
+The tab adapter binds the kit's scoped panel palette to the workspace text,
+selection and hover tokens, since the title-bar palette has different light-mode
+contrast. The override is local to painting these tabs and their existing menus.

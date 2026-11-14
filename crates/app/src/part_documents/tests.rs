@@ -329,3 +329,96 @@ fn physical_preview_does_not_require_visiting_items() {
     assert!(h.query_all_by_label("Footprint preview").next().is_some());
     assert!(h.query_all_by_label("Symbol preview").next().is_none());
 }
+
+/// The bottom action remains visible in a short host and reaches the real destination form;
+/// choosing an existing writable library publishes through the ordinary host worker.
+#[test]
+fn bottom_publish_action_uses_the_visible_destination_flow() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for (width, height) in [(2735., 850.), (620., 650.)] {
+        let (mut app, _temp, id) = fixture();
+        app.choose_part_reference(id, 2, &ReferenceField::Symbol, None).unwrap();
+        let mut h =
+            Harness::builder().with_max_steps(64).with_size(egui::vec2(width, height)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        if width < 1050. {
+            crate::tests::click(&mut h, "Items");
+        }
+        let publish = h.get_by_label("Publish…").rect();
+        assert!(publish.top() > height * 0.7, "{publish:?}");
+        assert!(publish.bottom() < height);
+        assert!(h.query_all_by_label("Package").next().is_none());
+        let before = h.state().library_editors.parts[&id].session.inspect();
+        h.get_by_label("Publish…").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryPublish(_)));
+        h.get_by_label("Choose library…").click();
+        h.run();
+        h.get_by_role_and_label(egui::Role::RadioButton, "Workshop").click();
+        h.run();
+        h.get_by_label("Publish").click();
+        h.run();
+        let ctx = h.ctx.clone();
+        finish(h.state_mut(), &ctx);
+        h.run();
+        assert!(!h.state().library_editors.parts[&id].dirty());
+        assert_ne!(h.state().library_editors.parts[&id].session.inspect(), before);
+    }
+}
+
+/// A fresh installation exposes creation directly, while cancellation returns to the same
+/// captured publication and draft without any folder picker or publication side effect.
+#[test]
+fn publication_without_libraries_exposes_creation_and_preserves_cancel() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PcbApp::default();
+    let id = app.new_part_document(&egui::Context::default(), None).unwrap();
+    let before = app.library_editors.parts[&id].session.inspect();
+    let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(620., 700.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    crate::tests::click(&mut h, "Items");
+    h.get_by_label("Choose category").click();
+    h.run();
+    assert!(h.query_all_by_label("No category definitions loaded").next().is_some());
+    h.get_by_label("Cancel").click();
+    h.run();
+    h.get_by_label("Publish…").click();
+    h.run();
+    h.get_by_label("New library…").click();
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::NewLibrary(_)));
+    h.get_by_label("Cancel").click();
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::LibraryPublish(_)));
+    h.get_by_label("Cancel").click();
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().library_editors.parts[&id].session.inspect(), before);
+}
+
+/// Named tabs preserve drafts while browsing and return compact hosts to Items. Closing the
+/// same dirty document uses the existing discard protection instead of removing it immediately.
+#[test]
+fn visible_document_tabs_return_to_retained_drafts() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for width in [2735., 620.] {
+        let (app, _temp, id) = fixture();
+        let before = app.library_editors.parts[&id].session.inspect();
+        let mut h =
+            Harness::builder().with_max_steps(64).with_size(egui::vec2(width, 850.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        h.get_by_label("Browse library").click();
+        h.run();
+        assert!(h.state().views.active.library.as_ref().unwrap().part_document.is_none());
+        assert_eq!(h.state().library_editors.parts[&id].session.inspect(), before);
+        h.get_by_label("Original connector").click();
+        h.run();
+        assert_eq!(h.state().views.active.library.as_ref().unwrap().part_document, Some(id));
+        assert!(h.query_all_by_label("Choose footprint").next().is_some());
+        assert_eq!(h.state().library_editors.parts[&id].session.inspect(), before);
+        h.get_by_label("Close document").click();
+        h.run();
+        assert!(matches!(h.state().dialog,Dialog::LibraryClose(Some(owner)) if owner==id));
+        assert!(h.state().library_editors.parts.contains_key(&id));
+    }
+}

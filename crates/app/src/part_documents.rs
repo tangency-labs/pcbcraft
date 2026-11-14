@@ -115,39 +115,65 @@ impl PcbApp {
         self.place_part_document(ctx, id)?;
         Ok(id)
     }
-    /// Browse and open part documents share one workspace; closing a tab asks before discarding.
+    /// Visible draft tabs retain stable document IDs across browsing, pane switches and
+    /// reordering. Closing uses ordinary discard protection; selecting a draft reveals Items.
     pub(crate) fn part_document_tabs(&mut self, ui: &mut egui::Ui, state: &mut crate::library_workspace::State) {
         if state.part_document.is_some_and(|id| !self.library_editors.parts.contains_key(&id)) {
             state.part_document = None;
         }
-        let mut current = state.part_document.map(|id| id.to_string()).unwrap_or_default();
-        let mut choices = vec![(String::new(), "Browse".to_owned())];
-        choices.extend(
-            self.library_editors
-                .parts
-                .iter()
-                .map(|(id, doc)| (id.to_string(), format!("{}{}", doc.session.record().name(), if doc.dirty() { " *" } else { "" }))),
-        );
-        if choices.len() == 1 {
+        state.part_order.retain(|id| self.library_editors.parts.contains_key(id));
+        for id in self.library_editors.parts.keys() {
+            if !state.part_order.contains(id) {
+                state.part_order.push(*id);
+            }
+        }
+        if state.part_order.is_empty() {
             return;
         }
-        ui.horizontal(|ui| {
-            let options: Vec<_> = choices.iter().map(|(id, label)| (id.as_str(), label.clone())).collect();
-            let width = (ui.available_width() - 150.).clamp(120., 600.);
-            ui.allocate_ui_with_layout(
-                egui::vec2(width, pcbcraft_chrome::Tokens::get().control_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    properties::choice(ui, "Document", ui.scope_id().with("part_document"), &mut current, &options);
-                },
-            );
-            state.part_document = current.parse().ok();
-            if let Some(id) = state.part_document
-                && controls::button(ui, "Close document").clicked()
-            {
-                self.dialog = Dialog::LibraryClose(Some(id));
+        let tabs: Vec<_> = state
+            .part_order
+            .iter()
+            .filter_map(|id| self.library_editors.parts.get(id))
+            .map(|doc| {
+                let reference = doc.session.record().reference();
+                (doc.session.record().name().to_owned(), doc.dirty(), format!("{}/{} r{}", reference.library, reference.id, reference.revision))
+            })
+            .collect();
+        let selected = state.part_document.and_then(|id| state.part_order.iter().position(|item| *item == id));
+        for action in pcbcraft_chrome::part_form::documents(ui, &tabs, selected) {
+            use pcbcraft_chrome::part_form::DocumentAction;
+            match action {
+                DocumentAction::Browse => {
+                    state.part_document = None;
+                    state.compact = 1;
+                }
+                DocumentAction::Select(index) => {
+                    state.part_document = state.part_order.get(index).copied();
+                    state.compact = 1;
+                }
+                DocumentAction::Close(index) => {
+                    if let Some(id) = state.part_order.get(index) {
+                        self.dialog = Dialog::LibraryClose(Some(*id));
+                    }
+                }
+                DocumentAction::Reorder { from, to } => {
+                    if from < state.part_order.len() && to < state.part_order.len() {
+                        let id = state.part_order.remove(from);
+                        state.part_order.insert(to, id);
+                    }
+                }
+                DocumentAction::New => {
+                    let source = state.source_id().filter(|source| self.writable_libraries().iter().any(|(id, _)| id == source)).map(str::to_owned);
+                    match Record::new_part(None).and_then(|record| self.library_editors.open_part(record, false, source)) {
+                        Ok(id) => {
+                            state.part_document = Some(id);
+                            state.compact = 1;
+                        }
+                        Err(error) => self.message = Some(error),
+                    }
+                }
             }
-        });
+        }
     }
     /// GUI and MCP replace the same bounded engine draft at its captured document revision.
     #[cfg(not(target_arch = "wasm32"))]

@@ -250,8 +250,8 @@ property drafts or gestures captured for the original, without discarding them.
 ## Generic and orderable part documents
 
 In **Parts Library**, choose **New → Generic part** to open a part document in
-the Items region. The Browser and Preview remain available, and the Document
-selector switches between Browse and retained part documents. A published symbol
+the Items region. The Browser and Preview remain available, and the named document
+tabs switch between Browse and retained part documents. A published symbol
 also offers **Create part from this symbol** in its editor. **Edit** reopens an
 exact published generic or orderable part; **Edit copy** gives the derivative a
 new identity while preserving its licence and source provenance.
@@ -277,6 +277,11 @@ Several pads can belong to one terminal. Selecting a mapping row highlights its
 pad and corresponding terminal, including a terminal on another symbol unit.
 Units are read-only here and remain editable in the Symbol Editor. The model
 slot is reserved for future package-bound 3D support.
+
+The fixed footer has the primary **Publish…** action and publication/destination
+state. It opens the destination form; choose a writable library, or use **New
+library…** when none exists, then confirm Publish. The new-library form asks for
+a name and folder before returning to the captured publication.
 
 Publish validates each declared symbol, category, typed value and package
 map, then uses the same native-folder destination, no-clobber write and recovery
@@ -316,3 +321,8 @@ that package's old map before explicit remapping. Category and generic-part
 changes clear only their dependent values. Re-selecting the same exact address
 is a no-op. `library.search` accepts `include_older: true` to browse the same
 available, unambiguous exact revisions through MCP; default search stays latest-only.
+
+Categories are optional typed specification definitions. The bundled starter
+collections do not contain categories; an empty chooser reports that none are
+loaded. The Native Parts Demo includes resistor, connector and IC categories and
+can be loaded through Add library when testing typed fields.

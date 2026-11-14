@@ -10,13 +10,34 @@ impl PcbApp {
         let mut record = doc.session.record().clone();
         let revision = doc.session.revision();
         let catalog = self.session.libraries();
-        let ready = record.validate(catalog).is_ok() && doc.pending.is_empty() && !self.library_editors.busy();
+        let busy = self.library_editors.busy() || self.library_sources.busy() || self.library_mutation_busy();
+        let destination = self.writable_libraries().into_iter().find(|(source, _)| Some(source) == doc.source.as_ref()).map(|(_, name)| name);
         let mut publish = false;
         let mut open_orderable = None;
         let mut edit_orderable = None;
         let mut browse = None;
         let mut clear_field = None;
-        pcbcraft_chrome::part_form::document(ui, |ui| {
+        pcbcraft_chrome::part_form::document(ui, |ui, footer| {
+            if footer {
+                let valid = record.validate(catalog);
+                let changed = doc.dirty() || &record != doc.session.record();
+                let status = if crate::IN_BROWSER {
+                    "Desktop required".into()
+                } else if busy {
+                    "Library operation in progress".into()
+                } else if !doc.pending.is_empty() {
+                    "Unapplied values".into()
+                } else if valid.is_err() {
+                    "Cannot publish".into()
+                } else if changed {
+                    format!("Draft · {}", destination.as_deref().unwrap_or("No library selected"))
+                } else {
+                    format!("Published r{} · {}", record.reference().revision, destination.as_deref().unwrap_or("Library unavailable"))
+                };
+                publish =
+                    pcbcraft_chrome::part_form::publication(ui, &status, !crate::IN_BROWSER && !busy && valid.is_ok() && doc.pending.is_empty());
+                return;
+            }
             ui.push_id(("part_form", id), |ui| {
                 properties::section(
                     ui,
@@ -26,7 +47,6 @@ impl PcbApp {
                     },
                 );
                 ui.horizontal(|ui| {
-                    publish = controls::enabled_button(ui, !crate::IN_BROWSER && ready, "Publish…").clicked();
                     for (label, redo) in [("Undo", false), ("Redo", true)] {
                         if controls::enabled_button(ui, doc.pending.is_empty(), label).clicked() {
                             doc.error = doc.session.history(revision, redo).err();
@@ -99,7 +119,7 @@ impl PcbApp {
                         }
                     }
                 }
-                if let Some(field) = clear_field {
+                if let Some(field) = clear_field.take() {
                     if doc.pending.is_empty() {
                         match record.select_reference(&field, None, catalog) {
                             Ok(candidate) => record = candidate,
@@ -126,8 +146,6 @@ impl PcbApp {
                 let valid = record.validate(catalog);
                 if let Err(error) = &valid {
                     ui.colored_label(pcbcraft_chrome::Tokens::get().error, error);
-                } else {
-                    ui.label(if doc.session.dirty() { "Ready to publish" } else { "Published" });
                 }
                 if let Some(error) = &doc.error {
                     ui.colored_label(pcbcraft_chrome::Tokens::get().error, error);
@@ -277,7 +295,7 @@ fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document
     }
     let mut chosen = doc.package.clone().unwrap_or_default();
     let options: Vec<_> = part.packages.iter().map(|(id, p)| (id.as_str(), p.name.clone())).collect();
-    if !options.is_empty() {
+    if options.len() > 1 {
         properties::choice(ui, "Package", ui.scope_id().with("package_choice"), &mut chosen, &options);
     }
     if doc.package.as_ref() != Some(&chosen) {
@@ -286,14 +304,16 @@ fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document
     }
     doc.package = (!chosen.is_empty()).then_some(chosen.clone());
     let Some(package) = part.packages.get_mut(&chosen) else { return };
-    properties::text(ui, "Name", &mut package.name);
     if pcbcraft_chrome::part_form::reference(ui, "Footprint", &reference_name(catalog, Some(&package.footprint), Kind::Footprint), false)
         == pcbcraft_chrome::part_form::ReferenceAction::Browse
     {
         *browse = Some(ReferenceField::Footprint { package: chosen });
     }
-    properties::field(ui, "3D model", |ui| {
-        ui.add_enabled(false, egui::Label::new("None"));
+    controls::collapsing(ui, "package_details", "Package details", false, None, |ui| {
+        properties::text(ui, "Name", &mut package.name);
+        properties::field(ui, "3D model", |ui| {
+            ui.add_enabled(false, egui::Label::new("None"));
+        });
     });
     let Some(footprint) = catalog.footprint(&package.footprint.library, &package.footprint.id, package.footprint.revision) else { return };
     let Some(symbol) = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision)) else { return };

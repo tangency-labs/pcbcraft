@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
     pub(crate) part_document: Option<u64>,
+    pub(crate) part_order: Vec<u64>,
     source: Option<String>,
     project: Option<uuid::Uuid>,
     project_library: Option<String>,
@@ -29,7 +30,7 @@ pub(super) struct State {
     expanded: BTreeSet<Key>,
     closed: BTreeSet<String>,
     opened: BTreeSet<String>,
-    compact: usize,
+    pub(crate) compact: usize,
     tab: usize,
     preview_collapsed: bool,
     browser: chrome::Browser,

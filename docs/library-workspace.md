@@ -98,7 +98,7 @@ Library; its stable command/layout key remains `library`.
 The New generic part action and Edit/Edit copy for generic and orderable records
 open session documents inside this workspace. Browser keeps its source/project
 navigation; Items shows the association form, while Preview shows the selected
-symbol unit and package footprint. Document switches back to Browse without
+symbol unit and package footprint. The Browse tab returns to browsing without
 discarding the form. Choosing another source in Browser also returns to Browse.
 The mapping table and document controls compose the pinned Craft table, choices,
 fields and buttons through `crates/chrome`; correspondence highlights reuse
@@ -121,3 +121,11 @@ footprint…** action that opens the searchable chooser; choosing creates one pa
 and cancellation leaves the document unchanged. A symbol-less part previews its
 footprint without a blank symbol column. Pin mapping appears only when both a
 symbol and footprint are present.
+
+Named part-document tabs remain visible while browsing. The shared tab strip
+shows unsaved dots, keeps the selected document visible through overflow, and
+supports ordering and close protection. Selecting a draft returns compact hosts
+to Items; Browse and source-tree navigation retain the open session document.
+The part form keeps its primary Publish action in a fixed footer outside the
+scrolling fields. A single footprint needs no package selector; package naming
+and the reserved model slot are in Package details.
