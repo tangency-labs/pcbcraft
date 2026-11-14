@@ -29,7 +29,10 @@ const INSTRUCTIONS: &str = "PCBCraft is an electronics design app, and these too
 `list_commands` shows what exists, `execute` runs one, `inspect_project` shows the result. Changes are undoable with `edit.undo`. \
 Project files are never edited directly. Inspect the project to read its current revision before making an edit. \
 With a live editor, view., window., arrangement., app. and file. commands change its views, windows, arrangements and settings without editing the project; \
-`inspect_editor` gives the view and window IDs they take.";
+`inspect_editor` gives the view and window IDs they take. With a live editor, unless the user requests otherwise, keep the area you are editing visible \
+in the appropriate editor pane. Inspect views with `inspect_editor` before starting, frame planned work with `view.center` and `view.zoom`, and reframe \
+after meaningful batches as needed. Use `view.fit` for a whole-document overview. Respect requests to keep the camera fixed or work without changing \
+the view, and leave unrelated panes alone.";
 
 pub struct Server {
     backend: Box<dyn Backend>,

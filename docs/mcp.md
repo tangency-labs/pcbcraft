@@ -4,6 +4,15 @@ PCBCraft offers an in-app Assistant and a live MCP connection on desktop.
 The CLI can also run a separate headless session. Project edits use the
 same engine commands and undo history within each session.
 
+The built-in Assistant instructions and the server instructions sent to external
+MCP clients ask agents working in a live editor to keep the area they are editing
+visible, unless the user requests otherwise. Agents are asked to inspect the
+views before starting, frame planned work with `view.center` and `view.zoom`,
+and reframe after meaningful batches as needed. `view.fit` provides a
+whole-document overview. Requests to keep the camera fixed take precedence,
+and unrelated panes should be left alone. This is guidance for the agent;
+the editor does not automatically move the camera when an agent edits.
+
 Projects from the previous split layout can be copied into the current format
 with `pcbcraft-cli convert SOURCE DESTINATION` before starting MCP. A `.pc`
 destination creates a ZIP; other destinations create a new working folder. See
