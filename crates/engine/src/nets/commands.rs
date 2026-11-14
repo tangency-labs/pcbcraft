@@ -79,6 +79,7 @@ impl Session {
         restored.primary = selected.primary.clone();
         restored.fallbacks = selected.fallbacks.clone();
         restored.state = State::Active {};
+        restored.class_bindings = selected.class_bindings.clone();
         records.insert(id, restored);
         let mut retired = selected.clone();
         retired.state = State::Retired { snapshot, reason: Retirement::Resolution, successors: vec![id] };

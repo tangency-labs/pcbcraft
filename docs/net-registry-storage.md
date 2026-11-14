@@ -10,7 +10,9 @@ named anchors and hierarchy; the registry records identity and reconciliation.
 
 The low-level codec preserves existing project bytes when no registry is present;
 the ordinary first-save board-folder/occurrence migration still applies.
-The first record selects project/17 and, for board projects, instances/2.
+The first record selects project/17 and, for board projects, instances/2, unless
+another feature requires a newer envelope. [Class bindings](net-class-assignments.md)
+select project/21 and board-owned instances/3 in the same registry home.
 `net_registry` is optional within the existing schematic/board instance home;
 an explicitly empty or malformed registry is rejected. The registry stores
 UUID-sorted records, each with one primary anchor, up to three ordered fallbacks,
@@ -97,5 +99,6 @@ undo/redo/reopen, malformed codec inputs, fixed anchor-key vectors, multi-unit
 terminals, stale revisions, zero-board saves, first-board scope transfer and
 journal interruption. Non-anchor wire edits leave instance bytes unchanged,
 and board-baseline acceptance does not promote unnamed networks. Promotion alone
-leaves the accepted baseline unchanged and its connectivity update a no-op. Classes,
+leaves the accepted baseline unchanged and its connectivity update a no-op.
+Persistent class assignments use this registry's identity and reconciliation;
 relationship constraints, repeated circuit instances and zones remain separate.

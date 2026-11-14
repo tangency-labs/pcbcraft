@@ -37,6 +37,7 @@ impl Session {
         self.check_revision(params)?;
         let original = self.open_project()?;
         let mut catalog = (*original.net_classes).clone();
+        let mut registry = (*original.net_registry).clone();
         let id = if command == CREATE {
             if catalog.definitions.len() >= MAX_CLASSES {
                 return Err(CommandError::Unavailable("Net-class catalog is full.".into()));
@@ -48,6 +49,26 @@ impl Session {
         if command == REMOVE {
             if catalog.get(id).is_none() {
                 return Err(CommandError::InvalidParams("Unknown net class.".into()));
+            }
+            let referenced = registry.records.iter().any(|record| record.class_bindings.iter().any(|binding| binding.class == id));
+            if let Some(value) = params.get("rebind") {
+                let replacement: Uuid = serde_json::from_value(value.clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
+                if replacement == id || catalog.get(replacement).is_none() {
+                    return Err(CommandError::InvalidParams("Choose a different existing replacement class.".into()));
+                }
+                for record in &mut registry.records {
+                    for binding in &mut record.class_bindings {
+                        if binding.class == id {
+                            binding.class = replacement;
+                        }
+                    }
+                    record.class_bindings.sort();
+                    record.class_bindings.dedup();
+                }
+            } else if referenced {
+                return Err(CommandError::InvalidParams(
+                    "The class has current or retained net assignments; explicitly rebind it before removal.".into(),
+                ));
             }
             catalog.definitions.retain(|class| class.id != id);
         } else {
@@ -75,6 +96,12 @@ impl Session {
             candidate = candidate.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
         }
         candidate.net_classes = Arc::new(catalog);
+        if registry != *original.net_registry {
+            candidate.net_registry = Arc::new(registry);
+        }
+        if candidate.net_registry.has_class_bindings() {
+            candidate.net_registry.validate(&candidate).map_err(CommandError::InvalidParams)?;
+        }
         self.change(candidate)
     }
 

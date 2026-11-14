@@ -18,7 +18,7 @@ pub const MAX_CLASSES: usize = 256;
 pub const CREATE: &str = "net_classes.create";
 /// Replace a class's name and sparse dimensional rules, retaining its identity.
 pub const UPDATE: &str = "net_classes.update";
-/// Remove an unbound class; saved net bindings are a later feature.
+/// Remove an unbound class, or explicitly rebind its saved intent atomically.
 pub const REMOVE: &str = "net_classes.remove";
 /// Inspect the catalog without preparing schematic connectivity.
 pub const INSPECT: &str = "net_classes.inspect";
@@ -72,6 +72,24 @@ impl Property {
             Self::PreferredTrackWidthNm => "preferred_track_width_nm",
             Self::PreferredViaDiameterNm => "preferred_via_diameter_nm",
             Self::PreferredViaDrillNm => "preferred_via_drill_nm",
+        }
+    }
+
+    /// The released dimensional vocabulary is shareable on meaningful split branches. Adding
+    /// a property requires an explicit policy here; relationship constraints are not copied.
+    pub fn shareable_on_split(self) -> bool {
+        match self {
+            Self::ClearanceNm
+            | Self::MinTrackWidthNm
+            | Self::EdgeClearanceNm
+            | Self::MinAnnularRingNm
+            | Self::MinViaDiameterNm
+            | Self::MaxViaDiameterNm
+            | Self::MinViaDrillNm
+            | Self::MaxViaDrillNm
+            | Self::PreferredTrackWidthNm
+            | Self::PreferredViaDiameterNm
+            | Self::PreferredViaDrillNm => true,
         }
     }
 

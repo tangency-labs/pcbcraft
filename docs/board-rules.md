@@ -75,7 +75,9 @@ rules. This slice does not change the project, board-folder or archive layout.
 
 The [net-class catalog and explicit-set resolver](net-classes.md) are available
 through shared commands, independently of this board-default consumer path.
-Persistent net assignments, class-aware routing/checking, relationship constraints
-and fabrication profiles remain under #77 and its follow-on issues. This board-default resolver
+[Persistent assignments](net-class-assignments.md) are available through shared
+commands. Class-aware routing/checking, relationship constraints
+and fabrication profiles remain under #77 and its follow-on issues. Dimensional
+assignments explicitly block unsupported consumers. This board-default resolver
 provides a shared consumer boundary without assigning rules by display names or
 claiming impedance, current-capacity or manufacturing verification.

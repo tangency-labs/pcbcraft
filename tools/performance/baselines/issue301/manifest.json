@@ -1,0 +1,201 @@
+{
+  "format": "pcbcraft-issue301-evidence/1",
+  "implementation_commit": "7ac9df2c4ef726b62640df40d059184e9814684e",
+  "collection": "Saved artifacts only; no new timing runs during packaging.",
+  "files": {
+    "README.md": {
+      "bytes": 3812,
+      "sha256": "02c2d48f9179ab640d7ccaabdeb73e83d5c2468ba5c3d76cb957a81273a8226d"
+    },
+    "checks.zip": {
+      "bytes": 101340,
+      "sha256": "c58807abfca82a9dce0e5f3dd2b3e6bdf0b191cecdc6b0f6bac94345b5a8ba8f"
+    },
+    "failure-review.md": {
+      "bytes": 5254,
+      "sha256": "52390121c96a6c2ca5d927145edd67e42685b8340d29147abfa8b54e69590989"
+    },
+    "performance/actions.json": {
+      "bytes": 47,
+      "sha256": "39f47ef867ece3c24662ca18e7237c2764d3a10d2859f3f415f57d996fae420c"
+    },
+    "performance/after-assigned.json": {
+      "bytes": 916,
+      "sha256": "08e21d58c85322a43ae590dd07233d64662d0d31b01f36e7eadab78dfaa8da6a"
+    },
+    "performance/after-unassigned.json": {
+      "bytes": 923,
+      "sha256": "27a7755fc19a5baf5c19a403615911c8854bfcdef02dcf3a5b5445f778c854dc"
+    },
+    "performance/before.json": {
+      "bytes": 956,
+      "sha256": "dc13dc128ccd0ad9b5cdca8f634627c70906eeff8e3003730e5a2ab6e68fbec7"
+    },
+    "performance/comparison.json": {
+      "bytes": 2403,
+      "sha256": "ad65f9eee027c4b186d4e93bc08c0a9a2e00b1ca48ec9566843b2b06618de7b9"
+    },
+    "performance/final-assigned.json": {
+      "bytes": 916,
+      "sha256": "dd8ec375fbfbc1bada460311b5285718182f316d43fa7e3b1e01636db5d48ae9"
+    },
+    "performance/final-unassigned.json": {
+      "bytes": 909,
+      "sha256": "f2f65f7aa457d84fa613ad58cd22435e26f381173a0dc4fc8d877820fe52f966"
+    },
+    "performance/probe-final.rs.txt": {
+      "bytes": 4460,
+      "sha256": "12021a2af0203294b271bc4a01fc11dd1628d8db81b986713ee4725e23dda58f"
+    },
+    "performance/probe.rs.txt": {
+      "bytes": 2972,
+      "sha256": "c4eeb1db2461ed11d6c767977fa586a6d50284fc4ae8202e25a457d9b2ad08dd"
+    },
+    "performance/registry.pc": {
+      "bytes": 27628,
+      "sha256": "40a79960b718564f244177f404906a04ffe7b8d8481125ef66e6f85c95ee4453"
+    },
+    "start.json": {
+      "bytes": 1410,
+      "sha256": "252900500f5340307f877878e47554c7afc65c0406e1d1d2366dc6b7ae9fee53"
+    },
+    "verification.json": {
+      "bytes": 14167,
+      "sha256": "6d8e9981948c4bbe6683ce629e7f8d03dd85fe057288a948ef6e8fa5d9e398c2"
+    }
+  },
+  "logs": {
+    "pcbcraft301-assignment-extended.log": {
+      "bytes": 1995,
+      "sha256": "d08ed40d17607b403ffddb4362da70112dd6b9240aeaa4b44441c2d9cea0775f"
+    },
+    "pcbcraft301-assignment-extended2.log": {
+      "bytes": 864,
+      "sha256": "48e3d0b488879544f4d677ba6fb60cb676ce91fb507759f457d04b4b589fad43"
+    },
+    "pcbcraft301-assignment-extended3.log": {
+      "bytes": 2079,
+      "sha256": "62524de6a07a46b9bb5dc569bc48354bff6c983e1107f7ef7917eeba7d0acff5"
+    },
+    "pcbcraft301-assignment-extended4.log": {
+      "bytes": 1387,
+      "sha256": "74416eceb1c9ca281e70ab714e7cf693d8a71709e6cab5fe4a6a36312ef7749f"
+    },
+    "pcbcraft301-assignment-extended5.log": {
+      "bytes": 1442,
+      "sha256": "626f03c81837c7d8408bb5fc0eb38cf9738f49c58bf2f35478075a940e0e8e8a"
+    },
+    "pcbcraft301-assignment-extended6.log": {
+      "bytes": 1981,
+      "sha256": "ba930270d4fa6f57f47445701e20f13191231a22765bd0ba3fc1e781dc0f5497"
+    },
+    "pcbcraft301-assignment-tests-fixed.log": {
+      "bytes": 1729,
+      "sha256": "34e6dd9b912fbc9a74a3f92a5a7f965a363460aed8d4043cf19fb05289987d71"
+    },
+    "pcbcraft301-assignment-tests-fixed2.log": {
+      "bytes": 1082,
+      "sha256": "9f0287dcb06644df548ca0ade29cb10664840ff48eb798ce9e854a0e338f118a"
+    },
+    "pcbcraft301-assignment-tests.log": {
+      "bytes": 3947,
+      "sha256": "41f02403373d23d5fe669d9d9acbcb7a297744f64c2f2837478b5f8b7d6bd521"
+    },
+    "pcbcraft301-check-first.log": {
+      "bytes": 992,
+      "sha256": "b1318c8ae713d96969c649b792428cdfe4bab48ee4928af0c0e52575807128f4"
+    },
+    "pcbcraft301-clippy-final.log": {
+      "bytes": 1585,
+      "sha256": "2d43e2459118fffba8d91481eb7591c4e6722804002c8fc29d7d6f0cd0e3ca35"
+    },
+    "pcbcraft301-clippy-first.log": {
+      "bytes": 1168,
+      "sha256": "607c43254de1e7b63bcfbe5b7919982e3e954db6c243ba2bb450b6b345948c00"
+    },
+    "pcbcraft301-clippy-harness.log": {
+      "bytes": 392,
+      "sha256": "b89973a0f24dec0a9d2e1bc01b6ef2c8814b631d847eaa6362ceec006d42bf4e"
+    },
+    "pcbcraft301-deny.log": {
+      "bytes": 33,
+      "sha256": "ef8317b369b8527e06290941bfada84d1f8e45b2b8c311d5e1fec1558e00a7be"
+    },
+    "pcbcraft301-fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pcbcraft301-harness-capture-host.log": {
+      "bytes": 432,
+      "sha256": "eca5b2ab5b73b571ecc2eeffe90ceecdc3c8360c149dc767600bf82fde43d5e6"
+    },
+    "pcbcraft301-harness-tests.log": {
+      "bytes": 2126,
+      "sha256": "907f471960900919c562016071fae3fd305eb0c6c3ae327b4887c307c0bc95a8"
+    },
+    "pcbcraft301-mcp-tests.log": {
+      "bytes": 949,
+      "sha256": "efd8be7786a3a7497ad5eeaa54a9403c69e42639f1a758de5c5027b2f705f351"
+    },
+    "pcbcraft301-mcp-tests2.log": {
+      "bytes": 1048,
+      "sha256": "8afbae078d03cd46cb85780e7b75800fe0907ffd2b2d838c518e8711a14f6204"
+    },
+    "pcbcraft301-native-build.log": {
+      "bytes": 184,
+      "sha256": "d163d5b48c2a651064f7a0a1f189352b2cb44817bdb7dac31ea6d6449208270f"
+    },
+    "pcbcraft301-nets-coherent.log": {
+      "bytes": 3542,
+      "sha256": "eced8224ac44bb006a2491ea92875c6a5b69dc4435e8df1833dcde0fadc39c02"
+    },
+    "pcbcraft301-nets-final-focused.log": {
+      "bytes": 3542,
+      "sha256": "4ac19dc58b30d95fa71a9a02c6b984d2bcbd2ccfa149b692fbba3d4312b8dd84"
+    },
+    "pcbcraft301-nets-first.log": {
+      "bytes": 2624,
+      "sha256": "30e7793a7e6ac19a519718d114cea920dbbaaa0cef604a3646a080808f6659dd"
+    },
+    "pcbcraft301-node-harness.log": {
+      "bytes": 412,
+      "sha256": "ac04c65815a8768115e3b0e458d5c97c1d9ab0ef188d56ad43627f6bf0a7bcd4"
+    },
+    "pcbcraft301-probe-build-after.log": {
+      "bytes": 174,
+      "sha256": "244e63ba9fb1134dd36f52e3d8c999f9ae2c06590f1d8ec6a79c17e9d4bb399f"
+    },
+    "pcbcraft301-probe-build-before.log": {
+      "bytes": 1274,
+      "sha256": "b59b48abafaf891daf979f7f37b802db84c7ee427ec1545747b28611255ad7c6"
+    },
+    "pcbcraft301-probe-final-build.log": {
+      "bytes": 174,
+      "sha256": "14ce52d938b484b2803173c4c3453d84db311a958d235bb3655a63ac870ebcbb"
+    },
+    "pcbcraft301-python-harness.log": {
+      "bytes": 117,
+      "sha256": "870201b4bc1d59febbe40cdca52c4d323b6eb959224a3f6681289ba2787e0aa2"
+    },
+    "pcbcraft301-storage-tests.log": {
+      "bytes": 691,
+      "sha256": "b5e45d71d44f4a9f4eb6e3187c26ccff8490f514634604fd3c5ecf960327ead7"
+    },
+    "pcbcraft301-wasi.log": {
+      "bytes": 8013,
+      "sha256": "e6e5aacc1b6edc8991ce97ee40c9fef2cb59eb3ddfb72742f0cd10f7169e60b0"
+    },
+    "pcbcraft301-wasm-check.log": {
+      "bytes": 723,
+      "sha256": "7af217e0a93743c93c8081b99fea161cfcf621db7922c617d78c3bbe5754e641"
+    },
+    "pcbcraft301-workspace-tests-fixed.log": {
+      "bytes": 173088,
+      "sha256": "a01bd564f170a5c6874f5b2841365bedb094c02d6a7673c357c588f9de995e52"
+    },
+    "pcbcraft301-workspace-tests.log": {
+      "bytes": 162285,
+      "sha256": "f0b41822bd2954cb3729efc4e2b623c2a546e5fcb5899230e7726d647996ac9c"
+    }
+  }
+}

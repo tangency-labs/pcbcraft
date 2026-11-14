@@ -1,7 +1,10 @@
 //! Sparse persistent electrical identities; the authored schematic remains the connectivity authority.
 
 mod anchor;
+mod classes;
 mod commands;
+pub(crate) use classes::target_schema as class_target_schema;
+pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
 mod graph;
 mod reconcile;
 mod validation;
@@ -86,6 +89,9 @@ pub struct Record {
     pub lineage: Vec<Lineage>,
     /// Active authority, unresolved choice or historical reservation.
     pub state: State,
+    /// Dimensional class intent and originating assigning nets, without saved endpoint membership.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "classes::stored_bindings")]
+    pub class_bindings: Vec<ClassBinding>,
 }
 
 impl Record {

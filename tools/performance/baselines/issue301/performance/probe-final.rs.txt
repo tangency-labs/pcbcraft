@@ -1,0 +1,93 @@
+//! Temporary scoped CPU probe over an immutable command-generated registry fixture.
+use pcbcraft_engine::{
+    Session,
+    persistence::{decode_documents, decode_packed, encode_documents, encode_packed},
+};
+use serde_json::{Value, json};
+use std::{path::Path, time::Instant};
+fn apply(s: &mut Session, c: &str, mut p: Value) -> Result<(), Box<dyn std::error::Error>> {
+    if c != "project.new" && c != "edit.undo" {
+        p["expected_revision"] = json!(s.revision());
+    }
+    s.apply(c, &p)?;
+    Ok(())
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args().collect();
+    let root = Path::new(&args[2]);
+    if args[1] == "generate" {
+        let mut s = Session::default();
+        apply(&mut s, "project.new", json!({"create_board":false}))?;
+        let mut first = None;
+        let mut branch = None;
+        for group in 0..4 {
+            let mut pins = Vec::new();
+            for n in 0..16 {
+                apply(&mut s, "schematic.place_resistor", json!({"x_nm":n*25_400_000,"y_nm":group*50_800_000}))?;
+                let symbol = s.project().unwrap().symbols().last().unwrap().id();
+                if first.is_none() {
+                    first = Some(symbol.clone());
+                }
+                pins.push(json!({"symbol":symbol,"terminal":"1"}));
+            }
+            for n in 1..pins.len() {
+                apply(&mut s, "schematic.connect_pins", json!({"from":pins[n-1],"to":pins[n]}))?;
+                if group == 0 {
+                    branch = Some(s.project().unwrap().wires().last().unwrap().id());
+                }
+            }
+            apply(&mut s, "nets.promote", json!({"anchor":pins[0]}))?;
+        }
+        apply(&mut s, "net_classes.create", json!({"name":"Power","rules":{"min_track_width_nm":400000,"preferred_track_width_nm":500000}}))?;
+        apply(&mut s, "net_classes.create", json!({"name":"High voltage","rules":{"clearance_nm":500000}}))?;
+        std::fs::write(root.join("registry.pc"), encode_packed(s.snapshot().unwrap())?)?;
+        std::fs::write(root.join("actions.json"), serde_json::to_vec_pretty(&json!({"symbol":first,"wire":branch}))?)?;
+        return Ok(());
+    }
+    let packed = std::fs::read(root.join("registry.pc"))?;
+    let docs = decode_packed(&packed)?.documents;
+    let project = decode_documents(&docs)?;
+    let project = if args[1] == "bound" {
+        let mut author = Session::default();
+        author.open_snapshot(project);
+        let classes: Vec<_> = author.project().unwrap().net_classes().definitions.iter().map(|class| class.id).collect();
+        let targets: Vec<_> = author.project().unwrap().inspect_net_registry()?["nets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|net| json!({"kind":"derived","anchor":net["anchor"]}))
+            .collect();
+        for target in targets {
+            apply(&mut author, "nets.set_classes", json!({"target":target,"classes":classes}))?;
+        }
+        author.snapshot().unwrap()
+    } else {
+        project
+    };
+    let docs = encode_documents(project.clone())?;
+    let actions: Value = serde_json::from_slice(&std::fs::read(root.join("actions.json"))?)?;
+    let mut move_ms = Vec::new();
+    let mut disconnect_ms = Vec::new();
+    for _ in 0..20 {
+        for (command, params, samples) in [
+            ("schematic.move_symbol", json!({"symbol":actions["symbol"],"x_nm":0,"y_nm":100000}), &mut move_ms),
+            ("schematic.delete_wire", json!({"wire":actions["wire"]}), &mut disconnect_ms),
+        ] {
+            let mut s = Session::default();
+            s.open_snapshot(project.clone());
+            let started = Instant::now();
+            apply(&mut s, command, params)?;
+            samples.push(started.elapsed().as_secs_f64() * 1000.);
+            assert_eq!(s.project().unwrap().inspect_net_registry()?["records"].as_array().unwrap().len(), 4);
+            apply(&mut s, "edit.undo", json!({}))?;
+            assert_eq!(encode_documents(s.snapshot().unwrap())?, docs);
+        }
+    }
+    std::fs::write(
+        &args[3],
+        serde_json::to_vec_pretty(
+            &json!({"format":"pcbcraft-net-assignment-probe/1","samples":20,"move_ms":move_ms,"disconnect_ms":disconnect_ms,"registry_records":4,"logical_terminals":64,"binding_state":if args[1]=="bound"{"two classes on all four nets"}else{"none"},"oracle":"stable four records; exact Undo documents"}),
+        )?,
+    )?;
+    Ok(())
+}

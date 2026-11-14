@@ -41,6 +41,12 @@ impl Registry {
             {
                 return Err("Duplicate or excessive net anchors/lineage.".into());
             }
+            if record.class_bindings.len() > super::classes::MAX_BINDINGS
+                || record.class_bindings.windows(2).any(|pair| pair[0] >= pair[1])
+                || record.class_bindings.iter().any(|binding| project.net_classes.get(binding.class).is_none() || !ids.contains(&binding.origin))
+            {
+                return Err("Invalid, dangling, duplicate or excessive net class bindings.".into());
+            }
             for anchor in record.anchors() {
                 anchor_owner(anchor, project, !matches!(record.state, State::Active {}))?;
             }

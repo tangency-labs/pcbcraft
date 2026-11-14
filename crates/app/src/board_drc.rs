@@ -61,6 +61,7 @@ pub(super) enum Action {
 /// A short human label for each finding kind.
 fn label(kind: Kind) -> &'static str {
     match kind {
+        Kind::UnsupportedNetClasses => "Unsupported net-class rules",
         Kind::Short => "Short",
         Kind::Clearance => "Clearance",
         Kind::TrackWidth => "Track width",

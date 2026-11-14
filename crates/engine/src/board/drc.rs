@@ -43,6 +43,8 @@ pub use super::rules::Values as Rules;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    /// Required assigned class dimensions are not evaluated by this checker yet.
+    UnsupportedNetClasses,
     /// One physical copper island joins pads from distinct intended nets, independently of
     /// the clearance rule, including when the required clearance is zero.
     Short,
@@ -155,6 +157,16 @@ impl BoardView<'_> {
     /// Check this board against `rules` and return every finding, sorted by kind and position.
     pub fn check_design(self, rules: Rules) -> Report {
         let mut found = Findings::default();
+        if let Err(error) = self.require_supported_net_classes() {
+            found.push(Violation {
+                kind: Kind::UnsupportedNetClasses,
+                message: error.to_string(),
+                at: Point { x_nm: 0, y_nm: 0 },
+                items: Vec::new(),
+                nets: Vec::new(),
+            });
+            return found.finish(rules, self.effective_rules().sources);
+        }
         let geometry = BoardGeometry::new(self);
         let items = &geometry.items;
         self.check_dimensions(rules, &mut found);
@@ -433,6 +445,7 @@ impl Session {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+        view.require_supported_net_classes()?;
         let mut overrides = params.clone();
         if overrides.is_null() {
             overrides = json!({});

@@ -525,6 +525,13 @@ fn rectangle_points(footprint: &super::Footprint, center: Point, width: i64, hei
     })
 }
 
+impl BoardView<'_> {
+    /// Refuse rule-dependent operations until their consumers apply saved net assignments.
+    pub(crate) fn require_supported_net_classes(self) -> Result<(), crate::CommandError> {
+        self.project.require_supported_class_consumer()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

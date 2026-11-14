@@ -151,7 +151,7 @@ impl Project {
             } else {
                 None
             };
-            let record = if let Some(retained) = retained {
+            let mut record = if let Some(retained) = retained {
                 network.retained(retained).map_err(CommandError::InvalidParams)?
             } else {
                 let mut record = network.record(allocate(&mut ids)?, None).map_err(CommandError::InvalidParams)?;
@@ -172,6 +172,23 @@ impl Project {
                 }
                 record
             };
+            let mut inherited = BTreeSet::new();
+            for parent in parents {
+                if let Some(source) = by_source.get(parent) {
+                    for binding in &source.class_bindings {
+                        let class =
+                            self.net_classes.get(binding.class).ok_or_else(|| CommandError::InvalidParams("Unknown inherited class.".into()))?;
+                        if targets[*parent].len() > 1 && class.rules.keys().any(|property| !property.shareable_on_split()) {
+                            return Err(CommandError::Unavailable("A class property does not support automatic split inheritance.".into()));
+                        }
+                        inherited.insert(binding.clone());
+                        if inherited.len() > super::classes::MAX_BINDINGS {
+                            return Err(CommandError::Unavailable("Net assignment origin limit exceeded.".into()));
+                        }
+                    }
+                }
+            }
+            record.class_bindings = inherited.into_iter().collect();
             assigned[index] = Some(record.id);
             result.insert(record.id, record);
         }
