@@ -289,6 +289,7 @@ pub enum RibbonSection {
 
 /// Compose a tab ribbon with persistent fields at the right. At narrow widths fields wrap
 /// below the commands, staying visible while only the tab's command strip scrolls horizontally.
+/// The workspace card follows the ribbon's measured outer height, including wrapped rows.
 pub fn ribbon_with_controls(
     ui: &mut Ui,
     workspace: &str,
@@ -324,7 +325,8 @@ pub fn ribbon_with_controls(
     let painter = ui.painter().clone();
     let background = painter.add(Shape::Noop);
     let panel = Panel::top("workspace_ribbon")
-        .exact_size(height + 2.0 * t.space_6)
+        .default_size(height + 2.0 * t.space_6)
+        .min_size(height + 2.0 * t.space_6)
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(Color32::TRANSPARENT).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)))
@@ -332,23 +334,9 @@ pub fn ribbon_with_controls(
             let mut picked = None;
             let mut quick_pick = None;
             ui.horizontal_top(|ui| {
-                if wide {
-                    // Read before the tile can toggle it, so the picker knows the frame it opens on.
-                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                    let tile = card(ui.ctx(), t.space_8)
-                        .show(ui, |ui| {
-                            workspace_tile(
-                                ui,
-                                workspace,
-                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
-                                RIBBON_HEIGHT,
-                            )
-                        })
-                        .inner;
-                    picked = picker(ui, &tile, workspaces, !was_open);
-                }
-
-                card(ui.ctx(), t.space_4).show(ui, |ui| {
+                // Reserve the leading column, then measure the command card before drawing its peer.
+                let workspace_rect = wide.then(|| ui.allocate_space(vec2(WORKSPACE_WIDTH, height)).1);
+                let ribbon_card = card(ui.ctx(), t.space_4).show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
@@ -455,6 +443,23 @@ pub fn ribbon_with_controls(
                         }
                     });
                 });
+                if let Some(mut rect) = workspace_rect {
+                    rect.max.y = ribbon_card.response.rect.bottom();
+                    let mut workspace_ui =
+                        ui.new_child(egui::UiBuilder::new().id_salt("workspace_card").max_rect(rect).layout(Layout::top_down(Align::Min)));
+                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
+                    let tile = card(ui.ctx(), t.space_8)
+                        .show(&mut workspace_ui, |ui| {
+                            workspace_tile(
+                                ui,
+                                workspace,
+                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
+                                ribbon_card.response.rect.height(),
+                            )
+                        })
+                        .inner;
+                    picked = picker(ui, &tile, workspaces, !was_open);
+                }
             });
             (picked, quick_pick)
         });
@@ -466,9 +471,9 @@ pub fn ribbon_with_controls(
 }
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
-/// a caret that points up while the picker is open. Its shared fixed dimensions do not
-/// depend on the active workspace's title or extra ribbon control rows. Long titles wrap
-/// within the tile while the caption retains its own line.
+/// a caret that points up while the picker is open. Its width is fixed; `height` follows
+/// the measured ribbon card, including wrapped control rows. Long titles wrap within
+/// the tile while the caption retains its own line.
 fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;

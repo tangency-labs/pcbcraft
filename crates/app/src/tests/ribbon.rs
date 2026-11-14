@@ -464,3 +464,73 @@ fn pcb_via_dropdown_validates_custom_pairs_and_cancellation() {
         assert!(h.state().message.as_ref().is_some_and(|message| message.contains("View or project changed")));
     }
 }
+
+/// Both cards follow the rendered ribbon, including wrapped PCB fields and editor titles.
+/// Resizing back to a wide host must also release the space used by wrapped controls.
+#[test]
+fn workspace_and_ribbon_cards_share_vertical_bounds() {
+    /// Find the smallest painted surface enclosing an accessible control.
+    fn surrounding_card(shapes: &[egui::epaint::ClippedShape], target: egui::Rect) -> egui::Rect {
+        /// Inspect nested frame shapes, including their shadow and fill rectangles.
+        fn collect(shape: &egui::Shape, target: egui::Rect, cards: &mut Vec<egui::Rect>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, target, cards)),
+                egui::Shape::Rect(rect) if rect.rect.height() > 80. && rect.rect.contains_rect(target) => cards.push(rect.rect),
+                _ => {}
+            }
+        }
+        let mut cards = Vec::new();
+        for shape in shapes {
+            collect(&shape.shape, target, &mut cards);
+        }
+        cards.into_iter().min_by(|a, b| a.area().total_cmp(&b.area())).unwrap()
+    }
+
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        for kind in 0..4 {
+            let mut app = PcbApp::default();
+            app.preferences.theme = theme;
+            match kind {
+                0 => app.start_new_project_in(Workspace::Schematic),
+                1 => app.start_new_project_in(Workspace::Board),
+                2 => app.new_library_item(pcbcraft_engine::authoring::Kind::Symbol),
+                _ => app.new_library_item(pcbcraft_engine::authoring::Kind::Footprint),
+            }
+            let tab = match kind {
+                0 => "Capture",
+                1 => "Layout",
+                _ => "Draw",
+            };
+            let canvas = match kind {
+                0 => "Schematic canvas",
+                1 => "PCB canvas",
+                _ => "Library canvas",
+            };
+            let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            let mut original_height: Option<f32> = None;
+            for width in [1400., 703., 600., 420., 900., 1400.] {
+                h.set_size(egui::vec2(width, 900.));
+                h.run();
+                let ribbon = surrounding_card(&h.output().shapes, h.get_by_label(tab).rect());
+                assert!(ribbon.bottom() <= h.get_by_label(canvas).rect().top(), "{kind} {width}: ribbon overlaps canvas");
+                if h.get_by_label("Choose workspace").rect().height() > 30. {
+                    let workspace = surrounding_card(&h.output().shapes, h.get_by_label("Choose workspace").rect());
+                    assert!((workspace.top() - ribbon.top()).abs() <= 0.1, "{kind} {width}: {workspace:?} vs {ribbon:?}");
+                    assert!((workspace.bottom() - ribbon.bottom()).abs() <= 0.1, "{kind} {width}: {workspace:?} vs {ribbon:?}");
+                    assert!(
+                        (workspace.width() - 88.).abs() <= 2.1,
+                        "{kind} {width}: compact workspace {workspace:?}, ribbon {ribbon:?}, target {:?}",
+                        h.get_by_label("Choose workspace").rect()
+                    );
+                }
+                if width == 1400. {
+                    if let Some(original) = original_height {
+                        assert!((ribbon.height() - original).abs() <= 0.1, "wide ribbon must shrink after wrapped layouts");
+                    } else {
+                        original_height = Some(ribbon.height());
+                    }
+                }
+            }
+        }
+    }
+}
