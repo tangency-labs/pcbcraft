@@ -373,6 +373,7 @@ impl PcbApp {
                         ui.add_enabled_ui(!dirty, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 controls::Choice::from_id_salt("class_choice")
+                                    .width(240.)
                                     .selected_text(
                                         edit.selected_class
                                             .and_then(|id| edit.project.net_classes().get(id))
@@ -405,6 +406,7 @@ impl PcbApp {
                         controls::search(ui, ui.scope_id().with("net_search"), &mut edit.net_search, "Search nets", "Search nets");
                         ui.add_enabled_ui(!dirty, |ui| {
                             controls::Choice::from_id_salt("class_net_choice")
+                                .width(ui.available_width())
                                 .selected_text(edit.net_index.and_then(|index| edit.nets.get(index)).map_or("Choose net", |net| net.label.as_str()))
                                 .show_ui(ui, |ui| {
                                     for (index, net) in edit

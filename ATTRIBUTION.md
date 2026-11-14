@@ -1392,3 +1392,9 @@ segmented tabs, choices, search, checkboxes, fields and footer through existing
 remain host domain composition; the toolkit does not provide an electronics rule
 editor. No custom generic control, dependency upgrade, external EDA implementation,
 library asset or native format change was introduced.
+
+The pinned modal host does not schedule a settling paint after viewport bounds
+change. The existing chrome settings-form adapter records those bounds and requests
+one extra frame, retaining the shared surface, positioning and input behavior.
+Class/net choices use the adapter's existing bounded-width option so browsing can
+show useful names and target details. No toolkit dependency was changed.
