@@ -22,7 +22,8 @@ and net identities determine the target. Select the complete set of classes and
 choose **Assign classes**. Clearing all boxes removes the assignment. A previously
 derived net is promoted only when a nonempty assignment is saved.
 
-The page previews effective hard values and preferences and reports conflicts.
+The page aligns effective values with their sources and reports conflicts above
+the dimension rows.
 An unresolved preference displays **Unresolved**, rather than picking one class.
 **Contributions and identities** shows every contributing built-in, board or class
 source, including class UUID and definition revision; **Assignment origins** shows

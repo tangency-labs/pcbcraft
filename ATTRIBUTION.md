@@ -1398,3 +1398,13 @@ change. The existing chrome settings-form adapter records those bounds and reque
 one extra frame, retaining the shared surface, positioning and input behavior.
 Class/net choices use the adapter's existing bounded-width option so browsing can
 show useful names and target details. No toolkit dependency was changed.
+
+The Rules layout follow-up composes the same settings section treatment, bounded
+fields, checkboxes and semantic warning band through `chrome::rule_form`. The
+pinned selectable table always owns a horizontal scroll region and adds row focus
+targets; nested in the vertical form, it prevented accessibility reveal from
+reaching lower controls. The adapter therefore reserves aligned cells around
+shared controls while the form retains one vertical scroll owner. It adds no
+custom control painting, model policy, dependency or toolkit revision. Source
+names and net references are presentation only; exact identities remain retained
+in the expanded details and native commands.

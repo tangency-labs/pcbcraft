@@ -187,14 +187,21 @@ pub(crate) fn form_header(ui: &mut Ui, title: &str) -> (Rect, bool) {
 /// Keep shared window actions fixed around a bounded page editor. Navigation, validation
 /// and page scrolling fit inside the body while the caller controls primary action availability.
 pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
+    settings_form_width(ctx, title, Tokens::get().form_card_width * 4., primary, enabled, add)
+}
+
+/// Use shared settings chrome with a content-appropriate maximum width; the footer and
+/// resize-settling behavior remain identical to the ordinary board setup form.
+pub fn settings_form_width(ctx: &egui::Context, title: &str, width: f32, primary: &str, enabled: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
     let t = Tokens::get();
     let id = egui::Id::unique("board_setup_form");
     // The backing Area positions using its previous size. Schedule one settling frame when
-    // viewport bounds change, so a browser resize cannot leave the modal off-center until input.
-    let metrics = (ctx.content_rect(), ctx.pixels_per_point());
+    // viewport bounds or requested form width change, keeping transitions between forms centered.
+    let width = width.max(0.);
+    let metrics = (ctx.content_rect(), ctx.pixels_per_point(), width);
     let key = id.with(("layout_metrics", ctx.viewport_id()));
     let changed = ctx.data_mut(|data| {
-        let changed = data.get_temp::<(Rect, f32)>(key) != Some(metrics);
+        let changed = data.get_temp::<(Rect, f32, f32)>(key) != Some(metrics);
         data.insert_temp(key, metrics);
         changed
     });
@@ -204,7 +211,7 @@ pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: b
     let frame = kit::navigation_popup_frame().inner_margin(0);
     let mut closed = false;
     let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
-        let width = (t.form_card_width * 4.0).min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        let width = width.max(0.).min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
         ui.set_width(width);
         let field_style = ui.style().clone();
         kit::scope(ui, |ui| {

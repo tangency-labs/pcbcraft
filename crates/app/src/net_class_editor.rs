@@ -1,13 +1,16 @@
 //! Shared, revision-bound class authoring and net inspection for schematic and PCB views.
 use crate::{Dialog, PcbApp, ViewInput, editor_view::DocumentTarget};
-use pcbcraft_chrome::{board_setup as form, controls, properties, shell, units};
+use pcbcraft_chrome::{controls, properties, rule_form as form, shell, units};
 use pcbcraft_engine::{
     Project,
     net_classes::{self, Definition, Property, Resolution, Rules, Source},
     nets::{Anchor, ClassBinding, ClassTarget},
 };
 use serde_json::json;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,12 +177,18 @@ impl Edit {
         let project = app.session.snapshot().ok_or("No project open.")?;
         let registry = project.inspect_net_registry()?;
         let rows = registry["nets"].as_array().ok_or("Net inspection is unavailable.")?;
+        let references: BTreeMap<_, _> = project.components().map(|component| (component.id(), component.reference().to_owned())).collect();
         let mut nets = Vec::new();
         for row in rows {
             let anchor: Anchor = serde_json::from_value(row["anchor"].clone()).map_err(|error| error.to_string())?;
             let names: Vec<String> = serde_json::from_value(row["names"].clone()).map_err(|error| error.to_string())?;
-            let name = if names.is_empty() { format!("Unnamed · {} {}", anchor.object, anchor.terminal) } else { names.join(" / ") };
-            let detail = if anchor.terminal.is_empty() { anchor.occurrence.to_string() } else { format!("{}:{}", anchor.object, anchor.terminal) };
+            let detail = if anchor.terminal.is_empty() {
+                anchor.occurrence.to_string()
+            } else {
+                let component = format!("component-{}", anchor.object);
+                format!("{} pin {}", references.get(&component).map_or(component.as_str(), String::as_str), anchor.terminal)
+            };
+            let name = if names.is_empty() { "Unnamed".into() } else { names.join(" / ") };
             nets.push(NetChoice { label: format!("{name} · {detail}"), target: ClassTarget::Derived { anchor } });
         }
         let selected = selected_target(app, source);
@@ -244,83 +253,141 @@ impl Edit {
     }
 }
 
-/// Render sparse opinions with the existing Craft checkbox/field primitives. A disabled opinion
-/// shows the actual inherited baseline rather than a stale, previously authored string.
+/// Render authored and inherited values in the same aligned form cells. Disabled fields retain
+/// their source value and exact edit text, and the host owns each sparse opinion's checkbox.
 fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft, baseline: pcbcraft_engine::board::rules::Values, unit: units::Unit, board: bool) {
-    if ui.available_width() < 450. {
-        ui.label("Class name");
-        controls::text(ui, &mut draft.name).accessible_name("Class name");
-    } else {
-        form::text(ui, "Class name", &mut draft.name);
-    }
+    ui.label("Class name");
+    controls::text(ui, &mut draft.name).accessible_name("Class name");
     for preferred in [false, true] {
-        form::heading(ui, if preferred { "Routing preferences" } else { "Hard limits" });
-        let narrow = ui.available_width() < 450.;
-        let label_width = if narrow { ui.available_width() } else { 250. };
-        egui::Grid::new(("class_fields", preferred)).num_columns(if narrow { 1 } else { 3 }).spacing(egui::vec2(12., 6.)).show(ui, |ui| {
-            for field in draft.fields.iter_mut().filter(|field| field.property.is_preference() == preferred) {
-                let name = label(field.property);
-                ui.allocate_ui_with_layout(egui::vec2(label_width, 28.), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    controls::checkbox(ui, &mut field.enabled, name);
-                });
-                if narrow {
-                    ui.end_row();
-                }
-                if field.enabled {
-                    ui.add_sized(egui::vec2(140., 28.), properties::input(&mut field.text)).accessible_name(format!("{name} value"));
-                } else {
-                    ui.label(units::label(field.property.value(&baseline), unit));
-                }
-                if narrow {
-                    ui.end_row();
-                }
-                ui.label(shell::dim(if field.enabled {
-                    "Class"
-                } else if board {
-                    "Board"
-                } else {
-                    "Built-in"
-                }));
-                ui.end_row();
-            }
-        });
+        {
+            let mut fields: Vec<_> = draft.fields.iter_mut().filter(|field| field.property.is_preference() == preferred).collect();
+            form::rows(
+                ui,
+                if preferred { "class_preferences" } else { "class_limits" },
+                if preferred { "Routing preferences" } else { "Hard limits" },
+                &mut fields,
+                |ui, field, cell| match cell {
+                    form::Cell::Rule => {
+                        controls::checkbox(ui, &mut field.enabled, label(field.property));
+                    }
+                    form::Cell::Value => {
+                        let mut inherited = units::label(field.property.value(&baseline), unit);
+                        let text = if field.enabled { &mut field.text } else { &mut inherited };
+                        ui.add_enabled_ui(field.enabled, |ui| {
+                            ui.add_sized(egui::vec2(ui.available_width(), pcbcraft_chrome::Tokens::get().control_height), properties::input(text))
+                                .accessible_name(format!("{} value", label(field.property)));
+                        });
+                    }
+                    form::Cell::Source => {
+                        ui.label(shell::dim(if field.enabled {
+                            "This class"
+                        } else if board {
+                            "Board defaults"
+                        } else {
+                            "Built-in defaults"
+                        }));
+                    }
+                },
+            );
+        }
     }
 }
 
-/// Effective values and every contribution stay distinct from editable class opinions.
-fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: units::Unit) {
-    for preferred in [false, true] {
-        form::heading(ui, if preferred { "Routing preferences" } else { "Hard limits" });
-        egui::Grid::new(("effective_class_rules", preferred)).num_columns(2).show(ui, |ui| {
-            for property in Property::ALL.into_iter().filter(|property| property.is_preference() == preferred) {
-                ui.label(label(property));
-                ui.label(
-                    result.values.get(&property).copied().flatten().map(|value| units::label(value, unit)).unwrap_or_else(|| "Unresolved".into()),
-                );
-                ui.end_row();
+/// Use human names in the main form; precise UUIDs/revisions remain in the source disclosure.
+fn source_name(project: &Project, source: &Source) -> String {
+    match source {
+        Source::Builtin => "Built-in defaults".into(),
+        Source::Request => "Request".into(),
+        Source::Board { .. } => "Board defaults".into(),
+        Source::Class { rule, .. } => project.net_classes().get(*rule).map_or_else(|| "Class".into(), |class| class.name.clone()),
+    }
+}
+
+/// Explain sources matching the published value without performing another resolution. An
+/// unresolved preference keeps all exact conflicting contributions available in Details.
+fn effective_sources(project: &Project, result: &Resolution, property: Property) -> String {
+    let Some(value) = result.values.get(&property).copied().flatten() else { return "Conflict".into() };
+    result
+        .contributions
+        .get(&property)
+        .into_iter()
+        .flatten()
+        .filter(|source| source.value_nm == value)
+        .map(|source| source_name(project, &source.source))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Effective values use the same columns as authored dimensions. Surface conflicts before
+/// the table while keeping technical source identities and assignment origins in a disclosure.
+fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: units::Unit, bindings: &[ClassBinding]) {
+    if !result.conflicts.is_empty() {
+        form::conflict(ui, |ui| {
+            ui.strong("Rule conflicts");
+            for conflict in &result.conflicts {
+                let properties = conflict.properties.iter().map(|property| label(*property)).collect::<Vec<_>>().join(" / ");
+                ui.label(format!("{properties}: {}", conflict.message));
             }
         });
     }
-    for conflict in &result.conflicts {
-        ui.label(shell::error(&conflict.message));
-    }
-    properties::section(ui, "Rule sources");
-    egui::CollapsingHeader::new("Contributions and identities").show(ui, |ui| {
-        for property in Property::ALL {
-            ui.label(label(property));
-            for contribution in result.contributions.get(&property).into_iter().flatten() {
-                let source = match contribution.source {
-                    Source::Builtin => "Built-in".to_owned(),
-                    Source::Request => "Request".to_owned(),
-                    Source::Board { rule } => format!("Board · {rule}"),
-                    Source::Class { rule, revision } => {
-                        format!("{} · {rule} · r{revision}", project.net_classes().get(rule).map_or("Class", |class| class.name.as_str()))
+    for preferred in [false, true] {
+        {
+            let mut fields: Vec<_> = Property::ALL.into_iter().filter(|property| property.is_preference() == preferred).collect();
+            form::rows(
+                ui,
+                if preferred { "effective_preferences" } else { "effective_limits" },
+                if preferred { "Routing preferences" } else { "Hard limits" },
+                &mut fields,
+                |ui, property, cell| match cell {
+                    form::Cell::Rule => {
+                        ui.label(label(*property));
                     }
-                };
-                ui.label(format!("{source}: {}", units::label(contribution.value_nm, unit)));
-            }
+                    form::Cell::Value => {
+                        if let Some(value) = result.values.get(property).copied().flatten() {
+                            ui.label(units::label(value, unit));
+                        } else {
+                            ui.label(shell::error("Unresolved"));
+                        }
+                    }
+                    form::Cell::Source => {
+                        let text = effective_sources(project, result, *property);
+                        ui.add(egui::Label::new(shell::dim(&text)).truncate()).on_hover_text(text);
+                    }
+                },
+            );
         }
+    }
+    form::section(ui, "Details", |ui| {
+        controls::collapsing(ui, "rule_sources", "Contributions and identities", false, None, |ui| {
+            for property in Property::ALL {
+                ui.strong(label(property));
+                for contribution in result.contributions.get(&property).into_iter().flatten() {
+                    let identity = match contribution.source {
+                        Source::Class { rule, revision } => format!(" · {rule} · r{revision}"),
+                        Source::Board { rule } => format!(" · {rule}"),
+                        _ => String::new(),
+                    };
+                    ui.label(format!("{}{}: {}", source_name(project, &contribution.source), identity, units::label(contribution.value_nm, unit)));
+                }
+            }
+        });
+        controls::collapsing(ui, "class_origins", "Assignment origins", false, None, |ui| {
+            for binding in bindings {
+                ui.label(format!("Class {} · origin {}", binding.class, binding.origin));
+            }
+        });
     });
+}
+
+/// Duplicate display names receive a short identity only when necessary to distinguish rows.
+fn class_label(project: &Project, class: &Definition) -> String {
+    if project.net_classes().definitions.iter().filter(|other| other.name == class.name).count() > 1 {
+        format!("{} · {}", class.name, &class.id.to_string()[..8])
+    } else {
+        class.name.clone()
+    }
 }
 
 impl PcbApp {
@@ -362,114 +429,123 @@ impl PcbApp {
         let mut new_class = false;
         let mut pick_net = edit.net_index;
         let primary = if edit.page == Page::Classes { "Save class" } else { "Assign classes" };
-        let action = pcbcraft_chrome::catalog::settings_form(ctx, "Rules", primary, current && valid, |ui| {
-            ui.add_enabled_ui(!dirty, |ui| properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Classes"), (Page::Net, "Selected net")]));
-            if !current {
-                ui.label(shell::error("The project or view changed. Close and reopen Rules to continue."));
-            }
-            egui::ScrollArea::vertical().id_salt("class_rule_body").auto_shrink([false, false]).show(ui, |ui| {
-                match edit.page {
-                    Page::Classes => {
-                        ui.add_enabled_ui(!dirty, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                controls::Choice::from_id_salt("class_choice")
-                                    .width(240.)
+        let action = pcbcraft_chrome::catalog::settings_form_width(ctx, "Rules", 800., primary, current && valid, |ui| {
+            form::body(ui, |ui| {
+                ui.add_enabled_ui(!dirty, |ui| properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Classes"), (Page::Net, "Selected net")]));
+                if !current {
+                    ui.label(shell::error("The project or view changed. Close and reopen Rules to continue."));
+                }
+                egui::ScrollArea::vertical().id_salt("class_rule_body").auto_shrink([false, false]).show(ui, |ui| {
+                    pcbcraft_chrome::workspace::describe_scroll_viewport(ui);
+                    match edit.page {
+                        Page::Classes => {
+                            ui.add_enabled_ui(!dirty, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    controls::Choice::from_id_salt("class_choice")
+                                        .width(240.)
+                                        .selected_text(
+                                            edit.selected_class
+                                                .and_then(|id| edit.project.net_classes().get(id))
+                                                .map_or("Choose class", |class| class.name.as_str()),
+                                        )
+                                        .show_ui(ui, |ui| {
+                                            for class in &edit.project.net_classes().definitions {
+                                                ui.selectable_value(
+                                                    &mut pick_class,
+                                                    Some(class.id),
+                                                    format!("{} · r{}", class_label(&edit.project, class), class.revision),
+                                                );
+                                            }
+                                        })
+                                        .response
+                                        .accessible_name("Class");
+                                    new_class = controls::button(ui, "New class").clicked();
+                                    board_defaults = ui
+                                        .add_enabled(
+                                            edit.project.board_target().is_some(),
+                                            pcbcraft_chrome::catalog::button("Board defaults…", false),
+                                        )
+                                        .clicked();
+                                })
+                            });
+                            let base = edit.baseline();
+                            let board = edit
+                                .project
+                                .board_target()
+                                .and_then(|target| edit.project.board_view(target))
+                                .is_some_and(|board| board.authored_rules().is_some());
+                            if let Some(draft) = &mut edit.draft {
+                                class_fields(ui, draft, base, edit.unit, board);
+                            }
+                        }
+                        Page::Net => {
+                            controls::search(ui, ui.scope_id().with("net_search"), &mut edit.net_search, "Search nets", "Search nets");
+                            ui.add_enabled_ui(!dirty, |ui| {
+                                controls::Choice::from_id_salt("class_net_choice")
+                                    .width(ui.available_width())
                                     .selected_text(
-                                        edit.selected_class
-                                            .and_then(|id| edit.project.net_classes().get(id))
-                                            .map_or("Choose class", |class| class.name.as_str()),
+                                        edit.net_index.and_then(|index| edit.nets.get(index)).map_or("Choose net", |net| net.label.as_str()),
                                     )
                                     .show_ui(ui, |ui| {
-                                        for class in &edit.project.net_classes().definitions {
-                                            ui.selectable_value(
-                                                &mut pick_class,
-                                                Some(class.id),
-                                                format!("{} · r{} · {}", class.name, class.revision, &class.id.to_string()[..8]),
-                                            );
+                                        for (index, net) in edit
+                                            .nets
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(_, net)| net.label.to_lowercase().contains(&edit.net_search.to_lowercase()))
+                                        {
+                                            ui.selectable_value(&mut pick_net, Some(index), &net.label);
                                         }
                                     })
                                     .response
-                                    .accessible_name("Class");
-                                new_class = controls::button(ui, "New class").clicked();
-                                board_defaults = ui
-                                    .add_enabled(edit.project.board_target().is_some(), pcbcraft_chrome::catalog::button("Board defaults…", false))
-                                    .clicked();
-                            })
-                        });
-                        let base = edit.baseline();
-                        let board = edit.project.board_target().is_some();
-                        if let Some(draft) = &mut edit.draft {
-                            class_fields(ui, draft, base, edit.unit, board);
-                        }
-                    }
-                    Page::Net => {
-                        controls::search(ui, ui.scope_id().with("net_search"), &mut edit.net_search, "Search nets", "Search nets");
-                        ui.add_enabled_ui(!dirty, |ui| {
-                            controls::Choice::from_id_salt("class_net_choice")
-                                .width(ui.available_width())
-                                .selected_text(edit.net_index.and_then(|index| edit.nets.get(index)).map_or("Choose net", |net| net.label.as_str()))
-                                .show_ui(ui, |ui| {
-                                    for (index, net) in edit
-                                        .nets
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, net)| net.label.to_lowercase().contains(&edit.net_search.to_lowercase()))
-                                    {
-                                        ui.selectable_value(&mut pick_net, Some(index), &net.label);
-                                    }
-                                })
-                                .response
-                                .accessible_name("Net");
-                        });
-                        if let Some(error) = &edit.selection_error {
-                            ui.label(shell::error(error));
-                        }
-                        if edit.target.is_some() {
-                            properties::section(ui, "Assigned classes");
-                            if edit.project.net_classes().definitions.is_empty() {
-                                ui.label(shell::dim("No class definitions"));
-                            }
-                            for class in &edit.project.net_classes().definitions {
-                                let mut selected = edit.classes.contains(&class.id);
-                                let name = format!("{} · {}", class.name, &class.id.to_string()[..8]);
-                                if ui
-                                    .push_id(class.id, |ui| controls::checkbox(ui, &mut selected, &name))
-                                    .inner
-                                    .on_hover_text(class.id.to_string())
-                                    .changed()
-                                {
-                                    if selected {
-                                        edit.classes.insert(class.id);
-                                    } else {
-                                        edit.classes.remove(&class.id);
-                                    }
-                                }
-                            }
-                            match edit.project.resolve_net_classes(&edit.classes.iter().copied().collect::<Vec<_>>(), edit.project.board_target()) {
-                                Ok(result) => resolution(ui, &edit.project, &result, edit.unit),
-                                Err(error) => {
-                                    ui.label(shell::error(error.to_string()));
-                                }
-                            }
-                            egui::CollapsingHeader::new("Assignment origins").show(ui, |ui| {
-                                for binding in &edit.bindings {
-                                    ui.label(format!("Class {} · origin {}", binding.class, binding.origin));
-                                }
+                                    .accessible_name("Net");
                             });
-                        } else if edit.selection_error.is_none() {
-                            ui.label(shell::dim("No supported net selected"));
+                            if let Some(error) = &edit.selection_error {
+                                ui.label(shell::error(error));
+                            }
+                            if edit.target.is_some() {
+                                form::section(ui, "Assigned classes", |ui| {
+                                    if edit.project.net_classes().definitions.is_empty() {
+                                        ui.label(shell::dim("No class definitions"));
+                                    }
+                                    for class in &edit.project.net_classes().definitions {
+                                        let mut selected = edit.classes.contains(&class.id);
+                                        let name = class_label(&edit.project, class);
+                                        if ui
+                                            .push_id(class.id, |ui| controls::checkbox(ui, &mut selected, &name))
+                                            .inner
+                                            .on_hover_text(class.id.to_string())
+                                            .changed()
+                                        {
+                                            if selected {
+                                                edit.classes.insert(class.id);
+                                            } else {
+                                                edit.classes.remove(&class.id);
+                                            }
+                                        }
+                                    }
+                                });
+                                match edit.project.resolve_net_classes(&edit.classes.iter().copied().collect::<Vec<_>>(), edit.project.board_target())
+                                {
+                                    Ok(result) => resolution(ui, &edit.project, &result, edit.unit, &edit.bindings),
+                                    Err(error) => {
+                                        ui.label(shell::error(error.to_string()));
+                                    }
+                                }
+                            } else if edit.selection_error.is_none() {
+                                ui.label(shell::dim("No supported net selected"));
+                            }
                         }
                     }
-                }
-                if let Some(error) = &edit.error {
-                    ui.label(shell::error(error));
-                }
-                if edit.page == Page::Classes
-                    && let Some(Err(error)) = &rules
-                {
-                    ui.label(shell::error(error));
-                }
-            });
+                    if let Some(error) = &edit.error {
+                        ui.label(shell::error(error));
+                    }
+                    if edit.page == Page::Classes
+                        && let Some(Err(error)) = &rules
+                    {
+                        ui.label(shell::error(error));
+                    }
+                });
+            })
         });
         if action.close {
             return;
