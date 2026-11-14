@@ -1,0 +1,25 @@
+{
+  "schema": "pcbcraft-issue303-evidence/1",
+  "implementation": "64831ae1bf022f1fc3290f26ead9df79348ed3ea",
+  "artifacts": {
+    "reference-before.json.gz": "2687e53a45d439aca27eba2cf1fec96fbf663d425dda905c1ad41138074c1116",
+    "reference-after.json.gz": "5bd1d938ed524ec8ffca426c527d631120ef349a910eb1530752353e88cf393b",
+    "assigned-before.json.gz": "2e4eee04d4cf7c221f782ef9cf1d4623e3d3d895a2525458eef960ade6366881",
+    "assigned-after.json.gz": "d6bfaf0e0725040197cb3c2c874186906172fa15f259e3c7a5e44a98aab1a83c",
+    "source-before.json.gz": "12c0a5d43b54e641dc2c4da67b7892c686addf11e9b2ee018c92d43bb5875917",
+    "source-after.json.gz": "d147a8c3836d991aca4af1a7004f6323852d5e6ca4445a7e1335744590d40b1b",
+    "environment-before.json": "e5197e10faa8c7a9ffe8beb8e39f31e3fa2ab745a0cd509191d699b410dfe6d5",
+    "environment-after.json": "53180c0ee6690efab6823b7368210f9b483924b00ce86eb60b2458dcb470692a",
+    "reference-comparison.md": "2d10e078e324d7440edd9ec2588c1abc9dccfc6c5d6357e284c60f92e83b57b6",
+    "assigned-comparison.md": "0901087da2f2619ecd3ac792aa555bcfe041f373b9a700978ab66b8eebde7944",
+    "failure-review.md": "186c93a7c808630a8e8f84e4ec1b1b9bbe8a69587587bb71d0aa3c6027e068e4",
+    "checks.json": "e608d7120f3700d44478ed6727980146d9510f5ef3c066df6dc7f86044b30c11",
+    "verification.json": "3e00ec46016c5da79c1264ff2a2d48cce10d0fde6e93fcce457218ae15b7b320",
+    "visual/class-dark-wide.png": "3dc4e0a16aeca673e8dba2708710399eb05c3ef020d57f0c8aa407c648e686cf",
+    "visual/net-dark-wide.png": "71e4b01616213587b361abd3c1c5aef7c770d6428a7c26eaa98bf4c8b75f6e52",
+    "visual/net-light-compact.png": "97dbb495445e3e0ea75f4b4bd5baccd08ca7c108e2425b97bd58594bd5c337f9",
+    "visual/resize-no-input.png": "5ee6c05b908f9ae8accd483b8f8d53a79e5aa094b83d7a65e416b65837893f9d",
+    "visual/browser.json": "cb2e02e67636c738527c38d7aad13b39815d06d5c289b912402692494c83efbb",
+    "README.md": "fc4bd81d48ac6011bfbb214f3765db1baa4e3e89fbd91e72fa5b1bf678946fd2"
+  }
+}
