@@ -15,6 +15,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[cfg(test)]
+std::thread_local! {
+    pub(super) static TERMINAL_NET_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Explicitly adopt current supported logical inputs before retaining physical removals.
 pub const INITIALIZE_BASELINE: &str = "pcb.initialize_update_baseline";
 mod commands;
@@ -549,6 +554,8 @@ impl Baseline {
     /// Borrowed terminal keys stay local to the immutable baseline; public edits
     /// to net records cannot leave a persistent derived cache stale.
     pub(crate) fn terminal_net_index(&self) -> BTreeMap<(u64, &str), usize> {
+        #[cfg(test)]
+        TERMINAL_NET_INDEX_BUILDS.with(|builds| builds.set(builds.get() + 1));
         self.nets
             .iter()
             .enumerate()

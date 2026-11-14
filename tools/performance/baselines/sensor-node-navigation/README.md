@@ -93,3 +93,20 @@ identical final-pixel result applies only to the initial navigation work. The
 later text adapter changes raster sampling, so its validation uses continuous
 size/bounds regressions and new GPU captures rather than claiming identical
 pixel output to the old font rasters.
+
+## Selection review follow-up
+
+CodeRabbit identified repeated accepted-net index construction when the Properties
+panel resolved each selected footprint separately. The batch lookup now resolves
+the selected IDs against one index and retains the resolved vector's count,
+omitting unknown/noncanonical IDs as before. A test-only counter reproduces two
+index builds for two selected placements with the per-ID traversal and one with
+the batch traversal, while comparing pad-net labels, graphics and reference
+appearance. Empty and wholly unknown selections construct no index. This focused
+work-count regression verifies the changed cost directly; the existing zoom and
+rendered evidence does not claim new selection timing measurements.
+
+The cache contention and poisoning tests require native OS threads and are
+excluded on `wasm32`, whose WASI test runner does not implement thread spawning.
+The remaining board/cache and batch-selection tests still run under WASI; this
+does not qualify browser rendering or presentation behavior.

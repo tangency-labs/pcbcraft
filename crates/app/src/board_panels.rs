@@ -99,7 +99,7 @@ impl PcbApp {
                         state.reference.show(ui, &footprint, input, unit, enabled, pcbcraft_chrome::properties::form_body_height(area));
                     return;
                 }
-                let selected: Vec<_> = state.selection.iter().filter_map(|id| target.footprint(id)).collect();
+                let selected: Vec<_> = target.footprints_for_ids(&state.selection).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
                         property(ui, "Reference", footprint.reference);

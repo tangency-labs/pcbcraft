@@ -244,12 +244,16 @@ impl<'a> BoardView<'a> {
     /// Resolve one canonical placement ID, generating geometry only for that placement.
     /// Unknown IDs, other object kinds and noncanonical numeric aliases return `None`.
     pub fn footprint(self, id: &str) -> Option<FootprintView<'a>> {
-        let ordinal = crate::schematic::wiring::parse_id(id, "footprint-")?;
-        if id != format!("footprint-{ordinal}") {
-            return None;
-        }
-        let index = self.project.board.footprints().binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
-        self.footprints_range(index, 1).next()
+        self.resolve_footprints(self.placement(id).into_iter()).next()
+    }
+
+    /// Resolve canonical selected IDs in their set order, omitting unknown or unresolved IDs.
+    /// The selection shares one accepted-net index instead of rebuilding it per placement.
+    pub fn footprints_for_ids<'s>(self, ids: &'s BTreeSet<String>) -> impl Iterator<Item = FootprintView<'a>> + 's
+    where
+        'a: 's,
+    {
+        self.resolve_footprints(ids.iter().filter_map(move |id| self.placement(id)))
     }
 
     /// Resolve placements lazily without assuming starter-definition geometry.
@@ -262,8 +266,29 @@ impl<'a> BoardView<'a> {
     /// Resolve a bounded placement range without constructing skipped footprint graphics.
     /// A resumable checker retains its stable range under one immutable snapshot.
     pub(super) fn footprints_range(self, start: usize, count: usize) -> impl Iterator<Item = FootprintView<'a>> {
-        let accepted = self.project.board.baseline.as_ref().map(|baseline| (baseline, baseline.terminal_net_index()));
-        self.project.board.footprints().iter().skip(start).take(count).filter_map(move |footprint| {
+        self.resolve_footprints(self.project.board.footprints().iter().skip(start).take(count))
+    }
+
+    /// Find a canonical placement without resolving geometry or accepted-net membership.
+    fn placement(self, id: &str) -> Option<&'a super::Footprint> {
+        let ordinal = crate::schematic::wiring::parse_id(id, "footprint-")?;
+        if id != format!("footprint-{ordinal}") {
+            return None;
+        }
+        let placements = self.project.board.footprints();
+        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
+        placements.get(index)
+    }
+
+    /// Resolve only supplied placements against one immutable accepted-net index. Empty or
+    /// entirely unknown selections do no index work; missing logical/history records are omitted.
+    fn resolve_footprints<'s>(self, placements: impl Iterator<Item = &'a super::Footprint> + 's) -> impl Iterator<Item = FootprintView<'a>> + 's
+    where
+        'a: 's,
+    {
+        let mut placements = placements.peekable();
+        let accepted = placements.peek().and(self.project.board.baseline.as_ref()).map(|baseline| (baseline, baseline.terminal_net_index()));
+        placements.filter_map(move |footprint| {
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
@@ -509,6 +534,39 @@ mod tests {
     };
     use serde_json::json;
 
+    /// A selection shares one baseline index while preserving resolved geometry, pad-net
+    /// labels and the filtered count. Empty/unknown selections must not prepare an index.
+    #[test]
+    fn selected_footprints_share_one_index_and_keep_the_resolved_count() {
+        let session = super::super::track::tests::routed_fixture();
+        let project = session.snapshot().unwrap();
+        let bytes = encode_documents(project.clone()).unwrap();
+        let board = project.boards().next().unwrap();
+        let placed: Vec<_> = board.footprint_ids().collect();
+        let ids = BTreeSet::from([placed[0].clone(), placed[2].clone(), "footprint-999999".into(), "footprint-0003".into(), "symbol-2".into()]);
+        let expected: Vec<_> = ids.iter().filter_map(|id| board.footprint(id)).collect();
+        let builds = &super::super::update::TERMINAL_NET_INDEX_BUILDS;
+        builds.with(|count| count.set(0));
+        let selected: Vec<_> = board.footprints_for_ids(&ids).collect();
+        assert_eq!(builds.with(|count| count.get()), 1);
+        assert_eq!(selected.len(), 2);
+        assert!(selected.len() < ids.len());
+        for (actual, expected) in selected.iter().zip(expected) {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.pads, expected.pads);
+            assert_eq!(actual.graphics, expected.graphics);
+            assert_eq!(actual.reference, expected.reference);
+            assert_eq!(actual.value, expected.value);
+            assert_eq!(actual.reference_appearance, expected.reference_appearance);
+        }
+        for ids in [BTreeSet::new(), BTreeSet::from(["footprint-999999".into(), "symbol-2".into()])] {
+            builds.with(|count| count.set(0));
+            assert_eq!(board.footprints_for_ids(&ids).count(), 0);
+            assert_eq!(builds.with(|count| count.get()), 0);
+        }
+        assert_eq!(encode_documents(project).unwrap(), bytes);
+    }
+
     /// Compare warm presentation against the uncached generator and prove that cache reads do
     /// not change serialized documents, including after another history snapshot used the cache.
     fn check_graphics(project: Arc<Project>) {
@@ -608,6 +666,7 @@ mod tests {
     }
 
     /// A failed cache owner cannot prevent ordinary board rendering or change authored bytes.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn poisoned_graphics_cache_falls_back_to_uncached_paths() {
         let session = super::super::track::tests::routed_fixture();
@@ -625,6 +684,7 @@ mod tests {
     }
 
     /// A busy cache cannot block a reader behind another editor or background job.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_contended_graphics_cache_does_not_block_board_reads() {
         let session = super::super::track::tests::routed_fixture();
