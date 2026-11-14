@@ -995,7 +995,11 @@ fn preferences_restore_defaults_for_the_open_page() {
     click(&mut harness, "Navigation");
     click(&mut harness, "Reversed");
     click(&mut harness, "Center of view");
+    click(&mut harness, "Zoom");
+    click(&mut harness, "Pan view");
     assert!(harness.state().preferences().navigation.reverse_zoom);
+    assert!(harness.state().preferences().navigation.middle_drag_zoom);
+    assert!(harness.state().preferences().navigation.right_drag_pan);
     click(&mut harness, "Restore page defaults");
     assert_eq!(harness.state().preferences().navigation, Navigation::default());
     assert_eq!(harness.state().preferences().theme, ThemeChoice::Light);

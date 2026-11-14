@@ -215,8 +215,10 @@ the same `VCC` net name, which can be changed before placement.
 
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
-smoothly around the pointer and a middle-button drag pans by default. Pinch
-gestures follow your fingers directly, and grid density fades between scales.
+smoothly around the pointer and a middle-button drag pans by default. Preferences can
+make a middle-button drag zoom up and down instead, and can make a right-button drag
+pan as well; a right-click still opens menus. Pinch gestures follow your fingers
+directly, and grid density fades between scales.
 Preferences can change wheel behavior, zoom direction/speed, theme and UI scale.
 Browser and Net Inspector
 use collapsible cards over the canvas; **View** restores a hidden card and opens

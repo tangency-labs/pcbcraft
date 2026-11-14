@@ -54,16 +54,20 @@ without changing saved files or document history.
 ## Preferences and grid
 
 Wheel zoom moves through intermediate scales over a short transition in schematic,
-PCB and library editor canvases. Pinch gestures and panning remain direct. The
-chosen pointer or center anchor stays fixed during the transition, while the
-snap spacing stays unchanged. Clicking, leaving the canvas, losing focus, or
+PCB and library editor canvases. Pinch gestures and panning remain direct. A
+middle-button drag pans by default; **Navigation → Middle-button drag** can make it
+zoom up and down about the press point instead, with the wheel still following its
+own setting. **Right-button drag** can pan instead of starting a selection box;
+right-click menus and tool cancellation are unchanged. The chosen pointer
+or center anchor stays fixed during the transition,
+while the snap spacing stays unchanged. Clicking, leaving the canvas, losing focus, or
 using Fit or an explicit view command stops pending wheel movement. Fine grid
 marks fade near density changes while the coarser marks remain visible.
 
 The app bar shows the project name and an unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale, PCB grid, grid opacity, units), Navigation (whether the wheel
-zooms or pans, zoom direction, speed and anchor), Views (selection following),
+zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
 **Off**, **Dots** or **Lines** for all PCB views and windows. This choice is remembered

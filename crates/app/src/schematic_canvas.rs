@@ -661,14 +661,15 @@ pub(crate) fn show(
             return Some(Click::GrabReshape(drag));
         }
     }
+    let right_drag = response.drag_started_by(egui::PointerButton::Secondary) && !navigation.right_drag_pan;
     if input_enabled
         && !lost_focus
         && tool.is_none()
         && egui::DragAndDrop::payload::<PartDrag>(ui.ctx()).is_none()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
-        && (response.drag_started_by(egui::PointerButton::Primary) || response.drag_started_by(egui::PointerButton::Secondary))
+        && (response.drag_started_by(egui::PointerButton::Primary) || right_drag)
     {
-        let right = response.drag_started_by(egui::PointerButton::Secondary);
+        let right = right_drag;
         let modifiers = ui.input(|i| i.modifiers);
         if !right
             && !modifiers.shift
