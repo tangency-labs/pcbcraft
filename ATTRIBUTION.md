@@ -1278,3 +1278,13 @@ references on November 13, 2026. Their source was not copied into this adapter.
 The existing shared toolkit licence and authorization records above continue
 to apply. The pinned registry does not track per-host enabled/covered state or
 queue native input; those concrete host responsibilities remain in PCBcraft.
+
+## Compact workspace switcher
+
+The workspace card dimensions follow the already qualified SolidCraft 0.41.0
+`crates/ui-egui/src/toolbar.rs` at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, using the existing shared ribbon
+metrics. PCBcraft retains its original electronics glyphs and accessible picker
+response, with wrapped titles composed inside the existing Craft card. The
+shared toolkit's retained Brand and Interface notice continues to apply; no
+source implementation, asset or dependency was added.
