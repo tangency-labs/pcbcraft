@@ -106,6 +106,32 @@ its sample count cannot support. One-sample runs are correctness/build smoke tes
 
 ## Generate and retain fixtures
 
+To diagnose navigation in an existing native project without modifying it, use
+the opt-in `project_perf` example with the same environment metadata described
+below:
+
+```sh
+cargo build --locked --release -p pcbcraft-app --features performance-harness --example project_perf
+target/release/examples/project_perf /path/to/project.json /tmp/environment.json /tmp/navigation-report.json
+```
+
+This runner uses the read-only project loader and replays eight warmup frames,
+then ten idle, zoom and click frames in each of the schematic and PCB editors.
+It checks that zoom reaches the canvas, click events are observed and authored
+archive bytes remain unchanged. Reports contain raw UI/tessellation CPU samples
+and a project hash; they do not measure GPU presentation or OS input latency.
+Keep the same project bytes and build profile for a before/after comparison,
+and qualify small sample sets as targeted service-cost checks. User projects
+and their libraries remain local unless redistribution is separately authorized.
+
+For zoom-specific reports on the populated sheets and PCB editor, append
+`--zoom-all`. This separate trace uses a 2560 × 1600 viewport, eight warmup
+frames, ten stationary frames and thirty continuously changing zoom-in and
+zoom-out frames per document. Its `texture_upload_bytes` arrays record actual
+texture deltas separately from CPU timing metrics. Repeatedly alternating between
+two zoom sizes can hide cold font work, so this trace deliberately requests new
+intermediate scales and verifies that camera zoom changes on every zoom frame.
+
 Run from the repository root using the pinned toolchain/dependencies. The actual
 shipping profile is `[profile.release]` in `Cargo.toml`, currently size optimized;
 using a different optimization profile changes the question being measured.

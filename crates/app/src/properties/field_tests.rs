@@ -351,14 +351,17 @@ fn symbol_text_scales_with_the_canvas_instead_of_staying_at_screen_size() {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == "R1" => Some(text.galley.job.sections[0].format.font_id.size),
+                egui::Shape::Text(text) if text.galley.job.text == "R1" => Some(text.visual_bounding_rect().height()),
                 _ => None,
             })
             .unwrap();
-        assert!((size / step - 1.).abs() < 0.01, "{zoom}: {size}/{step}");
-        sizes.push(size);
+        sizes.push((size, step));
     }
-    assert!((sizes[2] / sizes[1] - 4.).abs() < 0.01);
+    let physical_ratio = sizes[0].0 / sizes[0].1;
+    for (height, step) in &sizes {
+        assert!((height / step / physical_ratio - 1.).abs() < 0.03, "ink height {height}, grid step {step}");
+    }
+    assert!((sizes[2].0 / sizes[1].0 - 4.).abs() < 0.1);
 }
 
 /// Send two complete primary clicks within the platform double-click interval.

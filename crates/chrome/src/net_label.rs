@@ -111,7 +111,10 @@ fn draw(
     let offset = match style {
         Style::Local => vec2(4., -10.),
         Style::Global => {
-            let width = painter.layout_no_wrap(name.into(), FontId::proportional(Tokens::get().font_label * scale), color).size().x / scale + 14.;
+            let width =
+                crate::canvas_text::layout_no_wrap(painter, name.into(), FontId::proportional(Tokens::get().font_label * scale), color).size().x
+                    / scale
+                    + 14.;
             let points = [vec2(0., 0.), vec2(7., -9.), vec2(width, -9.), vec2(width, 9.), vec2(7., 9.), vec2(0., 0.)];
             for pair in points.windows(2) {
                 line(pair[0], pair[1]);
@@ -133,7 +136,7 @@ fn draw(
         );
         let size = text.map_or(step, |t| t.height);
         let name = if text.is_some_and(|t| t.show_name) { format!("Net name: {name}") } else { name.to_owned() };
-        let galley = painter.layout_no_wrap(name, FontId::proportional(size.max(1.)), color);
+        let galley = crate::canvas_text::layout_no_wrap(painter, name, FontId::proportional(size.max(1.)), color);
         let text_bounds = align.anchor_size(label_at, galley.size());
         let mut shape = egui::epaint::TextShape::new(text_bounds.min, galley, color);
         if let Some(text) = text {

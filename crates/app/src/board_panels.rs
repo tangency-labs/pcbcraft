@@ -91,7 +91,7 @@ impl PcbApp {
             state.properties_collapsed,
             workspace::panels::card_width(area, false),
             |ui| {
-                if let Some(footprint) = state.reference.selected.as_ref().and_then(|id| target.footprints().find(|footprint| &footprint.id == id))
+                if let Some(footprint) = state.reference.selected.as_ref().and_then(|id| target.footprint(id))
                     && let Some(input) = input
                 {
                     let enabled = settings_enabled && !state.editing_footprint();
@@ -99,7 +99,7 @@ impl PcbApp {
                         state.reference.show(ui, &footprint, input, unit, enabled, pcbcraft_chrome::properties::form_body_height(area));
                     return;
                 }
-                let selected: Vec<_> = target.footprints().filter(|footprint| state.selection.contains(&footprint.id)).collect();
+                let selected: Vec<_> = state.selection.iter().filter_map(|id| target.footprint(id)).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
                         property(ui, "Reference", footprint.reference);
@@ -141,7 +141,7 @@ impl PcbApp {
                                 &setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count().to_string(),
                             );
                         }
-                        property(ui, "Footprints", &target.footprints().count().to_string());
+                        property(ui, "Footprints", &target.footprint_ids().len().to_string());
                         property(ui, "Tracks", &target.tracks().len().to_string());
                         property(ui, "Vias", &target.vias().len().to_string());
                         if let Some(lines) = unrouted {

@@ -1120,7 +1120,7 @@ impl PcbApp {
                             self.session
                                 .project()
                                 .and_then(|project| project.board_view(self.views.active.board.target?))
-                                .map_or(0, |board| board.footprints().count())
+                                .map_or(0, |board| board.footprint_ids().len())
                         )
                     } else {
                         self.session.project().map_or_else(String::new, |project| {

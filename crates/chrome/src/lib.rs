@@ -11,6 +11,7 @@ pub mod assistant;
 pub mod authoring;
 pub mod automation;
 pub mod board;
+pub mod canvas_text;
 pub mod canvas_warning;
 pub mod catalog;
 pub mod controls;

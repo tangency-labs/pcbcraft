@@ -1006,6 +1006,7 @@ fn validate_with_hierarchy(
         schematic_packages: Arc::default(),
         board: Arc::new(layout),
         named_graph: Arc::default(),
+        board_graphics: Arc::default(),
         upgraded_from,
         layout: None,
         circuit_use: None,
