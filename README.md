@@ -22,15 +22,22 @@
 
 ## What works
 
-PCBCraft is in early development. Schematic editing runs on desktop and in the
-browser, and the PCB workspace supports footprint inspection, placement moves
-and rotation. Routing, full ERC/DRC and fabrication output are still planned.
+PCBCraft is in early development, with schematic and PCB editing on desktop and
+in the browser. The supported workflow includes reviewed schematic-to-board
+updates, footprint placement, basic track and through-via editing, and shared undo/redo.
 
 - **Schematics:** place and edit symbols, draw and reshape orthogonal wires,
   move groups, name nets with local/global labels and power/ground symbols, and
   organize flat or hierarchical sheets with shared undo/redo.
-- **PCB workspace:** draw and edit Board Outline geometry, inspect physical starter footprints, move and rotate them,
-  control layer visibility and highlight corresponding schematic components.
+- **PCB layout:** assign pinned footprints, review package and connection changes
+  before applying them, draw a Board Outline, move/rotate/flip footprints, and
+  place, move and resize basic tracks and through vias. Layer controls, net highlighting
+  and component counterpart highlights help navigate the board; see the
+  [layout guide](docs/pcb-layout-workflow.md).
+- **Checks:** run limited DRC checks for shorts, copper clearance,
+  track width, via annular rings, unrouted connections, board edges and courtyard
+  overlap. Interactive routing, full ERC/DRC and fabrication workflows remain
+  unfinished; see the [capability table](docs/capabilities.md) for current limits.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
 - **Library editors:** author native symbol and footprint definitions in independent
