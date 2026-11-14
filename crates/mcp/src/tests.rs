@@ -107,6 +107,20 @@ fn publication_preparation_mcp_returns_documents_without_paths_or_project_change
     let copied = body(&call(&mut s, "execute", json!({"command":"library.prepare_publication","params":copy_params,"inspect":false})));
     assert_eq!(copied["copy"], true);
     assert_ne!(copied["address"]["id"], result["address"]["id"]);
+    let part = pcbcraft_engine::part_authoring::Record::new_part(pcbcraft_engine::library::parts::Reference {
+        library: "basic-components".into(),
+        id: "connector".into(),
+        revision: 1,
+    })
+    .unwrap();
+    let prepared = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":"library.prepare_part_publication","params":{"record":part,"documents":{"library.json":params["documents"]["library.json"]}},"inspect":false}),
+    ));
+    assert_eq!(prepared["saved"], false);
+    assert!(prepared["documents"].as_object().unwrap().keys().all(|path| path.starts_with("parts/")));
+
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), initial);
     let mut invalid = params;
     invalid["path"] = json!("/tmp/forbidden-destination");
@@ -492,7 +506,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 7);
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 8);
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);

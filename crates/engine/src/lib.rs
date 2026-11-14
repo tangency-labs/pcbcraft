@@ -18,6 +18,7 @@ pub mod library_graphics;
 pub mod net_labels;
 pub mod nets;
 pub mod no_connect;
+pub mod part_authoring;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -95,6 +96,7 @@ enum ParamKind {
     LibrarySource,
     LibraryDocuments,
     AuthoringItem,
+    PartDraft,
     LibraryQuery,
     LibraryKind,
     LibraryQuantity,
@@ -200,6 +202,9 @@ impl ParamKind {
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
+            }
+            Self::PartDraft => {
+                json!({"type":"object","description":"Bounded pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 native draft record"})
             }
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
@@ -405,6 +410,13 @@ impl ParamKind {
             Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
+            Self::PartDraft
+                if serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= library::sources::MAX_FILE_BYTES)
+                    && serde_json::from_value::<part_authoring::Record>(value.clone()).is_ok() =>
+            {
+                Ok(())
+            }
+            Self::PartDraft => Err("must contain a bounded native part or manufacturer record"),
             Self::AuthoringItem if serde_json::to_vec(value).is_ok_and(|bytes| authoring::Item::decode(&bytes).is_ok()) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
             Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
@@ -1614,6 +1626,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[4],
     library::sources::COMMANDS[5],
     library::sources::COMMANDS[6],
+    library::sources::COMMANDS[7],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2344,6 +2357,7 @@ impl Session {
             | library::sources::SEARCH
             | library::sources::RESOLVE_PART
             | library::sources::PARSE_QUANTITY
+            | library::sources::PREPARE_PART_PUBLICATION
             | library::sources::PREPARE_PUBLICATION => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),

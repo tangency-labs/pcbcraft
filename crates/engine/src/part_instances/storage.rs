@@ -79,7 +79,7 @@ impl Reader {
         used: &mut BTreeSet<String>,
     ) -> Result<Selection, String> {
         let resolved = if let Some(resolved) = self.parts.get(&record.definition) {
-            if resolved.symbol != symbol {
+            if resolved.symbol.as_ref() != Some(&symbol) {
                 return Err("One pinned part refers to inconsistent symbol content.".into());
             }
             resolved.clone()
@@ -103,7 +103,7 @@ impl Reader {
                 package.validate_definitions(&symbol, &footprint)?;
                 footprints.insert(id.clone(), footprint);
             }
-            let resolved = Arc::new(ResolvedPart { definition: part, symbol, category, footprints });
+            let resolved = Arc::new(ResolvedPart { definition: part, symbol: Some(symbol), category, footprints });
             self.parts.insert(record.definition, resolved.clone());
             resolved
         };
@@ -137,7 +137,7 @@ pub(crate) fn validate_project(project: &crate::Project) -> Result<(), String> {
             continue;
         };
         selection.validate()?;
-        if part.definition != selection.resolved.symbol {
+        if Some(&part.definition) != selection.resolved.symbol.as_ref() {
             return Err("Part instance and pinned part symbol content differ.".into());
         }
         if let Some(value) = selection.primary_value()

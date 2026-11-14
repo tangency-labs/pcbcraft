@@ -1,6 +1,7 @@
-//! Read-only, bounded native library folders. Call from a worker, never the editor loop.
+//! Bounded native library I/O and lifecycle operations. Call from a worker, never the editor loop.
 use pcbcraft_engine::library::sources::{Documents, MAX_FILE_BYTES, MAX_FILES, MAX_SOURCE_BYTES, NativeSource, is_document_path};
 use std::{fs, io::Read, path::Path};
+pub mod deletion;
 pub mod publishing;
 
 /// Read only library.json and flat native item directories. Symlinks and special
@@ -21,7 +22,7 @@ fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
     }
     let mut documents = Documents::new();
     documents.insert("library.json".into(), read_file(&root.join("library.json"))?);
-    let mut problems = Vec::new();
+    let mut problems = recovery_problems(root)?;
     let mut total = documents["library.json"].len();
     let mut count = 1;
     for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts"] {
@@ -69,6 +70,27 @@ fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
     Ok((documents, problems))
 }
 
+/// Surface interrupted/retained deletion archives instead of presenting an incomplete source
+/// as clean. Inspect only bounded root-entry metadata; never adopt or follow recovery links.
+fn recovery_problems(root: &Path) -> Result<Vec<String>, String> {
+    let mut problems = Vec::new();
+    for (index, entry) in fs::read_dir(root).map_err(|e| e.to_string())?.enumerate() {
+        if index >= MAX_FILES {
+            problems.push("Library root entry limit reached; part-deletion recovery inspection is incomplete.".into());
+            break;
+        }
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_name().to_str().is_some_and(|name| name.starts_with(deletion::RECOVERY_PREFIX)) {
+            problems.push(format!(
+                "Pending part-deletion recovery: {}. Inspect and restore or move this recovery folder before publishing or deleting more parts.",
+                entry.path().display()
+            ));
+        }
+    }
+    problems.sort();
+    Ok(problems)
+}
+
 /// Bound regular-file reads even if a file grows after metadata was checked; invalid UTF-8 fails.
 fn read_file(path: &Path) -> Result<String, String> {
     let metadata = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
@@ -112,7 +134,7 @@ mod tests {
         }
         let reference = Reference { library: "parts-demo".into(), id: "dual-amplifier".into(), revision: 1 };
         let result = catalog.resolve_part(&reference).unwrap();
-        assert_eq!(result.symbol.units().len(), 2);
+        assert_eq!(result.symbol.as_ref().unwrap().units().len(), 2);
         assert_eq!(result.footprints.len(), 1);
     }
 
@@ -226,27 +248,63 @@ pub fn deletion_snapshot(root: &Path) -> Result<NativeSource, String> {
 /// service preserves the registration and reports an error; there is no permanent-delete fallback.
 pub fn trash_library(root: &Path) -> Result<(), String> {
     deletion_snapshot(root)?;
+    trash_directory(root)
+}
+
+/// The item remover supplies a private recovery directory after validating and staging its
+/// exact records. Folder deletion validates its manifest before entering this shared adapter.
+fn trash_directory(root: &Path) -> Result<(), String> {
     let path = if root.is_absolute() { root.to_path_buf() } else { std::env::current_dir().map_err(|e| e.to_string())?.join(root) };
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    let status = std::process::Command::new("gio").arg("trash").arg("--").arg(&path).status();
+    let mut command = {
+        let mut command = std::process::Command::new("gio");
+        command.arg("trash").arg("--").arg(&path);
+        command
+    };
     #[cfg(target_os = "macos")]
-    let status = std::process::Command::new("osascript")
-        .args(["-e", "on run argv\ntell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\nend run", "--"])
-        .arg(&path)
-        .status();
+    let mut command = {
+        let mut command = std::process::Command::new("osascript");
+        command.args(["-e", "on run argv\ntell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\nend run", "--"]).arg(&path);
+        command
+    };
     #[cfg(target_os = "windows")]
-    let status = std::process::Command::new("powershell.exe")
+    let mut command = {
+        let mut command = std::process::Command::new("powershell.exe");
+        command
         .args(["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($env:PCBCRAFT_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin')"])
-        .env("PCBCRAFT_TRASH_PATH", &path).status();
+        .env("PCBCRAFT_TRASH_PATH", &path);
+        command
+    };
     #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "macos", target_os = "windows")))]
     return Err(format!("System trash is unavailable for {}", path.display()));
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos", target_os = "windows"))]
-    if status.map_err(|e| format!("Could not start system trash: {e}"))?.success()
+    if wait_for_trash(&mut command, std::time::Duration::from_secs(30))?.success()
         && fs::symlink_metadata(root).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
     {
         Ok(())
     } else {
         Err("System trash did not remove the library folder; registration retained".into())
+    }
+}
+
+/// Bound the platform trash subprocess so an unavailable desktop service cannot hold the
+/// operation slot indefinitely. Filesystem reads/renames remain native blocking worker I/O.
+fn wait_for_trash(command: &mut std::process::Command, timeout: std::time::Duration) -> Result<std::process::ExitStatus, String> {
+    let mut child = command.spawn().map_err(|e| format!("Could not start system trash: {e}"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match result {
+                    Err(error) => format!("Could not inspect system trash: {error}"),
+                    _ => "System trash timed out; inspect the library before retrying.".into(),
+                });
+            }
+        }
     }
 }
 
@@ -305,5 +363,16 @@ mod installation_tests {
         fs::set_permissions(&actual, fs::Permissions::from_mode(0o555)).unwrap();
         assert!(deletion_snapshot(&actual).is_err());
         fs::set_permissions(&actual, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod trash_process_tests {
+    /// A stalled trash subprocess is terminated without ever applying a permanent-delete fallback.
+    #[test]
+    fn stalled_trash_process_times_out() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "exec sleep 5"]);
+        assert!(super::wait_for_trash(&mut command, std::time::Duration::from_millis(20)).unwrap_err().contains("timed out"));
     }
 }

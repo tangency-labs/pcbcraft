@@ -82,10 +82,12 @@ impl PcbApp {
         self.repaint_editors(ctx);
     }
 
-    /// Keep arrangement forms in their initiating editor; other project dialogs use the main host.
+    /// Keep arrangement and reference forms in their initiating editor. A closed reference
+    /// host falls back to the main host; dialogs without an explicit owner use the normal route.
     pub(crate) fn arrangement_dialog_host(&self) -> Option<HostId> {
         match &self.dialog {
             Dialog::Arrangement(edit) => Some(edit.host),
+            Dialog::PartReference(state) => Some(if self.views.hosts.contains_key(&state.host()) { state.host() } else { self.views.main }),
             _ => None,
         }
     }

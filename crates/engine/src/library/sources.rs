@@ -1,8 +1,10 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
+mod deletion;
 pub mod inventory;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
+pub use deletion::ItemRemoval;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -34,6 +36,8 @@ pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
 pub const PARSE_QUANTITY: &str = "library.parse_quantity";
 /// Prepare validated native revision documents; only a host can confirm a durable publication.
+pub const PREPARE_PART_PUBLICATION: &str = "library.prepare_part_publication";
+/// Prepare drawing documents through the same durable host boundary.
 pub const PREPARE_PUBLICATION: &str = "library.prepare_publication";
 
 /// Accept missing legacy attribution only when every definition field otherwise matches.
@@ -67,7 +71,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 7] = [
+pub(crate) const COMMANDS: [Command; 8] = [
     Command {
         id: PREPARE_PUBLICATION,
         title: "Prepare library publication",
@@ -129,7 +133,7 @@ pub(crate) const COMMANDS: [Command; 7] = [
     Command {
         id: SEARCH,
         title: "Search libraries",
-        summary: "Search current native symbols and footprints, excluding conflicting identities.",
+        summary: "Search native records, excluding conflicts; latest revisions by default, with explicit older-revision browsing.",
         params: &[
             Param {
                 name: "query",
@@ -142,6 +146,12 @@ pub(crate) const COMMANDS: [Command; 7] = [
                 summary: "symbol, footprint, category, part or manufacturer_part; omit for all",
                 required: false,
                 kind: ParamKind::LibraryKind,
+            },
+            Param {
+                name: "include_older",
+                summary: "Include individually addressable older revisions; default is latest only",
+                required: false,
+                kind: ParamKind::Flag,
             },
         ],
     },
@@ -172,6 +182,28 @@ pub(crate) const COMMANDS: [Command; 7] = [
                 required: true,
                 kind: ParamKind::LibraryQuery,
             },
+        ],
+    },
+    Command {
+        id: PREPARE_PART_PUBLICATION,
+        title: "Prepare part publication",
+        summary: "Resolve a native part or orderable draft and return immutable publication bytes without paths or a project edit.",
+        params: &[
+            Param { name: "record", summary: "Captured native part or manufacturer record", required: true, kind: ParamKind::PartDraft },
+            Param {
+                name: "documents",
+                summary: "Destination native documents including library.json",
+                required: true,
+                kind: ParamKind::LibraryDocuments,
+            },
+            Param {
+                name: "base_revision",
+                summary: "Published revision on which this draft is based",
+                required: false,
+                kind: ParamKind::DefinitionRevision,
+            },
+            Param { name: "allow_older", summary: "Confirm publication without merging a newer revision", required: false, kind: ParamKind::Flag },
+            Param { name: "copy", summary: "Publish a derivative under a fresh item identity", required: false, kind: ParamKind::Flag },
         ],
     },
 ];
@@ -508,15 +540,19 @@ pub struct Catalog {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedPart {
     pub definition: Arc<PartDefinition>,
-    pub symbol: Arc<SymbolDefinition>,
+    pub symbol: Option<Arc<SymbolDefinition>>,
     pub category: Option<Arc<Category>>,
     pub footprints: BTreeMap<String, Arc<FootprintDefinition>>,
 }
 impl ResolvedPart {
+    /// Schematic placement and pinned electrical instances require an explicitly declared symbol.
+    pub fn schematic_symbol(&self) -> Result<&Arc<SymbolDefinition>, String> {
+        self.symbol.as_ref().ok_or_else(|| "This part has no symbol and cannot be placed in a schematic.".into())
+    }
     /// Expose exact native documents for shared GUI/MCP inspection without fetching or changing them.
     fn snapshot(&self) -> Value {
         let footprints: BTreeMap<_, _> = self.footprints.iter().map(|(id, definition)| (id, definition.as_ref())).collect();
-        json!({"part":self.definition.as_ref(),"symbol":saved_copy(&self.symbol),"category":self.category.as_deref(),"footprints":footprints})
+        json!({"part":self.definition.as_ref(),"symbol":self.symbol.as_ref().map(|symbol| saved_copy(symbol)),"category":self.category.as_deref(),"footprints":footprints})
     }
     /// Return immutable native documents and a digest covering the complete dependency closure.
     pub fn inspect(&self) -> Value {
@@ -601,13 +637,25 @@ impl Catalog {
     /// Resolve only direct symbol/category/footprint dependencies, so cache initialization cannot recurse.
     fn resolve_part_uncached(&self, reference: &Reference) -> Result<ResolvedPart, String> {
         let part = self.exact(reference, Kind::Part)?.part().ok_or("Expected a part record.")?;
-        let symbol = self.exact(&part.symbol, Kind::Symbol)?.symbol().ok_or("Expected a symbol record.")?;
+        self.validate_part(part)
+    }
+
+    /// Validate an unpublished native part against loaded exact dependencies without
+    /// installing it, choosing revisions or changing any project or catalog state.
+    pub fn validate_part(&self, part: Arc<PartDefinition>) -> Result<ResolvedPart, String> {
+        let symbol = part
+            .symbol
+            .as_ref()
+            .map(|reference| self.exact(reference, Kind::Symbol)?.symbol().ok_or_else(|| "Expected a symbol record.".to_owned()))
+            .transpose()?;
         let category = part.category.as_ref().map(|binding| self.category(&binding.definition)).transpose()?;
         part.validate_category(category.as_deref())?;
         let mut footprints = BTreeMap::new();
         for (id, package) in &part.packages {
             let footprint = self.exact(&package.footprint, Kind::Footprint)?.footprint().ok_or("Expected a footprint record.")?;
-            package.validate_definitions(&symbol, &footprint).map_err(|error| format!("Package {id}: {error}"))?;
+            if let Some(symbol) = &symbol {
+                package.validate_definitions(symbol, &footprint).map_err(|error| format!("Package {id}: {error}"))?;
+            }
             footprints.insert(id.clone(), footprint);
         }
         super::compatibility::migration::resolved_part(ResolvedPart { definition: part, symbol, category, footprints }, self)
@@ -766,6 +814,28 @@ impl Catalog {
         }
         latest.into_values().filter(|(_, item)| !conflicts.contains(&item.key) && item.matches(&query)).collect()
     }
+    /// Search all available exact revisions with the same matching/conflict policy as the
+    /// latest-only catalog. Identical copies appear once and unavailable registrations stay out.
+    pub fn search_revisions(&self, query: &str, kind: Option<Kind>) -> Vec<(&str, &Item)> {
+        let query = query.trim().to_lowercase();
+        self.index
+            .iter()
+            .filter(|(key, _)| kind.is_none_or(|kind| key.kind == kind) && !self.conflicts.contains(key))
+            .filter_map(|(_, (source, index))| {
+                if source == super::compatibility::SOURCE {
+                    return None;
+                }
+                let item = self.sources.get(source)?.items.get(*index)?;
+                item.matches(&query).then_some((source.as_str(), item))
+            })
+            .collect()
+    }
+
+    /// Read one exact available, unambiguous catalog record without enumerating its source.
+    pub fn item(&self, key: &Key) -> Result<&Item, String> {
+        self.exact(&Reference { library: key.library.clone(), id: key.id.clone(), revision: key.revision }, key.kind)
+    }
+
     /// Resolve an exact unambiguous symbol for placement; a stale catalog selection fails explicitly.
     pub fn symbol(&self, library: &str, id: &str, revision: u32) -> Option<Arc<SymbolDefinition>> {
         let conflicts = &self.conflicts;
@@ -865,6 +935,35 @@ impl Session {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
         match id {
+            PREPARE_PART_PUBLICATION => {
+                let fail = CommandError::InvalidParams;
+                let record: crate::part_authoring::Record = serde_json::from_value(params["record"].clone()).map_err(|e| fail(e.to_string()))?;
+                let documents: Documents = serde_json::from_value(params["documents"].clone()).map_err(|e| fail(e.to_string()))?;
+                let destination = NativeSource::load(&documents).map_err(fail)?;
+                if !destination.problems().is_empty() {
+                    return Err(fail(destination.problems().join("\n")));
+                }
+                let reference = record.reference();
+                let latest = destination
+                    .items()
+                    .iter()
+                    .filter(|item| item.key.kind == record.kind() && item.key.id == reference.id)
+                    .map(|item| item.key.revision)
+                    .max()
+                    .unwrap_or(0)
+                    .max(self.libraries.highest_revision(destination.library(), record.kind(), &reference.id));
+                crate::part_authoring::prepare_record(
+                    &record,
+                    &self.libraries,
+                    documents.get("library.json").ok_or_else(|| fail("Missing library manifest".into()))?,
+                    latest,
+                    params["base_revision"].as_u64().map(|n| n as u32),
+                    params["allow_older"] == true,
+                    params["copy"] == true,
+                )
+                .map(|p| p.inspect())
+                .map_err(fail)
+            }
             PREPARE_PUBLICATION => {
                 let fail = CommandError::InvalidParams;
                 let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;
@@ -936,9 +1035,9 @@ impl Session {
                     .map(|kind| serde_json::from_value::<Kind>(kind.clone()))
                     .transpose()
                     .map_err(|e| CommandError::InvalidParams(e.to_string()))?;
-                let items: Vec<_> = self
-                    .libraries
-                    .search(&query, kind)
+                let matches =
+                    if params["include_older"] == true { self.libraries.search_revisions(&query, kind) } else { self.libraries.search(&query, kind) };
+                let items: Vec<_> = matches
                     .into_iter()
                     .map(|(source, item)| {
                         let mut value = item.inspect();

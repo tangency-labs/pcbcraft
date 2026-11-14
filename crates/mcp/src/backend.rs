@@ -85,6 +85,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::clipboard_text::OUTLINE
                         | pcbcraft_engine::library::sources::RESOLVE_PART
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
+                        | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                 )
             {

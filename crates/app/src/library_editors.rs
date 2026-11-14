@@ -23,13 +23,14 @@ use std::collections::BTreeMap;
 #[derive(Debug, Default)]
 pub(super) struct Editors {
     documents: BTreeMap<u64, Document>,
+    pub(crate) parts: BTreeMap<u64, crate::part_documents::Document>,
     pub(super) active: Option<u64>,
     next_id: u64,
     last_focused: [Option<u64>; 2],
     last_active: Option<u64>,
     files: io::Files,
     pub(crate) publisher: publishing::Publisher,
-    notice: Option<String>,
+    pub(crate) notice: Option<String>,
     pending_document: Option<u64>,
     open_target: Option<crate::ViewId>,
 }
@@ -57,6 +58,69 @@ struct Document {
     error: Option<String>,
 }
 impl Editors {
+    /// Published drawing identity is enough for used-by inspection and creating a part association.
+    pub(crate) fn published_drawing(&self, id: u64) -> Option<(pcbcraft_engine::library::sources::Kind, pcbcraft_engine::library::parts::Reference)> {
+        let doc = self.documents.get(&id)?;
+        let address = doc.session.published()?;
+        Some((
+            if doc.session.snapshot().kind == Kind::Symbol {
+                pcbcraft_engine::library::sources::Kind::Symbol
+            } else {
+                pcbcraft_engine::library::sources::Kind::Footprint
+            },
+            pcbcraft_engine::library::parts::Reference { library: address.library.clone(), id: address.id.clone(), revision: address.revision },
+        ))
+    }
+
+    /// Part and drawing documents share a bounded runtime ID namespace.
+    pub(crate) fn open_part(
+        &mut self,
+        record: pcbcraft_engine::part_authoring::Record,
+        published: bool,
+        source: Option<String>,
+    ) -> Result<u64, String> {
+        if self.parts.len() + self.documents.len() >= 8 {
+            return Err("Close a library document before opening another (maximum eight).".into());
+        }
+        if self.parts.values().any(|doc| {
+            doc.session.record().kind() == record.kind()
+                && doc.session.record().reference().library == record.reference().library
+                && doc.session.record().reference().id == record.reference().id
+        }) {
+            return Err("This part is already open; its current edits were kept.".into());
+        }
+        let id = self.next_id.checked_add(1).ok_or("Library document ID limit reached.")?;
+        let doc = crate::part_documents::Document::new(record, published, source)?;
+        self.parts.insert(id, doc);
+        self.next_id = id;
+        Ok(id)
+    }
+    /// Publication/creation completions retain their original document, across both kinds.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn document_revision(&self, id: u64) -> Option<u64> {
+        self.parts.get(&id).map(|doc| doc.session.revision()).or_else(|| self.documents.get(&id).map(|doc| doc.session.revision()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Retain a host-confirmed destination suggestion on the owning part document.
+    pub(crate) fn set_part_destination(&mut self, id: u64, source: String) {
+        if let Some(doc) = self.parts.get_mut(&id) {
+            doc.source = Some(source);
+        }
+    }
+    /// Unpublished form input and uncertain writes require an explicit discard decision.
+    pub(crate) fn close_part(&mut self, id: u64, discard: bool) -> Result<(), String> {
+        if self.busy() {
+            return Err("Finish the library operation before closing.".into());
+        }
+        let doc = self.parts.get(&id).ok_or("Unknown part document.")?;
+        if (doc.dirty() || self.publisher.unconfirmed() == Some(id)) && !discard {
+            return Err("Part document has unpublished changes.".into());
+        }
+        self.parts.remove(&id);
+        self.publisher.discard(id);
+        Ok(())
+    }
+
     /// Destination suggestions are document-local and do not bind an identity before publication.
     pub(crate) fn suggest_destination(&mut self, id: u64, source: Option<String>) {
         if let Some(doc) = self.documents.get_mut(&id)
@@ -72,18 +136,25 @@ impl Editors {
     }
     /// An uncertain publication needs a close decision even when its separate draft file was saved.
     fn document_unsaved(&self, id: u64) -> bool {
-        self.publisher.unconfirmed() == Some(id) || self.documents.get(&id).is_some_and(Document::unsaved)
+        self.publisher.unconfirmed() == Some(id)
+            || self.parts.get(&id).is_some_and(crate::part_documents::Document::dirty)
+            || self.documents.get(&id).is_some_and(Document::unsaved)
     }
     /// Unpublished geometry and unapplied fields both prevent deleting their origin library.
     pub(crate) fn unpublished_in(&self, library: &str) -> bool {
         self.publisher.unconfirmed_in(library)
+            || self.parts.values().any(|doc| doc.session.record().reference().library == library && doc.dirty())
             || self.documents.values().any(|doc| {
                 doc.session.snapshot().library == library && (doc.unsaved() || (doc.session.published().is_some() && doc.session.publication_dirty()))
             })
     }
     /// A bounded change stamp wakes all views when a definition edit or dirty-state transition occurs.
     pub(super) fn stamp(&self) -> Vec<(u64, u64, bool)> {
-        self.documents.iter().map(|(id, doc)| (*id, doc.session.revision(), self.document_unsaved(*id))).collect()
+        self.documents
+            .iter()
+            .map(|(id, doc)| (*id, doc.session.revision(), self.document_unsaved(*id)))
+            .chain(self.parts.iter().map(|(id, doc)| (*id, doc.session.revision(), self.document_unsaved(*id))))
+            .collect()
     }
     /// The active document determines its workspace, independent of the parked project view.
     pub(super) fn active_kind(&self) -> Option<Kind> {
@@ -127,7 +198,7 @@ impl Editors {
         let _ = self.focus(id);
     }
     pub(super) fn has_documents(&self) -> bool {
-        !self.documents.is_empty()
+        !self.documents.is_empty() || !self.parts.is_empty()
     }
     /// The browser picker starts during the triggering interaction; native pickers use a worker.
     pub(super) fn open_picker(&mut self, ctx: &Context) -> Result<(), String> {
@@ -135,7 +206,9 @@ impl Editors {
     }
     /// Include unapplied field input in leave/close protection, independently of the project.
     pub(super) fn unsaved(&self) -> bool {
-        self.publisher.unconfirmed().is_some() || self.documents.values().any(Document::unsaved)
+        self.publisher.unconfirmed().is_some()
+            || self.documents.values().any(Document::unsaved)
+            || self.parts.values().any(crate::part_documents::Document::dirty)
     }
     /// Only one bounded picker/publication owns resources at a time.
     pub(super) fn busy(&self) -> bool {
@@ -144,12 +217,12 @@ impl Editors {
     /// Inspection identifies each document and its own revision, never the project revision.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
     fn open(&mut self, item: Item, saved: bool) -> Result<u64, String> {
-        if self.documents.len() >= 4 {
+        if self.documents.len() >= 4 || self.documents.len() + self.parts.len() >= 8 {
             return Err("Close a library document before opening another (maximum four).".into());
         }
         if self.documents.values().any(|doc| {
@@ -199,6 +272,9 @@ impl Editors {
     /// Close only an explicitly addressed document. Discard is a conscious user/command choice;
     /// in-flight file owners cannot be destroyed or silently rebound to another document.
     fn close(&mut self, id: u64, discard: bool) -> Result<(), String> {
+        if self.parts.contains_key(&id) {
+            return self.close_part(id, discard);
+        }
         if self.busy() {
             return Err("Finish the library file operation before closing a document.".into());
         }
@@ -870,6 +946,7 @@ impl PcbApp {
             if let Some(id) = id {
                 self.message = self.library_editors.close(id, true).err();
             } else {
+                self.library_editors.parts.clear();
                 self.library_editors.documents.clear();
                 self.library_editors.publisher = Default::default();
                 self.library_editors.active = None;

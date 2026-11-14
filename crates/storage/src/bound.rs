@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct Directory {
     file: Arc<File>,
     #[cfg(not(unix))]
@@ -41,6 +41,39 @@ impl Directory {
             #[cfg(windows)]
             ancestors: Vec::new(),
         })
+    }
+
+    /// Bind a confirmation token to one captured filesystem directory, independently of its
+    /// spelling or a different folder containing identical native documents.
+    pub(super) fn identity(&self) -> io::Result<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = self.file.metadata()?;
+            Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "Stable directory identity is unavailable on this platform"))
+        }
+    }
+    /// Refuse a moved/replaced root before passing a private recovery folder to system trash.
+    /// Unix compares the captured handle's device/inode; other hosts stay unavailable until
+    /// an equivalent stable identity check is implemented and qualified.
+    pub(super) fn matches_path(&self, path: &Path) -> io::Result<bool> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let current = Self::open(path)?;
+            let before = self.file.metadata()?;
+            let after = current.file.metadata()?;
+            Ok(before.dev() == after.dev() && before.ino() == after.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Err(io::Error::new(io::ErrorKind::Unsupported, "Safe per-part deletion is not available on this platform"))
+        }
     }
 
     /// Open one directory component without following links. Creation never adopts a raced-in

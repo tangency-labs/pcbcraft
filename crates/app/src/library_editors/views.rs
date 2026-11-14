@@ -93,9 +93,17 @@ impl Document {
     }
 }
 impl PcbApp {
-    /// Review selects a live pane with pending fields, or recovers a closed pane's retained
+    /// Review includes unconfirmed publications even in otherwise clean part documents.
+    /// It selects a live pane with pending fields, or recovers a closed pane's retained
     /// fields into the current host. It never silently discards a second view's draft.
     pub(crate) fn review_library_edits(&mut self, ctx: &Context, requested: Option<u64>) {
+        let part = requested.filter(|id| self.library_editors.parts.contains_key(id)).or_else(|| {
+            requested.is_none().then(|| self.library_editors.parts.keys().find(|id| self.library_editors.document_unsaved(**id)).copied()).flatten()
+        });
+        if let Some(id) = part {
+            self.message = self.place_part_document(ctx, id).err();
+            return;
+        }
         let id = requested.or_else(|| self.library_editors.documents.keys().find(|id| self.library_editors.document_unsaved(**id)).copied());
         let Some(id) = id else { return };
         let pending =
@@ -212,6 +220,8 @@ impl PcbApp {
         self.library_editors.resume();
         if let Some(id) = self.library_editors.active {
             self.message = self.place_library_document(ctx, id, Placement::Here).err();
+        } else if let Some(id) = self.library_editors.parts.keys().next_back().copied() {
+            self.message = self.place_part_document(ctx, id).err();
         }
     }
     /// Resolve a definition's kind without borrowing its presentation or assigning focus.
@@ -285,6 +295,7 @@ impl PcbApp {
         if self.views.active.id() == view && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx()) {
             self.take_panel_escape(ui.ctx());
         }
+        self.part_drawing_actions(ui, id);
         let Some(doc) = self.library_editors.documents.get_mut(&id) else { return };
         let active = self.views.active.id() == view;
         let Some(panel) = self.views.view_mut(view).map(|view| &mut view.panels[crate::workspace_panels::PROPERTIES]) else { return };

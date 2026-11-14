@@ -3,8 +3,8 @@ use crate::bound::Directory;
 #[cfg(test)]
 mod tests;
 use pcbcraft_engine::{
-    authoring::publishing::Prepared,
-    library::sources::{Kind, MAX_FILE_BYTES, NativeSource},
+    authoring::publishing::Publication,
+    library::sources::{MAX_FILE_BYTES, NativeSource},
 };
 use std::{fs::File, io::Write, path::Path};
 
@@ -31,7 +31,7 @@ impl std::fmt::Display for Failure {
 
 /// A process lock keeps simultaneous cooperating publishers from allocating different snapshots
 /// of the same next revision. Crash/shutdown releases the OS lock; its empty file is reusable.
-struct Lock(File);
+pub(super) struct Lock(pub(super) File);
 impl Drop for Lock {
     /// Explicitly release the advisory lock on every staging and publication failure path.
     fn drop(&mut self) {
@@ -47,7 +47,7 @@ pub fn read_manifest(root: &Path) -> Result<String, String> {
 }
 
 /// Recover durable confirmation of an already visible exact revision without writing another.
-pub fn confirm(root: &Path, prepared: &Prepared) -> Result<(), String> {
+pub fn confirm(root: &Path, prepared: &impl Publication) -> Result<(), String> {
     let directory = Directory::open(root).map_err(|e| e.to_string())?;
     if read_manifest(root)? != prepared.manifest() {
         return Err("Destination manifest changed after publication.".into());
@@ -65,7 +65,7 @@ pub fn confirm(root: &Path, prepared: &Prepared) -> Result<(), String> {
 
 /// Resume the same captured revision after an uncertain worker outcome. An absent final record
 /// can be published under its original name; an existing record must match exactly and is never replaced.
-pub fn recover(root: &Path, prepared: &Prepared) -> Result<(), Failure> {
+pub fn recover(root: &Path, prepared: &impl Publication) -> Result<(), Failure> {
     let directory = Directory::open(root).map_err(|e| Failure::BeforeWrite(e.to_string()))?;
     let (path, _) = prepared.documents().iter().next().ok_or_else(|| Failure::BeforeWrite("Missing prepared record.".into()))?;
     let (parent, name) = path.split_once('/').ok_or_else(|| Failure::BeforeWrite("Invalid prepared path.".into()))?;
@@ -82,7 +82,7 @@ pub fn recover(root: &Path, prepared: &Prepared) -> Result<(), Failure> {
 
 /// Validate the destination again, then stage, sync and expose exactly one complete native record.
 /// Existing revisions and unrelated files are never replaced, including raced-in destinations.
-pub fn publish(root: &Path, prepared: &Prepared) -> Result<(), Failure> {
+pub fn publish(root: &Path, prepared: &impl Publication) -> Result<(), Failure> {
     let before = |e: String| Failure::BeforeWrite(e);
     if !super::writable(root) {
         return Err(before("Choose a writable native library folder.".into()));
@@ -100,17 +100,13 @@ pub fn publish(root: &Path, prepared: &Prepared) -> Result<(), Failure> {
     }
     let (mut documents, problems) = super::read_documents(root).map_err(before)?;
     let disk = NativeSource::load(&documents).map_err(before)?;
-    if disk.library() != prepared.item().library || !disk.problems().is_empty() || !problems.is_empty() {
+    let reference = prepared.reference();
+    if disk.library() != reference.library || !disk.problems().is_empty() || !problems.is_empty() {
         return Err(before("Resolve the destination library's diagnostics before publishing.".into()));
     }
-    let kind = if prepared.item().kind == pcbcraft_engine::authoring::Kind::Symbol { Kind::Symbol } else { Kind::Footprint };
-    let latest = disk
-        .items()
-        .iter()
-        .filter(|item| item.key.kind == kind && item.key.id == prepared.item().id)
-        .map(|item| item.key.revision)
-        .max()
-        .unwrap_or(0);
+    let kind = prepared.kind();
+    let latest =
+        disk.items().iter().filter(|item| item.key.kind == kind && item.key.id == reference.id).map(|item| item.key.revision).max().unwrap_or(0);
     if latest > prepared.latest() {
         return Err(before("A later revision appeared on disk; refresh and review the publication warning before retrying.".into()));
     }

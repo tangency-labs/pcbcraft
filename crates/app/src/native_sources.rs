@@ -1,5 +1,6 @@
 //! Source registration and background loading are application services, separate from project files.
 use crate::PcbApp;
+pub(crate) mod items;
 pub(super) mod lifecycle;
 use pcbcraft_engine::library::sources::{self, NativeSource};
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,10 @@ pub(super) struct Sources {
     #[cfg(target_arch = "wasm32")]
     last_browser_text: Option<String>,
     mutation: Option<lifecycle::Job>,
+    #[cfg(not(target_arch = "wasm32"))]
+    item_delete_pending: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    item_delete_canceled: bool,
 }
 
 impl Sources {

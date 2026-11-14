@@ -733,3 +733,21 @@ folder. Remove leaves files intact, while Delete moves an eligible folder to
 system trash after confirmation. In the browser, added libraries need reopening
 after a reload. Projects keep their pinned copies. See the
 [native source guide](native-library-sources.md) for limits and source diagnostics.
+
+## Create a reusable part
+
+Open **Parts Library**, choose **New → Generic part**, and select an existing
+symbol. Add a package, choose its footprint and assign each pad to a terminal or
+to Unconnected. Publish to a writable native library, then find the resolved
+record in the Parts Catalog to place it. A published generic part with a package
+can also receive an orderable manufacturer/MPN record through **Add orderable
+part**. These forms live in the Library workspace; drawing changes still use the
+Symbol and Footprint Editors. Unpublished part documents last for the current
+session, so publish finished work before closing. The [source guide](native-library-sources.md#generic-and-orderable-part-documents)
+covers exact revisions, typed values and recovery.
+
+Generic library parts do not require a symbol. In Parts Library, use **Add
+footprint…** to author a footprint-only part, or add the symbol independently with
+Browse. When both are present, complete the pin mapping before publishing.
+Schematic placement requires a symbol; the current placement command does not
+create board-owned symbol-less instances.

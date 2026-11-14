@@ -341,7 +341,8 @@ impl State {
     pub(crate) fn project_id(&self) -> Option<uuid::Uuid> {
         self.project
     }
-    /// Project navigation clears registration authority so source actions cannot target a stale row.
+    /// Explicit project navigation returns to Browse and clears registration authority, even
+    /// when the clicked row already represents the current project/filter.
     fn select_project(&mut self, project: uuid::Uuid, library: Option<String>, kind: usize) {
         self.project = Some(project);
         self.project_library = library;
@@ -349,6 +350,7 @@ impl State {
         self.kind = kind;
         self.selected = None;
         self.compact = 1;
+        self.part_document = None;
     }
     /// Exact project-local IDs remain addressable alongside the Project-only aggregate.
     fn includes_project(&self, key: &Key) -> bool {

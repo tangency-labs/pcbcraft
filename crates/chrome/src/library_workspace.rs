@@ -55,9 +55,10 @@ pub fn workspace(
     } else {
         let gap = t.space_12;
         let default_right = (area.width() * 0.29).clamp(300.0, 440.0);
-        let mut right = preview_width.width(default_right).clamp(240.0, (area.width() - 180.0 - gap * 2.0 - 360.0).clamp(240.0, 640.0));
         let floating = preview.position() == crate::workspace::panels::Position::Floating;
-        let left = browser.resize(ui, area, area.width() - if floating { 0.0 } else { right + gap } - gap - 360.0);
+        let left = browser.resize(ui, area, area.width() - if floating { 0.0 } else { 240.0 + gap } - gap - 360.0);
+        let max_preview = (area.width() - left - gap * 2.0 - 360.0).max(240.0);
+        let mut right = preview_width.width(default_right).clamp(240.0, max_preview);
         let browser_rect = Rect::from_min_max(area.min, pos2(area.left() + left, area.bottom()));
         let on_left = preview.position() == crate::workspace::panels::Position::Left;
         if floating {
@@ -69,13 +70,7 @@ pub fn workspace(
                 ui,
                 ui.make_persistent_id("library_preview_width"),
                 default_right,
-                column::Sash {
-                    bounds,
-                    name: "Resize Preview column width",
-                    min: 240.0,
-                    max: (area.width() - left - gap * 2.0 - 360.0).clamp(240.0, 640.0),
-                    leading: !on_left,
-                },
+                column::Sash { bounds, name: "Resize Preview column width", min: 240.0, max: max_preview, leading: !on_left },
             );
         }
         let preview_rect = if on_left {

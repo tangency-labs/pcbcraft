@@ -219,3 +219,39 @@ fn workspace_geometry(ui: &mut egui::Ui, label: &str, footprint: bool, camera: &
         paint(&ui.painter_at(response.rect), rect, camera);
     });
 }
+
+/// Part mapping inspection highlights a terminal on its actual unit, including non-default units.
+pub(super) fn part_symbol(ui: &mut egui::Ui, definition: &pcbcraft_engine::schematic::SymbolDefinition, terminal: Option<&str>, camera: &mut Camera) {
+    workspace_geometry(ui, "Symbol preview", false, camera, |painter, rect, camera| {
+        let unit = terminal
+            .and_then(|terminal| definition.units().iter().find(|unit| unit.pins().iter().any(|pin| pin.number == terminal)))
+            .unwrap_or(definition.default_unit());
+        crate::schematic_canvas::paint_part_preview(painter, unit, terminal, rect, camera.zoom, camera.pan);
+    });
+}
+/// The selected table row identifies one physical pad without creating a board assignment.
+pub(super) fn part_footprint(ui: &mut egui::Ui, definition: &FootprintDefinition, pad: Option<&str>, camera: &mut Camera) {
+    workspace_geometry(ui, "Footprint preview", true, camera, |painter, rect, camera| {
+        paint_footprint(painter, rect, definition, camera.zoom, camera.pan);
+        if let Some(pad) = pad.and_then(|number| definition.pads.iter().find(|pad| pad.number == number)) {
+            let mut extent = definition
+                .pads
+                .iter()
+                .map(|p| (p.center, p.width_nm, p.height_nm))
+                .chain(definition.graphics.iter().map(|g| (g.center, g.width_nm, g.height_nm)))
+                .fold(1_000_000.0_f32, |extent, (p, w, h)| extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + w.max(h) as f32));
+            for artwork in &definition.artwork {
+                for p in artwork.graphic.paths().iter().flatten() {
+                    extent = extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + artwork.graphic.stroke_nm as f32);
+                }
+            }
+            let scale = rect.width().min(rect.height()) / (2. * extent) * camera.zoom;
+            let at = rect.center() + camera.pan + egui::vec2(pad.center.x_nm as f32, pad.center.y_nm as f32) * scale;
+            painter.circle_stroke(
+                at,
+                (pad.width_nm.max(pad.height_nm) as f32 * scale * 0.6).max(5.),
+                egui::Stroke::new(2., pcbcraft_chrome::Tokens::get().accent),
+            );
+        }
+    });
+}

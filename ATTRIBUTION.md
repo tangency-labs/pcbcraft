@@ -1308,3 +1308,47 @@ identity and folder `basic-components`. Its original licensed records and revisi
 history are retained. Original compatibility code supplies historical `starter`
 addresses without rewriting project-pinned copies or adding duplicate browsing
 entries; no external library data or dependency was introduced.
+
+## Reusable part documents
+
+The generic/orderable part sessions, exact dependency validation and immutable
+publication extension for #309 are original MIT OR Apache-2.0 PCBcraft work over
+the existing native schemas and #308 publisher. The workspace form composes the
+already qualified Craft fields, choices, table, menus and buttons through
+`crates/chrome`; native symbol/pad correspondence highlights use PCBcraft's
+original painters. Tests assemble original bundled connector/header definitions
+and explicitly synthetic manufacturer metadata. No external EDA implementation,
+library data, artwork, new dependency or native format was introduced.
+
+The part-reference chooser follow-up composes the same pinned Craft search field,
+selectable table with row reveal, property form, choices and fixed footer. Its
+query cache, exact reference transactions and large-catalog tests are original
+PCBcraft work over the existing native catalog. The generated scale fixture uses
+original authoring primitives, without third-party records or new dependencies.
+
+The optional drawing associations in `pcbcraft-part/2`, retained format-1 codec,
+stage-specific schematic-placement validation and original regression records are
+PCBcraft work following @travle1's November 14 clarification. Compact part forms
+compose the already qualified Craft controls, fields, tables, disclosures and
+scroll regions through chrome. The pinned kit has no part-document composition;
+the bounded content rail and package/association ownership remain host code.
+No dependency, external EDA implementation or library asset was added.
+
+The part-document footer and tabs reuse the pinned Craft `CatalogLayout`, action
+footer and `app_bar::tabs` components through chrome. The shared document strip
+has no non-closeable navigation tab and does not attach accessible names to its
+painted document rows, so the host composes Browse beside it and adds response
+metadata without replacing its painting, overflow, menu or drag behavior. Draft
+identity, ordering and close protection remain PCBcraft-owned runtime state.
+No dependency, external asset or saved native format changed in this follow-up.
+The tab adapter binds the kit's scoped panel palette to the workspace text,
+selection and hover tokens, since the title-bar palette has different light-mode
+contrast. The override is local to painting these tabs and their existing menus.
+
+Per-part removal planning, directory-bound review tokens, reversible native-record
+staging and failure regressions are original PCBcraft work. The implementation
+reuses the existing publisher lock, handle-bound storage primitives and platform
+trash adapters without new dependencies or native formats. Delete part uses the
+already qualified Craft ribbon action and confirmation form through chrome;
+Preview resizing reuses the existing shared sash and panel surface. No external
+EDA sources, records, icons or artwork were consulted or added.

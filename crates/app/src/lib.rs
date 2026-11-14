@@ -49,6 +49,7 @@ mod native_sources;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
+mod part_documents;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
@@ -174,6 +175,8 @@ enum Dialog {
     NoConnects(Box<no_connect::Inspection>),
     AddLibrary(Option<String>),
     DeleteLibrary(native_sources::lifecycle::DeleteDraft),
+    #[cfg(not(target_arch = "wasm32"))]
+    DeleteLibraryItem(Box<native_sources::items::Draft>),
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
@@ -208,6 +211,7 @@ enum Dialog {
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
     LibraryPublish(library_editors::publishing::Draft),
+    PartReference(Box<part_documents::picker::State>),
     NewLibrary(library_editors::publishing::NewLibrary),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
@@ -246,6 +250,8 @@ pub struct PcbApp {
     assistant: assistant::Assistant,
     session: Session,
     library_editors: library_editors::Editors,
+    pending_part_navigation: Option<u64>,
+    part_updates: Vec<part_documents::DependencyUpdate>,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -2126,6 +2132,8 @@ impl PcbApp {
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
             Dialog::AddLibrary(source) => self.add_library_dialog(ctx, source),
             Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
@@ -2167,6 +2175,7 @@ impl PcbApp {
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::LibraryPublish(draft) => self.library_publish_dialog(ctx, draft),
+            Dialog::PartReference(state) => self.part_reference_dialog(ctx, *state),
             Dialog::NewLibrary(draft) => self.new_library_dialog(ctx, draft),
             Dialog::PasteOptions(draft) => self.paste_options_dialog(ctx, draft),
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),

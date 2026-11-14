@@ -1,7 +1,10 @@
 //! Desktop source publication is a bounded host operation; definition preparation stays in engine.
 use super::*;
 use pcbcraft_chrome::controls;
-use pcbcraft_engine::{authoring::publishing as engine, library::sources};
+use pcbcraft_engine::{
+    authoring::publishing::{self as engine},
+    library::sources,
+};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,15 +13,59 @@ use std::sync::{
     mpsc::{self, Receiver, TryRecvError},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use pcbcraft_engine::authoring::publishing::Publication;
+
+/// Both document types pass validated captures through one immutable host publisher.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub(crate) enum Capture {
+    Drawing(engine::Prepared),
+    Part(Arc<pcbcraft_engine::part_authoring::Prepared>),
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Publication for Capture {
+    fn documents(&self) -> &sources::Documents {
+        match self {
+            Self::Drawing(p) => p.documents(),
+            Self::Part(p) => p.documents(),
+        }
+    }
+    fn manifest(&self) -> &str {
+        match self {
+            Self::Drawing(p) => p.manifest(),
+            Self::Part(p) => p.manifest(),
+        }
+    }
+    fn latest(&self) -> u32 {
+        match self {
+            Self::Drawing(p) => p.latest(),
+            Self::Part(p) => p.latest(),
+        }
+    }
+    fn reference(&self) -> pcbcraft_engine::library::parts::Reference {
+        match self {
+            Self::Drawing(p) => p.reference(),
+            Self::Part(p) => p.reference(),
+        }
+    }
+    fn kind(&self) -> sources::Kind {
+        match self {
+            Self::Drawing(p) => p.kind(),
+            Self::Part(p) => p.kind(),
+        }
+    }
+}
+
 /// Short destination form retains its captured document authority while open.
 #[derive(Clone, Debug)]
 pub(crate) struct Draft {
-    document: u64,
-    revision: u64,
-    source: String,
-    allow_older: bool,
-    copy: bool,
-    error: Option<String>,
+    pub(crate) document: u64,
+    pub(crate) revision: u64,
+    pub(crate) source: String,
+    pub(crate) allow_older: bool,
+    pub(crate) copy: bool,
+    pub(crate) error: Option<String>,
 }
 
 /// Native library creation asks for portable metadata before invoking the host folder picker.
@@ -26,9 +73,15 @@ pub(crate) struct Draft {
 pub(crate) struct NewLibrary {
     id: String,
     name: String,
-    license: String,
+    pub(crate) license: String,
     error: Option<String>,
-    return_to: Option<Box<Draft>>,
+    pub(crate) return_to: Option<Box<Draft>>,
+}
+impl NewLibrary {
+    /// Return the newly created destination to either kind of captured publication dialog.
+    pub(crate) fn returning(license: String, draft: Draft) -> Self {
+        Self { license, return_to: Some(Box::new(draft)), ..Default::default() }
+    }
 }
 impl Default for NewLibrary {
     /// Original libraries start with the application's native authoring license, editable by the user.
@@ -39,16 +92,16 @@ impl Default for NewLibrary {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]
-struct Request {
-    document: u64,
-    source: String,
-    path: String,
-    generation: u64,
-    prepared: engine::Prepared,
+pub(crate) struct Request {
+    pub(crate) document: u64,
+    pub(crate) source: String,
+    pub(crate) path: String,
+    pub(crate) generation: u64,
+    pub(crate) prepared: Capture,
 }
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
-enum Completion {
+pub(crate) enum Completion {
     NotWritten(String),
     Published(Request, Result<Arc<sources::NativeSource>, String>),
     Unconfirmed(Request, String),
@@ -59,7 +112,7 @@ enum Completion {
 /// Progress captures retry authority before any write; a final result releases the worker slot.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
-enum Event {
+pub(crate) enum Event {
     Prepared(Request),
     Finished(Result<Completion, String>),
 }
@@ -70,7 +123,7 @@ pub(crate) struct Publisher {
     #[cfg(not(target_arch = "wasm32"))]
     pending: Option<Receiver<Event>>,
     #[cfg(not(target_arch = "wasm32"))]
-    recovery: Option<Request>,
+    pub(crate) recovery: Option<Request>,
     #[cfg(not(target_arch = "wasm32"))]
     resume: Option<Box<Draft>>,
 }
@@ -79,14 +132,14 @@ impl Publisher {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
         json!({"busy":self.busy(),"unconfirmed":self.recovery.as_ref().map(|request| json!({
-            "document":request.document,"source":request.source,"address":{"library":request.prepared.item().library,"id":request.prepared.item().id,"revision":request.prepared.item().revision}
+            "document":request.document,"source":request.source,"address":{"library":request.prepared.reference().library,"id":request.prepared.reference().id,"revision":request.prepared.reference().revision}
         }))})
     }
     /// Uncertain visible records keep their destination protected until verified or discarded.
     pub(crate) fn unconfirmed_in(&self, library: &str) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.recovery.as_ref().is_some_and(|request| request.prepared.item().library == library)
+            self.recovery.as_ref().is_some_and(|request| request.prepared.reference().library == library)
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -95,7 +148,7 @@ impl Publisher {
         }
     }
     /// The unresolved publication belongs to one explicit document, even after a worker disconnect.
-    pub(super) fn unconfirmed(&self) -> Option<u64> {
+    pub(crate) fn unconfirmed(&self) -> Option<u64> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.recovery.as_ref().map(|request| request.document)
@@ -129,7 +182,7 @@ impl Publisher {
     /// A channel disconnect releases the slot, while the captured publication is retained for
     /// verification rather than risking a second revision after an uncertain worker failure.
     #[cfg(not(target_arch = "wasm32"))]
-    fn start(
+    pub(crate) fn start(
         &mut self,
         ctx: &Context,
         work: impl FnOnce(&mpsc::SyncSender<Event>) -> Result<Completion, String> + Send + 'static,
@@ -197,6 +250,9 @@ impl PcbApp {
 
     /// Open one destination picker for ordinary publication and explicit Save As copies.
     pub(crate) fn begin_library_publish(&mut self, document: u64) -> Result<(), String> {
+        if self.library_editors.parts.contains_key(&document) {
+            return self.begin_part_publish(document);
+        }
         if IN_BROWSER {
             return Err("Publishing is desktop-only; download a draft or export a native definition instead.".into());
         }
@@ -230,6 +286,10 @@ impl PcbApp {
     /// Keep routine publication compact; source addresses, paths and licenses are available in
     /// Details, while an older-base decision has its own clearly spaced warning section.
     pub(crate) fn library_publish_dialog(&mut self, ctx: &Context, mut draft: Draft) {
+        if self.library_editors.parts.contains_key(&draft.document) {
+            self.part_publish_dialog(ctx, draft);
+            return;
+        }
         let destinations = self.writable_libraries();
         if !destinations.iter().any(|(source, _)| *source == draft.source) {
             draft.source.clear();
@@ -425,6 +485,9 @@ impl PcbApp {
         allow_older: bool,
         copy: bool,
     ) -> Result<(), String> {
+        if self.library_editors.parts.contains_key(&document) {
+            return self.publish_part_document(ctx, document, revision, source, allow_older, copy);
+        }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (ctx, document, revision, source, allow_older, copy);
@@ -488,7 +551,7 @@ impl PcbApp {
                 } else {
                     engine::prepare(item, &disk_manifest, latest, base, allow_older)?
                 };
-                let request = Request { document, source, path, generation, prepared };
+                let request = Request { document, source, path, generation, prepared: Capture::Drawing(prepared) };
                 // Retain retry identity on the UI side before any final record can become visible.
                 send.send(Event::Prepared(request.clone())).map_err(|_| "Publisher owner disconnected before writing.")?;
                 match pcbcraft_storage::library::publishing::publish(std::path::Path::new(&request.path), &request.prepared) {
@@ -509,7 +572,13 @@ impl PcbApp {
     }
 
     /// Start one create worker after validating capacity; cancellation registers nothing.
-    fn create_native_library(&mut self, ctx: &Context, manifest: String, folder_name: &str, return_to: Option<Box<Draft>>) -> Result<(), String> {
+    pub(crate) fn create_native_library(
+        &mut self,
+        ctx: &Context,
+        manifest: String,
+        folder_name: &str,
+        return_to: Option<Box<Draft>>,
+    ) -> Result<(), String> {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (ctx, manifest, folder_name, return_to);
@@ -600,14 +669,29 @@ impl PcbApp {
                     format!("{error}. Publish again to verify this same revision without writing another.")
                 }
                 Ok(Completion::Published(request, refresh)) => {
-                    if let Some(doc) = self.library_editors.documents.get_mut(&request.document) {
-                        doc.session.confirm_publication(&request.prepared);
+                    if let Some(doc) = self.library_editors.documents.get_mut(&request.document)
+                        && let Capture::Drawing(prepared) = &request.prepared
+                    {
+                        doc.session.confirm_publication(prepared);
                     }
+                    self.confirm_part_publication(request.document, &request.prepared);
                     self.library_editors.publisher.recovery = None;
-                    let saved =
-                        format!("Published {}/{} r{}", request.prepared.item().library, request.prepared.item().id, request.prepared.item().revision);
+                    let saved = match &request.prepared {
+                        Capture::Part(prepared) => format!("Published {} · r{}", prepared.record().name(), prepared.reference().revision),
+                        Capture::Drawing(_) => format!(
+                            "Published {}/{} r{}",
+                            request.prepared.reference().library,
+                            request.prepared.reference().id,
+                            request.prepared.reference().revision
+                        ),
+                    };
                     match self.adopt_published_source(&request.source, &request.path, request.generation, refresh) {
-                        Ok(()) => saved,
+                        Ok(()) => {
+                            if let Capture::Drawing(prepared) = &request.prepared {
+                                self.queue_part_dependency_updates(prepared);
+                            }
+                            saved
+                        }
                         Err(error) => format!("{saved}. Refresh failed: {error}. The revision is saved; refresh the source without republishing."),
                     }
                 }
@@ -615,11 +699,14 @@ impl PcbApp {
                     match self.adopt_published_source(&source, &path, generation, Ok(parsed)) {
                         Ok(()) => {
                             if let Some(mut draft) = return_to
-                                && let Some(doc) = self.library_editors.documents.get_mut(&draft.document)
+                                && let Some(revision) = self.library_editors.document_revision(draft.document)
                             {
-                                doc.publish_source = Some(source.clone());
+                                self.library_editors.set_part_destination(draft.document, source.clone());
+                                if let Some(doc) = self.library_editors.documents.get_mut(&draft.document) {
+                                    doc.publish_source = Some(source.clone());
+                                }
                                 draft.source = source;
-                                draft.revision = doc.session.revision();
+                                draft.revision = revision;
                                 draft.error = None;
                                 self.resume_library_publish(draft);
                             }
@@ -636,9 +723,10 @@ impl PcbApp {
     /// A delayed library creation never replaces another dialog or a close decision. Its
     /// originating document is checked again when that decision has finished.
     #[cfg(not(target_arch = "wasm32"))]
-    fn resume_library_publish(&mut self, mut draft: Box<Draft>) {
-        let Some(doc) = self.library_editors.documents.get(&draft.document) else { return };
-        draft.revision = doc.session.revision();
+    pub(crate) fn resume_library_publish(&mut self, mut draft: Box<Draft>) {
+        let revision = self.library_editors.document_revision(draft.document);
+        let Some(revision) = revision else { return };
+        draft.revision = revision;
         if matches!(self.dialog, Dialog::None) {
             self.dialog = Dialog::LibraryPublish(*draft);
         } else {
@@ -680,7 +768,10 @@ impl PcbApp {
     pub(crate) fn edit_catalog_selection(&mut self, ctx: &Context, copy: bool) -> Result<(), String> {
         let preferred = self.preferred_library_source();
         let state = self.views.active.library.as_ref().ok_or("Choose a Parts Library pane first.")?;
-        let key = state.selected_key().ok_or("Select a symbol or footprint first.")?;
+        let key = state.selected_key().ok_or("Select a library item first.")?;
+        if matches!(key.kind, sources::Kind::Part | sources::Kind::ManufacturerPart) {
+            return self.edit_part_selection(ctx, copy);
+        }
         let project = state.project_id();
         if project.is_some() && project != self.session.project().map(|project| project.id()) {
             return Err("This project selection is no longer current.".into());
@@ -792,14 +883,14 @@ fn collection_id(name: &str) -> String {
 
 /// Refresh is intentionally a separate result after a successful durable write.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh_publication(request: Request) -> Completion {
+pub(crate) fn refresh_publication(request: Request) -> Completion {
     let refresh = pcbcraft_storage::library::load(std::path::Path::new(&request.path)).map(Arc::new);
     Completion::Published(request, refresh)
 }
 
 /// An uncertain save retries confirmation of the same exact bytes, never publication allocation.
 #[cfg(not(target_arch = "wasm32"))]
-fn verify_publication(request: Request) -> Result<Completion, String> {
+pub(crate) fn verify_publication(request: Request) -> Result<Completion, String> {
     match pcbcraft_storage::library::publishing::recover(std::path::Path::new(&request.path), &request.prepared) {
         Ok(()) => Ok(refresh_publication(request)),
         Err(pcbcraft_storage::library::publishing::Failure::Published(error)) => Ok(Completion::Unconfirmed(request, error)),

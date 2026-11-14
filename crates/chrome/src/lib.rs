@@ -24,6 +24,7 @@ pub mod library_sources;
 pub mod library_workspace;
 pub mod menu;
 pub mod net_label;
+pub mod part_form;
 pub mod pcb_update;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;

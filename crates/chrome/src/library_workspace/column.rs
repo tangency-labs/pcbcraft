@@ -46,6 +46,16 @@ impl ColumnWidth {
         self.resize = None;
         Ok(())
     }
+    /// Preview requests are viewport-limited when painted, independently of Browser's compact
+    /// width bound. Retain a larger preference when the host temporarily becomes narrower.
+    pub fn set_preview_width(&mut self, width: f32) -> Result<(), String> {
+        if !width.is_finite() || !(240.0..=65535.0).contains(&width) {
+            return Err("Preview width must be between 240 and 65535 logical points".into());
+        }
+        self.preferred = Some(width);
+        self.resize = None;
+        Ok(())
+    }
     /// Escape, focus loss and compact/floating layout transitions restore the pre-gesture choice.
     pub(super) fn cancel_resize(&mut self) {
         if let Some(resize) = self.resize.take() {

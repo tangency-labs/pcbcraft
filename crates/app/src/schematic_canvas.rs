@@ -1356,3 +1356,24 @@ fn paint_symbol(
         }
     }
 }
+
+/// A part's correspondence preview uses the native symbol painter and the exact selected unit.
+/// Highlighting never infers a logical terminal from display text or coordinates.
+pub(crate) fn paint_part_preview(
+    painter: &Painter,
+    unit: &pcbcraft_engine::schematic::SymbolUnit,
+    terminal: Option<&str>,
+    rect: Rect,
+    zoom: f32,
+    pan: egui::Vec2,
+) {
+    let bounds = grid_bounds(unit, 0, false);
+    let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
+    let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
+    let center = rect.center() + pan - bounds.center().to_vec2() * step;
+    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, pcbcraft_chrome::Tokens::get().canvas_ink));
+    if let Some(pin) = terminal.and_then(|terminal| unit.pins().iter().find(|pin| pin.number == terminal)) {
+        let at = center + egui::vec2(pin.offset.x_nm as f32, pin.offset.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
+        painter.circle_stroke(at, 6., Stroke::new(2., pcbcraft_chrome::Tokens::get().accent));
+    }
+}

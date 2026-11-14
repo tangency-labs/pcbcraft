@@ -156,8 +156,12 @@ fn part_dependency_addresses_and_source_resolution_migrate_together() {
     assert!(source.problems().is_empty(), "{:?}", source.problems());
     let definition = source.items().iter().find_map(|item| item.part()).unwrap();
     let category = source.items().iter().find_map(|item| item.category()).unwrap();
-    let resolved =
-        Arc::new(ResolvedPart { definition, symbol: legacy, category: Some(category), footprints: BTreeMap::from([("0603".into(), footprint)]) });
+    let resolved = Arc::new(ResolvedPart {
+        definition,
+        symbol: Some(legacy),
+        category: Some(category),
+        footprints: BTreeMap::from([("0603".into(), footprint)]),
+    });
     let mut before = session.snapshot().unwrap();
     Arc::make_mut(&mut Arc::make_mut(&mut before).components).values_mut().next().unwrap().part =
         Some(crate::part_instances::Selection { resolved, package: Some("0603".into()), manufacturer: None, requirements: BTreeMap::new() });
@@ -172,7 +176,7 @@ fn part_dependency_addresses_and_source_resolution_migrate_together() {
     rejected.install_library_source("legacy-parts", source.clone()).unwrap();
     let reference = conflict.components().next().unwrap().part.as_ref().unwrap().resolved.definition.reference();
     let resolved = rejected.libraries().resolve_part(&reference).unwrap();
-    assert_eq!(resolved.symbol.library, "basic-components");
+    assert_eq!(resolved.symbol.as_ref().unwrap().library, "basic-components");
     let digest = sources::part_digest(resolved);
     let revision = rejected.revision();
     let result = rejected.apply(crate::part_instances::PLACE_PART,&json!({"library":reference.library,"definition":reference.id,"definition_revision":reference.revision,"definition_digest":digest,"x_nm":20_000_000,"y_nm":0,"expected_revision":revision}));
@@ -183,7 +187,7 @@ fn part_dependency_addresses_and_source_resolution_migrate_together() {
     assert_eq!(encode_documents(decode_documents(&original).unwrap()).unwrap(), original);
     let opened = project(decode_documents(&encode_documents(before).unwrap()).unwrap()).unwrap();
     let selection = opened.components().next().unwrap().part.as_ref().unwrap();
-    assert_eq!(selection.resolved.definition.symbol.library, "basic-components");
+    assert_eq!(selection.resolved.definition.symbol.as_ref().unwrap().library, "basic-components");
     assert!(selection.resolved.definition.packages.values().all(|package| package.footprint.library == "basic-components"));
     session.open_snapshot(opened.clone());
     session.install_library_source("legacy-parts", source).unwrap();
@@ -195,7 +199,7 @@ fn part_dependency_addresses_and_source_resolution_migrate_together() {
     assert_eq!(session.project().unwrap().components().count(), 3);
     let before = session.snapshot().unwrap();
     let mut conflicting = crate::library::bundled_documents().find(|(id, _)| *id == "basic-components").unwrap().1;
-    let revision = selection.resolved.symbol.revision();
+    let revision = selection.resolved.symbol.as_ref().unwrap().revision();
     let path = conflicting
         .iter()
         .find(|(path, text)| {

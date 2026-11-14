@@ -24,10 +24,14 @@ impl DeleteDraft {
 /// One bounded operation slot covers inspection and trash, including disconnected workers.
 #[derive(Debug)]
 pub(super) struct Job {
-    receive: Receiver<Result<Outcome, String>>,
+    pub(super) receive: Receiver<Result<Outcome, String>>,
 }
 #[derive(Debug)]
-enum Outcome {
+pub(super) enum Outcome {
+    #[cfg(not(target_arch = "wasm32"))]
+    ItemPrepared(Box<super::items::Draft>),
+    #[cfg(not(target_arch = "wasm32"))]
+    ItemFinished { source: String, path: String, result: Result<Arc<NativeSource>, String>, error: Option<String> },
     #[cfg(not(target_arch = "wasm32"))]
     Prepared(DeleteDraft),
     #[cfg(not(target_arch = "wasm32"))]
@@ -209,12 +213,51 @@ impl PcbApp {
                             self.library_sources.remove(&source, &mut self.session);
                         }
                     }
-                    Err(error) => self.message = Some(error),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Ok(Outcome::ItemPrepared(draft)) => {
+                        self.library_sources.item_delete_pending = false;
+                        if !self.library_sources.item_delete_canceled
+                            && matches!(self.dialog, Dialog::None)
+                            && self.session.libraries().generation() == draft.generation
+                        {
+                            self.dialog = Dialog::DeleteLibraryItem(draft);
+                        }
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Ok(Outcome::ItemFinished { source, path, result, error }) => {
+                        self.library_sources.item_delete_pending = false;
+                        if self.library_sources.registered.iter().any(|r| r.source == source && r.path == path) {
+                            match result {
+                                Ok(loaded) => {
+                                    self.message = self.session.install_library_source(&source, loaded).err().map(|e| e.to_string());
+                                }
+                                Err(refresh) => {
+                                    self.session.mark_library_unavailable(&source);
+                                    self.library_sources.statuses.insert(source, refresh.clone());
+                                    self.message = Some(refresh);
+                                }
+                            }
+                        }
+                        if let Some(error) = error {
+                            self.message = Some(error);
+                        }
+                    }
+                    Err(error) => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            self.library_sources.item_delete_pending = false;
+                        }
+                        self.message = Some(error);
+                    }
                 }
                 self.repaint_editors(ctx);
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.library_sources.mutation = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.library_sources.item_delete_pending = false;
+                }
                 self.message = Some("Library operation disconnected; inspect its folder before retrying".into());
             }
             Some(Err(TryRecvError::Empty)) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),

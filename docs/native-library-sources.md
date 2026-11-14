@@ -55,7 +55,7 @@ its folder again. A saved project retains its pinned definitions and opens
 without reopening the library. There is no separate session-upload group or
 Upload bundle entry point.
 
-**Remove** forgets the registration/cache and leaves its files intact. **Delete**
+**Remove** forgets the registration/cache and leaves its files intact. **Delete library**
 is desktop-only for writable registered folders. Its confirmation names the
 folder, counts native item revisions and explains that projects keep their
 pinned copies. Pending editor changes from that library block deletion. The
@@ -64,6 +64,34 @@ retains the registration and reports an error. Linux/FreeBSD use the desktop
 `gio trash` service, macOS uses Finder, and Windows uses the recycle-bin API
 through PowerShell. An unavailable service has no permanent-delete fallback.
 Built-in libraries cannot be refreshed, relocated, removed or deleted.
+
+For an individual generic or orderable part, return to **Browse**, select its row
+in a writable folder library, and choose **Item › Delete part**. Close that
+part's authoring document first, including a clean published document. The
+confirmation covers every revision of that identity in the selected folder;
+symbols, footprints, categories and existing project-pinned copies are retained.
+Known orderable references in loaded libraries and dependent open drafts block
+removal. Libraries that are not loaded cannot be checked.
+
+The host captures the native files, rechecks them under the publisher lock, and
+stages the reviewed records as a small native library folder before sending that
+folder to system trash. A failed trash operation restores unused source names;
+if a newer file prevents restoration, the error identifies the retained recovery
+folder. Source loading also reports any pending recovery folder, including after
+an interrupted process, and blocks further publication/deletion until it is
+explicitly restored or moved out of the library. This reports recoverable state;
+it does not perform automatic crash recovery. There is no permanent-delete fallback. The library refreshes after the
+operation, including failure. This per-part path currently requires a Unix
+desktop; Windows and browser per-part deletion remain unavailable. A folder
+restored from trash contains the original manifest and deleted native records;
+there is no in-app undelete or project-Undo operation for library deletion.
+
+Live clients prepare `app.library_delete_part` in the addressed Library pane,
+then read `library_item_deletion` from editor inspection. Confirmation requires
+`phase: "confirm"` and the reviewed `token`; `phase: "cancel"` dismisses the
+review. The token binds the target, captured files and actual directory, and a
+catalog change requires a new review. These phases share GUI validation and the
+single native source-operation worker slot.
 
 To try the original MIT OR Apache-2.0 examples, add `examples/native-library`
 or `examples/native-parts`, or package one for transfer:
@@ -246,3 +274,83 @@ publication and catalog refresh remain host responsibilities.
 without filesystem paths. Later live edits remain unsaved when a captured
 publication finishes. Save As changes the edited identity and invalidates
 property drafts or gestures captured for the original, without discarding them.
+
+## Generic and orderable part documents
+
+In **Parts Library**, choose **New → Generic part** to open a part document in
+the Items region. The Browser and Preview remain available, and the named document
+tabs switch between Browse and retained part documents. A published symbol
+also offers **Create part from this symbol** in its editor. **Edit** reopens an
+exact published generic or orderable part; **Edit copy** gives the derivative a
+new identity while preserving its licence and source provenance.
+
+Use **Browse** beside Symbol, Footprint, Category or Generic part to open the
+shared searchable chooser. Narrow results by library, inspect the native preview,
+and confirm with Choose. Arrow keys move the selection and Enter confirms it;
+Cancel preserves the current association. Results default to the latest revision
+of each item, with **Include older revisions** for an explicit historical choice.
+Opening an already selected older revision retains that exact selection. Results
+are paged in sets of 50, and matching metadata is cached until the search, filter
+or loaded sources change. The form itself shows only its chosen association.
+
+Symbol and footprint associations are optional. Use **Clear** to remove a symbol;
+its pin maps clear in the same undoable edit. **Add footprint…** opens the chooser
+and creates a package only when Choose confirms a footprint. Cancel leaves the
+part unchanged. A footprint-only part can publish without a dummy symbol. Choose
+an optional category and its primary quantity field. Fixed parameters use the category's typed input parser; Apply value commits
+an entered value, Reset value restores it, and applying an empty field removes
+that fixed requirement. Each package selects an exact footprint revision. When a symbol is present,
+explicitly assign every physical pad to a symbol terminal or to Unconnected.
+Several pads can belong to one terminal. Selecting a mapping row highlights its
+pad and corresponding terminal, including a terminal on another symbol unit.
+Units are read-only here and remain editable in the Symbol Editor. The model
+slot is reserved for future package-bound 3D support.
+
+The fixed footer has the primary **Publish…** action and publication/destination
+state. It opens the destination form; choose a writable library, or use **New
+library…** when none exists, then confirm Publish. The new-library form asks for
+a name and folder before returning to the captured publication.
+
+Publish validates each declared symbol, category, typed value and package
+map, then uses the same native-folder destination, no-clobber write and recovery
+path as drawing publication. Only resolved published records enter placement.
+An incomplete map stays in the document and cannot replace a valid published
+revision. Part documents have their own revision-checked Undo/Redo and are kept
+only in the current application session; closing changed work requires an
+explicit discard decision. They have no persistent draft-file format.
+
+Once the generic part is published with a package, **Add orderable part** opens
+its manufacturer/MPN document, with package, optional datasheet and typed
+specifications. Datasheet links are saved as text and are never fetched on load.
+The exact owning generic part must already resolve before its orderable record
+can publish. Both records use the ordinary Parts Catalog placement and offline
+project-pinning path; plain symbol placement remains available.
+
+Drawing editors show the loaded generic parts that use their published revision.
+Publishing a later drawing revision offers those parts for review. Each selected
+part opens with the exact reference advanced and its existing maps preserved;
+publishing that part is a separate explicit action. Mapping problems must be
+corrected before it can publish. This flow changes reusable source definitions;
+reviewed adoption by already placed project instances belongs to #312.
+
+Live MCP exposes `app.part_new`, `app.part_orderable`, `app.part_edit`,
+`app.part_history`, `app.part_reference` and `app.part_focus`, using explicit
+document IDs and captured revisions from `inspect_editor.library_editors.part_documents`.
+`app.library_publish`, `app.library_catalog_edit` and `app.library_close` also
+accept these documents. `library.prepare_part_publication` prepares validated
+native part/manufacturer documents in a headless session, using already loaded
+exact dependencies and transported destination documents. It accepts no host
+filesystem paths and never confirms a save.
+
+`app.part_reference` chooses a typed association field at the captured document
+revision. A `new_package` field includes a new stable package ID and creates it
+only when an exact footprint is confirmed. A footprint field includes its stable package ID; changing it clears
+that package's old map before explicit remapping. Category and generic-part
+changes clear only their dependent values. Re-selecting the same exact address
+is a no-op. `library.search` accepts `include_older: true` to browse the same
+available, unambiguous exact revisions through MCP; default search stays latest-only.
+
+Categories are optional typed specification definitions. The bundled starter
+collections do not contain categories; an empty chooser reports that none are
+loaded. The Native Parts Demo includes resistor, connector and IC categories and
+can be loaded through Add library when testing typed fields.

@@ -308,7 +308,13 @@ fn successful_write_with_failed_refresh_is_saved_and_not_republished() {
     let (send, receive) = mpsc::sync_channel(1);
     app.library_editors.publisher.pending = Some(receive);
     send.send(Event::Finished(Ok(Completion::Published(
-        Request { document: id, source: "workshop-source".into(), path, generation: app.session.libraries().generation(), prepared },
+        Request {
+            document: id,
+            source: "workshop-source".into(),
+            path,
+            generation: app.session.libraries().generation(),
+            prepared: Capture::Drawing(prepared),
+        },
         Err("injected refresh failure".into()),
     ))))
     .unwrap();
@@ -337,7 +343,7 @@ fn disconnected_worker_recovery_does_not_create_a_second_revision() {
         source: "workshop-source".into(),
         path: path.clone(),
         generation: app.session.libraries().generation(),
-        prepared,
+        prepared: Capture::Drawing(prepared),
     }))
     .unwrap();
     app.poll_library_publication(&ctx);
@@ -379,7 +385,7 @@ fn uncertain_clean_copy_retains_recovery_until_verified_and_has_a_gui_retry() {
         source: "workshop-source".into(),
         path: path.clone(),
         generation: app.session.libraries().generation(),
-        prepared,
+        prepared: Capture::Drawing(prepared),
     });
     std::fs::rename(&path, temp.path().join("temporarily-offline")).unwrap();
     app.publish_library_item(&ctx, id, 0, "workshop-source", false).unwrap();

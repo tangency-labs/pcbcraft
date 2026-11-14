@@ -450,7 +450,7 @@ impl Editor for LiveEditor<'_> {
             return Some("Wait for the queued UI input to complete, or cancel it, before running another command".into());
         }
         if (app.library_sources.mutating() || app.library_sources.installing())
-            && (command.starts_with("library.") || command.starts_with("app.library_"))
+            && (command.starts_with("library.") || command.starts_with("app.library_") || command.starts_with("app.part_"))
         {
             return Some("Finish the current library folder operation before changing its sources or editors".into());
         }
@@ -462,7 +462,11 @@ impl Editor for LiveEditor<'_> {
         if app.views.editing_text() {
             return Some(format!("Finish the current text edit before running `{command}`"));
         }
-        if !matches!(app.dialog, Dialog::None) || app.files.busy() || app.project_action_pending() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let item_delete_review = command == "app.library_delete_part" && matches!(app.dialog, Dialog::DeleteLibraryItem(_));
+        #[cfg(target_arch = "wasm32")]
+        let item_delete_review = false;
+        if (!matches!(app.dialog, Dialog::None) && !item_delete_review) || app.files.busy() || app.project_action_pending() {
             return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
         }
         if app.parts.is_modal() && !matches!(command, "window.set_catalog_mode" | "window.set_panel") {
@@ -805,5 +809,24 @@ mod copper_tests {
             assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
             assert!(!app.remote_copper.queue.busy());
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod item_delete_tests {
+    use super::*;
+    /// Only the reviewed part-deletion command passes its own modal guard; other commands and
+    /// unrelated dialogs retain ordinary live-control refusal.
+    #[test]
+    fn deletion_confirmation_is_reachable_without_bypassing_other_dialogs() {
+        let (_temp, mut app, key) = crate::native_sources::items::tests::fixture();
+        let ctx = egui::Context::default();
+        app.begin_library_item_delete(&ctx, "deletable-item", &key).unwrap();
+        crate::native_sources::items::tests::finish(&mut app, &ctx);
+        let editor = LiveEditor { app: &mut app, ctx: &ctx };
+        assert!(editor.refusal("app.library_delete_part").is_none());
+        assert!(editor.refusal("app.part_edit").is_some());
+        editor.app.dialog = Dialog::About;
+        assert!(editor.refusal("app.library_delete_part").is_some());
     }
 }

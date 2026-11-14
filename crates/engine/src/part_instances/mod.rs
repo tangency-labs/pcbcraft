@@ -44,13 +44,8 @@ impl Selection {
     pub fn validate(&self) -> Result<(), String> {
         let part = &self.resolved.definition;
         part.validate_category(self.resolved.category.as_deref())?;
-        if part.symbol
-            != (Reference {
-                library: self.resolved.symbol.library.clone(),
-                id: self.resolved.symbol.id.clone(),
-                revision: self.resolved.symbol.revision(),
-            })
-        {
+        let symbol = self.resolved.schematic_symbol()?;
+        if part.symbol.as_ref() != Some(&Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision() }) {
             return Err("Pinned part symbol identity mismatch.".into());
         }
         if self.package.as_ref().is_some_and(|id| !part.packages.contains_key(id)) {
@@ -111,7 +106,7 @@ impl Selection {
     pub fn with_primary_value(&self, input: &str) -> Result<Self, String> {
         let mut value = self.clone();
         if let Err(error) = value.set_primary_value(input)
-            && (input != self.resolved.symbol.default_value() || self.primary_value().is_some() || self.manufacturer.is_some())
+            && (input != self.resolved.schematic_symbol()?.default_value() || self.primary_value().is_some() || self.manufacturer.is_some())
         {
             return Err(error);
         }

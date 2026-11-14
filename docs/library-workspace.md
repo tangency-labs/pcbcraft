@@ -92,3 +92,52 @@ editors. All five working workspaces use the shared chooser's fixed wide tile
 or fixed compact button at one breakpoint. A title's length and extra ribbon
 control rows do not change that chooser's dimensions. The display name is Parts
 Library; its stable command/layout key remains `library`.
+
+## Part documents (#309)
+
+The New generic part action and Edit/Edit copy for generic and orderable records
+open session documents inside this workspace. Browser keeps its source/project
+navigation; Items shows the association form, while Preview shows the selected
+symbol unit and package footprint. The Browse tab returns to browsing without
+discarding the form. Choosing another source in Browser also returns to Browse.
+The mapping table and document controls compose the pinned Craft table, choices,
+fields and buttons through `crates/chrome`; correspondence highlights reuse
+original electronics geometry. This composition needs no new generic control or
+external asset. Package model bindings and descriptive fields remain with #86
+and #314 respectively. See the [part document workflow](native-library-sources.md#generic-and-orderable-part-documents)
+for publication, close protection and shared commands.
+
+Part association fields show their selected item and a Browse action. The chooser
+uses catalog search, a library filter, native preview and explicit exact revision
+selection, with 50 results per page. It does not expand every installed record
+into a field dropdown. Matching metadata is rebuilt only when the query, filter
+or source generation changes. The shared table's explicit row-reveal API keeps
+keyboard selection visible; narrow hosts use Results/Preview choices inside the
+same bounded chooser and fixed Choose/Cancel footer.
+
+Part documents keep their fields on a bounded reading rail when Items is expanded.
+Symbol is optional and can be cleared. The Footprints section has an **Add
+footprint…** action that opens the searchable chooser; choosing creates one package
+and cancellation leaves the document unchanged. A symbol-less part previews its
+footprint without a blank symbol column. Pin mapping appears only when both a
+symbol and footprint are present.
+
+Named part-document tabs remain visible while browsing. The shared tab strip
+shows unsaved dots, keeps the selected document visible through overflow, and
+supports ordering and close protection. Selecting a draft returns compact hosts
+to Items; Browse and source-tree navigation retain the open session document.
+The part form keeps its primary Publish action in a fixed footer outside the
+scrolling fields. A single footprint needs no package selector; package naming
+and the reserved model slot are in Package details.
+
+The docked Preview width is limited by the available workspace rather than a
+fixed 640-point cap. Its sash leaves at least 360 logical points for Items and
+the Browser's current width; narrower hosts still use the existing compact
+Browser/Items/Preview choices. `app.library_browse preview_width` accepts a
+preferred width from 240 through 65535 logical points, clamped to the current
+viewport during rendering. Browser width and project contents are unaffected.
+
+**Item › Delete part** removes the selected generic/orderable identity's revisions
+from a writable external folder, after review and dependency checks. **Delete
+library** remains a separate source action. See the [source guide](native-library-sources.md)
+for trash recovery and platform limits.
