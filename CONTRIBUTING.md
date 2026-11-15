@@ -101,6 +101,11 @@ With the CLI, pass labels through `gh issue create --label`; inspect the current
 catalog with `gh label list`. Contributors without label permissions can describe
 the affected area in the issue so a maintainer can classify it.
 
+Follow the [composition and module-boundary rules](AGENTS.md#composition-and-module-boundaries):
+assemble features from reusable modules with explicit state ownership and narrow
+interfaces, reuse shared behavior, and keep domain computation separate from
+presentation and I/O. Scope existing-code extractions to the behavior being changed.
+
 Production Rust must not use `unsafe`, `unwrap`, `expect`, `panic!` or placeholder
 branches. Add `///` documentation for public APIs and changed functions with
 branching logic, explaining input constraints, errors and state changes. Put
