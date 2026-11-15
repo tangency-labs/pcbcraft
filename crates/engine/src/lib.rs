@@ -1091,8 +1091,23 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::identity::CREATE_BOARD,
         title: "Create Board",
-        summary: "Create the first physical board in a schematic-only project. Undoable.",
-        params: &[NEW_BOARD_NAME, EXPECTED_REVISION],
+        summary: "Create the first physical board, optionally adopting validated setup and silkscreen drafts in the same undoable edit.",
+        params: &[
+            NEW_BOARD_NAME,
+            Param {
+                required: false,
+                name: "setup",
+                summary: "Complete setup draft to adopt atomically with board creation",
+                kind: ParamKind::BoardSetup,
+            },
+            Param {
+                required: false,
+                name: "silkscreen",
+                summary: "Board print settings to adopt atomically with creation",
+                kind: ParamKind::SilkscreenSettings,
+            },
+            EXPECTED_REVISION,
+        ],
     },
     Command {
         id: sheets::CREATE_SHEET,

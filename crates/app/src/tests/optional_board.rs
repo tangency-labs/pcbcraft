@@ -3,45 +3,116 @@ use super::*;
 use crate::editor_view::{DocumentTarget, EditorView};
 use pcbcraft_engine::persistence::encode_documents;
 
-/// Opening the PCB workspace is a view change; only Create board mutates the document.
+/// The empty-state shortcut opens capture in the same pane without creating a board or
+/// changing the project, including when the introduction wraps in a compact workspace.
+#[test]
+fn empty_board_schematic_shortcut_is_navigation_only() {
+    for size in [egui::vec2(1000., 700.), egui::vec2(480., 650.), egui::vec2(800., 440.)] {
+        let mut h = harness();
+        h.set_size(size);
+        new_project(&mut h);
+        let snapshot = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let sheet = h.state().views.active.target();
+        let pane = h.state().views.active.id();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB Layout");
+        h.get_by_label("Start your PCB layout");
+        let create = h.get_by_label("Create board").rect();
+        let schematic = h.get_by_label("Open schematic").rect();
+        assert!(!create.intersects(schematic));
+        assert!(create.left() >= 0. && schematic.right() <= size.x);
+        click(&mut h, "Open schematic");
+        assert_eq!(h.state().views.active.id(), pane);
+        assert_eq!(h.state().views.active.target(), sheet);
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        assert!(h.state().session.project().unwrap().board_target().is_none());
+    }
+}
+
+/// The first-board dialog is disposable until Apply. Cancel changes neither the authored
+/// project nor its revision; one Apply publishes ownership and setup in a single undo step.
 #[test]
 fn optional_board_is_created_explicitly_and_undo_restores_schematic_only_state() {
     let mut h = harness();
     new_project(&mut h);
-    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    assert!(h.state().session.project().unwrap().board_document_path().is_none());
-    assert!(!before.contains_key("board.json"));
-    assert!(h.state().session.project().unwrap().board_target().is_none());
+    let before = h.state().session.snapshot().unwrap();
+    let documents = encode_documents(before.clone()).unwrap();
     let revision = h.state().session.revision();
-
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB Layout");
-    h.get_by_label("Create board");
-    assert_eq!(h.state().session.revision(), revision);
-    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-    assert_eq!(h.state().views.active.target(), Some(DocumentTarget::BoardWorkspace(h.state().session.project().unwrap().id())));
-    assert!(h.state().views.active.board.target.is_none());
-    assert!(!h.state().session.available(pcbcraft_engine::INITIALIZE_BOARD_SETUP));
-
     click(&mut h, "Create board");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    assert_eq!(h.state().rule_dialog_source().unwrap().revision, revision);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert!(h.state().session.project().unwrap().board_target().is_none());
+    assert!(!h.get_by_label("Apply board setup").accesskit_node().is_disabled());
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    h.get_by_label("Start your PCB layout");
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), documents);
+    assert_eq!(h.state().views.active.target(), Some(DocumentTarget::BoardWorkspace(before.id())));
+    click(&mut h, "Create board");
+    click(&mut h, "Apply board setup");
     let board = h.state().session.project().unwrap().board_target().unwrap();
+    assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Board(board)));
+    let setup = h.state().session.project().unwrap().board_setup().unwrap().clone();
     h.get_by_label("PCB canvas");
-    assert!(
-        encode_documents(h.state().session.snapshot().unwrap())
-            .unwrap()
-            .contains_key(&h.state().session.project().unwrap().board_document_path().unwrap())
-    );
-
+    let saved = pcbcraft_engine::persistence::encode_packed(h.state().session.snapshot().unwrap()).unwrap();
+    let reopened = pcbcraft_engine::persistence::decode_packed(&saved).unwrap().project;
+    assert_eq!(reopened.board_target(), Some(board));
+    assert_eq!(reopened.board_setup(), Some(&setup));
     h.state_mut().run("edit.undo", &Value::Null);
     h.run();
     assert!(h.state().session.project().unwrap().board_target().is_none());
-    assert!(h.state().views.active.unavailable(), "An explicit removed board cannot become a different target");
+    assert!(h.state().views.active.unavailable());
     h.state_mut().run("edit.redo", &Value::Null);
     h.run();
     assert_eq!(h.state().session.project().unwrap().board_target(), Some(board));
-    assert!(!h.state().views.active.unavailable());
+    assert_eq!(h.state().session.project().unwrap().board_setup(), Some(&setup));
+}
+
+/// Cancel and Escape retain redo history at both setup navigation sizes. A later external
+/// revision expires the draft instead of allowing first-board creation from stale input.
+#[test]
+fn empty_board_setup_cancellation_and_stale_apply_preserve_state() {
+    for (width, escape) in [(1200., false), (700., true)] {
+        let mut h = harness();
+        h.set_size(egui::vec2(width, 900.));
+        resistor_at_origin(&mut h);
+        h.state_mut().run("edit.undo", &Value::Null);
+        h.run();
+        assert!(h.state().session.available("edit.redo"));
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB Layout");
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        click(&mut h, "Create board");
+        if escape {
+            h.key_press(Key::Escape);
+            h.run();
+        } else {
+            click(&mut h, "Cancel");
+        }
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(h.state().session.available("edit.redo"));
+        click(&mut h, "Create board");
+        h.state_mut().run("edit.redo", &Value::Null);
+        h.run();
+        let changed = h.state().session.snapshot().unwrap();
+        assert!(h.get_by_label("Apply board setup").accesskit_node().is_disabled());
+        click(&mut h, "Apply board setup");
+        assert!(Arc::ptr_eq(&changed, &h.state().session.snapshot().unwrap()));
+        assert!(h.state().session.project().unwrap().board_target().is_none());
+        click(&mut h, "Cancel");
+    }
 }
 
 /// Empty PCB arrangements retain a project-scoped presentation target, never a fake board UUID.
@@ -170,12 +241,13 @@ fn pending_create_board_click_cannot_follow_project_replacement_or_reopen() {
         let before_release = h.state().session.snapshot().unwrap();
         h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
         assert!(h.state().session.project().unwrap().board_target().is_none());
         assert!(Arc::ptr_eq(&h.state().session.snapshot().unwrap(), &before_release));
     }
 }
 
-/// A second click at the old CTA location cannot create another board or an extra undo entry.
+/// Repeated clicks cannot bypass setup or create another board or an extra undo entry.
 #[test]
 fn repeated_create_board_clicks_only_create_one_board() {
     let mut h = harness();
@@ -186,8 +258,11 @@ fn repeated_create_board_clicks_only_create_one_board() {
     click(&mut h, "Create board");
     let created = h.state().session.snapshot().unwrap();
     let revision = h.state().session.revision();
+    assert!(h.state().session.project().unwrap().board_target().is_none());
     click_canvas_at(&mut h, point);
     assert_eq!(h.state().session.revision(), revision);
     assert!(Arc::ptr_eq(&h.state().session.snapshot().unwrap(), &created));
+    click(&mut h, "Apply board setup");
+    assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(h.state().session.project().unwrap().boards().count(), 1);
 }

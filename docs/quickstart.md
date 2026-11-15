@@ -76,7 +76,10 @@ documents. To begin an empty design on either platform, choose **New Schematic**
 or **New PCB** on Home. Each opens an **Untitled** project in the chosen workspace,
 with an empty sheet. **New Schematic** starts without a physical board; **New PCB**
 creates its one board explicitly. Opening the PCB workspace from a schematic-only
-project shows **Create board**; merely switching workspaces does not create it.
+project shows **Create board**, **Open schematic** and the next steps for setup,
+footprints and routing; merely switching workspaces does not create a board.
+**Create board** opens a setup draft. Cancel returns to the empty state; applying
+setup creates the board and saves its settings in one undoable edit.
 The compact cards wrap as the window narrows. Empty PCBs start at a closer drawing
 scale, which **Fit board** restores until the board contains geometry; saved views
 retain their own zoom and position.

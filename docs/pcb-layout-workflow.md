@@ -18,6 +18,14 @@ implementation source or other GPL EDA source is an input.
 
 ## The workflow today
 
+When a project has no board, PCB Layout shows **Create board** and **Open
+schematic**, along with the sequence for board setup, adding schematic footprints
+through Update PCB, and drawing the outline and routing. Opening the workspace
+or returning to the schematic does not create a board. **Create board** opens
+Board setup as a draft. Cancel returns to the empty state without changing the
+project; **Apply board setup** creates the board and saves its settings together
+as one undoable edit. Board defaults and net classes become available after creation.
+
 The PCB ribbon separates Layout, Draw, Analyze, Manufacture, Libraries and
 View. Layout groups placement, Route, clipboard, selection edits and board
 setup/synchronization; alignment is available in Modify's menu. Draw operates

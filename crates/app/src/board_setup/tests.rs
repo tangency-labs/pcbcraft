@@ -867,3 +867,33 @@ fn embedded_rule_reverts_keep_other_setup_drafts() {
     click(&mut h, "Cancel");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// Invalid first-board settings remain a disposable draft; error correction creates the
+/// configured board in one edit. The existing board-rule pages wait for physical ownership.
+#[test]
+fn first_board_setup_rejects_invalid_fields_without_creating_ownership() {
+    let mut app = PcbApp::default();
+    app.start_new_project_in(Workspace::Schematic);
+    let view = app.views.active.id();
+    app.apply_workspace(view, Workspace::Board, pcbcraft_chrome::workspace::Placement::Here);
+    let mut h = Harness::builder().with_size(egui::vec2(1200., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    click(&mut h, "Create board");
+    assert!(h.get_by_role_and_label(egui::Role::Button, "Board defaults").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(egui::Role::Button, "Net classes").accesskit_node().is_disabled());
+    page(&mut h, "Silkscreen");
+    replace(&mut h, "Text height", "0");
+    click(&mut h, "Apply board setup");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(h.state().session.project().unwrap().board_target().is_none());
+    replace(&mut h, "Text height", "2 mm");
+    click(&mut h, "Apply board setup");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    assert_eq!(h.state().session.project().unwrap().board_view(target).unwrap().silkscreen().text_height_nm, 2_000_000);
+}

@@ -67,6 +67,11 @@ queries and DRC](net-class-consumers.md) consume those bindings with effective
 dimensions and per-object provenance. [Editor controls](net-class-editor.md) use the same commands and scoped identities. Zones,
 repeated instances and system registries remain separate work.
 
+The boardless PCB workspace explains setup, footprint updates and routing, with
+explicit Create board and Open schematic actions. Create board opens a disposable
+setup draft; Apply creates the board and settings together, while Cancel leaves
+the project unchanged. Board defaults and net classes are available after creation.
+
 The engine [single-board update workflow](single-board-update.md) previews and
 atomically accepts footprint/package and connectivity changes through shared
 commands and headless/live MCP. Desired assignments and accepted geometry remain

@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod controls;
 pub mod cursor;
 pub mod editor;
+pub mod empty_state;
 pub mod fonts;
 pub mod grid;
 pub mod home;

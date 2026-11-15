@@ -51,7 +51,10 @@ Neither layout discovers boards by scanning directories.
 creates the project and its board in one undoable action, used by New PCB on Home.
 `pcb.create_board` adds the first board to an existing project, optionally taking
 its name and requiring the current revision. A second creation is refused.
-Opening the PCB workspace alone does not create physical state.
+Opening the PCB workspace alone does not create physical state. The empty-state
+Create board action opens a disposable setup draft, and Cancel leaves the project
+unchanged. Applying uses `pcb.create_board` with optional validated `setup` and
+`silkscreen` settings, publishing ownership and settings in one undoable edit.
 
 Legacy formats retain their sole deterministic compatibility board identity and
 their old encoding on Open and in the low-level codec until Save migrates it. The first authored physical change

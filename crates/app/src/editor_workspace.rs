@@ -912,7 +912,8 @@ impl PcbApp {
     }
 
     /// Render split and detached panes with one document header each. A single main canvas
-    /// uses an overlaid breadcrumb without tab clearance. Workspace panels address the focused view;
+    /// uses an overlaid breadcrumb without tab clearance, except for the boardless introduction
+    /// that owns its context and scroll area. Workspace panels address the focused view;
     /// Mixed layouts confine project panels to the focused project pane; each definition pane
     /// owns its Browser and Properties inside its own rectangle.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
@@ -1140,7 +1141,13 @@ impl PcbApp {
                         });
                     });
                 }
-                if !headers && let Some(path) = self.views.active.sheet_path(&self.session) {
+                // The boardless introduction supplies its own context and occupies the canvas;
+                // an overlaid breadcrumb would collide with its scrollable content in short panes.
+                let empty_board = self.views.active.workspace == Workspace::Board && self.views.active.board.target.is_none();
+                if !headers
+                    && !empty_board
+                    && let Some(path) = self.views.active.sheet_path(&self.session)
+                {
                     let count = if self.views.active.workspace == Workspace::Board {
                         format!(
                             "{} footprints",
