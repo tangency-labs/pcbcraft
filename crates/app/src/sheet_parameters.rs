@@ -49,10 +49,15 @@ impl Change {
 
 impl Drafts {
     /// Reload every draft from the project when the sheet or revision differs from the last
-    /// frame; otherwise keep what is being typed.
+    /// frame; otherwise keep what is being typed. Another sheet also clears the New fields and
+    /// their errors, so an unfinished name is never added to a sheet it wasn't typed for.
     fn sync(&mut self, project: &Project, sheet: SheetTarget, revision: u64) {
         if self.key == Some((sheet, revision)) {
             return;
+        }
+        if self.key.is_none_or(|(previous, _)| previous != sheet) {
+            self.new_name.clear();
+            self.new_error.clear();
         }
         self.key = Some((sheet, revision));
         self.values.clear();
@@ -74,13 +79,14 @@ fn hint(project: &Project, sheet: SheetTarget, row: &Row) -> String {
     if resolved.is_empty() { row.value.clone() } else { resolved }
 }
 
-/// The edit a field implies when it loses focus: clearing an own value removes it, and a
-/// different value sets it. `None` when nothing changed.
+/// The edit a field implies when it loses focus: clearing a nonempty own value removes it, and a
+/// different value sets it. `None` when nothing changed, including leaving an empty own value
+/// (such as one New just added) empty.
 fn commit(scope: Scope, row: &Row, draft: &str) -> Option<Change> {
     let own = (row.source == Source::Own).then_some(row.value.as_str());
     match (own, draft.is_empty()) {
-        (Some(_), true) => Some(Change { scope, name: row.name.clone(), value: None }),
-        (None, true) => None,
+        (Some(current), true) if !current.is_empty() => Some(Change { scope, name: row.name.clone(), value: None }),
+        (_, true) => None,
         (current, false) if current != Some(draft) => Some(Change { scope, name: row.name.clone(), value: Some(draft.to_owned()) }),
         _ => None,
     }
@@ -116,7 +122,10 @@ fn scope_rows(ui: &mut Ui, project: &Project, sheet: SheetTarget, scope: Scope, 
         }
     }
     let name = drafts.new_name.entry(scope).or_default();
-    if ui.push_id((scope, "new"), |ui| chrome::text_hint(ui, "New", name, "Add a parameter by name")).inner.lost_focus() && !name.trim().is_empty() {
+    // A space can't appear in a parameter name, so no row can share the New field's ID.
+    if ui.push_id((scope, "New field"), |ui| chrome::text_hint(ui, "New", name, "Add a parameter by name")).inner.lost_focus()
+        && !name.trim().is_empty()
+    {
         match add(scope, &rows, name.trim()) {
             Ok(added) => {
                 name.clear();
@@ -165,6 +174,27 @@ mod tests {
         let default = row("@project.Revision", Source::Default);
         assert_eq!(commit(Scope::Sheet, &default, ""), None);
         assert_eq!(commit(Scope::Sheet, &default, "A").and_then(|c| c.value), Some("A".into()));
+        // An empty own value left empty, as after New, stays.
+        assert_eq!(commit(Scope::Sheet, &row("", Source::Own), ""), None);
+    }
+
+    /// Switching sheets drops the New fields' unfinished names and errors; a new revision on the
+    /// same sheet keeps them.
+    #[test]
+    fn new_drafts_belong_to_their_sheet() {
+        let mut session = pcbcraft_engine::Session::default();
+        session.apply("project.new", &serde_json::json!({})).unwrap();
+        session.apply(pcbcraft_engine::sheets::CREATE_SHEET, &serde_json::json!({"name":"Aux","expected_revision":session.revision()})).unwrap();
+        let project = session.snapshot().unwrap();
+        let [sheet, other] = [0, 1].map(|n| project.sheets().nth(n).unwrap().target);
+        let mut drafts = Drafts::default();
+        drafts.sync(&project, sheet, 1);
+        drafts.new_name.insert(Scope::Sheet, "Gai".into());
+        drafts.new_error.insert(Scope::Sheet, "error".into());
+        drafts.sync(&project, sheet, 2);
+        assert_eq!(drafts.new_name.get(&Scope::Sheet).map(String::as_str), Some("Gai"));
+        drafts.sync(&project, other, 2);
+        assert!(drafts.new_name.is_empty() && drafts.new_error.is_empty());
     }
 
     /// New refuses any existing name ignoring case, built-ins included, and adds an empty

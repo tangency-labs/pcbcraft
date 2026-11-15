@@ -35,14 +35,22 @@ fn names_are_words_that_start_with_a_letter() {
     }
     let mut list = Parameters::new();
     list.insert("Revision".into(), "B".into());
-    assert_eq!(check(&list), Ok(()));
+    assert_eq!(check(&list, &PROJECT_STANDARD), Ok(()));
     list.insert("bad name".into(), String::new());
-    assert!(matches!(check(&list), Err(ParameterError::Name(_))));
+    assert!(matches!(check(&list, &PROJECT_STANDARD), Err(ParameterError::Name(_))));
     list.clear();
     list.insert("Long".into(), "x".repeat(MAX_VALUE_LEN + 1));
-    assert!(matches!(check(&list), Err(ParameterError::Value(_))));
+    assert!(matches!(check(&list, &PROJECT_STANDARD), Err(ParameterError::Value(_))));
     let many: Parameters = (0..=MAX_PARAMETERS).map(|i| (format!("P{i}"), String::new())).collect();
-    assert_eq!(check(&many), Err(ParameterError::TooMany));
+    assert_eq!(check(&many, &PROJECT_STANDARD), Err(ParameterError::TooMany));
+    // Editing ignores case, so a twin spelling of a standard or stored name could never be edited.
+    for twins in [vec!["revision"], vec!["Gain", "gain"]] {
+        let list: Parameters = twins.into_iter().map(|name| (name.to_owned(), "x".to_owned())).collect();
+        assert!(matches!(check(&list, &PROJECT_STANDARD), Err(ParameterError::Spelling(_))));
+    }
+    let list: Parameters = [("title".to_owned(), "x".to_owned())].into();
+    assert!(matches!(check(&list, &SHEET_STANDARD), Err(ParameterError::Spelling(_))));
+    assert_eq!(check(&list, &PROJECT_STANDARD), Ok(()), "only the list's own standard names count");
 }
 
 #[test]
@@ -212,6 +220,8 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title":"x".repeat(MAX_VALUE_LEN + 1)})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title": 3})).is_err());
+    assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({"Revision":"B","revision":"C"})).is_err());
+    assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"title":"x"})).is_err());
     assert!(mutate(&sheet_file, &|_| {}).is_ok());
 }
 
@@ -225,9 +235,43 @@ fn branching_self_references_stay_bounded() {
     assert!(looping.len() <= MAX_VALUE_LEN);
     edit(&mut s, SET, json!({"scope":"project","name":"Loop","value":looping})).unwrap();
     let r = resolve(&mut s, &sheet, "@project.Loop");
-    // Past the limit, only the open values' remaining text is appended, as typed.
-    assert!(r["text"].as_str().unwrap().len() <= MAX_RESOLVED_LEN + (MAX_DEPTH + 1) * MAX_VALUE_LEN);
+    assert!(r["text"].as_str().unwrap().len() <= MAX_RESOLVED_LEN);
     assert_eq!(r["unknown"], json!(["@project.Loop"]));
+}
+
+/// The output limit is strict: many references to a long value expand only while the whole
+/// result still fits, and the rest stay as typed.
+#[test]
+fn resolved_text_never_passes_the_output_limit() {
+    let mut s = schematic();
+    let sheet = main_sheet(&s);
+    edit(&mut s, SET, json!({"scope":"project","name":"Long","value":"x".repeat(MAX_VALUE_LEN)})).unwrap();
+    // 70 × 1000 bytes would pass 64 KiB; the text after the last reference must still fit.
+    let r = resolve(&mut s, &sheet, &("@project.Long ".repeat(70) + "tail"));
+    let resolved = r["text"].as_str().unwrap();
+    assert!(resolved.len() <= MAX_RESOLVED_LEN, "{}", resolved.len());
+    assert!(resolved.starts_with(&"x".repeat(MAX_VALUE_LEN)), "earlier references still expand");
+    assert!(resolved.ends_with("@project.Long tail"), "later references stay as typed");
+    assert_eq!(r["unknown"], json!(["@project.Long"]));
+}
+
+/// A single value lookup reads the same sources as the rows, exact spelling first.
+#[test]
+fn value_lookup_matches_the_listed_rows() {
+    let mut s = schematic();
+    let sheet = main_sheet(&s);
+    edit(&mut s, SET, json!({"scope":"project","name":"Revision","value":"B"})).unwrap();
+    edit(&mut s, SET, json!({"scope":"project","name":"Gain","value":"10"})).unwrap();
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Title","value":"Power"})).unwrap();
+    let project = s.project().unwrap();
+    let target = Some(project.sheet_target());
+    for scope in Scope::ALL {
+        for row in project.parameter_rows(scope, target) {
+            assert_eq!(project.parameter_value(scope, target, &row.name), Some(row.value.clone()), "{scope:?} {}", row.name);
+            assert_eq!(project.parameter_value(scope, target, &row.name.to_lowercase()), Some(row.value), "{scope:?} ignoring case");
+        }
+        assert_eq!(project.parameter_value(scope, target, "Missing"), None);
+    }
 }
 
 /// Setting a standard parameter to its default stores nothing, so an empty project Revision
@@ -247,6 +291,31 @@ fn standard_values_equal_to_the_default_are_not_stored() {
     assert!(project.sheet_parameters(project.sheet_target()).unwrap().is_empty());
     edit(&mut s, SET, json!({"scope":"project","name":"Checked","value":""})).unwrap();
     assert_eq!(s.project().unwrap().parameters().get("Checked").map(String::as_str), Some(""));
+    // Renaming onto a standard name follows the same rule, and a custom empty value survives a
+    // rename to another custom name.
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Old","value":"@project.Revision"})).unwrap();
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Old","rename":"revision"})).unwrap();
+    let project = s.project().unwrap();
+    assert!(project.sheet_parameters(project.sheet_target()).unwrap().is_empty());
+    edit(&mut s, SET, json!({"scope":"project","name":"Checked","rename":"Approved"})).unwrap();
+    assert_eq!(s.project().unwrap().parameters().get("Approved").map(String::as_str), Some(""));
+}
+
+/// A sheet without paper can't store parameters, so editing one is refused and changes nothing.
+#[test]
+fn sheet_parameters_need_paper() {
+    let mut s = schematic();
+    let sheet = main_sheet(&s);
+    let mut project = (*s.project().unwrap()).clone();
+    for info in Arc::make_mut(&mut project.sheets) {
+        info.page = None;
+    }
+    s.open_snapshot(Arc::new(project));
+    let before = s.snapshot().unwrap();
+    let error = edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Gain","value":"10"})).unwrap_err();
+    assert!(error.to_string().contains("needs paper"), "{error}");
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    edit(&mut s, SET, json!({"scope":"project","name":"Gain","value":"10"})).expect("project parameters don't need paper");
 }
 
 /// The legacy diagnostic encoding refuses sheet parameters rather than dropping them, even on a

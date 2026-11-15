@@ -419,7 +419,10 @@ point, directly before `sheets`:
 Each object holds at most 256 entries sorted by name, one per line, so changing
 one value changes one line. A name is an ASCII letter followed by up to 63
 letters, digits or `_`; a value is a string of at most 1000 bytes and may hold
-references. Empty objects, null, other value types and lists in other versions
+references. Editing ignores case, so a name that differs from another stored
+name, or from a standard name of its list (`Revision`, `Date`, `Company`,
+`DrawnBy` for the project; those and `Title` for a sheet), only in case is
+rejected. Empty objects, null, other value types and lists in other versions
 are rejected. Project/22 is a superset of project/21 whose net-class catalog,
 class assignments, net registry and no-connect intent are optional, each with
 its existing rules. Like project/20, it requires adopted storage and occurrence

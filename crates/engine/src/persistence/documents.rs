@@ -378,7 +378,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if parameter_format && project_parameters.is_empty() {
         return Err("Empty project parameter lists must be omitted.".into());
     }
-    crate::parameters::check(&project_parameters).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    crate::parameters::check(&project_parameters, &crate::parameters::PROJECT_STANDARD).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     let mut net_classes = project.net_classes.take();
     if let Some(catalog) = &mut net_classes {
         catalog.validate()?;
@@ -609,7 +609,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             if sheet.format != PAGE_SHEET_FORMAT || parameters.is_empty() {
                 return Err(format!("{}: sheet parameters require sheet format 9 and a nonempty list", reference.file));
             }
-            crate::parameters::check(&parameters).map_err(|error| format!("{}: {error}", reference.file))?;
+            crate::parameters::check(&parameters, &crate::parameters::SHEET_STANDARD).map_err(|error| format!("{}: {error}", reference.file))?;
             metadata.parameters = Arc::new(parameters);
         }
         let mut named = sheet.net_labels.take().unwrap_or_default();

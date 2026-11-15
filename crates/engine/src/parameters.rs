@@ -52,6 +52,17 @@ const MAX_RESOLVED_LEN: usize = 64 * 1024;
 pub const PROJECT_STANDARD: [&str; 4] = ["Revision", "Date", "Company", "DrawnBy"];
 
 /// The standard sheet parameters and the value each has until the sheet sets its own.
+/// The standard sheet parameter names, as [`check`] takes them.
+pub const SHEET_STANDARD: [&str; 5] = {
+    let mut names = [""; 5];
+    let mut i = 0;
+    while i < 5 {
+        names[i] = SHEET_DEFAULTS[i].0;
+        i += 1;
+    }
+    names
+};
+
 pub const SHEET_DEFAULTS: [(&str, &str); 5] = [
     ("Title", "@sheet.Name"),
     ("Revision", "@project.Revision"),
@@ -94,6 +105,8 @@ pub enum ParameterError {
     Name(String),
     /// A value is too long.
     Value(String),
+    /// A name differs from a standard or another stored name only in case.
+    Spelling(String),
 }
 
 impl std::fmt::Display for ParameterError {
@@ -102,6 +115,7 @@ impl std::fmt::Display for ParameterError {
             Self::TooMany => write!(f, "more than {MAX_PARAMETERS} parameters"),
             Self::Name(name) => write!(f, "parameter name `{name}`: use 1 to {MAX_NAME_LEN} letters, digits and `_`, starting with a letter"),
             Self::Value(name) => write!(f, "parameter `{name}`: the value is longer than {MAX_VALUE_LEN} bytes"),
+            Self::Spelling(name) => write!(f, "parameter name `{name}` differs from another parameter only in case"),
         }
     }
 }
@@ -113,15 +127,22 @@ pub fn valid_name(name: &str) -> bool {
     name.len() <= MAX_NAME_LEN && chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Check every name and value of a stored list, and its length. Decoding refuses a list that
-/// fails, so stored lists always pass.
-pub fn check(parameters: &Parameters) -> Result<(), ParameterError> {
+/// Check every name and value of a stored list, and its length. `standard` names the list's
+/// standard parameters. Editing ignores case, so a name that matches a standard name or another
+/// stored name only ignoring case is refused: an edit could never reach it. Decoding refuses a
+/// list that fails, so stored lists always pass.
+pub fn check(parameters: &Parameters, standard: &[&str]) -> Result<(), ParameterError> {
     if parameters.len() > MAX_PARAMETERS {
         return Err(ParameterError::TooMany);
     }
+    let mut seen = std::collections::BTreeSet::new();
     for (name, value) in parameters {
         if !valid_name(name) {
             return Err(ParameterError::Name(name.clone()));
+        }
+        let twin = standard.iter().any(|standard| *standard != name && standard.eq_ignore_ascii_case(name));
+        if twin || !seen.insert(name.to_ascii_lowercase()) {
+            return Err(ParameterError::Spelling(name.clone()));
         }
         if value.len() > MAX_VALUE_LEN {
             return Err(ParameterError::Value(name.clone()));
@@ -399,33 +420,80 @@ impl Project {
     /// The unresolved value of one parameter as `scope` offers it on `sheet`; `None` when it does
     /// not exist there. Names match exactly first, then ignoring case.
     pub fn parameter_value(&self, scope: Scope, sheet: Option<SheetTarget>, name: &str) -> Option<String> {
-        let rows = self.parameter_rows(scope, sheet);
-        rows.iter().find(|row| row.name == name).or_else(|| rows.iter().find(|row| row.name.eq_ignore_ascii_case(name))).map(|row| row.value.clone())
+        self.find_value(scope, sheet, |row| row == name).or_else(|| self.find_value(scope, sheet, |row| row.eq_ignore_ascii_case(name)))
+    }
+
+    /// The first value, in [`Project::parameter_rows`] order, whose name `matches`, read from the
+    /// same built-in, standard and stored sources without building the rows.
+    fn find_value(&self, scope: Scope, sheet: Option<SheetTarget>, matches: impl Fn(&str) -> bool) -> Option<String> {
+        let sheet = sheet.and_then(|target| self.sheets.iter().find(|s| target.project == self.id && s.sheet_id == target.sheet));
+        let list = |own: &Parameters, standard: &[(&str, &str)]| {
+            standard
+                .iter()
+                .find(|(name, _)| matches(name))
+                .map(|(name, default)| own.get(*name).cloned().unwrap_or_else(|| (*default).to_owned()))
+                .or_else(|| own.iter().find(|(name, _)| matches(name)).map(|(_, value)| value.clone()))
+        };
+        match scope {
+            Scope::Project => {
+                if matches("Name") {
+                    return Some(self.name.clone());
+                }
+                list(&self.parameters, &PROJECT_STANDARD.map(|name| (name, "")))
+            }
+            Scope::Sheet => {
+                let sheet = sheet?;
+                if matches("Name") {
+                    return Some(sheet.sheet_name.clone());
+                }
+                list(&sheet.parameters, &SHEET_DEFAULTS)
+            }
+            Scope::Instance => {
+                let sheet = sheet?;
+                if matches("Name") {
+                    return Some(sheet.sheet_name.clone());
+                }
+                let order = || self.page_order();
+                if matches("Page") {
+                    return Some(order().iter().position(|t| t.sheet == sheet.sheet_id).map_or(0, |n| n + 1).to_string());
+                }
+                matches("Pages").then(|| order().len().to_string())
+            }
+        }
     }
 
     /// Replace every reference in `text` with its value as shown on `sheet` (`None` for a text
     /// that belongs to no sheet, which can name only `@project`). References that name nothing,
-    /// nest deeper than a few levels, or come after the resolution has expanded
-    /// [`MAX_EXPANSIONS`] references or produced [`MAX_RESOLVED_LEN`] bytes, stay as typed and
-    /// are listed in [`Resolved::unknown`].
+    /// nest deeper than a few levels, come after the resolution has expanded [`MAX_EXPANSIONS`]
+    /// references, or whose value would take the result past [`MAX_RESOLVED_LEN`] bytes, stay as
+    /// typed and are listed in [`Resolved::unknown`]. The result is never longer than that limit
+    /// or `text` itself, whichever is longer.
     pub fn resolve_text(&self, sheet: Option<SheetTarget>, text: &str) -> Resolved {
         let mut out = Resolved::default();
-        self.resolve_into(sheet, text, 0, &mut { MAX_EXPANSIONS }, &mut out);
+        self.resolve_into(sheet, text, 0, 0, &mut { MAX_EXPANSIONS }, &mut out);
         out
     }
 
     /// Append `text` to `out` with its references resolved `depth` levels deep, spending one of
-    /// the shared `budget` per expansion. Once the budget or the output limit is used up, the
-    /// remaining references are appended as typed.
-    fn resolve_into(&self, sheet: Option<SheetTarget>, text: &str, depth: usize, budget: &mut usize, out: &mut Resolved) {
+    /// the shared `budget` per expansion. `pending` is how many bytes of enclosing texts still
+    /// follow `text`; an expansion happens only when the output so far, the value, the rest of
+    /// `text` and `pending` all fit in [`MAX_RESOLVED_LEN`], so appending a reference as typed
+    /// instead always keeps the result inside it. Depth and budget are checked before any lookup.
+    fn resolve_into(&self, sheet: Option<SheetTarget>, text: &str, pending: usize, depth: usize, budget: &mut usize, out: &mut Resolved) {
         for piece in pieces(text) {
             match piece {
                 Piece::Text(text) => out.text.push_str(text),
                 Piece::Reference { scope, name, raw } => {
-                    match self.parameter_value(scope, sheet, name).filter(|_| depth < MAX_DEPTH && *budget > 0 && out.text.len() < MAX_RESOLVED_LEN) {
+                    // Bytes of `text` after this reference; `raw` is a slice of `text`.
+                    let after = text.len() - (raw.as_ptr() as usize - text.as_ptr() as usize) - raw.len();
+                    let value = (depth < MAX_DEPTH && *budget > 0)
+                        .then(|| self.parameter_value(scope, sheet, name))
+                        .flatten()
+                        .filter(|value| out.text.len() + value.len() + after + pending <= MAX_RESOLVED_LEN);
+                    match value {
                         Some(value) => {
                             *budget -= 1;
-                            self.resolve_into(sheet, &value, depth + 1, budget, out);
+                            self.resolve_into(sheet, &value, after + pending, depth + 1, budget, out);
                         }
                         None => {
                             out.text.push_str(raw);
@@ -490,9 +558,8 @@ fn standard_default(target: Target, name: &str) -> Option<&'static str> {
 
 /// Change one list: set `name` to `value`, remove it (`value` `None` without a rename) or rename
 /// it, keeping its value unless a new one is given. Refuses renaming a missing parameter or onto
-/// another one, and growing past [`MAX_PARAMETERS`]. Returns whether the list changed.
-fn apply(list: &mut Parameters, name: &str, value: Option<String>, rename: Option<String>) -> Result<bool, CommandError> {
-    let before = list.clone();
+/// another one, and growing past [`MAX_PARAMETERS`].
+fn apply(list: &mut Parameters, name: &str, value: Option<String>, rename: Option<String>) -> Result<(), CommandError> {
     match rename {
         Some(new) => {
             let old = list.remove(name).ok_or_else(|| CommandError::InvalidParams(format!("there is no parameter `{name}` to rename")))?;
@@ -513,7 +580,7 @@ fn apply(list: &mut Parameters, name: &str, value: Option<String>, rename: Optio
             }
         },
     }
-    Ok(*list != before)
+    Ok(())
 }
 
 /// The listing shape shared by `parameter.list` and inspection.
@@ -546,8 +613,23 @@ impl Session {
         // A standard parameter set to its default stores nothing, so it keeps following the
         // default and an empty project Revision does not adopt the newer storage layout.
         let value = value.filter(|value| rename.is_some() || standard_default(target, &name) != Some(value.as_str()));
+        if let Target::Sheet(sheet) = target
+            && original.for_sheet(sheet).is_some_and(|project| project.page().is_none())
+        {
+            // Only sheets with paper can store parameters; a value here could not be saved.
+            return Err(CommandError::InvalidParams("this sheet needs paper before it can hold parameters; choose a paper size first".into()));
+        }
         let mut candidate = original.clone();
-        if !apply(candidate.parameters_mut(target)?, &name, value, rename)? {
+        let list = candidate.parameters_mut(target)?;
+        let before = list.clone();
+        apply(list, &name, value, rename.clone())?;
+        // A rename onto a standard name follows the same rule: its default is not stored.
+        if let Some(new) = &rename
+            && list.get(new).map(String::as_str) == standard_default(target, new)
+        {
+            list.remove(new);
+        }
+        if *list == before {
             return Ok(());
         }
         if target == Target::Project && !candidate.parameters.is_empty() {
