@@ -4,6 +4,7 @@ mod column;
 use crate::{Tokens, controls};
 pub use browser::Browser;
 pub use column::ColumnWidth;
+pub(crate) use column::Sash;
 use egui::{Align, Layout, Rect, RichText, Ui, UiBuilder, pos2, vec2};
 use solidcraft_ui_kit as kit;
 

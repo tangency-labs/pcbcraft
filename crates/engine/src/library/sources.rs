@@ -14,13 +14,13 @@ use std::{
 };
 
 /// Maximum loaded source registrations in one session, including bundled native libraries.
-pub const MAX_SOURCES: usize = 18;
+pub const MAX_SOURCES: usize = 32;
 /// Maximum files in a source, including its manifest.
-pub const MAX_FILES: usize = 256;
+pub const MAX_FILES: usize = 8192;
 /// Maximum UTF-8 bytes in one native file.
 pub const MAX_FILE_BYTES: usize = 1 << 20;
 /// Maximum UTF-8 bytes in one source snapshot.
-pub const MAX_SOURCE_BYTES: usize = 8 << 20;
+pub const MAX_SOURCE_BYTES: usize = 32 << 20;
 /// Native relative paths and UTF-8 file contents; filesystem adapters never enter the engine.
 pub type Documents = BTreeMap<String, String>;
 /// Install a bounded native snapshot without editing any pinned project definitions.
@@ -378,7 +378,7 @@ impl NativeSource {
     pub fn bundle_documents(bytes: &[u8]) -> Result<Documents, String> {
         // JSON string escaping can expand source text; bound the transport separately too.
         if bytes.len() > MAX_SOURCE_BYTES * 2 {
-            return Err("Library bundle exceeds 16 MiB".into());
+            return Err(format!("Library bundle exceeds {} MiB", MAX_SOURCE_BYTES * 2 / (1 << 20)));
         }
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -512,7 +512,7 @@ pub fn check_documents(documents: &Documents) -> Result<(), String> {
         }
         total += text.len();
         if total > MAX_SOURCE_BYTES {
-            return Err("Library source exceeds 8 MiB".into());
+            return Err("Library source exceeds 32 MiB".into());
         }
     }
     Ok(())
@@ -534,6 +534,10 @@ pub struct Catalog {
     field_conflicts: BTreeSet<String>,
     /// Read-only resolution is cached by exact identity and invalidated on every catalog mutation.
     resolved_parts: BTreeMap<Key, OnceLock<Result<ResolvedPart, String>>>,
+    disabled_builtin: BTreeSet<String>,
+    manufacturer_index: BTreeMap<Reference, Vec<Reference>>,
+    inspection: OnceLock<Value>,
+    cache_identity: Arc<()>,
 }
 
 /// One validated library snapshot of a part and all definitions it requires; no project mutation.
@@ -614,13 +618,7 @@ impl Catalog {
     }
     /// List resolvable manufacturer records belonging to one exact reusable part revision.
     pub fn manufacturers_for(&self, part: &Reference) -> Vec<Arc<ManufacturerPart>> {
-        self.search("", Some(Kind::ManufacturerPart))
-            .into_iter()
-            .filter_map(|(_, item)| {
-                let record = item.manufacturer_part()?;
-                (record.part == *part).then(|| self.manufacturer_part(&record.reference()).ok()).flatten()
-            })
-            .collect()
+        self.manufacturer_index.get(part).into_iter().flatten().filter_map(|reference| self.manufacturer_part(reference).ok()).collect()
     }
     /// Validate a part against exact currently available dependencies, including every package option.
     /// The operation is read-only, performs no network I/O, and never substitutes a newer revision.
@@ -686,16 +684,51 @@ impl Catalog {
         catalog.generation = 0;
         catalog
     }
+    /// Enable or exclude one embedded collection without removing its immutable source data.
+    /// Exclusion affects search and exact resolution for new selections, not project-pinned
+    /// records. The compatibility registration follows Basic components to avoid a bypass.
+    pub fn set_builtin_enabled(&mut self, library: &str, enabled: bool) -> Result<(), String> {
+        let id = format!("bundled-{library}");
+        if !self.builtin.contains(&id) || id == super::compatibility::SOURCE {
+            return Err("Unknown built-in library.".into());
+        }
+        let mut changed = if enabled { self.disabled_builtin.remove(&id) } else { self.disabled_builtin.insert(id) };
+        if library == "basic-components" {
+            changed |= if enabled {
+                self.disabled_builtin.remove(super::compatibility::SOURCE)
+            } else {
+                self.disabled_builtin.insert(super::compatibility::SOURCE.into())
+            };
+        }
+        if changed {
+            self.rebuild_conflicts();
+            self.generation = self.generation.wrapping_add(1);
+        }
+        Ok(())
+    }
+    /// The same effective availability governs indexing, exact resolution and discovery.
+    fn source_available(&self, id: &str) -> bool {
+        !self.unavailable.contains(id) && !self.disabled_builtin.contains(id)
+    }
     /// Resolve the latest unambiguous native symbol through the same index as an exact revision.
     pub fn latest_symbol(&self, library: &str, id: &str) -> Option<Arc<SymbolDefinition>> {
         self.sources
             .iter()
-            .filter(|(source, _)| !self.unavailable.contains(*source))
+            .filter(|(source, _)| self.source_available(source))
             .flat_map(|(_, source)| &source.items)
             .filter(|item| item.key.kind == Kind::Symbol && item.key.library == library && item.key.id == id)
             .max_by_key(|item| item.key.revision)
             .filter(|item| !self.conflicts.contains(&item.key))
             .and_then(Item::symbol)
+    }
+    /// Whether an embedded collection participates in new source discovery and resolution.
+    pub fn builtin_enabled(&self, library: &str) -> bool {
+        self.builtin.contains(&format!("bundled-{library}")) && !self.disabled_builtin.contains(&format!("bundled-{library}"))
+    }
+    /// Opaque identity for disposable result caches. Cloned snapshots share it until a source
+    /// mutation, while unrelated catalogs with equal numeric generations remain distinct.
+    pub fn cache_identity(&self) -> Arc<()> {
+        self.cache_identity.clone()
     }
     /// A session-local load/removal generation for rejecting delayed background source results.
     pub fn generation(&self) -> u64 {
@@ -715,7 +748,7 @@ impl Catalog {
         }
         if !self.sources.contains_key(id) && self.sources.len() - usize::from(self.sources.contains_key(super::compatibility::SOURCE)) >= MAX_SOURCES
         {
-            return Err("At most 18 native sources may be loaded".into());
+            return Err("At most 32 native sources may be loaded".into());
         }
         let mut changed = self.changed.get(id).cloned().unwrap_or_default();
         if let Some(previous) = self.sources.get(id) {
@@ -760,7 +793,7 @@ impl Catalog {
     fn rebuild_conflicts(&mut self) {
         let mut known: BTreeMap<&Key, &Value> = BTreeMap::new();
         let mut conflicts: BTreeSet<_> = self.changed.values().flatten().cloned().collect();
-        for item in self.sources.values().flat_map(|source| &source.items) {
+        for item in self.sources.iter().filter(|(id, _)| !self.disabled_builtin.contains(*id)).flat_map(|(_, source)| &source.items) {
             if let Some(previous) = known.insert(&item.key, &item.canonical)
                 && previous != &item.canonical
             {
@@ -771,7 +804,7 @@ impl Catalog {
         self.index.clear();
         self.field_conflicts.clear();
         let mut fields: BTreeMap<String, super::parts::FieldType> = BTreeMap::new();
-        for (source_id, source) in self.sources.iter().filter(|(id, _)| !self.unavailable.contains(*id)) {
+        for (source_id, source) in self.sources.iter().filter(|(id, _)| !self.unavailable.contains(*id) && !self.disabled_builtin.contains(*id)) {
             for (index, item) in source.items.iter().enumerate() {
                 self.index.entry(item.key.clone()).or_insert_with(|| (source_id.clone(), index));
                 if self.conflicts.contains(&item.key) {
@@ -791,6 +824,13 @@ impl Catalog {
             }
         }
         self.resolved_parts = self.index.keys().filter(|key| key.kind == Kind::Part).map(|key| (key.clone(), OnceLock::new())).collect();
+        self.inspection = OnceLock::new();
+        self.cache_identity = Arc::new(());
+        self.manufacturer_index.clear();
+        let records: Vec<_> = self.search("", Some(Kind::ManufacturerPart)).into_iter().filter_map(|(_, item)| item.manufacturer_part()).collect();
+        for record in records {
+            self.manufacturer_index.entry(record.part.clone()).or_default().push(record.reference());
+        }
     }
     /// Search the latest revision of each native identity, omitting all copies of conflicting keys.
     /// Identical copies appear once; their source registrations remain separately inspectable.
@@ -801,7 +841,7 @@ impl Catalog {
         for (source, item) in self
             .sources
             .iter()
-            .filter(|(id, _)| !self.unavailable.contains(*id) && id.as_str() != super::compatibility::SOURCE)
+            .filter(|(id, _)| self.source_available(id) && id.as_str() != super::compatibility::SOURCE)
             .flat_map(|(id, source)| source.items.iter().map(move |item| (id.as_str(), item)))
         {
             if kind.is_some_and(|kind| kind != item.key.kind) {
@@ -841,7 +881,7 @@ impl Catalog {
         let conflicts = &self.conflicts;
         self.sources
             .iter()
-            .filter(|(id, _)| !self.unavailable.contains(*id))
+            .filter(|(id, _)| self.source_available(id))
             .flat_map(|(_, source)| &source.items)
             .find(|item| {
                 item.key.library == library
@@ -855,7 +895,7 @@ impl Catalog {
     /// Inspect every revision from one available registration, including quarantined items.
     /// Browsing does not select placement candidates or silently substitute another source.
     pub fn source_items(&self, source: &str) -> &[Item] {
-        if self.unavailable.contains(source) {
+        if !self.source_available(source) {
             return &[];
         }
         self.sources.get(source).map_or(&[], |source| source.items.as_slice())
@@ -875,16 +915,20 @@ impl Catalog {
                     && self
                         .sources
                         .iter()
-                        .filter(|(id, _)| !self.unavailable.contains(*id))
+                        .filter(|(id, _)| self.source_available(id))
                         .any(|(_, existing)| existing.items.iter().any(|other| other.key == item.key && other.canonical == item.canonical))
             })
     }
 
     /// List sources with trusted built-in status and validation/conflict messages by filename.
     pub fn inspect(&self) -> Value {
+        self.inspection.get_or_init(|| self.inspect_sources()).clone()
+    }
+    /// Resolve source diagnostics once per catalog generation, not once per painted frame.
+    fn inspect_sources(&self) -> Value {
         let conflicts = &self.conflicts;
         let mut sources = Vec::new();
-        sources.extend(self.sources.iter().filter(|(id, _)| id.as_str() != super::compatibility::SOURCE).map(|(id,source)| {
+        sources.extend(self.sources.iter().filter(|(id, _)| id.as_str() != super::compatibility::SOURCE && !self.disabled_builtin.contains(*id)).map(|(id,source)| {
             let mut problems = source.problems.clone();
             for item in &source.items {
                 if conflicts.contains(&item.key) { problems.push(format!("{}: conflicting {:?} {}/{} revision {}; use a new revision",item.file,item.key.kind,item.key.library,item.key.id,item.key.revision)); }
@@ -903,7 +947,7 @@ impl Catalog {
                     problems.push(format!("{}: {error}",item.file));
                 }
             }
-            json!({"source":id,"builtin":self.builtin.contains(id),"library":source.library,"name":source.name,"license":source.license,"available":!self.unavailable.contains(id),"problems":problems,
+            json!({"source":id,"builtin":self.builtin.contains(id),"library":source.library,"name":source.name,"license":source.license,"available":self.source_available(id),"enabled":!self.disabled_builtin.contains(id),"problems":problems,
                 "symbols":source.items.iter().filter(|i|i.key.kind==Kind::Symbol).count(),"footprints":source.items.iter().filter(|i|i.key.kind==Kind::Footprint).count(),
                 "manufacturer_parts":source.items.iter().filter(|i|i.key.kind==Kind::ManufacturerPart).count(),
                 "parts":source.items.iter().filter(|i|i.key.kind==Kind::Part).count(),"categories":source.items.iter().filter(|i|i.key.kind==Kind::Category).count()})
@@ -924,6 +968,10 @@ impl Session {
         Arc::make_mut(&mut self.libraries).install(id, source).map_err(CommandError::InvalidParams)
     }
 
+    /// Apply an application preference to the disposable catalog, leaving authored history intact.
+    pub fn set_builtin_library_enabled(&mut self, library: &str, enabled: bool) -> Result<(), CommandError> {
+        Arc::make_mut(&mut self.libraries).set_builtin_enabled(library, enabled).map_err(CommandError::InvalidParams)
+    }
     /// Mark a filesystem source unavailable after a failed refresh, preserving pinned projects and
     /// cached revision identity checks while removing that source's items from search/placement.
     pub fn mark_library_unavailable(&mut self, id: &str) {

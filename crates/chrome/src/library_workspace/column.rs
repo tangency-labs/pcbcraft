@@ -15,7 +15,7 @@ struct Resize {
     before: Option<f32>,
 }
 /// Actual host bounds and edge orientation; drawing and commands remain host-owned.
-pub(super) struct Sash<'a> {
+pub(crate) struct Sash<'a> {
     pub bounds: Rect,
     pub name: &'a str,
     pub min: f32,
@@ -64,7 +64,7 @@ impl ColumnWidth {
     }
     /// Pointer and keyboard adjustments move the named edge; a held stationary pointer does not
     /// keep repainting. Leading edges invert width changes while retaining physical arrow direction.
-    pub(super) fn resize(&mut self, ui: &mut Ui, id: Id, default: f32, sash: Sash<'_>) -> f32 {
+    pub(crate) fn resize(&mut self, ui: &mut Ui, id: Id, default: f32, sash: Sash<'_>) -> f32 {
         let max = sash.max.max(sash.min);
         if !ui.is_enabled()
             || ui.input(|input| {

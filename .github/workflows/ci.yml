@@ -88,6 +88,8 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Check browser library folder and bundle limits
+        run: node scripts/test-native-library-picker.cjs
       - name: Build the web app
         working-directory: apps/pcbcraft-web
         run: trunk build --release

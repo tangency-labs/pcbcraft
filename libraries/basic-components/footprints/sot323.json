@@ -1,0 +1,105 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "basic-components",
+  "id": "sot323",
+  "revision": 1,
+  "name": "SOT-323 (SC-70-3)",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "https://assets.nexperia.com/documents/package-information/SOT323.pdf",
+    "locator": "SOT323, 27-May-2022, nominal 2.00 \u00d7 1.25 mm body and 1.30 mm same-side pin pitch; original demo 0.50 \u00d7 0.60 mm lands, 1.80 mm row centers, courtyard, silk and reference lettering. Confirm against the selected transistor."
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -650000,
+        "y_nm": 900000
+      },
+      "width_nm": 500000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 125000
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": 650000,
+        "y_nm": 900000
+      },
+      "width_nm": 500000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 125000
+    },
+    {
+      "number": "3",
+      "center": {
+        "x_nm": 0,
+        "y_nm": -900000
+      },
+      "width_nm": 500000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 125000
+    }
+  ],
+  "graphics": [
+    {
+      "purpose": "fabrication",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 2000000,
+      "height_nm": 1250000,
+      "rotation": 0
+    },
+    {
+      "purpose": "courtyard",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 2800000,
+      "height_nm": 2900000,
+      "rotation": 0
+    }
+  ],
+  "reference": "pcbcraft-technical-1",
+  "silkscreen": [
+    {
+      "points": [
+        {
+          "x_nm": -1200000,
+          "y_nm": -500000
+        },
+        {
+          "x_nm": -1200000,
+          "y_nm": 500000
+        }
+      ],
+      "closed": false
+    },
+    {
+      "points": [
+        {
+          "x_nm": 1200000,
+          "y_nm": -500000
+        },
+        {
+          "x_nm": 1200000,
+          "y_nm": 500000
+        }
+      ],
+      "closed": false
+    }
+  ]
+}

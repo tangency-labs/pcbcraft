@@ -1544,3 +1544,26 @@ The native geometry is independently drawn under MIT OR Apache-2.0; manufacturer
 images are not imported or bundled. At @travle1's direction, this unpublished
 first draft is replaced in place without a separate discarded revision. Terminal
 positions are unchanged, and every visible stroke uses the same physical width.
+
+## Expanded built-in footprints and library discovery controls
+
+The built-in physical catalog now includes original 0805/1206 resistor lands,
+SOIC-8, SOT-563, SOT-323, SOD-123 and additional 2.54 mm headers. The SOIC-8,
+SOT-563 and three/four-pin header geometry was authored for the sensor demo and
+is reused under new `basic-components` identities; project-pinned demo records
+remain unchanged. Dimensional references and original land/courtyard choices
+are recorded in each native JSON definition and `docs/footprint-library.md`.
+No vendor artwork or third-party library assets are included, and demo choices
+are not manufacturing qualification.
+
+Library preferences and placement comparisons compose the pinned Craft settings
+and property controls through `crates/chrome`. Its `ModalHost` lacks a resize
+builder, so the expanded Parts Catalog composes egui's persisted `Resize` region
+inside the shared modal surface, header and footer. No toolkit dependency or
+external implementation was changed.
+
+The expanded catalog also reuses Craft's dense table and existing preview-column
+sash, along with the Library Manager's symbol/footprint navigation. The standalone
+Craft footer does not expose its leading content slot publicly, so the adapter
+retains its surface and action buttons while composing the shared library button
+and Repeat placement checkbox into its unused leading band.

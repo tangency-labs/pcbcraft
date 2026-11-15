@@ -255,3 +255,38 @@ fn physical_footprints_on_multiple_sheets_share_the_board_without_aliasing_nets(
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     assert_eq!(encode_documents(decode_packed(&encode_packed(snapshot).unwrap()).unwrap().project).unwrap(), docs);
 }
+
+/// Expanded defaults retain exact native maps and offline geometry, including header pitch and polarity.
+#[test]
+fn expanded_defaults_place_and_reopen_without_installed_sources() {
+    let mut s = session();
+    let mut x = 0;
+    for (symbol_id, footprint_id, map) in [
+        ("resistor", "resistor-0805", json!({"1":"1","2":"2"})),
+        ("resistor", "resistor-1206", json!({"1":"1","2":"2"})),
+        ("diode", "sod123", json!({"1":"1","2":"2"})),
+        ("npn", "sot323", json!({"1":"1","2":"2","3":"3"})),
+        ("header-3", "header-1x03-254", json!({"1":"1","2":"2","3":"3"})),
+        ("header-4", "header-1x04-254", json!({"1":"1","2":"2","3":"3","4":"4"})),
+        ("header-6", "header-1x06-254", json!({"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6"})),
+        ("header-8", "header-1x08-254", json!({"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6","7":"7","8":"8"})),
+        ("header-2x3", "header-2x03-254", json!({"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6"})),
+    ] {
+        let definition = s.libraries().latest_symbol("basic-components", symbol_id).unwrap();
+        s.apply(PLACE_SYMBOL, &json!({"library":"basic-components","definition":symbol_id,"definition_revision":definition.revision(),"definition_digest":crate::library::sources::symbol_digest(&definition).unwrap(),"x_nm":x,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        let id = s.project().unwrap().symbols().last().unwrap().id();
+        assign(&mut s, &id, footprint_id, map);
+        x += 20_000_000;
+    }
+    let pinned = s.snapshot().unwrap();
+    let documents = encode_documents(pinned.clone()).unwrap();
+    let reopened = decode_documents(&documents).unwrap();
+    assert_eq!(encode_documents(reopened).unwrap(), documents);
+    s.set_builtin_library_enabled("basic-components", false).unwrap();
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &pinned));
+    let dual = basic_components("header-2x03-254").unwrap();
+    assert_eq!(dual.pads[0].center, Point { x_nm: -1_270_000, y_nm: -2_540_000 });
+    assert_eq!(dual.pads[1].center, Point { x_nm: 1_270_000, y_nm: -2_540_000 });
+    assert_eq!(dual.pads[0].shape, PadShape::Rectangle);
+    assert_eq!(basic_components("sod123").unwrap().pads[0].number, "1");
+}

@@ -28,6 +28,9 @@ fn large_catalog_selects_libraries_and_confirms_before_placement() {
     let canvas = h.get_by_label("Schematic canvas").rect();
     h.get_by_label("Basic components");
     h.get_by_label("All libraries");
+    for label in ["Small", "Medium", "Large", "List"] {
+        assert!(h.query_by_label(label).is_none());
+    }
     let close = h.get_by_label("Close Parts Catalog").rect();
     let place = h.get_by_label("Place").rect();
     assert!(close.right() - place.left() < 400.);
@@ -445,7 +448,6 @@ fn power_catalog_drags_preview_place_and_repeat_in_both_presentations() {
             click(&mut h, "Cancel");
             h.key_press(Key::P);
             h.run();
-            click(&mut h, "List");
             if compact {
                 click(&mut h, "Dock Parts Catalog");
             }
@@ -512,7 +514,6 @@ fn power_drags_use_their_own_names_and_reject_invalid_or_cancelled_drops() {
         click(&mut h, "Cancel");
         h.key_press(Key::P);
         h.run();
-        click(&mut h, "List");
         click(&mut h, "Dock Parts Catalog");
         if mode == "invalid" {
             click(&mut h, "+3V3");
@@ -873,4 +874,248 @@ fn assignment_component_browser_routes_native_parts() {
     assert!(matches!(h.state().dialog, crate::Dialog::NativePart(_)));
     h.get_by_role_and_label(egui::Role::ComboBox, "Package");
     click(&mut h, "Cancel");
+}
+
+/// Original bounded scale fixture shares one symbol across many independent reusable part records.
+fn scale_catalog(libraries: usize, parts: usize) -> library::sources::Catalog {
+    use library::sources::{Catalog, Documents, NativeSource};
+    let mut catalog = Catalog::bundled();
+    for index in 0..libraries {
+        let id = format!("catalog-scale-{index}");
+        let mut docs = Documents::from([
+            (
+                "library.json".into(),
+                json!({"format":"pcbcraft-library/1","id":id,"name":format!("Scale library {index}"),"license":"MIT OR Apache-2.0"}).to_string(),
+            ),
+            ("symbols/connector.json".into(), include_str!("../../../../libraries/basic-components/symbols/connector.json").into()),
+        ]);
+        for n in 0..parts {
+            docs.insert(format!("parts/part-{n}.json"),json!({"format":"pcbcraft-part/2","library":id,"id":format!("part-{n}"),"revision":1,"name":format!("Synthetic part {n}"),"license":"MIT OR Apache-2.0","source":{"kind":"original","reference":"PCBcraft catalog scale fixture","locator":"Synthetic metadata only"},"symbol":{"library":id,"id":"connector","revision":4},"packages":{}}).to_string());
+        }
+        catalog.install(&id, Arc::new(NativeSource::load(&docs).unwrap())).unwrap();
+    }
+    catalog
+}
+/// Opt-in diagnostic compares idle row retrieval on one fixed 3,200-part source set.
+#[test]
+#[ignore = "opt-in catalog scale diagnostic"]
+fn catalog_scale_probe() {
+    let catalog = scale_catalog(16, 200);
+    let mut browser = PartsBrowser::default();
+    let mut samples = Vec::new();
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let rows = browser.catalog_results(&catalog);
+        assert!(rows.all.len() >= 3200);
+        assert_eq!(rows.sources.as_array().unwrap().len(), 18);
+        samples.push(start.elapsed().as_nanos());
+    }
+    println!("CATALOG_SCALE_NS={samples:?}");
+}
+
+/// Cached rows retain identity between idle frames, invalidate on source changes and stay bounded
+/// to virtualized geometry even when twenty libraries contribute twenty thousand parts.
+#[test]
+fn many_libraries_share_cached_rows_and_search_by_library() {
+    let mut catalog = scale_catalog(20, 1000);
+    let mut browser = PartsBrowser::default();
+    let rows = browser.catalog_results(&catalog);
+    assert!(rows.all.len() >= 20_000);
+    assert!(Arc::ptr_eq(&rows, &browser.catalog_results(&catalog)));
+    let query = browser.query_results(&rows, "catalog-scale-19");
+    assert_eq!(query.len(), 1000);
+    assert!(Arc::ptr_eq(&query, &browser.query_results(&rows, "catalog-scale-19")));
+    catalog.set_builtin_enabled("basic-components", false).unwrap();
+    assert!(!Arc::ptr_eq(&rows, &browser.catalog_results(&catalog)));
+    let other = scale_catalog(1, 1);
+    assert!(browser.catalog_results(&other).all.len() < 100);
+}
+
+/// Expanded presentation uses wide-screen space and retains an on-screen footer on compact hosts.
+#[test]
+fn expanded_catalog_defaults_to_seventy_percent_and_remembers_resizing() {
+    for (w, h) in [(1800., 800.), (1000., 800.)] {
+        let mut harness = editor(w);
+        harness.set_size(egui::vec2(w, h));
+        harness.run();
+        let cancel = harness.get_by_label("Cancel").rect();
+        let search = harness.get_by_label("Search parts").rect();
+        let title = harness.get_by_label("Parts Catalog").rect();
+        let initial_height = cancel.bottom() - title.top();
+        let repeat = harness.get_by_label("Repeat placement").rect();
+        assert!((repeat.center().y - cancel.center().y).abs() < 4., "repeat is outside the footer: {repeat:?} {cancel:?}");
+        assert!((initial_height / h - 0.7).abs() < 0.08, "{title:?} {cancel:?}");
+        assert!(cancel.bottom() <= h, "{cancel:?}");
+        // The standard resize corner remains interactive inside the shared modal surface.
+        let corner = harness.ctx.read_response(egui::Id::unique("parts_catalog").with("size").with("__resize_corner")).unwrap().rect;
+        let from = corner.center();
+        harness.drag_at(from);
+        harness.hover_at(from + egui::vec2(100., 65.));
+        harness.run();
+        harness.drop_at(from + egui::vec2(100., 65.));
+        harness.run();
+        let resized = harness.get_by_label("Cancel").rect();
+        assert!(resized.bottom() - harness.get_by_label("Parts Catalog").rect().top() > initial_height + 10., "{from:?} {resized:?}");
+        assert!(search.left() < w * 0.3);
+        click(&mut harness, "Cancel");
+        harness.key_press(Key::A);
+        harness.run();
+        assert_eq!(harness.get_by_label("Cancel").rect().size(), resized.size());
+        let remembered = harness.ctx.read_response(egui::Id::unique("parts_catalog").with("size").with("__resize_corner")).unwrap().rect;
+        assert!((remembered.center().y - corner.center().y).abs() > 5.);
+        harness.set_size(egui::vec2(w, 650.));
+        harness.run();
+        assert!(harness.get_by_label("Cancel").rect().bottom() <= 650.);
+        harness.set_size(egui::vec2(w, h));
+        harness.run();
+        click(&mut harness, "Filters…");
+        harness.get_by_label("Include Basic components");
+        harness.get_by_label("Include Power");
+        click(&mut harness, "Cancel");
+        assert!(harness.state().parts.open);
+    }
+}
+
+/// Personal source switches and placement filters apply through Preferences without editing a project.
+#[test]
+fn library_preferences_apply_cancel_and_filter_catalog_only() {
+    let mut h = editor(1400.);
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    click(&mut h, "Filters…");
+    click(&mut h, "Include Basic components");
+    click(&mut h, "Cancel");
+    assert!(h.state().session.libraries().builtin_enabled("basic-components"));
+    click(&mut h, "Filters…");
+    click(&mut h, "Use placement filters");
+    click(&mut h, "Require manufacturer and MPN");
+    click(&mut h, "OK");
+    h.run();
+    assert!(h.query_by_label("Resistor").is_none());
+    h.get_by_label("GND");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+    // The setting filters choices; ordinary engine editing retains the flexible schema contract.
+    h.state_mut()
+        .session
+        .apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision}))
+        .unwrap();
+    let roundtrip = crate::placement_filters::Settings::parse(Some(serde_json::to_string(&h.state().library_preferences).unwrap()));
+    assert_eq!(roundtrip, h.state().library_preferences);
+}
+
+/// MPN search finds its reusable parent, but placement still needs an explicitly matching choice.
+#[test]
+fn required_mpn_filters_search_and_every_placement_capture() {
+    let mut h = editor(1400.);
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":native_documents()})).unwrap();
+    h.state_mut().library_preferences.filter = library::filter::Filter { enabled: true, manufacturer: true, footprint: true, ..Default::default() };
+    h.run();
+    h.get_by_label("Search parts").type_text("TEST-R100M-0603");
+    h.run();
+    let selected = h.state().parts.part.as_ref().unwrap();
+    assert!(selected.manufacturer.is_none());
+    assert!(h.get_by_label("Place").accesskit_node().is_disabled());
+    h.get_by_role_and_label(egui::Role::ComboBox, "Manufacturer part").scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Manufacturer part").click();
+    h.run();
+    click(&mut h, "Illustrative Manufacturer · TEST-R100M-0603");
+    assert!(!h.get_by_label("Place").accesskit_node().is_disabled());
+    let browser = &h.state().parts;
+    let rows = browser.results.as_ref().unwrap().1.clone();
+    let entry = rows.all.iter().find(|e| Some(e.key()) == browser.selected).unwrap();
+    assert!(browser.capture_placement(entry, &browser.value).is_some());
+    click(&mut h, "Place");
+    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::PlaceSymbol { .. })));
+}
+
+/// The preview sash uses shared pointer/keyboard behavior and saves independently of window size.
+#[test]
+fn expanded_preview_width_is_resizable_and_saved() {
+    let mut h = editor(1800.);
+    let before = h.get_by_label("Resize catalog preview").rect().center();
+    h.drag_at(before);
+    h.hover_at(before - egui::vec2(80., 0.));
+    h.run();
+    h.drop_at(before - egui::vec2(80., 0.));
+    h.run();
+    let width = h.state().parts.preview_width.preferred().unwrap();
+    assert!(width >= 350., "{width}");
+    let saved = h.state().parts.saved_state();
+    assert_eq!(PartsBrowser::from_state(&saved).preview_width.preferred(), Some(width));
+    assert!(saved.valid());
+    click(&mut h, "Cancel");
+    h.key_press(Key::A);
+    h.run();
+    assert_eq!(h.state().parts.preview_width.preferred(), Some(width));
+}
+
+/// An excluded MPN must not advertise a reusable parent through hidden manufacturer metadata.
+#[test]
+fn typed_filters_exclude_ineligible_mpn_search_metadata() {
+    use library::{
+        filter::{Filter, Parameter},
+        parts::{Requirement, Value},
+    };
+    let mut docs = native_documents();
+    let mut other: serde_json::Value = serde_json::from_str(&docs["manufacturer-parts/test.json"]).unwrap();
+    other["id"] = json!("other-resistor");
+    other["mpn"] = json!("EXCLUDED-MPN");
+    other["specifications"]["pcbcraft:resistance"] = json!({"type":"quantity","value":"1000","unit":"Ohm"});
+    docs.insert("manufacturer-parts/other.json".into(), other.to_string());
+    let mut catalog = library::sources::Catalog::default();
+    catalog.install("fixture", Arc::new(library::sources::NativeSource::load(&docs).unwrap())).unwrap();
+    let category = catalog.search("", Some(library::sources::Kind::Category)).into_iter().find_map(|(_, i)| i.category()).unwrap();
+    let mut browser = PartsBrowser::default();
+    browser.set_filter(Filter {
+        enabled: true,
+        manufacturer: true,
+        category: Some((*category).clone()),
+        parameters: vec![Parameter {
+            field: "pcbcraft:resistance".into(),
+            requirement: Some(Requirement::Exact { value: Value::Quantity { value: "0.1".into(), unit: "Ohm".into() } }),
+        }],
+        ..Default::default()
+    });
+    let rows = browser.catalog_results(&catalog);
+    assert!(browser.query_results(&rows, "excluded-mpn").is_empty());
+    assert_eq!(browser.query_results(&rows, "test-r100m-0603").len(), 1);
+}
+
+/// Catalog previews use independent library-manager cameras without changing part or project data.
+#[test]
+fn catalog_symbol_and_package_previews_zoom_pan_and_fit_independently() {
+    let mut h = editor(1400.);
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":native_documents()})).unwrap();
+    h.run();
+    click(&mut h, "Generic resistor");
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let symbol = h.get_by_label("Symbol preview").rect();
+    let footprint = h.get_by_label("Footprint preview").rect();
+    assert!(symbol.bottom() < footprint.top());
+    assert!(footprint.bottom() < h.get_by_label("Cancel").rect().top());
+    click(&mut h, "Zoom in Symbol preview");
+    assert_eq!(h.state().parts.symbol_camera.inspect()["zoom_percent"], 125.);
+    assert_eq!(h.state().parts.footprint_camera.inspect()["zoom_percent"], 100.);
+    let at = h.get_by_label("Symbol preview").rect().center();
+    h.drag_at(at);
+    h.hover_at(at + egui::vec2(20., 10.));
+    h.run();
+    h.drop_at(at + egui::vec2(20., 10.));
+    h.run();
+    assert_ne!(h.state().parts.symbol_camera.inspect()["pan"], json!([0., 0.]));
+    click(&mut h, "Fit Symbol preview");
+    assert_eq!(h.state().parts.symbol_camera.inspect()["zoom_percent"], 100.);
+    assert_eq!(h.state().parts.symbol_camera.inspect()["pan"], json!([0., 0.]));
+    click(&mut h, "Zoom in Footprint preview");
+    assert_eq!(h.state().parts.footprint_camera.inspect()["zoom_percent"], 125.);
+    h.get_by_role_and_label(egui::Role::ComboBox, "Package").click();
+    h.run();
+    click(&mut h, "Unassigned");
+    h.get_by_label("Choose a package");
+    assert!(h.query_by_label("Zoom in Footprint preview").is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
 }

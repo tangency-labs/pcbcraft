@@ -175,7 +175,17 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
 /// Library canvases share the picker's navigation while retaining their native palettes.
 /// Stable caller scopes isolate symbol and footprint cameras and Fit controls.
 pub(super) fn workspace_symbol(ui: &mut egui::Ui, definition: &pcbcraft_engine::schematic::SymbolDefinition, camera: &mut Camera) {
-    workspace_geometry(ui, "Symbol preview", false, camera, |painter, rect, camera| {
+    workspace_symbol_sized(ui, definition, camera, None);
+}
+
+/// The catalog uses the same navigation and drawing with a bounded canvas height.
+pub(super) fn workspace_symbol_sized(
+    ui: &mut egui::Ui,
+    definition: &pcbcraft_engine::schematic::SymbolDefinition,
+    camera: &mut Camera,
+    height: Option<f32>,
+) {
+    workspace_geometry(ui, "Symbol preview", false, camera, height, |painter, rect, camera| {
         crate::schematic_canvas::paint_preview_transformed(
             painter,
             definition,
@@ -189,15 +199,30 @@ pub(super) fn workspace_symbol(ui: &mut egui::Ui, definition: &pcbcraft_engine::
 
 /// Draw the exact footprint revision without creating or changing a board placement.
 pub(super) fn workspace_footprint(ui: &mut egui::Ui, definition: &FootprintDefinition, camera: &mut Camera) {
-    workspace_geometry(ui, "Footprint preview", true, camera, |painter, rect, camera| {
+    workspace_footprint_sized(ui, definition, camera, None);
+}
+
+/// Bound a physical preview without changing its camera, palette or exact native definition.
+pub(super) fn workspace_footprint_sized(ui: &mut egui::Ui, definition: &FootprintDefinition, camera: &mut Camera, height: Option<f32>) {
+    workspace_geometry(ui, "Footprint preview", true, camera, height, |painter, rect, camera| {
         paint_footprint(painter, rect, definition, camera.zoom, camera.pan);
     });
 }
 
 /// Shared controls sit outside the canvas so wheel input over metadata still scrolls normally.
-fn workspace_geometry(ui: &mut egui::Ui, label: &str, footprint: bool, camera: &mut Camera, paint: impl FnOnce(&egui::Painter, egui::Rect, &Camera)) {
+fn workspace_geometry(
+    ui: &mut egui::Ui,
+    label: &str,
+    footprint: bool,
+    camera: &mut Camera,
+    height: Option<f32>,
+    paint: impl FnOnce(&egui::Painter, egui::Rect, &Camera),
+) {
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
+            if height.is_some() {
+                ui.label(if footprint { "Footprint" } else { "Symbol" });
+            }
             for (text, factor, action) in [("−", 0.8, "Zoom out"), ("+", 1.25, "Zoom in"), ("Fit", 0., "Fit")] {
                 let response = pcbcraft_chrome::controls::button(ui, text);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{action} {label}")));
@@ -210,7 +235,10 @@ fn workspace_geometry(ui: &mut egui::Ui, label: &str, footprint: bool, camera: &
                 }
             }
         });
-        let (rect, response) = properties::geometry_preview(ui, label, footprint);
+        let (rect, response) = match height {
+            Some(height) => properties::geometry_preview_sized(ui, label, footprint, height),
+            None => properties::geometry_preview(ui, label, footprint),
+        };
         if response.double_clicked() {
             *camera = Camera::default();
         }
@@ -222,7 +250,7 @@ fn workspace_geometry(ui: &mut egui::Ui, label: &str, footprint: bool, camera: &
 
 /// Part mapping inspection highlights a terminal on its actual unit, including non-default units.
 pub(super) fn part_symbol(ui: &mut egui::Ui, definition: &pcbcraft_engine::schematic::SymbolDefinition, terminal: Option<&str>, camera: &mut Camera) {
-    workspace_geometry(ui, "Symbol preview", false, camera, |painter, rect, camera| {
+    workspace_geometry(ui, "Symbol preview", false, camera, None, |painter, rect, camera| {
         let unit = terminal
             .and_then(|terminal| definition.units().iter().find(|unit| unit.pins().iter().any(|pin| pin.number == terminal)))
             .unwrap_or(definition.default_unit());
@@ -231,7 +259,7 @@ pub(super) fn part_symbol(ui: &mut egui::Ui, definition: &pcbcraft_engine::schem
 }
 /// The selected table row identifies one physical pad without creating a board assignment.
 pub(super) fn part_footprint(ui: &mut egui::Ui, definition: &FootprintDefinition, pad: Option<&str>, camera: &mut Camera) {
-    workspace_geometry(ui, "Footprint preview", true, camera, |painter, rect, camera| {
+    workspace_geometry(ui, "Footprint preview", true, camera, None, |painter, rect, camera| {
         paint_footprint(painter, rect, definition, camera.zoom, camera.pan);
         if let Some(pad) = pad.and_then(|number| definition.pads.iter().find(|pad| pad.number == number)) {
             let mut extent = definition

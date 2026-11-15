@@ -1199,8 +1199,13 @@ impl PcbApp {
             &self.views.active.schematic.selection,
             &self.views.active.board.selection,
         );
+        // Panels belong to individual hosts; apply personal criteria to each bound chooser.
+        self.parts.set_filter(self.library_preferences.filter.clone());
         if let Some(pick) = self.parts.show(ui, area, self.browser.rect(), source, self.session.libraries(), self.session.project()) {
             match pick {
+                crate::parts_browser::Pick::Filters => {
+                    self.dialog = crate::Dialog::Preferences(crate::preferences::PreferencesWindow::at_libraries(self.preferences));
+                }
                 crate::parts_browser::Pick::Place(placement) => self.begin_template(placement),
                 crate::parts_browser::Pick::Unit { definition, component, unit, value } => {
                     self.views.active.schematic.tool = Some(crate::schematic_canvas::Tool::PlaceSymbol {
