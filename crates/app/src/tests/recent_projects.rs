@@ -10,7 +10,7 @@ use super::*;
 
 /// The file worker keeps requesting repaints, so step until its result is adopted rather than
 /// asking the harness to wait for idle while I/O may still be running.
-fn finish_file(h: &mut Harness<'_, PcbApp>) {
+pub(super) fn finish_file(h: &mut Harness<'_, PcbApp>) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while h.state().files.busy() && Instant::now() < deadline {
         h.run_steps(1);
