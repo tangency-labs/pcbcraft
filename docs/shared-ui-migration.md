@@ -556,7 +556,8 @@ Saved project layouts now use File's shared menu surface and aligned rows instea
 of persistent title-bar tabs. The project title uses the available bar width,
 truncating only when the utility controls and drag space need the room. Pane headers retain the pinned Craft tab shape and
 close control, with the host extending each canvas palette/grid behind unused
-header space. Tab surfaces and selection ink use the workspace palette so labels
+header space. Headers consume their exact height without trailing widget spacing,
+so the canvas meets the tab edge without an unpainted band. Tab surfaces and selection ink use the workspace palette so labels
 remain readable over either canvas in both themes. The existing background projection
 serves ribbon margins and pane headers after camera navigation. Title-bar movement
 follows the pinned Craft helper's drag threshold, keeping ordinary clicks in the

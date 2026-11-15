@@ -54,7 +54,7 @@ pub fn panel_area(mut area: Rect, panes: &[Rect], headers: bool, spacing: f32) -
                 area.max.y = area.bottom().min(pane.top() - spacing);
             }
         }
-        area.min.y = (top + header_height() + spacing).min(area.bottom());
+        area.min.y = (top + header_height()).min(area.bottom());
     }
     area
 }
@@ -73,6 +73,7 @@ pub enum PaneAction {
 /// Show the current document path in a split or detached pane's header. Focus changes its
 /// underline, leaving the workspace stationary. Inset tabs retain rounded Craft corners;
 /// the host paints the canvas backdrop through the unused header space.
+/// The header consumes exactly its height, without trailing widget spacing before the canvas.
 /// Long paths elide from the left to retain the sheet name;
 /// accessibility and hover text always contain the complete path. Return a focus click and
 /// an optional view action; the close button dismisses only this pane, and native placement
@@ -81,7 +82,10 @@ pub enum PaneAction {
 /// Detached native panes also expose a leading Dock button, independent of header length.
 pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detached: bool) -> (bool, Option<PaneAction>) {
     let t = Tokens::get();
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), header_height()), Sense::hover());
+    ui.spacing_mut().item_spacing.y = spacing;
     let font = FontId::proportional(t.font_label);
     let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text);
     let close_width = t.space_24;
