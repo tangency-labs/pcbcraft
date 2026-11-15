@@ -161,6 +161,20 @@ fn compact_columns_stack_selection_filters_under_the_card_above() {
     }
 }
 
+/// With DRC and a right-docked Selection filters card both open in Compact, the DRC card starts
+/// below the filters stacked under Properties instead of covering them.
+#[test]
+fn compact_drc_card_stacks_below_right_docked_selection_filters() {
+    let mut h = fixture(true);
+    h.state_mut().views.active.board.drc.open = true;
+    h.state_mut().preferences.panel_style = PanelStyle::Compact;
+    h.run();
+    let (properties, filters, drc) = (card_rect(&h, "Move Properties"), card_rect(&h, "Move Selection filters"), card_rect(&h, "Collapse DRC"));
+    assert!((filters.top() - properties.bottom()).abs() < 1.0, "filters stay under Properties: {properties:?} {filters:?}");
+    assert!(!drc.intersects(filters.shrink(0.5)), "DRC must not cover Selection filters: {filters:?} {drc:?}");
+    assert!((drc.top() - filters.bottom()).abs() < 1.0, "DRC starts right under the filters: {filters:?} {drc:?}");
+}
+
 /// The whole card around the header control labelled `label`: the smallest visible area holding it.
 fn card_rect(h: &Harness<'_, PcbApp>, label: &str) -> egui::Rect {
     let header = h.get_by_label(label).rect();

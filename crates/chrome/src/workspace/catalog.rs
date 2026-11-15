@@ -272,7 +272,8 @@ impl Panel {
         {
             let position = Self::snap(canvas, pointer);
             if position != Position::Floating {
-                let target = self.rect(canvas, browser, position, compact);
+                // Preview the docked frame the release will produce, not the dragged card's own.
+                let target = self.rect(canvas, browser, position, PanelStyle::compact(ui.ctx()));
                 let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("parts_snap_preview")));
                 painter.rect_filled(target, super::FLOATING_RADIUS, t.accent_soft.gamma_multiply(0.7));
                 painter.rect_stroke(target, super::FLOATING_RADIUS, Stroke::new(2.0, t.accent), StrokeKind::Inside);

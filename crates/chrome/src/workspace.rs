@@ -1312,9 +1312,11 @@ pub(crate) fn floating_card_min_height() -> f32 {
     card_header_height() + 2.0 * FLOATING_GAP
 }
 
-/// Minimum area height for a docked card; a compact card omits the floating edge clearance.
+/// Minimum area height for a docked card's header and frame. Floating style adds the floating
+/// edge clearance to [`card_header_height`]; Compact uses its own tighter inset, no stroke and
+/// no edge gap, so a Compact header fits in 34 points.
 pub(crate) fn panel_min_height(compact: bool) -> f32 {
-    card_header_height() + if compact { 0.0 } else { 2.0 * FLOATING_GAP }
+    if compact { FLOATING_HEADER + COMPACT_MARGIN.sum().y } else { card_header_height() + 2.0 * FLOATING_GAP }
 }
 
 /// Anchor a workspace card to either canvas edge, retaining shared dimensions and collapse behavior.
@@ -1902,5 +1904,31 @@ mod ribbon_tests {
 
         PanelStyle::Floating.publish(&ctx);
         assert_eq!(panel_frame(&ctx, false), floating.0);
+    }
+
+    /// A Compact card's 34-point header (24-point title plus its 10-point inset) still shows in a
+    /// 40-point area, where the Floating card, which needs its edge gaps, is omitted.
+    #[test]
+    fn compact_card_header_fits_a_short_area() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        let area = Rect::from_min_size(pos2(0.0, 100.0), vec2(400.0, 40.0));
+        for (style, shown) in [(PanelStyle::Compact, true), (PanelStyle::Floating, false)] {
+            let mut rect = Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                style.publish(ui.ctx());
+                rect = floating_card_width(ui, egui::Id::unique("short card"), "Card", area, false, true, 200.0, |ui| {
+                    ui.label("body");
+                })
+                .0;
+            });
+            output.textures_delta.clear();
+            assert_eq!(rect.is_positive(), shown, "{style:?}: {rect:?}");
+            if shown {
+                assert!(rect.height() <= area.height() + 0.5 && rect.top() >= area.top(), "{style:?}: {rect:?}");
+            }
+        }
+        assert!((panel_min_height(true) - 34.0).abs() < f32::EPSILON);
+        assert!((panel_min_height(false) - (card_header_height() + 2.0 * FLOATING_GAP)).abs() < f32::EPSILON);
     }
 }

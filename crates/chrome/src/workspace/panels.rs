@@ -449,6 +449,9 @@ impl Panel {
         {
             let side = Self::snap(canvas, pointer);
             if side != Position::Floating {
+                // Preview the docked gap the release will produce, not the dragged card's own.
+                let docked_gap = if slot || super::PanelStyle::compact(ui.ctx()) { 0.0 } else { FLOATING_GAP };
+                let bounds = canvas.shrink(docked_gap);
                 let target = Rect::from_min_size(
                     pos2(if side == Position::Left { bounds.left() } else { bounds.right() - width }, bounds.top()),
                     vec2(width, bounds.height()),
