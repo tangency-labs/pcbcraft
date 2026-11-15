@@ -2057,3 +2057,129 @@ fn main_window_title_names_its_document_like_a_detached_window() {
     assert!(h.state().views.hosts.contains_key(&HostId::ROOT), "the arrangement recreates the main window");
     assert_eq!(titles, [titled.as_str()]);
 }
+
+/// Closing the originating detached editor expires its shared Rules draft without authoring
+/// or retargeting it to the still-open root editor.
+#[test]
+fn closing_detached_editor_expires_net_class_rules() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let root = h.state().views.active.id();
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    h.state_mut().views.bind(child);
+    h.state_mut().begin_rules();
+    h.state_mut().views.bind(root);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Rules(_)));
+    let before = h.state().session.inspect();
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Embedded setup pages remain in their captured native host across page/focus changes.
+/// Closing that host discards only the draft; another window cannot edit behind the modal.
+#[test]
+fn embedded_rule_pages_stay_in_their_detached_setup_host() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout in new window");
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().begin_board_setup(child);
+    h.run_steps(5);
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let at = child_rect(&peer, "Net classes").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    let at = child_rect(&peer, "New class").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    child_rect(&peer, "Class name");
+    assert!(h.query_by_label("Class name").is_none(), "rule content must not appear in the main window");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    focus(&mut h, &peer, false);
+    h.run_steps(3);
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let at = {
+        let peer = peer.borrow();
+        let bounds = peer
+            .nodes
+            .values()
+            .find(|node| node.role() == egui::accesskit::Role::TextInput && node.label() == Some("Class name"))
+            .unwrap()
+            .bounds()
+            .unwrap();
+        pos2((bounds.x0 + bounds.x1) as f32 / 2., (bounds.y0 + bounds.y1) as f32 / 2.)
+    };
+    child_click_at(&mut h, &peer, at);
+    peer.borrow_mut().events.push(Event::Text("Child class".into()));
+    h.run_steps(3);
+    let at = child_rect(&peer, "Save class").center();
+    child_click_at(&mut h, &peer, at);
+    assert_eq!(h.state().session.project().unwrap().net_classes().definitions[0].name, "Child class");
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let at = child_rect(&peer, "Board defaults").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    child_rect(&peer, "Use built-in defaults");
+    child_rect(&peer, "Apply board defaults");
+    assert!(h.query_by_label("Use built-in defaults").is_none());
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Standalone Analyze/Rules content follows the same source-host placement contract.
+#[test]
+fn standalone_rule_modal_stays_in_its_detached_source_host() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout in new window");
+    let root = h.state().views.hosts[&HostId::ROOT].focused;
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().views.bind(child);
+    h.state_mut().begin_rules();
+    h.state_mut().views.bind(root);
+    h.run_steps(5);
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    child_rect(&peer, "New class");
+    assert!(h.query_by_label("New class").is_none());
+    let at = child_rect(&peer, "Cancel").center();
+    child_click_at(&mut h, &peer, at);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Auxiliary main workspaces cannot claim a setup dialog owned by a detached project view.
+#[test]
+fn library_main_does_not_claim_detached_rule_pages() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout in new window");
+    let root = h.state().views.hosts[&HostId::ROOT].focused;
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":root.0,"workspace":"library","placement":"here"})).unwrap();
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().begin_board_setup(child);
+    h.run_steps(5);
+    let at = child_rect(&peer, "Board defaults").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    child_rect(&peer, "Use built-in defaults");
+    assert!(h.query_by_label("Use built-in defaults").is_none());
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let at = child_rect(&peer, "Cancel").center();
+    child_click_at(&mut h, &peer, at);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

@@ -1,0 +1,246 @@
+{
+  "initial": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4015764879295602
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 13.249544454971328
+    },
+    {
+      "name": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace"
+      ],
+      "exit": 0,
+      "seconds": 78.46023391699418
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 7.704065300989896
+    },
+    {
+      "name": "deny",
+      "command": [
+        "cargo",
+        "deny",
+        "--locked",
+        "check",
+        "licenses",
+        "sources",
+        "bans"
+      ],
+      "exit": 0,
+      "seconds": 0.6805712360655889
+    },
+    {
+      "name": "harness-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 8.435660723014735
+    },
+    {
+      "name": "harness-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "performance::"
+      ],
+      "exit": 0,
+      "seconds": 34.813184158992954
+    },
+    {
+      "name": "python",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test*performance*.py"
+      ],
+      "exit": 0,
+      "seconds": 0.45983506296761334
+    },
+    {
+      "name": "node",
+      "command": [
+        "node",
+        "--no-warnings",
+        "--experimental-vm-modules",
+        "--test",
+        "scripts/test-performance-page.cjs",
+        "scripts/test-rendered-performance-page.cjs"
+      ],
+      "exit": 0,
+      "seconds": 0.22443069505970925
+    },
+    {
+      "name": "wasm-harness",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--example",
+        "board_perf_web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 7.553357946919277
+    },
+    {
+      "name": "web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 32.402995832962915
+    }
+  ],
+  "affected": [
+    {
+      "name": "resize-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4121007819194347
+    },
+    {
+      "name": "resize-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 3.744259597035125
+    },
+    {
+      "name": "resize-app-chrome",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "-p",
+        "pcbcraft-chrome"
+      ],
+      "exit": 0,
+      "seconds": 53.06560993299354
+    },
+    {
+      "name": "resize-web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 26.646090283058584
+    },
+    {
+      "name": "resize-harness-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 2.9371965940808877
+    },
+    {
+      "name": "final-release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--example",
+        "board_perf"
+      ],
+      "exit": 0,
+      "seconds": 21.52259388298262
+    }
+  ]
+}

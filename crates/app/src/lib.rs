@@ -46,6 +46,7 @@ mod library_workspace;
 mod live_control;
 mod native_part_properties;
 mod native_sources;
+mod net_class_editor;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
@@ -60,6 +61,7 @@ mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
+mod rule_diagram;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
@@ -204,6 +206,7 @@ enum Dialog {
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
+    Rules(Box<net_class_editor::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -2187,6 +2190,7 @@ impl PcbApp {
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
+            Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
@@ -2506,7 +2510,10 @@ impl PcbApp {
             self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         }
         let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
-        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog)) && self.arrangement_dialog_host().is_none();
+        let enabled = !self.project_action_pending()
+            && (main || (!self.home && !had_dialog))
+            && self.arrangement_dialog_host().is_none()
+            && self.rule_dialog_host().is_none();
         self.app_bar(ui, enabled);
         ui.add_enabled_ui(enabled, |ui| {
             let workspace = if self.home && main {
@@ -2548,6 +2555,7 @@ impl PcbApp {
         self.integrated_titlebar = integrated;
         let dialog_host = self
             .arrangement_dialog_host()
+            .or_else(|| self.rule_dialog_host())
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
             .or_else(|| self.external_paste_options_host())

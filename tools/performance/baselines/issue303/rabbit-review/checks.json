@@ -1,0 +1,98 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit": 0,
+    "seconds": 1.4253726800670847
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "-p",
+      "pcbcraft-chrome",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0,
+    "seconds": 7.61833637394011
+  },
+  {
+    "name": "app-chrome",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "-p",
+      "pcbcraft-chrome",
+      "--lib"
+    ],
+    "exit": 0,
+    "seconds": 54.38480119802989
+  },
+  {
+    "name": "class-consumers",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-engine",
+      "board::class_rules::tests",
+      "--lib"
+    ],
+    "exit": 0,
+    "seconds": 19.6248353170231
+  },
+  {
+    "name": "wasm",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit": 0,
+    "seconds": 17.96259905595798
+  },
+  {
+    "name": "web-package",
+    "command": [
+      "trunk",
+      "build",
+      "--release"
+    ],
+    "exit": 0,
+    "seconds": 31.42443864105735
+  },
+  {
+    "name": "native-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "pcbcraft",
+      "-p",
+      "pcbcraft-cli"
+    ],
+    "exit": 0,
+    "seconds": 6.871332269976847
+  }
+]

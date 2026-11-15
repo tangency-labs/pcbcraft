@@ -178,6 +178,12 @@ impl Graph {
         self.by_anchor.get(anchor).copied()
     }
 
+    /// Read exact current endpoint identity for selection without accepting junctions as saved
+    /// registry anchors. A junction may instead resolve through its current electrical group.
+    pub(super) fn endpoint_anchor(&self, sheet: SheetTarget, endpoint: WireEndpoint) -> Option<&Anchor> {
+        self.endpoints.get(&(sheet.id(), endpoint))
+    }
+
     /// Requalify transient keys for the first board's whole-scope transfer, preserving memberships.
     pub fn requalify(&mut self, scope: Scope) {
         for network in &mut self.networks {

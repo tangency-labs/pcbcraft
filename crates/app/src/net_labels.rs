@@ -500,6 +500,7 @@ impl PcbApp {
         edit.set_units(self.preferences.units);
         let mut apply = false;
         let mut more = false;
+        let mut net_rules = false;
         let enabled = matches!(self.dialog, Dialog::None);
         let collapsed = self.views.active.schematic.properties.collapsed;
         let width = pcbcraft_chrome::workspace::panels::card_width(canvas, true);
@@ -528,6 +529,10 @@ impl PcbApp {
                     }
                 }
                 more = pcbcraft_chrome::controls::button(ui, "More properties ↗").clicked();
+                net_rules = ui
+                    .add_enabled_ui(edit.read().as_ref() == Ok(&current.label), |ui| pcbcraft_chrome::controls::button(ui, "Net rules…"))
+                    .inner
+                    .clicked();
             },
         );
         if collapse {
@@ -546,6 +551,9 @@ impl PcbApp {
         if more {
             edit.focused = false;
             self.dialog = Dialog::NetLabel(Box::new(edit.clone()));
+        }
+        if net_rules {
+            self.begin_net_rules();
         }
         self.views.active.schematic.properties.net_draft = Some(edit);
         self.views.active.schematic.properties.rect = rect;

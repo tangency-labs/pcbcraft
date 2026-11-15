@@ -1,0 +1,127 @@
+{
+  "scope": "Original PCB constraint illustrations and common Board Rules/class/effective form layout",
+  "workspace_tests": {
+    "passed": 1863,
+    "ignored": 11
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4944390470627695
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 6.231465209042653
+    },
+    {
+      "name": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace"
+      ],
+      "exit": 0,
+      "seconds": 117.70148096396588
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 2.2773671169998124
+    },
+    {
+      "name": "harness-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 4.2437572160270065
+    },
+    {
+      "name": "harness-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "performance::"
+      ],
+      "exit": 0,
+      "seconds": 26.121808322961442
+    },
+    {
+      "name": "web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 27.01266832498368
+    },
+    {
+      "name": "native-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "pcbcraft",
+        "-p",
+        "pcbcraft-cli"
+      ],
+      "exit": 0,
+      "seconds": 0.918585856910795
+    }
+  ],
+  "focused": "Seven class-editor tests and four board-rule tests passed. Extended real-control tests verify readable image semantics, disabled built-in fields and separated/bounded geometry/input cells at widths 1200/700/400. Existing tests exercise exact units, reset, history, stale drafts, live MCP authority and lower-field reveal.",
+  "visual_review": "Native GPU readback at 1280x1000 dark and 700x820 light: board, class and effective pages; lower board preferences also captured. Arrows reviewed for copper spacing, track width, board edge spacing, radial annular ring, outside diameter and drill diameter.",
+  "browser": "Packaged Chrome148/ANGLE SwiftShader: opened class/board forms, toggled built-ins, typed 0.35 mm into a draft, scrolled preferences, resized to 760x640, reached final field with footer visible, Cancelled. No page errors.",
+  "contracts": "Presentation only; same board/class commands, resolver, nanometre precision, history and saved format. No new dependencies or external artwork.",
+  "limits": [
+    "No new performance or native compositor/endurance qualification",
+    "Illustrations show measured boundaries, not a scaled preview of entered values",
+    "User native app/session preserved; restart required"
+  ],
+  "publication": "Local only; no push or PR"
+}

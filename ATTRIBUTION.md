@@ -1382,3 +1382,62 @@ routing halo, ribbon dimensions and existing message surface through chrome;
 no new generic control or toolkit gap was required. Command-built tests use
 original PCBcraft parts and production codecs. No external EDA implementation,
 asset, dependency or toolkit revision was introduced.
+
+## Shared net-class editor
+
+The #303 Rules workflow, current-selection projection and regressions are original
+MIT OR Apache-2.0 PCBcraft work. The form composes the pinned Craft settings modal,
+segmented tabs, choices, search, checkboxes, fields and footer through existing
+`crates/chrome` adapters. Hard/preference grouping, sparse opinions and provenance
+remain host domain composition; the toolkit does not provide an electronics rule
+editor. No custom generic control, dependency upgrade, external EDA implementation,
+library asset or native format change was introduced.
+
+The pinned modal host does not schedule a settling paint after viewport bounds
+change. The existing chrome settings-form adapter records those bounds and requests
+one extra frame, retaining the shared surface, positioning and input behavior.
+Class/net choices use the adapter's existing bounded-width option so browsing can
+show useful names and target details. No toolkit dependency was changed.
+
+The Rules layout follow-up composes the same settings section treatment, bounded
+fields, checkboxes and semantic warning band through `chrome::rule_form`. The
+pinned selectable table always owns a horizontal scroll region and adds row focus
+targets; nested in the vertical form, it prevented accessibility reveal from
+reaching lower controls. The adapter therefore reserves aligned cells around
+shared controls while the form retains one vertical scroll owner. It adds no
+custom control painting, model policy, dependency or toolkit revision. Source
+names and net references are presentation only; exact identities remain retained
+in the expanded details and native commands.
+
+The active-source follow-up adds an original read-only classification over the
+existing resolver result, without changing resolution, commands or saved data.
+The same qualified form rows distinguish class contributions, saved effective
+rules and unsaved assignment previews; technical details identify active,
+overridden, less restrictive and conflicting contributions. No dependency,
+external source, custom drawing or shared toolkit revision was introduced.
+
+The dimensional illustrations and boundary descriptions in Rules are original
+PCBcraft work: copper spacing, board edge spacing, track width, via outer/drill
+diameters and radial annular ring. They use existing theme colors and vector
+geometry; no KiCad/JLCPCB artwork, external source, asset or dependency was used.
+The pinned toolkit has no PCB constraint illustration component. Electronics
+geometry stays in the app, while the chrome form adapter reserves its column and
+continues to compose shared fields, checkboxes, modal surfaces and scrolling.
+
+Board Setup's Design rules destinations reuse its existing Craft navigation rail
+and compact selector to open the same revision-bound board/class editors. Draft
+retention and source-view checks remain host behavior; no new generic control,
+asset, dependency or toolkit revision was introduced.
+
+The composition follow-up keeps source-view/snapshot collection at the application
+orchestration boundary. Draft and selected-net helpers receive explicit immutable
+model/selection inputs, and board/class dimensional inputs share one chrome
+adapter over the same qualified Craft field. Commands, resolution, source
+authority and saved data remain unchanged; no new dependency or toolkit gap.
+
+The embedded Rules follow-up extracts content-only board/class editors and typed
+navigation intents for composition inside either Board Setup or the standalone
+Rules modal. The shell owns revision-checked commands, retained drafts and native
+source-window placement. It reuses the existing Craft page rail/selector, fields,
+scroll host and footer; no nested modal, new generic control, dependency or artwork
+was introduced.

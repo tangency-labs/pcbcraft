@@ -810,7 +810,7 @@ impl PcbApp {
                 };
             }
         }
-        let dialog_host = self.arrangement_dialog_host().unwrap_or(self.views.main);
+        let dialog_host = self.arrangement_dialog_host().or_else(|| self.rule_dialog_host()).unwrap_or(self.views.main);
         if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         } else if !matches!(self.dialog, Dialog::None) {

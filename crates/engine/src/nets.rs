@@ -7,6 +7,7 @@ pub(crate) use classes::target_schema as class_target_schema;
 pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
 mod graph;
 mod reconcile;
+mod selection;
 mod validation;
 pub(crate) use anchor::schema as anchor_schema;
 pub use anchor::{Anchor, AnchorKind, Scope, ScopeKind};

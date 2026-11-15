@@ -1,0 +1,20 @@
+{
+  "base": "a4cdd5430e5608c3dde766d853f34e58a30b5c3f",
+  "files": {
+    "ATTRIBUTION.md": "1ed2155006b2ca6b383ed7d55e9012a491cab326557e062f02572ba66e7959e1",
+    "crates/app/src/board_setup.rs": "c1bc11a604a0f46ea7bb17efb684e16483e4c3e17007763b8cc95d8f16afef49",
+    "crates/app/src/board_setup/tests.rs": "247834ec4309e025b5aeff76b327c0d1ff152e6ecd7286265dc47217be104dc9",
+    "crates/app/src/net_class_editor.rs": "8584af9f5e2817acc9cc74fee324d1a6cd51967568ca8244f7ccd9faaacc5741",
+    "crates/chrome/src/board_setup.rs": "c0df868cdc46c1ecc23f8cda1e2fc6b2fb2282a6662c765d557bbc60b81bdf8e",
+    "docs/capabilities.md": "f5c0ea9e0d7a79e65e4b3c38b7b1c9ff06a44b4804a42f09534ef589ca483d82",
+    "docs/net-class-editor.md": "2948c8491f078e023083337874c6e6f1ed0bc966ddc70c4e7a7dc406632bfa09",
+    "docs/quickstart.md": "b8f2682dabdb46711cc3afc189dcb8f155623dc885addfbcee06454743c3a0c1"
+  },
+  "native_renderer": "Existing isolated GPU readback helper, production code unchanged since these captures; later third regression added no rendering changes.",
+  "render_helper_sha256": "eae5657c6076c57e3b22a440525bdb60a975d97ff71200ff34caa5073a48f230",
+  "browser_bundle": {
+    "pcbcraft-web-596d53dfd418ee03.js": "a1b828cb0c73de3fc14cac9b42a5a6204e175a3293af5b83af88c03ae323c4af",
+    "pcbcraft-web-596d53dfd418ee03_bg.wasm": "67f0b8e89f783815d88099ada60710317cd0701f48f2ef2906be0fa758bb4f5d",
+    "index.html": "ba86da2648fe7e182fa41073e1c6ed3769946e3913cc0fa3215d4bc5b5dc7eda"
+  }
+}

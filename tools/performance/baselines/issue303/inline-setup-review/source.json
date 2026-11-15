@@ -1,0 +1,20 @@
+{
+  "base_head": "4e77298409b889d4aa3f176e9623de92f58ad50e",
+  "files": {
+    "ATTRIBUTION.md": "7001ead7e23eadc5b34e4fec93970ea560398de58307f448eb6099145c84199d",
+    "crates/app/src/board_rules.rs": "2314a99d13430a9dbfda5a255b5cce02033313fa2843020a89d52431b052303e",
+    "crates/app/src/board_setup.rs": "1bdd017623e237d48aa1dc2a5fdd8fb8dc6abaf2d9209d306de81c8cad0c0440",
+    "crates/app/src/board_setup/tests.rs": "9b9598f916891ef04da9367ad20fc9e997036c37fa813f741223973d4737f008",
+    "crates/app/src/editor_windows.rs": "853ef524f7f182ef56794e3ad46442a40108bec39afa62bcbe0d20dcb4c11eb8",
+    "crates/app/src/lib.rs": "b8b877315205af130bc6bb3d13fd063075b529297562a7711d22e44764ca09d4",
+    "crates/app/src/library_editors.rs": "dc89abd07cb603330fba07c9931cd2301d77a7b18ceeccb067e299cb1b52ab31",
+    "crates/app/src/library_workspace.rs": "65b44e73c698909009a522066a4fc9f031f999a57523b487858b47a787aa9f3e",
+    "crates/app/src/net_class_editor.rs": "430a44f86f565ec175bcd4a7687832d1a8ab1c708e625b1878456e988fef3d15",
+    "crates/app/src/net_class_editor/tests.rs": "3549f58761f9c0afcc5d20fefaf5b5bccc1c026402cac34e71e9f052b623dd7c",
+    "crates/app/src/tests/detached_editors.rs": "a6a31c07df6895428e498c282d7904162276c605380bc44be749c422ed2f111c",
+    "crates/chrome/src/board_setup.rs": "950ef31e3286e6a9e7ee9be68bb00b44fba016e533c388ae93a2a7b0920e4ea9",
+    "docs/net-class-editor.md": "f66508d58bd78d710ddce9ef55ee9a65afc411076f161c3e49fbb786890c5047",
+    "docs/quickstart.md": "fa710d5c38c40b0da8e150b6c1edff47274cfa747963732391c6e3cac3dd4a1f"
+  },
+  "snapshot_gpu_test": "Temporary source snapshot with test-only WGPU capture; no production renderer dependency change"
+}

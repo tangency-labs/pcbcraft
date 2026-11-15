@@ -1,0 +1,9 @@
+{
+  "base": "430c44240ca2f30961aab1b24cea5fae6212f16d",
+  "files": {
+    "crates/app/src/net_class_editor.rs": "7bc8e9c0b0ed12afc81dc882c300176434b69053e292704a10cabe4109ec13c1",
+    "crates/app/src/net_class_editor/tests.rs": "906c4060ec764899966fadc39534b40b3576c33ca14c6e3842ea7f514d33c51d",
+    "docs/net-class-editor.md": "71e5b702e15a4a7cc86788503522dfbeab6bc2109f8cd20e20d3bf9e47f797e1"
+  },
+  "render_helper": "/tmp/pcbcraft303-render; isolated existing GPU readback helper, production dependencies unchanged"
+}

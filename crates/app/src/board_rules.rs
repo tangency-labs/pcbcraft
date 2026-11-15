@@ -1,10 +1,8 @@
 //! A disposable rule draft uses the shared settings modal and engine transaction.
 use crate::{Dialog, PcbApp, ViewInput};
-use pcbcraft_chrome::{board_setup as form, properties, units};
-use pcbcraft_engine::board::{
-    rules::{LIMIT_FIELDS, PREFERENCE_FIELDS, Values},
-    view::BoardTarget,
-};
+use pcbcraft_chrome::{controls, rule_form as form, shell, units};
+use pcbcraft_engine::board::{rules::Values, view::BoardTarget};
+use pcbcraft_engine::net_classes::Property;
 use serde_json::json;
 
 /// Captured revision and exact source integers keep stale drafts and rounded units from editing.
@@ -14,6 +12,7 @@ pub(super) struct Edit {
     board: BoardTarget,
     unit: units::Unit,
     builtin: bool,
+    original_builtin: bool,
     fields: Vec<Field>,
     error: Option<String>,
 }
@@ -21,20 +20,116 @@ pub(super) struct Edit {
 /// One labelled dimension retains its source precision until the user edits its text.
 #[derive(Debug)]
 struct Field {
-    key: &'static str,
+    property: Property,
     label: &'static str,
     original: i64,
+    captured: i64,
     initial: String,
     text: String,
 }
 
 impl Edit {
+    /// Capture immutable board values for either a standalone modal or an embedded setup page.
+    pub(super) fn capture(source: ViewInput, board: pcbcraft_engine::board::view::BoardView<'_>, unit: units::Unit) -> Self {
+        let values = json!(board.effective_rules().values);
+        let fields = Property::ALL
+            .into_iter()
+            .map(|property| {
+                let original = values[property.as_str()].as_i64().unwrap_or_default();
+                let text = units::edit_label(original, unit);
+                Field { property, label: crate::rule_diagram::label(property), original, captured: original, initial: text.clone(), text }
+            })
+            .collect();
+        Self {
+            source,
+            board: board.target,
+            unit,
+            builtin: board.authored_rules().is_none(),
+            original_builtin: board.authored_rules().is_none(),
+            fields,
+            error: None,
+        }
+    }
+    /// Retain the captured source for window placement and revision validation.
+    pub(super) fn source(&self) -> ViewInput {
+        self.source
+    }
+    /// Advance authority only after the containing host's own validated command; text is retained.
+    pub(super) fn context_after_owned_command(&mut self, source: ViewInput) {
+        self.source = source;
+    }
+    /// Whether this page can publish; the containing host separately validates authority.
+    pub(super) fn can_apply(&self) -> bool {
+        self.builtin || self.values().is_ok()
+    }
+    /// Produce shared command values without publishing or changing history.
+    pub(super) fn rules(&self) -> Result<serde_json::Value, String> {
+        if self.builtin { Ok(serde_json::Value::Null) } else { self.values().map(|values| json!(values)) }
+    }
+    /// Detect edits in this page without losing exact original text at display-unit boundaries.
+    pub(super) fn changed(&self) -> bool {
+        self.builtin != self.original_builtin
+            || self.values().map_or(true, |values| self.fields.iter().any(|field| field.property.value(&values) != field.captured))
+    }
+    /// Paint editor content only; the host supplies navigation, scrolling and actions.
+    pub(super) fn show(&mut self, ui: &mut egui::Ui, current: bool) {
+        let edit = self;
+        let value = edit.values();
+        ui.horizontal(|ui| {
+            if controls::checkbox(ui, &mut edit.builtin, "Use built-in defaults").changed() && edit.builtin {
+                edit.reset_values();
+            }
+            if edit.changed() && controls::button(ui, "Revert changes").clicked() {
+                edit.builtin = edit.original_builtin;
+                for field in &mut edit.fields {
+                    field.original = field.captured;
+                    field.initial = units::edit_label(field.captured, edit.unit);
+                    field.text = field.initial.clone();
+                }
+                edit.error = None;
+            }
+        });
+        for preferred in [false, true] {
+            let mut fields: Vec<_> = edit.fields.iter_mut().filter(|field| field.property.is_preference() == preferred).collect();
+            form::rows(
+                ui,
+                if preferred { "board_preferences" } else { "board_limits" },
+                if preferred { "Routing preferences" } else { "Hard limits" },
+                [if edit.builtin { "Built-in value" } else { "Board value" }, "Constraint"],
+                &mut fields,
+                |ui, field, cell| match cell {
+                    form::Cell::Rule => {
+                        ui.label(field.label);
+                    }
+                    form::Cell::Diagram => crate::rule_diagram::show(ui, field.property),
+                    form::Cell::Value => {
+                        form::length_field(ui, &mut field.text, !edit.builtin, field.label);
+                    }
+                    form::Cell::Source => {
+                        ui.label(shell::dim(if preferred {
+                            "Preference"
+                        } else if field.property.is_maximum() {
+                            "Upper limit"
+                        } else {
+                            "Lower limit"
+                        }));
+                    }
+                },
+            );
+        }
+        if !current {
+            ui.label(shell::error("The project changed. Close and reopen Rules to continue."));
+        }
+        if let Some(error) = edit.error.as_deref().or_else(|| if edit.builtin { None } else { value.as_ref().err().map(String::as_str) }) {
+            ui.label(shell::error(error));
+        }
+    }
     /// Stage exact built-in dimensions when resetting intent, so disabled fields display the
     /// values Apply will restore. Cancelling still retains the original authored record.
     fn reset_values(&mut self) {
         let values = json!(Values::default());
         for field in &mut self.fields {
-            field.original = values[field.key].as_i64().unwrap_or_default();
+            field.original = values[field.property.as_str()].as_i64().unwrap_or_default();
             field.initial = units::edit_label(field.original, self.unit);
             field.text = field.initial.clone();
         }
@@ -44,8 +139,9 @@ impl Edit {
     /// Preserve untouched integers while parsing edited fields in the captured display unit.
     fn values(&self) -> Result<Values, String> {
         let mut value = json!({});
-        for Field { key, original, initial, text, .. } in &self.fields {
-            value[*key] = json!(if initial == text { *original } else { units::parse_length(text, self.unit).map_err(|e| e.to_string())? });
+        for Field { property, original, initial, text, .. } in &self.fields {
+            value[property.as_str()] =
+                json!(if initial == text { *original } else { units::parse_length(text, self.unit).map_err(|e| e.to_string())? });
         }
         let values: Values = serde_json::from_value(value).map_err(|e| e.to_string())?;
         values.validate()?;
@@ -55,96 +151,66 @@ impl Edit {
 
 impl PcbApp {
     /// Open the physical board's rules from either editor without mutating the design.
+    #[cfg(test)]
     pub(super) fn begin_board_rules(&mut self) {
         if !matches!(self.dialog, Dialog::None) || self.files.busy() || self.project_action_pending() {
             return;
         }
         let Some(source) = self.views.active.input(&self.session) else { return };
-        let Some(project) = self.views.active.snapshot(&self.session) else { return };
+        self.begin_board_rules_from(source);
+    }
+
+    /// Keep a shared Rules transition bound to its original view, including split/detached hosts.
+    pub(super) fn begin_board_rules_from(&mut self, source: ViewInput) {
+        if !matches!(self.dialog, Dialog::None) || !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session)) {
+            return;
+        }
+        let Some(project) = self.views.view(source.view()).and_then(|view| view.snapshot(&self.session)) else { return };
         let Some(board) = project.board_target().and_then(|t| project.board_view(t)) else { return };
         let unit = self.preferences.units;
-        let values = json!(board.effective_rules().values);
-        let labels = [
-            "Copper clearance",
-            "Minimum track width",
-            "Board edge clearance",
-            "Minimum annular ring",
-            "Minimum via diameter",
-            "Maximum via diameter",
-            "Minimum via drill",
-            "Maximum via drill",
-            "Preferred track width",
-            "Preferred via diameter",
-            "Preferred via drill",
-        ];
-        let fields = LIMIT_FIELDS
-            .iter()
-            .chain(PREFERENCE_FIELDS)
-            .zip(labels)
-            .map(|(key, label)| {
-                let original = values[*key].as_i64().unwrap_or_default();
-                let text = units::edit_label(original, unit);
-                Field { key, label, original, initial: text.clone(), text }
-            })
-            .collect();
-        self.dialog =
-            Dialog::BoardRules(Box::new(Edit { source, board: board.target, unit, builtin: board.authored_rules().is_none(), fields, error: None }));
+        self.dialog = Dialog::BoardRules(Box::new(Edit::capture(source, board, unit)));
+    }
+
+    /// Submit board-default values for an explicitly addressed source through the shared command.
+    /// Both containing hosts receive errors without losing their drafts or refreshing stale input.
+    pub(super) fn apply_board_rule_values(&mut self, source: ViewInput, board: BoardTarget, rules: serde_json::Value) -> Result<(), String> {
+        if !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session)) {
+            return Err("The project or view changed. Close and reopen Rules to continue.".into());
+        }
+        self.run(pcbcraft_engine::SET_RULES, &json!({"board":board.board,"expected_revision":source.revision,"rules":rules}));
+        self.message.take().map_or(Ok(()), Err)
     }
 
     /// Shared form chrome keeps Apply/Cancel visible while dimensions scroll at small sizes.
     /// Cancellation or stale project/view authority discards the draft without a command.
     pub(super) fn board_rules_dialog(&mut self, ctx: &egui::Context, mut edit: Box<Edit>) {
+        if self.views.view(edit.source.view()).is_none() {
+            return;
+        }
         let current = self.views.view(edit.source.view()).is_some_and(|v| v.accepts(edit.source, &self.session));
         let value = edit.values();
         let valid = edit.builtin || value.is_ok();
-        let action = pcbcraft_chrome::catalog::settings_form(ctx, "Board Rules", "Apply", current && valid, |ui| {
+        let action = pcbcraft_chrome::catalog::settings_form_width(ctx, "Board Rules", 800., "Apply", current && valid, |ui| {
             egui::ScrollArea::vertical().id_salt("board_rules_fields").auto_shrink([false, false]).show(ui, |ui| {
-                if pcbcraft_chrome::controls::checkbox(ui, &mut edit.builtin, "Use built-in defaults").changed() && edit.builtin {
-                    edit.reset_values();
-                }
-                ui.add_enabled_ui(!edit.builtin, |ui| {
-                    for (i, Field { label, text, .. }) in edit.fields.iter_mut().enumerate() {
-                        if i == 0 {
-                            form::heading(ui, "Hard limits");
-                        }
-                        if i == LIMIT_FIELDS.len() {
-                            form::heading(ui, "Routing preferences");
-                        }
-                        if ui.available_width() < 450. {
-                            ui.label(*label);
-                            pcbcraft_chrome::controls::text(ui, text).accessible_name(*label);
-                        } else {
-                            form::text(ui, label, text);
-                        }
-                    }
+                pcbcraft_chrome::workspace::describe_scroll_viewport(ui);
+                form::body(ui, |ui| {
+                    edit.show(ui, current);
                 });
-                if !current {
-                    ui.label(pcbcraft_chrome::shell::error("The project changed. Close and reopen Rules to continue."));
-                }
-                if let Some(error) = edit.error.as_deref().or_else(|| if edit.builtin { None } else { value.as_ref().err().map(String::as_str) }) {
-                    ui.label(pcbcraft_chrome::shell::error(error));
-                }
-                properties::section(ui, if edit.builtin { "Source: built-in defaults" } else { "Source: board defaults" });
             });
         });
         if action.close {
             return;
         }
         if action.primary && current && valid {
-            let rules = if edit.builtin {
-                serde_json::Value::Null
-            } else {
-                match edit.values() {
-                    Ok(values) => json!(values),
-                    Err(error) => {
-                        edit.error = Some(error);
-                        self.dialog = Dialog::BoardRules(edit);
-                        return;
-                    }
+            let rules = match edit.rules() {
+                Ok(rules) => rules,
+                Err(error) => {
+                    edit.error = Some(error);
+                    self.dialog = Dialog::BoardRules(edit);
+                    return;
                 }
             };
-            self.run(pcbcraft_engine::SET_RULES, &json!({"board":edit.board.board,"expected_revision":edit.source.revision,"rules":rules}));
-            if let Some(error) = self.message.take() {
+            if let Err(error) = self.apply_board_rule_values(edit.source, edit.board, rules) {
                 edit.error = Some(error);
             } else {
                 self.repaint_editors(ctx);
@@ -197,11 +263,17 @@ mod tests {
             h.state_mut().preferences.units = units::Unit::Mil;
             let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
             click(&mut h, "Analyze");
-            click(&mut h, "Edit board defaults and routing preferences");
+            click(&mut h, "Edit net classes, assignments and board defaults.");
+            click(&mut h, "Board defaults…");
             click(&mut h, "Cancel");
             assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
             h.state_mut().begin_board_rules();
             h.run();
+            let diagram = h.get_by_role_and_label(egui::Role::Image, "Copper clearance diagram: Space between copper edges on different nets.");
+            let field = h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance");
+            assert!(!diagram.accesskit_node().is_disabled(), "geometry stays legible with built-in values");
+            assert!(field.accesskit_node().is_disabled());
+            assert!(field.rect().width() <= 140.1 && field.rect().left() >= diagram.rect().right());
             click(&mut h, "Use built-in defaults");
             replace(&mut h, "Copper clearance", "0.35 mm");
             replace(&mut h, "Preferred track width", "0.400001 mm");

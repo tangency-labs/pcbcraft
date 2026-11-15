@@ -509,15 +509,29 @@ track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.
 Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
 
-Use **Analyze → Rules** to save board limits and preferred routing dimensions.
-Clear **Use built-in defaults** to author values, then Apply; checking it restores
-the built-in values. New routes use those preferences, while existing copper
-keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
-The separate [net-class catalog](net-classes.md) and
-[persistent assignments](net-class-assignments.md) can be authored and inspected
-through MCP. Naming a net does not classify it. Assigned classes now supply
-routing defaults, query spacing and DRC limits through the same resolver; editor
-controls remain under #303. Starting a route on classified copper adopts that
+Use **Analyze → Rules** in either editor to create or edit net classes. **New class**
+opens a sparse definition: check a dimension to give the class an opinion, or leave
+it unchecked to inherit defaults. Save class commits one undoable edit. Classes
+can be authored in a schematic-only project; they do not create a board.
+
+Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
+Properties, or use the **Effective net rules** page in Rules to search for a current net.
+Check the classes to assign and choose **Assign classes**. The page shows effective
+hard limits, routing preferences, conflicts, rule IDs/revisions and assignment
+origins. Naming a net does not classify it. See the [editor workflow](net-class-editor.md)
+for supported targets and the shared MCP commands.
+
+**Board Setup → Design rules** embeds **Board defaults** and **Net classes** as
+pages using the same editors as **Analyze → Rules**. Navigation retains pending
+fields; each page's Save/Apply action saves that page and keeps other drafts.
+Cancel discards fields that have not been saved. The dialog stays in its originating
+window.
+
+**Board defaults…** in Rules opens the board form with the same bounded fields and
+dimension drawings as the class editor. Clear **Use built-in
+defaults** to author values, then Apply; checking it restores built-in values.
+New routes use those preferences while existing copper keeps its dimensions.
+See [board rules](board-rules.md) for overrides and sources. Starting a route on classified copper adopts that
 net's preferred width unless you selected an explicit ribbon width, and uses its
 clearance halo. Explicit changed widths/vias must meet
 applicable hard limits, and unresolved defaults report an error without creating

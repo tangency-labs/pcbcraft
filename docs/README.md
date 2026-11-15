@@ -34,6 +34,7 @@ before treating an older plan as implemented behavior.
 | Intentional unused connections | [No-connect markers](no-connect-markers.md) |
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
 | Board rules and materials | [Board rules](board-rules.md) · [Materials and dielectric construction](board-materials.md) |
+| Create classes, assign nets and inspect effective rules | [Shared net-class editor](net-class-editor.md) |
 | Parts, sources and definition editing | [Native library sources](native-library-sources.md) · [Parts Library workspace](library-workspace.md) · [Properties and library editors](properties-and-library-editors.md) |
 | Included and example definitions | [Bundled symbol libraries](builtin-symbol-libraries.md) · [Symbol libraries](symbol-library.md) · [Starter footprints](footprint-library.md) · [Native-parts example](../examples/native-parts/README.md) |
 
