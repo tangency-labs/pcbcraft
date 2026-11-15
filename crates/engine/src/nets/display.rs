@@ -47,7 +47,7 @@ fn path(project: &Project, mut sheet: uuid::Uuid) -> String {
 /// Canonical anchors select endpoints; geometry, references and iteration order never do.
 pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
     let mut endpoints = BTreeMap::new();
-    let mut component_pins = BTreeMap::new();
+    let connected_symbols: BTreeSet<_> = graph.nets.iter().flatten().map(|terminal| terminal.symbol).collect();
     let mut named = BTreeMap::new();
     let scope = project.net_scope();
     for sheet in project.sheets() {
@@ -57,9 +57,14 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
         named.extend(own.net_labels().iter().map(|label| (WireEndpoint::NetLabel(label.id), label.name.clone())));
         named.extend(own.hierarchical_labels().iter().map(|label| (WireEndpoint::Label(label.id), label.name.clone())));
         named.extend(own.power_terminals().map(|(end, name, _)| (end, name.to_owned())));
-        for symbol in own.symbols() {
-            let Some(component) = project.components.get(&symbol.component) else { continue };
+        for symbol in own.symbols().iter().filter(|symbol| connected_symbols.contains(&symbol.ordinal)) {
+            if !project.components.contains_key(&symbol.component) {
+                continue;
+            }
             for terminal in symbol.terminals() {
+                if graph.net_index_for(terminal).is_none() {
+                    continue;
+                }
                 let anchor = Anchor {
                     kind: AnchorKind::Terminal,
                     project: project.id,
@@ -69,7 +74,6 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
                     terminal: terminal.number().into(),
                 };
                 endpoints.insert(WireEndpoint::Terminal(terminal), (anchor.clone(), sheet_path.clone()));
-                component_pins.entry(anchor).or_insert_with(|| terminal_name(component.reference(), terminal.number(), component.definition.pins()));
             }
         }
         for (end, _) in own.hierarchy_endpoints().chain(own.junctions().map(|(id, at)| (WireEndpoint::Junction(id), at))) {
@@ -110,14 +114,19 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
                     .or_insert_with(|| path.clone());
                 anchors
             });
-        let terminal = anchors.keys().filter(|anchor| anchor.kind == AnchorKind::Terminal).find(|anchor| component_pins.contains_key(*anchor));
+        let terminal = anchors.keys().find(|anchor| anchor.kind == AnchorKind::Terminal && project.components.contains_key(&anchor.object));
         fallback.push(graph.net_names(index).is_empty() && terminal.is_none());
         let name = graph
             .net_names(index)
             .iter()
             .min()
             .cloned()
-            .or_else(|| terminal.and_then(|anchor| component_pins.get(anchor).cloned()))
+            .or_else(|| {
+                terminal.and_then(|anchor| {
+                    let component = project.components.get(&anchor.object)?;
+                    Some(terminal_name(component.reference(), &anchor.terminal, component.definition.pins()))
+                })
+            })
             .unwrap_or_else(|| "Unconnected".into());
         // Explicit local names retain the occurrence that declares the chosen name, even when
         // hierarchy brings a lower component terminal onto the same resolved network.
