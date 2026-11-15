@@ -20,6 +20,8 @@ pub(crate) struct Drafts {
     key: Option<(SheetTarget, u64)>,
     values: BTreeMap<(Scope, String), String>,
     new_name: BTreeMap<Scope, String>,
+    /// Why the New name of a scope was not added, until it is changed and left again.
+    new_error: BTreeMap<Scope, String>,
 }
 
 /// One edit for the host to submit as `parameter.set`.
@@ -84,26 +86,50 @@ fn commit(scope: Scope, row: &Row, draft: &str) -> Option<Change> {
     }
 }
 
-/// Draw one scope's editable rows and a New field that adds an empty parameter when left. Returns the edit to submit, if any.
+/// The edit the New field implies when it loses focus with `name` typed: an empty parameter, or
+/// an error when `rows` (built-ins included) already holds that name ignoring case, because
+/// setting it would overwrite the existing value.
+fn add(scope: Scope, rows: &[Row], name: &str) -> Result<Change, String> {
+    match rows.iter().find(|row| row.name.eq_ignore_ascii_case(name)) {
+        Some(row) => Err(format!("There already is a parameter `{}`; edit its field instead.", row.name)),
+        None => Ok(Change { scope, name: name.to_owned(), value: Some(String::new()) }),
+    }
+}
+
+/// Draw one scope's editable rows and a New field that adds an empty parameter when left. A name
+/// that already exists stays in the field with an error. Returns the edit to submit, if any.
 fn scope_rows(ui: &mut Ui, project: &Project, sheet: SheetTarget, scope: Scope, drafts: &mut Drafts) -> Option<Change> {
     let mut change = None;
-    for row in project.parameter_rows(scope, Some(sheet)).into_iter().filter(|row| row.source != Source::BuiltIn) {
+    let rows = project.parameter_rows(scope, Some(sheet));
+    for row in rows.iter().filter(|row| row.source != Source::BuiltIn) {
         let draft = drafts.values.entry((scope, row.name.clone())).or_default();
         // A stable ID per scope and name keeps focus with its parameter when rows are added
         // or removed; positional IDs would hand a leaving field's focus to its neighbour.
-        let response = ui.push_id((scope, &row.name), |ui| chrome::text_hint(ui, &row.name, draft, &hint(project, sheet, &row))).inner;
+        let response = ui.push_id((scope, &row.name), |ui| chrome::text_hint(ui, &row.name, draft, &hint(project, sheet, row))).inner;
         let response = if pcbcraft_engine::parameters::has_references(draft) {
             response.on_hover_text(project.resolve_text(Some(sheet), draft).text)
         } else {
             response
         };
         if response.lost_focus() {
-            change = change.or_else(|| commit(scope, &row, draft));
+            change = change.or_else(|| commit(scope, row, draft));
         }
     }
     let name = drafts.new_name.entry(scope).or_default();
     if ui.push_id((scope, "new"), |ui| chrome::text_hint(ui, "New", name, "Add a parameter by name")).inner.lost_focus() && !name.trim().is_empty() {
-        change = change.or(Some(Change { scope, name: std::mem::take(name).trim().to_owned(), value: Some(String::new()) }));
+        match add(scope, &rows, name.trim()) {
+            Ok(added) => {
+                name.clear();
+                drafts.new_error.remove(&scope);
+                change = change.or(Some(added));
+            }
+            Err(error) => {
+                drafts.new_error.insert(scope, error);
+            }
+        }
+    }
+    if let Some(error) = drafts.new_error.get(&scope) {
+        ui.label(pcbcraft_chrome::shell::error(error.as_str()));
     }
     change
 }
@@ -139,5 +165,16 @@ mod tests {
         let default = row("@project.Revision", Source::Default);
         assert_eq!(commit(Scope::Sheet, &default, ""), None);
         assert_eq!(commit(Scope::Sheet, &default, "A").and_then(|c| c.value), Some("A".into()));
+    }
+
+    /// New refuses any existing name ignoring case, built-ins included, and adds an empty
+    /// parameter otherwise.
+    #[test]
+    fn new_refuses_existing_names() {
+        let rows = [row("B", Source::Own), Row { name: "Name".into(), value: "Main".into(), source: Source::BuiltIn }];
+        assert!(add(Scope::Sheet, &rows, "Revision").is_err());
+        assert!(add(Scope::Sheet, &rows, "revision").is_err());
+        assert!(add(Scope::Sheet, &rows, "name").is_err());
+        assert_eq!(add(Scope::Sheet, &rows, "Checked"), Ok(Change { scope: Scope::Sheet, name: "Checked".into(), value: Some(String::new()) }));
     }
 }

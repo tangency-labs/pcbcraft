@@ -42,6 +42,11 @@ pub const MAX_VALUE_LEN: usize = 1000;
 pub const MAX_TEXT_LEN: usize = 4096;
 /// How deep references inside parameter values are followed.
 const MAX_DEPTH: usize = 8;
+/// How many references one resolution expands in total. Depth alone does not bound the work: a
+/// value naming itself several times would branch at every level.
+const MAX_EXPANSIONS: usize = 256;
+/// The longest text one resolution produces, in bytes.
+const MAX_RESOLVED_LEN: usize = 64 * 1024;
 
 /// The standard project parameters. They exist on every project and are empty until set.
 pub const PROJECT_STANDARD: [&str; 4] = ["Revision", "Date", "Company", "DrawnBy"];
@@ -244,7 +249,8 @@ pub fn has_references(text: &str) -> bool {
 pub struct Resolved {
     /// The text to show.
     pub text: String,
-    /// The references that named nothing, as typed, each once. They stay in the text as typed.
+    /// The references that named nothing, nested too deeply or were reached after the expansion
+    /// budget ran out, as typed, each once. They stay in the text as typed.
     pub unknown: Vec<String>,
 }
 
@@ -399,28 +405,36 @@ impl Project {
 
     /// Replace every reference in `text` with its value as shown on `sheet` (`None` for a text
     /// that belongs to no sheet, which can name only `@project`). References that name nothing,
-    /// or that nest deeper than a few levels, stay as typed and are listed in
-    /// [`Resolved::unknown`].
+    /// nest deeper than a few levels, or come after the resolution has expanded
+    /// [`MAX_EXPANSIONS`] references or produced [`MAX_RESOLVED_LEN`] bytes, stay as typed and
+    /// are listed in [`Resolved::unknown`].
     pub fn resolve_text(&self, sheet: Option<SheetTarget>, text: &str) -> Resolved {
         let mut out = Resolved::default();
-        self.resolve_into(sheet, text, 0, &mut out);
+        self.resolve_into(sheet, text, 0, &mut { MAX_EXPANSIONS }, &mut out);
         out
     }
 
-    /// Append `text` to `out` with its references resolved `depth` levels deep.
-    fn resolve_into(&self, sheet: Option<SheetTarget>, text: &str, depth: usize, out: &mut Resolved) {
+    /// Append `text` to `out` with its references resolved `depth` levels deep, spending one of
+    /// the shared `budget` per expansion. Once the budget or the output limit is used up, the
+    /// remaining references are appended as typed.
+    fn resolve_into(&self, sheet: Option<SheetTarget>, text: &str, depth: usize, budget: &mut usize, out: &mut Resolved) {
         for piece in pieces(text) {
             match piece {
                 Piece::Text(text) => out.text.push_str(text),
-                Piece::Reference { scope, name, raw } => match self.parameter_value(scope, sheet, name).filter(|_| depth < MAX_DEPTH) {
-                    Some(value) => self.resolve_into(sheet, &value, depth + 1, out),
-                    None => {
-                        out.text.push_str(raw);
-                        if !out.unknown.iter().any(|u| u == raw) {
-                            out.unknown.push(raw.to_owned());
+                Piece::Reference { scope, name, raw } => {
+                    match self.parameter_value(scope, sheet, name).filter(|_| depth < MAX_DEPTH && *budget > 0 && out.text.len() < MAX_RESOLVED_LEN) {
+                        Some(value) => {
+                            *budget -= 1;
+                            self.resolve_into(sheet, &value, depth + 1, budget, out);
+                        }
+                        None => {
+                            out.text.push_str(raw);
+                            if !out.unknown.iter().any(|u| u == raw) {
+                                out.unknown.push(raw.to_owned());
+                            }
                         }
                     }
-                },
+                }
             }
         }
     }
@@ -464,6 +478,16 @@ fn canonical(project: &Project, target: Target, name: &str) -> Result<String, Co
         .unwrap_or_else(|| name.to_owned()))
 }
 
+/// The default of `name` when it is one of `target`'s standard parameters: empty for the project,
+/// the inherited reference for a sheet. `None` for custom parameters, whose empty value is a real
+/// value (New adds one).
+fn standard_default(target: Target, name: &str) -> Option<&'static str> {
+    match target {
+        Target::Project => PROJECT_STANDARD.contains(&name).then_some(""),
+        Target::Sheet(_) => SHEET_DEFAULTS.iter().find(|(standard, _)| *standard == name).map(|(_, default)| *default),
+    }
+}
+
 /// Change one list: set `name` to `value`, remove it (`value` `None` without a rename) or rename
 /// it, keeping its value unless a new one is given. Refuses renaming a missing parameter or onto
 /// another one, and growing past [`MAX_PARAMETERS`]. Returns whether the list changed.
@@ -499,7 +523,8 @@ fn rows_json(rows: &[Row]) -> Value {
 
 impl Session {
     /// Set, rename or remove one parameter of the project or a sheet as one undo step. Setting a
-    /// value equal to the current one changes nothing and records no step. Project parameters
+    /// value equal to the current one changes nothing and records no step; setting a standard
+    /// parameter to its default removes its own value. Project parameters
     /// adopt the current storage layout first, like net classes, because only project/22 stores
     /// them.
     pub(crate) fn set_parameter(&mut self, params: &Value) -> Result<(), CommandError> {
@@ -518,6 +543,9 @@ impl Session {
         if value.as_ref().is_some_and(|value| value.len() > MAX_VALUE_LEN) {
             return Err(CommandError::InvalidParams(format!("a parameter value is at most {MAX_VALUE_LEN} bytes")));
         }
+        // A standard parameter set to its default stores nothing, so it keeps following the
+        // default and an empty project Revision does not adopt the newer storage layout.
+        let value = value.filter(|value| rename.is_some() || standard_default(target, &name) != Some(value.as_str()));
         let mut candidate = original.clone();
         if !apply(candidate.parameters_mut(target)?, &name, value, rename)? {
             return Ok(());

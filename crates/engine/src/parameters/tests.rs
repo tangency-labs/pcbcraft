@@ -214,3 +214,53 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title": 3})).is_err());
     assert!(mutate(&sheet_file, &|_| {}).is_ok());
 }
+
+/// A value naming itself many times branches at every level; the shared expansion budget stops
+/// it quickly, leaves the remaining references as typed and reports them.
+#[test]
+fn branching_self_references_stay_bounded() {
+    let mut s = schematic();
+    let sheet = main_sheet(&s);
+    let looping = vec!["@project.Loop"; 50].join(" ");
+    assert!(looping.len() <= MAX_VALUE_LEN);
+    edit(&mut s, SET, json!({"scope":"project","name":"Loop","value":looping})).unwrap();
+    let r = resolve(&mut s, &sheet, "@project.Loop");
+    // Past the limit, only the open values' remaining text is appended, as typed.
+    assert!(r["text"].as_str().unwrap().len() <= MAX_RESOLVED_LEN + (MAX_DEPTH + 1) * MAX_VALUE_LEN);
+    assert_eq!(r["unknown"], json!(["@project.Loop"]));
+}
+
+/// Setting a standard parameter to its default stores nothing, so an empty project Revision
+/// adopts no storage layout; a custom parameter keeps its empty value.
+#[test]
+fn standard_values_equal_to_the_default_are_not_stored() {
+    let mut s = schematic();
+    let sheet = main_sheet(&s);
+    let revision = s.revision();
+    edit(&mut s, SET, json!({"scope":"project","name":"Revision","value":""})).unwrap();
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"revision","value":"@project.Revision"})).unwrap();
+    assert_eq!(s.revision(), revision);
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Revision","value":"B"})).unwrap();
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Revision","value":"@project.Revision"})).unwrap();
+    let project = s.project().unwrap();
+    assert!(project.parameters().is_empty());
+    assert!(project.sheet_parameters(project.sheet_target()).unwrap().is_empty());
+    edit(&mut s, SET, json!({"scope":"project","name":"Checked","value":""})).unwrap();
+    assert_eq!(s.project().unwrap().parameters().get("Checked").map(String::as_str), Some(""));
+}
+
+/// The legacy diagnostic encoding refuses sheet parameters rather than dropping them, even on a
+/// sheet without paper.
+#[test]
+fn diagnostic_encoding_refuses_sheet_parameters() {
+    let mut s = schematic();
+    let sheet = main_sheet(&s);
+    edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Gain","value":"10"})).unwrap();
+    let mut project = (*s.project().unwrap()).clone();
+    project.circuit_use = None;
+    for info in Arc::make_mut(&mut project.sheets) {
+        info.page = None;
+    }
+    let error = crate::persistence::encode(Arc::new(project)).unwrap_err();
+    assert!(error.contains("sheet parameters"), "{error}");
+}

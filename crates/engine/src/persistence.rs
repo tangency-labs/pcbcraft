@@ -544,6 +544,9 @@ impl Encoder {
         if !project.parameters.is_empty() {
             return Err("legacy diagnostic encoding cannot represent project parameters; use split documents or a packed archive".into());
         }
+        if project.sheets.iter().any(|sheet| !sheet.parameters.is_empty()) {
+            return Err("legacy diagnostic encoding cannot represent sheet parameters; use split documents or a packed archive".into());
+        }
         if project.sheets.iter().any(|sheet| sheet.page.is_some()) {
             return Err("legacy diagnostic encoding cannot represent sheet paper; use split documents or a packed archive".into());
         }
