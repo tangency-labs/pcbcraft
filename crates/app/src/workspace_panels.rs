@@ -92,13 +92,14 @@ pub(super) fn areas(canvas: Rect, browser: Rect, panels: &[Panel; 3], visible: [
 /// above it in the same column, instead of at its precomputed share of the column, so a column
 /// reads as one stack with no canvas between its cards. `above` holds the rectangles actually
 /// shown this frame for earlier cards on the same side; empty or hidden ones are ignored. The
-/// slot keeps its bottom edge. Floating style, and slots with nothing above, are unchanged.
+/// slot keeps its bottom edge and becomes empty when the cards above exhaust it. Floating
+/// style, and slots with nothing above, are unchanged.
 pub(super) fn follow(slot: Rect, above: impl IntoIterator<Item = Rect>, compact: bool) -> Rect {
     if !compact || !slot.is_positive() {
         return slot;
     }
     match above.into_iter().filter(|rect| rect.is_positive()).map(|rect| rect.bottom()).reduce(f32::max) {
-        Some(bottom) if bottom < slot.bottom() => Rect::from_min_max(egui::pos2(slot.left(), bottom), slot.max),
+        Some(bottom) => Rect::from_min_max(egui::pos2(slot.left(), bottom.min(slot.bottom())), slot.max),
         _ => slot,
     }
 }
@@ -191,7 +192,11 @@ mod tests {
         assert_eq!(follow(slot, [properties], true), Rect::from_min_max(pos2(0., 220.), pos2(300., 800.)));
         assert_eq!(follow(slot, [properties], false), slot, "floating keeps its split");
         assert_eq!(follow(slot, [Rect::NOTHING], true), slot, "a hidden card above is ignored");
-        assert_eq!(follow(slot, [Rect::from_min_max(pos2(40., 0.), pos2(300., 900.))], true), slot, "never invert the slot");
+        for bottom in [800., 900.] {
+            let exhausted = follow(slot, [Rect::from_min_max(pos2(40., 0.), pos2(300., bottom))], true);
+            assert_eq!(exhausted.bottom(), slot.bottom());
+            assert_eq!(exhausted.height(), 0., "an exhausted column hides the next card instead of reusing its slot");
+        }
         let mut panels = defaults();
         panels[PROPERTIES].set_position(Position::Right, None);
         panels[FILTERS].set_position(Position::Left, None);

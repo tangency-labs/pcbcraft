@@ -406,3 +406,28 @@ fn net_inspector_reserves_space_above_filters_without_moving_properties() {
         assert_eq!(document(&h), before);
     }
 }
+
+/// Exhausting a short Compact column hides DRC without changing its open state or dock intent.
+#[test]
+fn compact_short_column_does_not_overlay_filters_and_drc() {
+    let mut h = fixture(true);
+    h.state_mut().preferences.panel_style = PanelStyle::Compact;
+    h.state_mut().views.active.board.drc.open = true;
+    let before = document(&h);
+    let placement = h.state().views.active.panels[FILTERS].saved_state();
+    for height in [500., 400., 320.] {
+        h.set_size(egui::vec2(1400., height));
+        h.run();
+        let drc = h.state().views.active.board.drc.rect;
+        if h.query_by_label("Move Selection filters").is_some() {
+            let filters = card_rect(&h, "Move Selection filters");
+            assert!(!drc.is_positive() || drc.top() >= filters.bottom() - 0.5, "height {height}: DRC {drc:?} must follow filters {filters:?}");
+        }
+        assert!(h.state().views.active.board.drc.open);
+        assert_eq!(h.state().views.active.panels[FILTERS].saved_state(), placement);
+        assert_eq!(document(&h), before);
+    }
+    h.set_size(egui::vec2(1400., 900.));
+    h.run();
+    assert!(h.state().views.active.board.drc.rect.is_positive(), "restoring room reveals the still-open DRC card");
+}

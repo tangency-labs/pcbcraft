@@ -300,7 +300,8 @@ impl Panel {
     }
 
     /// Preserve contextual-card spacing while allowing filled workspace columns to align
-    /// exactly with their neighbors. The same drag state and controls serve both layouts.
+    /// exactly with their neighbors. The selected frame's header height bounds the vertical
+    /// clamp; the same drag state and controls serve both layouts.
     #[allow(clippy::too_many_arguments)]
     fn show_card(
         &mut self,
@@ -349,9 +350,16 @@ impl Panel {
         } else {
             pos2(if self.state.position == Position::Left { area.left() + gap } else { area.right() - width - gap }, area.top() + gap)
         };
+        let visible_height = if slot && floating {
+            height
+        } else if compact {
+            margins.y + FLOATING_HEADER
+        } else {
+            super::card_header_height()
+        };
         let at = pos2(
             desired.x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())),
-            desired.y.clamp(bounds.top(), (bounds.bottom() - if slot && floating { height } else { super::card_header_height() }).max(bounds.top())),
+            desired.y.clamp(bounds.top(), (bounds.bottom() - visible_height).max(bounds.top())),
         );
         let body_height = body_height.min((bounds.bottom() - at.y - margins.y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
         let t = Tokens::get();
@@ -462,5 +470,39 @@ impl Panel {
             }
         }
         (shown.response.rect, shown.inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::PanelStyle;
+
+    /// The contextual renderer must not lift a bottom-aligned Compact header above its short dock.
+    #[test]
+    fn compact_contextual_card_stays_inside_a_short_bottom_dock() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        let canvas = Rect::from_min_max(pos2(0., 0.), pos2(600., 1000.));
+        let dock = Rect::from_min_max(pos2(0., 960.), pos2(600., 1000.));
+        for slot in [false, true] {
+            let mut panel = Panel::new(Position::Right);
+            let before = panel.saved_state();
+            let mut rect = Rect::NOTHING;
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    PanelStyle::Compact.publish(ui.ctx());
+                    rect = if slot {
+                        panel.show_in_slot(ui, Id::unique("short contextual slot"), "Card", canvas, dock, false, |_| {}).0
+                    } else {
+                        panel.show(ui, Id::unique("short contextual card"), "Card", canvas, dock, false, 240., |_| {}).0
+                    };
+                });
+                output.textures_delta.clear();
+            }
+            assert!(rect.is_positive(), "{rect:?}");
+            assert!(rect.top() >= dock.top() - 0.5 && rect.bottom() <= dock.bottom() + 0.5, "{rect:?} must stay in {dock:?}");
+            assert_eq!(panel.saved_state(), before);
+        }
     }
 }
