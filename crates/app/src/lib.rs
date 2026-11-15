@@ -2510,7 +2510,10 @@ impl PcbApp {
             self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         }
         let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
-        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog)) && self.arrangement_dialog_host().is_none();
+        let enabled = !self.project_action_pending()
+            && (main || (!self.home && !had_dialog))
+            && self.arrangement_dialog_host().is_none()
+            && self.rule_dialog_host().is_none();
         self.app_bar(ui, enabled);
         ui.add_enabled_ui(enabled, |ui| {
             let workspace = if self.home && main {
@@ -2552,6 +2555,7 @@ impl PcbApp {
         self.integrated_titlebar = integrated;
         let dialog_host = self
             .arrangement_dialog_host()
+            .or_else(|| self.rule_dialog_host())
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
             .or_else(|| self.external_paste_options_host())

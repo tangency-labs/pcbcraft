@@ -12,7 +12,7 @@ pub fn layer_actions_height() -> f32 {
     Tokens::get().control_height * 2.
 }
 
-/// Setup pages and rule-editor destinations carry labels only; drafts and transitions stay in the app.
+/// Setup pages carry labels only; drafts, authority and command actions stay in the app.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
     #[default]
@@ -25,10 +25,10 @@ pub enum Page {
     NetClasses,
 }
 impl Page {
-    /// Preserve existing page identities while listing the shared rule-editor destinations last.
+    /// Preserve existing page identities while listing the shared rule pages last.
     const ALL: [Self; 7] = [Self::Layers, Self::Stackup, Self::Materials, Self::Silkscreen, Self::Profiles, Self::BoardDefaults, Self::NetClasses];
 
-    /// Keep the familiar board-editor/physical-stackup distinction explicit in navigation.
+    /// Name physical setup and rule pages consistently across wide and compact navigation.
     pub fn title(self) -> &'static str {
         match self {
             Self::Layers => "Board editor layers",
@@ -106,11 +106,13 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
     content.set_clip_rect(ui.clip_rect().intersect(inner));
     content.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
     content.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1., t.border);
-    egui::ScrollArea::vertical()
-        .id_salt(("setup_page", *page as u8))
-        .auto_shrink([false, false])
-        .max_height(inner.height())
-        .show(&mut content, |ui| add(ui, *page));
+    egui::ScrollArea::vertical().id_salt(("setup_page", *page as u8)).auto_shrink([false, false]).max_height(inner.height()).show(
+        &mut content,
+        |ui| {
+            crate::workspace::describe_scroll_viewport(ui);
+            add(ui, *page);
+        },
+    );
 }
 
 /// Page headings use the interface face and weight shared with Preferences and the catalog.

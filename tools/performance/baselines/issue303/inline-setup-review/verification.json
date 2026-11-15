@@ -1,0 +1,33 @@
+{
+  "workspace_tests": {
+    "passed": 1870,
+    "ignored": 11,
+    "failed": 0
+  },
+  "documentation_tests": {
+    "passed": 1,
+    "failed": 0,
+    "retry": "Initial workspace doc compilation used stale chrome/engine dependency outputs. Refreshed these package outputs only, then cargo test --locked --workspace --doc passed."
+  },
+  "app_tests": {
+    "passed": 975,
+    "ignored": 9
+  },
+  "harness_tests": 15,
+  "native_gpu_capture_test": 1,
+  "visuals": [
+    "Native dark wide / light compact setup pages and pending layer retention",
+    "Packaged Chrome 148 ANGLE SwiftShader actual class save, retained rule/layer drafts and compact navigation"
+  ],
+  "failures_found_and_fixed": [
+    "Conditional discard control changed text input identity and lost focus while renaming; stable widget slot and field id scope fix passes existing rename test"
+  ],
+  "limits": [
+    "No OS compositor/Wayland endurance certification",
+    "No new timing baseline",
+    "User native app not closed, restarted or launched"
+  ],
+  "raw_logs": "setup/issue303/inline-setup-review/checks",
+  "checks": "checks.json",
+  "browser": "browser.json"
+}

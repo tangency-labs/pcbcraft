@@ -180,8 +180,8 @@ pub(super) struct Edit {
     unit: units::Unit,
     populated: bool,
     original_copper: u64,
-    original_setup: BoardSetup,
-    original_silkscreen: pcbcraft_engine::board::silkscreen::Settings,
+    rules: Option<Box<crate::board_rules::Edit>>,
+    classes: Option<Box<crate::net_class_editor::Edit>>,
     silkscreen: [Length; 3],
     candidate: Candidate,
     initializing: bool,
@@ -200,19 +200,13 @@ pub(super) struct Edit {
 }
 
 impl Edit {
-    /// Rule-editor navigation cannot discard partial fields, imported profiles or material edits.
-    /// Compare only on navigation, preserving untouched precision and avoiding per-paint validation.
-    fn pending_for_rules(&self) -> bool {
-        self.profile_ticket.is_some()
-            || self.material_edit.is_some()
-            || self.profile_name != "Board setup"
-            || !self.new_name.is_empty()
-            || self.new_purpose != LayerPurpose::User
-            || self.new_side.is_some()
-            || !self.target_thickness.is_empty()
-            || !self.locked.is_empty()
-            || self.candidate.value(self.unit).as_ref() != Ok(&self.original_setup)
-            || self.silk_style().as_ref() != Ok(&self.original_silkscreen)
+    /// Keep the containing window bound to its captured view across every setup page.
+    pub(super) fn source(&self) -> ViewInput {
+        self.source
+    }
+    /// A setup Apply cannot close over unsaved content on another rule page.
+    fn pending_rule_pages(&self) -> bool {
+        self.rules.as_ref().is_some_and(|edit| edit.changed()) || self.classes.as_ref().is_some_and(|edit| edit.changed())
     }
 }
 
@@ -235,6 +229,19 @@ fn purpose_name(purpose: LayerPurpose) -> &'static str {
 mod pages;
 
 impl PcbApp {
+    /// Rule/setup dialogs stay in the window containing their captured source view.
+    pub(super) fn rule_dialog_source(&self) -> Option<ViewInput> {
+        match &self.dialog {
+            Dialog::BoardSetup(edit) => Some(edit.source()),
+            Dialog::BoardRules(edit) => Some(edit.source()),
+            Dialog::Rules(edit) => Some(edit.source()),
+            _ => None,
+        }
+    }
+    /// Placement follows the owning view, independently of whichever window currently has focus.
+    pub(super) fn rule_dialog_host(&self) -> Option<crate::editor_layout::HostId> {
+        self.rule_dialog_source().and_then(|source| self.views.owner(source.view()))
+    }
     /// Open an explicitly addressed board's disposable draft, with the same revision used by MCP.
     pub(super) fn begin_board_setup(&mut self, view: ViewId) {
         if !matches!(self.dialog, Dialog::None) || self.files.busy() || self.project_action_pending() {
@@ -258,8 +265,8 @@ impl PcbApp {
             unit: self.preferences.units,
             populated: board.footprints().next().is_some(),
             original_copper: setup.stackup().strata.len().div_ceil(2) as u64,
-            original_setup: setup.clone(),
-            original_silkscreen: board.silkscreen(),
+            rules: None,
+            classes: None,
             candidate: Candidate::new(setup, self.preferences.units),
             silkscreen: [board.silkscreen().text_height_nm, board.silkscreen().stroke_width_nm, board.silkscreen().pad_clearance_nm]
                 .map(|n| Length::new(Some(n), self.preferences.units)),
@@ -279,25 +286,77 @@ impl PcbApp {
         }));
     }
 
-    /// Submit one validated candidate through the shared command path. Failed/stale forms retain
-    /// their fields; Cancel has no effect on model, revision, undo or saved bytes. Initial and
-    /// existing setups use the same complete editor and publish only on Apply. Only this form's
-    /// pending profile job blocks Apply; abandoned jobs still reserve the shared file slot.
+    /// Rebind retained drafts only after this setup host's own validated command. Never adopt
+    /// an external edit or a changed view/target/epoch; retained fields remain inspectable on error.
+    fn refresh_setup_rule_context(&self, edit: &mut Edit) -> bool {
+        let previous = edit.source;
+        let mut source = previous;
+        source.revision = self.session.revision();
+        if !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session)) {
+            edit.error = Some("The originating view changed. Close and reopen Board setup.".into());
+            return false;
+        }
+        let Some(project) = self.session.snapshot() else {
+            return false;
+        };
+        edit.source = source;
+        if let Some(rules) = &mut edit.rules
+            && rules.source() == previous
+        {
+            rules.context_after_owned_command(source);
+        }
+        // The class command handler refreshes its own saved draft. If that refresh failed,
+        // retain its old source rather than blessing an unrefreshed create/update as current.
+        if edit.page != Page::NetClasses
+            && let Some(classes) = &mut edit.classes
+            && classes.source() == previous
+        {
+            classes.context_after_owned_command(source, project);
+        }
+        edit.error = None;
+        true
+    }
+
+    /// Host physical setup and shared rule pages in one window with independent drafts.
+    /// Each Save/Apply uses its existing command and retains other pending pages; external
+    /// revisions expire the host. Cancel drops unsaved fields, not earlier explicit saves.
+    /// Only this form's pending profile job blocks publication; abandoned jobs retain their slot.
     pub(super) fn board_setup_dialog(&mut self, ctx: &Context, mut edit: Box<Edit>) {
+        if self.views.view(edit.source.view()).is_none() {
+            return;
+        }
         let valid = self.views.view(edit.source.view()).is_some_and(|v| v.accepts(edit.source, &self.session));
         if !valid {
             edit.error = Some("The project or view changed. Close Board setup and reopen it to edit the current board.".into());
         }
         self.poll_setup_profile(&mut edit, valid);
-        let can_apply = valid && edit.profile_ticket.is_none();
+        let can_apply = valid
+            && edit.profile_ticket.is_none()
+            && match edit.page {
+                Page::BoardDefaults => {
+                    edit.material_edit.is_none() && edit.rules.as_ref().is_some_and(|rules| rules.source() == edit.source && rules.can_apply())
+                }
+                Page::NetClasses => {
+                    edit.material_edit.is_none()
+                        && edit.classes.as_ref().is_some_and(|classes| classes.source() == edit.source && classes.can_apply())
+                }
+                _ => true,
+            };
         let profile_busy = self.board_profile_files.busy();
         let mut profile_action = None;
-        let apply_label = if edit.material_edit.is_some() { "Save material to draft" } else { "Apply board setup" };
+        let apply_label = match edit.page {
+            Page::BoardDefaults => "Apply board defaults",
+            Page::NetClasses => edit.classes.as_ref().map_or("Save class", |classes| classes.primary()),
+            _ if edit.material_edit.is_some() => "Save material to draft",
+            _ => "Apply board setup",
+        };
+        let previous_page = edit.page;
+        let mut class_actions = None;
         let error = edit.error.clone();
         let mut page = edit.page;
         let action = pcbcraft_chrome::catalog::settings_form(ctx, "Board setup", apply_label, can_apply, |ui| {
             form::pages(ui, &mut page, error.as_deref(), |ui, page| {
-                if edit.initializing && edit.populated {
+                if edit.initializing && edit.populated && !matches!(page, Page::BoardDefaults | Page::NetClasses) {
                     ui.label("Applying setup resolves existing surface-mount pads to front copper and through-hole pads across the stack. Placements and package assignments are retained.");
                 }
                 match page {
@@ -306,37 +365,75 @@ impl PcbApp {
                     Page::Materials => edit.materials(ui),
                     Page::Silkscreen => edit.silkscreen(ui),
                     Page::Profiles => profile_action = edit.profiles(ui, profile_busy),
-                    Page::BoardDefaults | Page::NetClasses => {}
+                    Page::BoardDefaults => {
+                        if edit.rules.is_none() && valid {
+                            edit.rules = self.session.snapshot().and_then(|project| {
+                                project.board_view(edit.board).map(|board| Box::new(crate::board_rules::Edit::capture(edit.source, board, edit.unit)))
+                            });
+                        }
+                        if let Some(rules) = &mut edit.rules {
+                            rules.show(ui, valid);
+                        }
+                    }
+                    Page::NetClasses => {
+                        if edit.classes.is_none() && valid {
+                            match self.capture_class_rules(edit.source, edit.unit) {
+                                Ok(classes) => edit.classes = Some(Box::new(classes)),
+                                Err(error) => edit.error = Some(error),
+                            }
+                        }
+                        if let Some(classes) = &mut edit.classes {
+                            class_actions = Some(classes.show(ui, valid));
+                        }
+                    }
                 }
             });
         });
         if action.close {
             return;
         }
-        if matches!(page, Page::BoardDefaults | Page::NetClasses) {
-            if valid && !edit.pending_for_rules() {
-                match page {
-                    Page::BoardDefaults => self.begin_board_rules_from(edit.source),
-                    Page::NetClasses => self.begin_class_rules_from(edit.source),
-                    _ => {}
+        edit.page = page;
+        if previous_page != page && valid {
+            edit.error = None;
+        }
+        if page == Page::NetClasses {
+            if let (Some(classes), Some(actions)) = (&mut edit.classes, class_actions) {
+                let defaults = actions.board_defaults;
+                if self.apply_rule_actions(ctx, classes, actions, action.primary && can_apply && page == previous_page) {
+                    self.refresh_setup_rule_context(&mut edit);
                 }
-                if !matches!(self.dialog, Dialog::None) {
+                if defaults && valid {
+                    edit.page = Page::BoardDefaults;
                     ctx.request_repaint();
-                    return;
                 }
-            } else if valid {
-                edit.error = Some("Apply or cancel your board setup changes before opening a rule editor.".into());
             }
-            // Retain the original page and draft when navigation cannot finish.
-            ctx.request_repaint();
             self.dialog = Dialog::BoardSetup(edit);
             return;
         }
-        edit.page = page;
+        if page == Page::BoardDefaults {
+            if action.primary && can_apply && page == previous_page {
+                let rules = edit.rules.as_ref().ok_or_else(|| "Board defaults are unavailable.".to_owned()).and_then(|rules| rules.rules());
+                match rules {
+                    Ok(rules) => {
+                        if let Err(error) = self.apply_board_rule_values(edit.source, edit.board, rules) {
+                            edit.error = Some(error);
+                        } else if self.refresh_setup_rule_context(&mut edit) {
+                            edit.rules = self.session.snapshot().and_then(|project| {
+                                project.board_view(edit.board).map(|board| Box::new(crate::board_rules::Edit::capture(edit.source, board, edit.unit)))
+                            });
+                            self.repaint_editors(ctx);
+                        }
+                    }
+                    Err(error) => edit.error = Some(error),
+                }
+            }
+            self.dialog = Dialog::BoardSetup(edit);
+            return;
+        }
         if let Some(action) = profile_action {
             self.start_setup_profile(ctx, &mut edit, action);
         }
-        let apply = action.primary;
+        let apply = action.primary && page == previous_page;
         if apply && valid && edit.profile_ticket.is_none() {
             if edit.material_edit.is_some() {
                 edit.error = edit.save_material().err();
@@ -362,7 +459,24 @@ impl PcbApp {
                         edit.error = Some(error);
                     } else {
                         self.repaint_editors(ctx);
-                        return;
+                        if !edit.pending_rule_pages() {
+                            return;
+                        }
+                        if self.refresh_setup_rule_context(&mut edit) {
+                            // Keep the containing host open over remaining unsaved rule content.
+                            if let Some(board) = self.session.project().and_then(|project| project.board_view(edit.board))
+                                && let Some(setup) = board.setup()
+                            {
+                                edit.candidate = Candidate::new(setup.clone(), edit.unit);
+                                edit.original_copper = setup.stackup().strata.len().div_ceil(2) as u64;
+                                edit.silkscreen =
+                                    [board.silkscreen().text_height_nm, board.silkscreen().stroke_width_nm, board.silkscreen().pad_clearance_nm]
+                                        .map(|value| Length::new(Some(value), edit.unit));
+                                edit.initializing = false;
+                                edit.locked.clear();
+                                edit.target_thickness.clear();
+                            }
+                        }
                     }
                 }
                 Err(error) => edit.error = Some(error),

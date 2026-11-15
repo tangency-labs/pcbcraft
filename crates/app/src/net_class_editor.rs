@@ -235,7 +235,7 @@ impl Edit {
         self.error = None;
     }
     /// Only the active page owns pending edits; navigation cannot discard them implicitly.
-    fn changed(&self) -> bool {
+    pub(super) fn changed(&self) -> bool {
         match self.page {
             Page::Classes => self.draft.as_ref().is_some_and(|draft| draft.changed(self.unit)),
             Page::Net => self.classes != self.original_classes,
@@ -435,6 +435,156 @@ fn class_label(project: &Project, class: &Definition) -> String {
     }
 }
 
+/// Navigation intents produced by shared editor content; the containing host applies them.
+#[derive(Debug)]
+pub(super) struct Actions {
+    page: Page,
+    new_class: bool,
+    discard: bool,
+    pick_class: Option<Uuid>,
+    pick_net: Option<usize>,
+    pub(super) board_defaults: bool,
+}
+
+impl Edit {
+    /// Expose the captured view for host placement without acquiring new edit authority.
+    pub(super) fn source(&self) -> ViewInput {
+        self.source
+    }
+    /// The containing modal owns its footer; editor content supplies its action label.
+    pub(super) fn primary(&self) -> &'static str {
+        if self.page == Page::Classes { "Save class" } else { "Assign classes" }
+    }
+    /// Validate only this editor's staged fields; other setup pages retain independent drafts.
+    pub(super) fn can_apply(&self) -> bool {
+        match self.page {
+            Page::Classes => self.draft.as_ref().is_some_and(|d| d.rules(self.unit).is_ok()) && self.changed(),
+            Page::Net => self.target.is_some() && self.changed(),
+        }
+    }
+    /// A containing host may retain unsaved content while refreshing after its own validated
+    /// command. External revisions must still expire the host and cannot use this method.
+    pub(super) fn context_after_owned_command(&mut self, source: ViewInput, project: Arc<Project>) {
+        self.source = source;
+        self.project = project;
+    }
+    /// Render reusable content inside the caller's scroll owner; return typed navigation intents.
+    pub(super) fn show(&mut self, ui: &mut egui::Ui, current: bool) -> Actions {
+        let edit = self;
+        let page = edit.page;
+        let dirty = edit.changed();
+        let rules = edit.draft.as_ref().map(|draft| draft.rules(edit.unit));
+        let mut pick_class = edit.selected_class;
+        let mut pick_net = edit.net_index;
+        let mut new_class = false;
+        let mut board_defaults = false;
+        let discard;
+        ui.add_enabled_ui(!dirty, |ui| {
+            properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Class definitions"), (Page::Net, "Effective net rules")])
+        });
+        if !current {
+            ui.label(shell::error("The project or view changed. Close and reopen Rules to continue."));
+        }
+        match edit.page {
+            Page::Classes => {
+                ui.add_enabled_ui(!dirty, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        controls::Choice::from_id_salt("class_choice")
+                            .width(240.)
+                            .selected_text(
+                                edit.selected_class
+                                    .and_then(|id| edit.project.net_classes().get(id))
+                                    .map_or("Choose class", |class| class.name.as_str()),
+                            )
+                            .show_ui(ui, |ui| {
+                                for class in &edit.project.net_classes().definitions {
+                                    ui.selectable_value(
+                                        &mut pick_class,
+                                        Some(class.id),
+                                        format!("{} · r{}", class_label(&edit.project, class), class.revision),
+                                    );
+                                }
+                            })
+                            .response
+                            .accessible_name("Class");
+                        new_class = controls::button(ui, "New class").clicked();
+                        board_defaults = ui
+                            .add_enabled(edit.project.board_target().is_some(), pcbcraft_chrome::catalog::button("Board defaults…", false))
+                            .clicked();
+                    })
+                });
+                discard = ui.add_enabled_ui(dirty, |ui| controls::button(ui, "Discard class changes")).inner.clicked();
+                if let Some(draft) = &mut edit.draft {
+                    // Revert actions may appear while typing; field identity must not depend on them.
+                    ui.push_id("class_draft_fields", |ui| class_fields(ui, draft));
+                }
+            }
+            Page::Net => {
+                controls::search(ui, ui.scope_id().with("net_search"), &mut edit.net_search, "Search nets", "Search nets");
+                ui.add_enabled_ui(!dirty, |ui| {
+                    controls::Choice::from_id_salt("class_net_choice")
+                        .width(ui.available_width())
+                        .selected_text(edit.net_index.and_then(|index| edit.nets.get(index)).map_or("Choose net", |net| net.label.as_str()))
+                        .show_ui(ui, |ui| {
+                            for (index, net) in
+                                edit.nets.iter().enumerate().filter(|(_, net)| net.label.to_lowercase().contains(&edit.net_search.to_lowercase()))
+                            {
+                                ui.selectable_value(&mut pick_net, Some(index), &net.label);
+                            }
+                        })
+                        .response
+                        .accessible_name("Net");
+                });
+                discard = ui.add_enabled_ui(dirty, |ui| controls::button(ui, "Revert assignment changes")).inner.clicked();
+                if let Some(error) = &edit.selection_error {
+                    ui.label(shell::error(error));
+                }
+                if edit.target.is_some() {
+                    form::section(ui, "Assigned classes", |ui| {
+                        if edit.project.net_classes().definitions.is_empty() {
+                            ui.label(shell::dim("No class definitions"));
+                        }
+                        for class in &edit.project.net_classes().definitions {
+                            let mut selected = edit.classes.contains(&class.id);
+                            let name = class_label(&edit.project, class);
+                            if ui
+                                .push_id(class.id, |ui| controls::checkbox(ui, &mut selected, &name))
+                                .inner
+                                .on_hover_text(class.id.to_string())
+                                .changed()
+                            {
+                                if selected {
+                                    edit.classes.insert(class.id);
+                                } else {
+                                    edit.classes.remove(&class.id);
+                                }
+                            }
+                        }
+                    });
+                    match edit.project.resolve_net_classes(&edit.classes.iter().copied().collect::<Vec<_>>(), edit.project.board_target()) {
+                        Ok(result) => resolution(ui, &edit.project, &result, edit.unit, &edit.bindings, edit.classes != edit.original_classes),
+                        Err(error) => {
+                            ui.label(shell::error(error.to_string()));
+                        }
+                    }
+                } else if edit.selection_error.is_none() {
+                    ui.label(shell::dim("No supported net selected"));
+                }
+            }
+        }
+        if let Some(error) = &edit.error {
+            ui.label(shell::error(error));
+        }
+        if edit.page == Page::Classes
+            && let Some(Err(error)) = &rules
+        {
+            ui.label(shell::error(error));
+        }
+
+        Actions { page, new_class, discard, pick_class, pick_net, board_defaults }
+    }
+}
+
 impl PcbApp {
     /// Open the same Rules workflow from either editor, without requiring a physical board.
     pub(super) fn begin_rules(&mut self) {
@@ -452,10 +602,6 @@ impl PcbApp {
         let Some(source) = self.views.active.input(&self.session) else { return };
         self.open_rules_from(source, net);
     }
-    /// Board Setup reuses class authoring with the captured originating view, not active focus.
-    pub(super) fn begin_class_rules_from(&mut self, source: ViewInput) {
-        self.open_rules_from(source, false);
-    }
     /// Validate a navigation handoff before capturing the same revision-bound shared form.
     fn open_rules_from(&mut self, source: ViewInput, net: bool) {
         if !matches!(self.dialog, Dialog::None)
@@ -465,161 +611,77 @@ impl PcbApp {
         {
             return;
         }
-        match self.capture_rules(source, if net { Page::Net } else { Page::Classes }) {
+        match self.capture_rules(source, if net { Page::Net } else { Page::Classes }, self.preferences.units) {
             Ok(edit) => self.dialog = Dialog::Rules(Box::new(edit)),
             Err(error) => self.message = Some(error),
         }
     }
+    /// Capture class content for an existing host without opening or replacing any modal.
+    pub(super) fn capture_class_rules(&self, source: ViewInput, unit: units::Unit) -> Result<Edit, String> {
+        self.capture_rules(source, Page::Classes, unit)
+    }
     /// Assemble source-view inputs at the shell boundary; reusable draft/selection helpers need
     /// only the immutable project, explicit selection and captured display/authority data.
-    fn capture_rules(&self, source: ViewInput, page: Page) -> Result<Edit, String> {
+    fn capture_rules(&self, source: ViewInput, page: Page, unit: units::Unit) -> Result<Edit, String> {
         let view = self.views.view(source.view()).filter(|view| view.accepts(source, &self.session)).ok_or("The originating view changed.")?;
         let project = self.session.snapshot().ok_or("No project open.")?;
         let selected = selected_target(&project, view.target(), &view.schematic.selection, &view.board.tracks.selected);
-        Edit::capture(project, source, page, self.preferences.units, selected)
+        Edit::capture(project, source, page, unit, selected)
     }
-    /// One Apply emits one shared native command. Stale drafts remain inspectable but cannot
-    /// write; cancellation changes no document, and successful edits refresh the originating view.
+    /// Host reusable Rules content in its standalone modal. The same content and command path
+    /// are embedded in Board Setup without replacing that containing modal.
     pub(super) fn rules_dialog(&mut self, ctx: &egui::Context, mut edit: Box<Edit>) {
         if self.views.view(edit.source.view()).is_none() {
             return;
         }
         let current = self.views.view(edit.source.view()).is_some_and(|view| view.accepts(edit.source, &self.session));
-        let page = edit.page;
-        let dirty = edit.changed();
-        let rules = edit.draft.as_ref().map(|draft| draft.rules(edit.unit));
-        let valid = match edit.page {
-            Page::Classes => rules.as_ref().is_some_and(Result::is_ok) && dirty,
-            Page::Net => edit.target.is_some() && dirty,
-        };
-        let mut board_defaults = false;
-        let mut pick_class = edit.selected_class;
-        let mut new_class = false;
-        let mut pick_net = edit.net_index;
-        let primary = if edit.page == Page::Classes { "Save class" } else { "Assign classes" };
+        let primary = edit.primary();
+        let valid = edit.can_apply();
+        let mut actions = None;
         let action = pcbcraft_chrome::catalog::settings_form_width(ctx, "Rules", 800., primary, current && valid, |ui| {
             form::body(ui, |ui| {
-                ui.add_enabled_ui(!dirty, |ui| {
-                    properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Class definitions"), (Page::Net, "Effective net rules")])
-                });
-                if !current {
-                    ui.label(shell::error("The project or view changed. Close and reopen Rules to continue."));
-                }
                 egui::ScrollArea::vertical().id_salt("class_rule_body").auto_shrink([false, false]).show(ui, |ui| {
                     pcbcraft_chrome::workspace::describe_scroll_viewport(ui);
-                    match edit.page {
-                        Page::Classes => {
-                            ui.add_enabled_ui(!dirty, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    controls::Choice::from_id_salt("class_choice")
-                                        .width(240.)
-                                        .selected_text(
-                                            edit.selected_class
-                                                .and_then(|id| edit.project.net_classes().get(id))
-                                                .map_or("Choose class", |class| class.name.as_str()),
-                                        )
-                                        .show_ui(ui, |ui| {
-                                            for class in &edit.project.net_classes().definitions {
-                                                ui.selectable_value(
-                                                    &mut pick_class,
-                                                    Some(class.id),
-                                                    format!("{} · r{}", class_label(&edit.project, class), class.revision),
-                                                );
-                                            }
-                                        })
-                                        .response
-                                        .accessible_name("Class");
-                                    new_class = controls::button(ui, "New class").clicked();
-                                    board_defaults = ui
-                                        .add_enabled(
-                                            edit.project.board_target().is_some(),
-                                            pcbcraft_chrome::catalog::button("Board defaults…", false),
-                                        )
-                                        .clicked();
-                                })
-                            });
-                            if let Some(draft) = &mut edit.draft {
-                                class_fields(ui, draft);
-                            }
-                        }
-                        Page::Net => {
-                            controls::search(ui, ui.scope_id().with("net_search"), &mut edit.net_search, "Search nets", "Search nets");
-                            ui.add_enabled_ui(!dirty, |ui| {
-                                controls::Choice::from_id_salt("class_net_choice")
-                                    .width(ui.available_width())
-                                    .selected_text(
-                                        edit.net_index.and_then(|index| edit.nets.get(index)).map_or("Choose net", |net| net.label.as_str()),
-                                    )
-                                    .show_ui(ui, |ui| {
-                                        for (index, net) in edit
-                                            .nets
-                                            .iter()
-                                            .enumerate()
-                                            .filter(|(_, net)| net.label.to_lowercase().contains(&edit.net_search.to_lowercase()))
-                                        {
-                                            ui.selectable_value(&mut pick_net, Some(index), &net.label);
-                                        }
-                                    })
-                                    .response
-                                    .accessible_name("Net");
-                            });
-                            if let Some(error) = &edit.selection_error {
-                                ui.label(shell::error(error));
-                            }
-                            if edit.target.is_some() {
-                                form::section(ui, "Assigned classes", |ui| {
-                                    if edit.project.net_classes().definitions.is_empty() {
-                                        ui.label(shell::dim("No class definitions"));
-                                    }
-                                    for class in &edit.project.net_classes().definitions {
-                                        let mut selected = edit.classes.contains(&class.id);
-                                        let name = class_label(&edit.project, class);
-                                        if ui
-                                            .push_id(class.id, |ui| controls::checkbox(ui, &mut selected, &name))
-                                            .inner
-                                            .on_hover_text(class.id.to_string())
-                                            .changed()
-                                        {
-                                            if selected {
-                                                edit.classes.insert(class.id);
-                                            } else {
-                                                edit.classes.remove(&class.id);
-                                            }
-                                        }
-                                    }
-                                });
-                                match edit.project.resolve_net_classes(&edit.classes.iter().copied().collect::<Vec<_>>(), edit.project.board_target())
-                                {
-                                    Ok(result) => {
-                                        resolution(ui, &edit.project, &result, edit.unit, &edit.bindings, edit.classes != edit.original_classes)
-                                    }
-                                    Err(error) => {
-                                        ui.label(shell::error(error.to_string()));
-                                    }
-                                }
-                            } else if edit.selection_error.is_none() {
-                                ui.label(shell::dim("No supported net selected"));
-                            }
-                        }
-                    }
-                    if let Some(error) = &edit.error {
-                        ui.label(shell::error(error));
-                    }
-                    if edit.page == Page::Classes
-                        && let Some(Err(error)) = &rules
-                    {
-                        ui.label(shell::error(error));
-                    }
+                    actions = Some(edit.show(ui, current));
                 });
-            })
+            });
         });
         if action.close {
             return;
         }
-        if board_defaults && current {
-            self.begin_board_rules_from(edit.source);
-            return;
+        if let Some(actions) = actions {
+            if actions.board_defaults && current {
+                self.begin_board_rules_from(edit.source);
+                return;
+            }
+            self.apply_rule_actions(ctx, &mut edit, actions, action.primary);
         }
+        self.dialog = Dialog::Rules(edit);
+    }
+    /// Apply one editor's typed actions through shared commands. A true result means this host
+    /// successfully submitted its own command; errors retain the draft and stale sources refuse.
+    pub(super) fn apply_rule_actions(&mut self, ctx: &egui::Context, edit: &mut Edit, actions: Actions, submit: bool) -> bool {
+        let Actions { page, new_class, discard, pick_class, pick_net, .. } = actions;
+        if discard {
+            match edit.page {
+                Page::Classes => {
+                    if edit.selected_class.is_some() {
+                        edit.load_class(edit.selected_class);
+                    } else {
+                        edit.draft = None;
+                        edit.error = None;
+                    }
+                }
+                Page::Net => {
+                    edit.classes = edit.original_classes.clone();
+                    edit.error = None;
+                }
+            }
+            return false;
+        }
+        let current = self.views.view(edit.source.view()).is_some_and(|view| view.accepts(edit.source, &self.session));
+        let valid = edit.can_apply();
+        let mut saved = false;
         if new_class {
             edit.load_class(None);
         } else if pick_class != edit.selected_class {
@@ -631,7 +693,7 @@ impl PcbApp {
         {
             edit.error = Some(error);
         }
-        if action.primary && current && valid && edit.page == page {
+        if submit && current && valid && edit.page == page {
             let old_ids: BTreeSet<_> = edit.project.net_classes().definitions.iter().map(|class| class.id).collect();
             let selected = edit.selected_class;
             let chosen_net = edit.net_index.and_then(|index| edit.nets.get(index)).map(|net| net.target.clone());
@@ -648,8 +710,7 @@ impl PcbApp {
                             }
                             Err(error) => {
                                 edit.error = Some(error);
-                                self.dialog = Dialog::Rules(edit);
-                                return;
+                                return false;
                             }
                         }
                     }
@@ -668,7 +729,7 @@ impl PcbApp {
             } else {
                 let source = self.views.view(edit.source.view()).and_then(|view| view.input(&self.session));
                 if let Some(source) = source {
-                    match self.capture_rules(source, edit.page) {
+                    match self.capture_rules(source, edit.page, edit.unit) {
                         Ok(mut refreshed) => {
                             if edit.page == Page::Classes {
                                 let id = selected.or_else(|| {
@@ -688,15 +749,16 @@ impl PcbApp {
                             {
                                 refreshed.error = Some(error);
                             }
-                            edit = Box::new(refreshed);
+                            *edit = refreshed;
                         }
                         Err(error) => edit.error = Some(error),
                     }
                 }
                 self.repaint_editors(ctx);
+                saved = true;
             }
         }
-        self.dialog = Dialog::Rules(edit);
+        saved
     }
 }
 

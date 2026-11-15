@@ -63,3 +63,6 @@ Design rules destinations for the existing board-default and net-class editors.
 
 The [composition-guidance rebase](composition-rebase-review/README.md) records
 unchanged commit replays and the focused draft/input-interface extraction.
+
+The [embedded Board Setup follow-up](inline-setup-review/README.md) replaces those
+destinations with retained pages inside Setup and fixes source-window hosting.

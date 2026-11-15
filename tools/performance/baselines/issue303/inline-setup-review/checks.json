@@ -1,0 +1,122 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit": 0,
+    "seconds": 1.409839526982978
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0,
+    "seconds": 12.882273126975633
+  },
+  {
+    "name": "workspace",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace"
+    ],
+    "exit": 1,
+    "seconds": 75.67396403593011
+  },
+  {
+    "name": "workspace-doc-retry",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace",
+      "--doc"
+    ],
+    "exit": 0,
+    "seconds": 23.320087338914163
+  },
+  {
+    "name": "wasm",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit": 0,
+    "seconds": 4.264510283945128
+  },
+  {
+    "name": "harness-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0,
+    "seconds": 12.742974383989349
+  },
+  {
+    "name": "harness-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "performance::"
+    ],
+    "exit": 0,
+    "seconds": 42.91208883700892
+  },
+  {
+    "name": "web-package",
+    "command": [
+      "trunk",
+      "build",
+      "--release"
+    ],
+    "exit": 0,
+    "seconds": 33.28110773500521
+  },
+  {
+    "name": "native-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "pcbcraft",
+      "-p",
+      "pcbcraft-cli"
+    ],
+    "exit": 0,
+    "seconds": 16.952009549946524
+  }
+]

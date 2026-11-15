@@ -51,11 +51,17 @@ and copper-to-edge gaps, track width, radial annular ring, via outside diameter 
 drill diameter. These are illustrative drawings, independent of the entered value;
 the hover and accessible image description identify the measured boundaries.
 
-**Board Setup → Design rules** also provides **Board defaults** and **Net classes**,
-opening these same editors. Pending or invalid setup changes retain their draft;
-apply or cancel them before leaving Setup for a rule editor. Opening either editor
-does not apply a suggested initial stackup. **Analyze → Rules** remains available
-from either workspace, including schematic-only designs.
+**Board Setup → Design rules** embeds **Board defaults** and **Net classes** as
+pages in the same window, sharing these editor components and commands. Switching
+pages retains pending fields, including invalid input. **Apply board defaults**,
+**Save class** and **Assign classes** save their own page and keep Setup open;
+other pending layer, stackup or rule drafts remain intact. **Discard class changes**,
+**Revert assignment changes** and **Revert changes** reset only their own editor. **Apply board setup**
+saves the physical setup and retains the window if another rule page still has
+unsaved fields. Cancel/close discards remaining drafts; it does not undo edits
+already explicitly saved. Opening rule pages does not apply a suggested initial
+stackup. **Analyze → Rules** remains available from either workspace, including
+schematic-only designs. These dialogs stay in their originating editor window.
 
 **Board defaults…** in Rules opens the board-scoped form when a board exists, using the same
 row layout and illustrations. Built-in values are read-only until **Use built-in

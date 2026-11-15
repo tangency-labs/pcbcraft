@@ -67,6 +67,11 @@ fn class_form_controls_create_edit_cancel_and_exact_units() {
         assert_eq!(class.rules[&Property::PreferredTrackWidthNm], 508000);
         assert_eq!(class.rules.len(), 2);
         replace(&mut h, "Class name", "Power renamed");
+        assert_eq!(
+            h.get_by_role_and_label(egui::Role::TextInput, "Class name").value().as_deref(),
+            Some("Power renamed"),
+            "{width}: retain focus as discard availability changes"
+        );
         click(&mut h, "Save class");
         let class = h.state().session.project().unwrap().net_classes().get(id).unwrap();
         assert_eq!(class.rules[&Property::ClearanceNm], 350001);

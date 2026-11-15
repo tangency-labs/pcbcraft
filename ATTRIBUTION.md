@@ -1434,3 +1434,10 @@ orchestration boundary. Draft and selected-net helpers receive explicit immutabl
 model/selection inputs, and board/class dimensional inputs share one chrome
 adapter over the same qualified Craft field. Commands, resolution, source
 authority and saved data remain unchanged; no new dependency or toolkit gap.
+
+The embedded Rules follow-up extracts content-only board/class editors and typed
+navigation intents for composition inside either Board Setup or the standalone
+Rules modal. The shell owns revision-checked commands, retained drafts and native
+source-window placement. It reuses the existing Craft page rail/selector, fields,
+scroll host and footer; no nested modal, new generic control, dependency or artwork
+was introduced.

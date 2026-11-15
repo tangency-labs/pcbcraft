@@ -648,40 +648,38 @@ fn starting_material_and_copper_presets_stage_real_board_settings() {
     }
 }
 
-/// Both Board Setup destinations use the existing rule editors without applying the untouched
-/// setup suggestion. Saving rules/classes shares native commands and one-step history.
+/// Embedded rule pages retain Setup navigation and publish the same one-step commands,
+/// without applying an untouched initial layer/stackup suggestion.
 #[test]
-fn design_rules_navigation_reuses_editors_without_initializing_setup() {
+fn design_rules_pages_share_setup_host_and_command_history() {
     for width in [1200., 700.] {
         let mut h = harness(width);
         let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         click(&mut h, "Board setup");
         page(&mut h, "Board defaults");
         h.run();
-        assert!(matches!(h.state().dialog, Dialog::BoardRules(_)));
+        assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         click(&mut h, "Use built-in defaults");
         replace(&mut h, "Copper clearance", "0.4 mm");
-        click(&mut h, "Apply");
+        click(&mut h, "Apply board defaults");
+        assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
         assert!(h.state().session.project().unwrap().board_setup().is_none());
         assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().effective_rules().values.clearance_nm, 400000);
+        click(&mut h, "Cancel");
         h.state_mut().run("edit.undo", &json!({}));
         h.run();
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         click(&mut h, "Board setup");
         page(&mut h, "Net classes");
         h.run();
-        assert!(matches!(h.state().dialog, Dialog::Rules(_)));
-        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         click(&mut h, "New class");
         replace(&mut h, "Class name", "Signal");
         click(&mut h, "Copper clearance");
         replace(&mut h, "Copper clearance value", "0.35 mm");
         click(&mut h, "Save class");
-        assert_eq!(
-            h.state().session.project().unwrap().net_classes().definitions[0].rules[&pcbcraft_engine::net_classes::Property::ClearanceNm],
-            350000
-        );
+        assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+        assert_eq!(h.state().session.project().unwrap().net_classes().definitions[0].name, "Signal");
         assert!(h.state().session.project().unwrap().board_setup().is_none());
         click(&mut h, "Cancel");
         h.state_mut().run("edit.undo", &json!({}));
@@ -690,52 +688,160 @@ fn design_rules_navigation_reuses_editors_without_initializing_setup() {
     }
 }
 
-/// Leaving setup never discards authored/partial fields or bypasses the originating revision.
+/// Page switches retain all fields; successful rule saves advance only the host's own revision,
+/// leaving staged layer/stackup edits available for a subsequent explicit setup Apply.
 #[test]
-fn design_rules_navigation_preserves_pending_and_stale_setup_drafts() {
+fn design_rules_pages_retain_drafts_across_owned_saves() {
     for width in [1200., 700.] {
         let mut h = harness(width);
         let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         click(&mut h, "Board setup");
         replace(&mut h, "Layer name Top", "My copper");
-        for destination in ["Board defaults", "Net classes"] {
-            page(&mut h, destination);
-            assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
-            assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Layer name Top").value().as_deref(), Some("My copper"));
-            assert!(h.query_by_label("Apply or cancel your board setup changes before opening a rule editor.").is_some());
-            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-        }
-        page(&mut h, "Silkscreen");
-        replace(&mut h, "Text height", "incomplete");
+        page(&mut h, "Board defaults");
+        click(&mut h, "Use built-in defaults");
+        replace(&mut h, "Copper clearance", "0.4 mm");
         page(&mut h, "Net classes");
-        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Text height").value().as_deref(), Some("incomplete"));
+        click(&mut h, "New class");
+        replace(&mut h, "Class name", "Signal");
+        click(&mut h, "Copper clearance");
+        replace(&mut h, "Copper clearance value", "0.35 mm");
+        page(&mut h, "Board defaults");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance").value().as_deref(), Some("0.4 mm"));
+        click(&mut h, "Apply board defaults");
+        page(&mut h, "Net classes");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Class name").value().as_deref(), Some("Signal"));
+        click(&mut h, "Save class");
+        page(&mut h, "Board editor layers");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Layer name Top").value().as_deref(), Some("My copper"));
+        click(&mut h, "Apply board setup");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        let project = h.state().session.project().unwrap();
+        assert_eq!(
+            project
+                .board_setup()
+                .unwrap()
+                .layers()
+                .iter()
+                .find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Front))
+                .unwrap()
+                .name,
+            "My copper"
+        );
+        assert_eq!(project.net_classes().definitions[0].name, "Signal");
+        for _ in 0..3 {
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// Setup Apply cannot close over unsaved rule drafts; subsequent rule saves retain authority,
+/// and native reopen sees all three explicit edits through their existing shared commands.
+#[test]
+fn setup_apply_keeps_pending_rule_pages_open() {
+    let mut h = harness(1200.);
+    click(&mut h, "Board setup");
+    replace(&mut h, "Layer name Top", "Saved copper");
+    page(&mut h, "Board defaults");
+    click(&mut h, "Use built-in defaults");
+    replace(&mut h, "Copper clearance", "0.4 mm");
+    page(&mut h, "Net classes");
+    click(&mut h, "New class");
+    replace(&mut h, "Class name", "Power");
+    click(&mut h, "Copper clearance");
+    replace(&mut h, "Copper clearance value", "0.5 mm");
+    page(&mut h, "Board editor layers");
+    click(&mut h, "Apply board setup");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    assert!(h.state().session.project().unwrap().net_classes().definitions.is_empty());
+    page(&mut h, "Net classes");
+    assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Class name").value().as_deref(), Some("Power"));
+    click(&mut h, "Save class");
+    page(&mut h, "Board defaults");
+    assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance").value().as_deref(), Some("0.4 mm"));
+    click(&mut h, "Apply board defaults");
+    click(&mut h, "Cancel");
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&bytes).unwrap();
+    assert_eq!(
+        reopened
+            .board_setup()
+            .unwrap()
+            .layers()
+            .iter()
+            .find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Front))
+            .unwrap()
+            .name,
+        "Saved copper"
+    );
+    assert_eq!(reopened.net_classes().definitions[0].name, "Power");
+    assert_eq!(reopened.boards().next().unwrap().effective_rules().values.clearance_nm, 400000);
+}
+
+/// Partial invalid edits survive navigation and Cancel discards every uncommitted page.
+/// An external edit never receives the owned-save rebinding used by these embedded editors.
+#[test]
+fn design_rules_pages_preserve_invalid_fields_and_refuse_external_revisions() {
+    for width in [1200., 700.] {
+        let mut h = harness(width);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "Board setup");
+        replace(&mut h, "Layer name Top", "Pending");
+        page(&mut h, "Silkscreen");
+        replace(&mut h, "Text height", "invalid");
+        page(&mut h, "Net classes");
+        click(&mut h, "New class");
+        replace(&mut h, "Class name", "Signal");
+        click(&mut h, "Copper clearance");
+        replace(&mut h, "Copper clearance value", "invalid");
+        page(&mut h, "Board defaults");
+        click(&mut h, "Use built-in defaults");
+        replace(&mut h, "Copper clearance", "invalid");
+        page(&mut h, "Silkscreen");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Text height").value().as_deref(), Some("invalid"));
+        page(&mut h, "Net classes");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance value").value().as_deref(), Some("invalid"));
+        assert!(h.get_by_role_and_label(egui::Role::Button, "Save class").accesskit_node().is_disabled());
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         click(&mut h, "Cancel");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         click(&mut h, "Board setup");
+        page(&mut h, "Net classes");
+        click(&mut h, "New class");
+        replace(&mut h, "Class name", "Preserved");
         h.state_mut().run("project.rename", &json!({"name":"Concurrent edit"}));
         h.run();
         let concurrent = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        page(&mut h, "Board defaults");
         page(&mut h, "Net classes");
-        assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Class name").value().as_deref(), Some("Preserved"));
+        assert!(h.get_by_role_and_label(egui::Role::Button, "Save class").accesskit_node().is_disabled());
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), concurrent);
     }
 }
 
-/// Applied boards expose both destinations too; navigation does not rewrite saved setup data.
+/// Page-local cancellation does not discard another setup page's pending fields.
 #[test]
-fn design_rules_navigation_preserves_existing_setup() {
-    for width in [1200., 700.] {
-        let mut h = harness(width);
-        click(&mut h, "Board setup");
-        click(&mut h, "Apply board setup");
-        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-        for destination in ["Board defaults", "Net classes"] {
-            click(&mut h, "Board setup");
-            page(&mut h, destination);
-            h.run();
-            assert!(matches!(h.state().dialog, Dialog::BoardRules(_) | Dialog::Rules(_)));
-            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-            click(&mut h, "Cancel");
-        }
-    }
+fn embedded_rule_reverts_keep_other_setup_drafts() {
+    let mut h = harness(700.);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Board setup");
+    replace(&mut h, "Layer name Top", "Keep this");
+    page(&mut h, "Net classes");
+    click(&mut h, "New class");
+    replace(&mut h, "Class name", "Discard this");
+    click(&mut h, "Discard class changes");
+    assert!(h.query_by_label("Class name").is_none());
+    assert!(!h.get_by_role_and_label(egui::Role::Button, "New class").accesskit_node().is_disabled());
+    page(&mut h, "Board defaults");
+    click(&mut h, "Use built-in defaults");
+    replace(&mut h, "Copper clearance", "invalid");
+    click(&mut h, "Revert changes");
+    assert!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance").accesskit_node().is_disabled());
+    page(&mut h, "Board editor layers");
+    assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Layer name Top").value().as_deref(), Some("Keep this"));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Cancel");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
