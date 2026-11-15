@@ -72,8 +72,8 @@ in the schematic netlist.
 `view.set_net_names_visibility` providing the same live command. The setting
 survives local arrangements without changing document history. Pads retain their
 numbers and add a net name when both lines fit. Via names span the full diameter,
-centered over the hole with a small contrast backing; sufficiently wide, long
-visible tracks repeat upright names along their axis. Narrow copper, short
+centered over the hole with a fine outline around the letters. Sufficiently wide,
+long visible tracks repeat upright names along their axis. Narrow copper, short
 segments and distant zoom omit text before it would overflow copper or become
 unreadable. Hidden copper layers omit their track labels.
 

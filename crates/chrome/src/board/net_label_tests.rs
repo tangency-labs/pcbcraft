@@ -8,18 +8,23 @@ fn text_shapes(paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
 
 /// Capture a chosen viewport so repetition can be checked independently of off-screen copper.
 fn text_shapes_in(size: egui::Vec2, paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
+    shapes_in(size, paint)
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Text(text) => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Retain non-text shapes when checking that an annotation leaves the physical via visible.
+fn shapes_in(size: egui::Vec2, paint: impl Fn(&Painter)) -> Vec<egui::Shape> {
     let ctx = egui::Context::default();
     crate::install(&ctx);
     let mut out =
         ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() }, |ui| paint(ui.painter()));
     out.textures_delta.clear();
-    out.shapes
-        .into_iter()
-        .filter_map(|shape| match shape.shape {
-            egui::Shape::Text(text) => Some(text),
-            _ => None,
-        })
-        .collect()
+    out.shapes.into_iter().map(|shape| shape.shape).collect()
 }
 
 /// A wide viewport needs a few well-separated names, regardless of the zoomed copper width.
@@ -113,7 +118,7 @@ fn track_names_fit_visible_copper_and_remain_upright() {
 }
 
 /// Short via names become readable at working zoom, while long names need more space. Both
-/// the name and its backing stay inside the via outline and centered across the hole.
+/// the name and its halo stay inside the via outline and centered across the hole.
 #[test]
 fn via_names_use_the_full_diameter() {
     let center = pos2(200., 200.);
@@ -122,12 +127,15 @@ fn via_names_use_the_full_diameter() {
     assert!(text_shapes(|p| via_net_label(p, center, 48., "ALERT_N")).is_empty());
     for (diameter, name) in [(36., "GND"), (60., "ALERT_N"), (180., "U3.OUT")] {
         let text = text_shapes(|p| via_net_label(p, center, diameter, name));
-        assert_eq!(text.len(), 1, "{name} at {diameter}");
-        let bounds = text[0].visual_bounding_rect();
+        let foreground: Vec<_> = text.iter().filter(|text| text.override_text_color.is_none()).collect();
+        assert_eq!(foreground.len(), 1, "{name} at {diameter}");
+        let bounds = foreground[0].visual_bounding_rect();
         assert!(bounds.center().distance(center) < 0.01);
-        let backing = bounds.expand(2.);
-        for corner in [backing.left_top(), backing.right_top(), backing.left_bottom(), backing.right_bottom()] {
-            assert!(corner.distance(center) < diameter / 2. - 2.);
+        for text in &text {
+            let bounds = text.visual_bounding_rect();
+            for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
+                assert!(corner.distance(center) < diameter / 2. - 2.);
+            }
         }
     }
 }
@@ -137,16 +145,26 @@ fn via_names_use_the_full_diameter() {
 #[test]
 fn via_names_keep_contrast_and_avoid_viewport_clipping() {
     for light in [false, true] {
-        let labels = text_shapes(|p| {
-            p.ctx().set_visuals(if light { egui::Visuals::light() } else { egui::Visuals::dark() });
+        let shapes = shapes_in(vec2(800., 600.), |p| {
+            crate::theme::apply(p.ctx(), !light);
             via(p, pos2(200., 200.), 30., 18., false, false, None);
             via_net_label(p, pos2(200., 200.), 60., "GND");
             via_net_label(p, pos2(2., 200.), 60., "GND");
             via_net_label(p, pos2(200., 2.), 60., "GND");
             via_net_label(p, pos2(200., 200.), 60., "");
         });
-        assert_eq!(labels.len(), 1);
-        assert_eq!(labels[0].fallback_color, copper_label_ink(Tokens::get().board_canvas));
+        assert!(!shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(_))), "via text must not paint a background plate");
+        let labels: Vec<_> = shapes.iter().filter_map(|shape| if let egui::Shape::Text(text) = shape { Some(text) } else { None }).collect();
+        let foreground: Vec<_> = labels.iter().filter(|text| text.override_text_color.is_none()).collect();
+        assert_eq!(foreground.len(), 1);
+        let foreground = foreground[0];
+        assert_eq!(foreground.fallback_color, copper_label_ink(Tokens::get().board_canvas));
+        let outline: Vec<_> = labels.iter().filter(|text| text.override_text_color.is_some()).collect();
+        assert!(!outline.is_empty());
+        for text in outline {
+            assert_eq!(text.override_text_color, Some(Tokens::get().board_canvas));
+            assert!(text.pos.distance(foreground.pos) <= 1., "the halo must stay fine");
+        }
     }
 }
 
