@@ -674,6 +674,39 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
     assert!(commands.contains(&egui::ViewportCommand::Maximized(true)));
 }
 
+/// Project titles use free bar space and truncate only when utilities need the room.
+#[test]
+fn project_title_uses_available_space_without_covering_controls() {
+    let mut h = harness();
+    h.state_mut().integrated_titlebar = true;
+    new_project(&mut h);
+    let name = "Dual LED · transistor flasher demonstration";
+    h.state_mut().run("project.rename", &json!({"name": name}));
+    let t = pcbcraft_chrome::Tokens::get();
+    let mut wide_width = 0.;
+    for width in [1280., 640.] {
+        h.set_size(egui::vec2(width, 700.));
+        h.run();
+        let bar_bottom = h.get_by_label("File").rect().bottom();
+        let title = h.query_all_by_label(name).find(|node| node.rect().bottom() <= bar_bottom).unwrap().rect();
+        let natural = h.ctx.fonts_mut(|fonts| fonts.layout_no_wrap(name.into(), pcbcraft_chrome::fonts::semibold(t.font_button), t.text)).size().x;
+        if width == 1280. {
+            assert!(title.width() >= natural - 1., "{title:?} cannot show {natural} points of text");
+            wide_width = title.width();
+        } else {
+            assert!(title.width() < wide_width);
+        }
+        let controls_left = ["Assistant", "Preferences", "Help", "Report a bug"]
+            .into_iter()
+            .filter_map(|label| h.query_by_label(label))
+            .map(|node| node.rect().left())
+            .fold(width, f32::min);
+        assert!(title.right() < controls_left);
+        assert!(h.get_by_label("Unsaved changes").rect().right() < controls_left);
+        assert!(h.get_by_label("Close window").rect().right() <= width);
+    }
+}
+
 /// A dirty project keeps its marker when the title no longer fits beside the utilities.
 #[test]
 fn narrow_app_bar_keeps_the_unsaved_marker() {
