@@ -13,6 +13,8 @@ const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE_OR_FOLDER | --conne
        pcbcraft-cli convert SOURCE DESTINATION
                         Convert a previous split project to a new destination. A .pc destination
                         creates a ZIP package; other names create a new project folder.
+       pcbcraft-cli --help, -h
+                        Print this usage information.
        pcbcraft-cli --version";
 
 /// Dispatch the CLI and report file or server errors on stderr.
@@ -38,6 +40,10 @@ fn main() -> ExitCode {
             Some((token_file, wait)) => connect_editor(port, token_file, wait).and_then(|backend| serve(Box::new(backend))),
             None => Err(format!("unrecognized --connect options\n{USAGE}")),
         },
+        [flag] if flag == "--help" || flag == "-h" => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
         [flag] if flag == "--version" => {
             println!("pcbcraft-cli {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
