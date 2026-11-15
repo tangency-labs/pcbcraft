@@ -13,12 +13,11 @@
     {
       "id": "main",
       "drawing": [
-        {"type": "line", "from_nm": [-3175000, 0], "to_nm": [3175000, 0]},
-        {"type": "rect", "min_nm": [-1270000, -952500], "max_nm": [1270000, 952500]}
+        {"type": "graphic", "graphic": {"geometry": {"type": "polyline", "points": [{"x_nm": -1587500, "y_nm": 635000}, {"x_nm": -635000, "y_nm": 1587500}, {"x_nm": 1587500, "y_nm": -635000}, {"x_nm": 635000, "y_nm": -1587500}], "closed": true}, "stroke_nm": 120000, "fill": "none"}}
       ],
       "pins": [
-        {"terminal": "1", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 1905000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
-        {"terminal": "2", "at_nm": [5080000, 0], "appearance": {"orientation": "left", "length_nm": 1905000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+        {"terminal": "1", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 4127500, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [5080000, 0], "appearance": {"orientation": "left", "length_nm": 4127500, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
       ]
     }
   ]

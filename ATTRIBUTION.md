@@ -1536,8 +1536,11 @@ was incorporated. Existing passive/LED/package notices remain with the pinned
 records. Project documents and archives are generated through shared native
 commands and production codecs; the tests independently state the intended nets.
 
-The ferrite bead redraw follows @travle1's further visual feedback, using an
-original compact rectangular core around a straight lead under MIT OR Apache-2.0.
-At @travle1's direction, this unpublished first draft is replaced in place rather
-than retaining the discarded drawing as a separate revision. Terminal positions
-are unchanged. No external symbol library or artwork was used.
+The ferrite bead redraw follows @travle1's further visual feedback. Its tilted
+rectangular outline and leads ending at the body follow the schematic convention
+shown in Texas Instruments SLUAAI2 (December 2021), Figure 1-5:
+https://www.ti.com/document-viewer/lit/html/sluaai2
+The native geometry is independently drawn under MIT OR Apache-2.0; manufacturer
+images are not imported or bundled. At @travle1's direction, this unpublished
+first draft is replaced in place without a separate discarded revision. Terminal
+positions are unchanged, and every visible stroke uses the same physical width.
