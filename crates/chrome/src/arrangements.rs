@@ -14,23 +14,31 @@ pub enum Intent {
 
 /// Keep saved layouts reachable in File without persistent title-bar tabs.
 /// Selection and management emit intents; the host retains validation and window ownership.
+/// Tall lists use the shared scrolling-menu rows within the viewport, including the New action.
 pub fn menu(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> {
     let mut intent = None;
     crate::menu::MenuItem::new("Layouts").enabled(!tabs.is_empty()).submenu(ui, |ui| {
-        for (id, name) in tabs {
-            ui.push_id(id, |ui| {
-                crate::menu::MenuItem::new(name).choice(*id == active).submenu(ui, |ui| {
-                    if crate::menu::MenuItem::new("Activate").show(ui) {
-                        intent = Some(Intent::Select(*id));
-                    }
-                    intent = actions(ui, *id, tabs.len()).or(intent);
+        let t = crate::Tokens::get();
+        let room = (ui.ctx().content_rect().height() - 2.0 * t.space_12).max(0.0);
+        ui.set_width((t.control_height * 8.0 + t.space_12).min((ui.ctx().content_rect().width() - 2.0 * t.space_12).max(0.0)));
+        let estimate = (tabs.len() + 1) as f32 * solidcraft_theme::Tokens::get().control_height + t.space_8 + 1.0;
+        let id = ui.scope_id().with(("saved_layout_rows", tabs));
+        solidcraft_ui_kit::menu::scroll_rows(ui, id, room, estimate, |ui| {
+            for (id, name) in tabs {
+                ui.push_id(id, |ui| {
+                    crate::menu::MenuItem::new(name).choice(*id == active).submenu(ui, |ui| {
+                        if crate::menu::MenuItem::new("Activate").show(ui) {
+                            intent = Some(Intent::Select(*id));
+                        }
+                        intent = actions(ui, *id, tabs.len()).or(intent);
+                    });
                 });
-            });
-        }
-        crate::menu::separator(ui);
-        if crate::menu::MenuItem::new("New arrangement").show(ui) {
-            intent = Some(Intent::New);
-        }
+            }
+            crate::menu::separator(ui);
+            if crate::menu::MenuItem::new("New arrangement").show(ui) {
+                intent = Some(Intent::New);
+            }
+        });
     });
     intent
 }

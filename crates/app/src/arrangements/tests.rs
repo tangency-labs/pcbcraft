@@ -503,6 +503,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
 fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     use egui::{Key, Modifiers};
     let mut h = harness();
+    let original = h.state().arrangements.active();
     click(&mut h, "New arrangement");
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.key_press(Key::Backspace);
@@ -520,17 +521,20 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     click(&mut h, "Duplicate…");
     click(&mut h, "Create");
     has_layout(&h, "Views copy");
+    let target = h.state().arrangements.active();
+    assert_ne!(target, original);
     let before = h.state().arrangement_snapshot().unwrap();
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
     click(&mut h, "Cancel");
-    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().arrangements.tabs().iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![original, target]);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
-    assert!(h.query_by_label("Arrangement Views").is_none());
-    assert_eq!(h.state().arrangements.tabs().len(), 1);
+    assert!(!h.state().arrangements.tabs().iter().any(|(id, _)| *id == target));
+    assert_eq!(h.state().arrangements.tabs().iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![original]);
+    assert_eq!(h.state().arrangements.active(), original);
 }
 
 /// A deliberately single-view setup can be created without losing the original split layout.
@@ -573,6 +577,7 @@ fn compact_arrangement_controls_stay_reachable() {
 #[test]
 fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     let mut h = harness();
+    let target = h.state().arrangements.active();
     let design = h.state().arrangement_snapshot().unwrap();
     action(&mut h, Action::Create { name: "Review".into(), start: Start::Current });
     click(&mut h, "Choose workspace");
@@ -601,10 +606,12 @@ fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     click(&mut h, "Arrangement Review");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
     let view = h.state().views.active.id();
+    let expected: Vec<_> = h.state().arrangements.tabs().iter().filter(|(id, _)| *id != target).map(|(id, _)| *id).collect();
     layout_menu(&mut h, "Capture");
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
-    assert!(h.query_by_label("Arrangement Capture").is_none());
+    assert!(!h.state().arrangements.tabs().iter().any(|(id, _)| *id == target));
+    assert_eq!(h.state().arrangements.tabs().iter().map(|(id, _)| *id).collect::<Vec<_>>(), expected);
     assert_eq!(h.state().arrangements.active(), active);
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
@@ -782,4 +789,45 @@ fn layout_names_do_not_collide_with_menu_actions() {
     click(&mut h, "Rename");
     has_layout(&h, "Named layout");
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// A short viewport can scroll to and activate its last saved layout and create another one.
+#[test]
+fn large_layout_menu_keeps_last_layout_and_new_action_reachable() {
+    for theme in [crate::ThemeChoice::Dark, crate::ThemeChoice::Light] {
+        let mut h = harness();
+        h.state_mut().preferences.theme = theme;
+        h.state_mut().integrated_titlebar = true;
+        let first = h.state().arrangements.active();
+        for index in 1..24 {
+            action(&mut h, Action::Create { name: format!("Saved layout {index:02}"), start: Start::Current });
+        }
+        let last = h.state().arrangements.active();
+        action(&mut h, Action::Select(first));
+        h.set_size(egui::vec2(640., 600.));
+        h.run();
+        let before = h.state().session.inspect();
+        click(&mut h, "File");
+        h.get_by_label("Layouts").hover();
+        h.run();
+        h.get_by_role_and_label(egui::Role::RadioButton, "Saved layout 23").scroll_to_me();
+        h.run();
+        assert!(crate::tests::fully_visible(&h, "Saved layout 23"));
+        assert!(h.get_by_label("Saved layout 23").rect().width() <= h.get_by_label("New Project").rect().width() + 1.);
+        h.get_by_role_and_label(egui::Role::RadioButton, "Saved layout 23").hover();
+        h.run();
+        click(&mut h, "Activate");
+        assert_eq!(h.state().arrangements.active(), last);
+        click(&mut h, "File");
+        h.get_by_label("Layouts").hover();
+        h.run();
+        h.get_by_label("New arrangement").scroll_to_me();
+        h.run();
+        assert!(crate::tests::fully_visible(&h, "New arrangement"));
+        click(&mut h, "New arrangement");
+        h.get_by_label("Arrangement name");
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().arrangements.tabs().len(), 24);
+        assert_eq!(h.state().session.inspect(), before);
+    }
 }
