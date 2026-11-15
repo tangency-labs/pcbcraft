@@ -446,6 +446,21 @@ impl PcbApp {
             return;
         }
         let Some(source) = self.views.active.input(&self.session) else { return };
+        self.open_rules_from(source, net);
+    }
+    /// Board Setup reuses class authoring with the captured originating view, not active focus.
+    pub(super) fn begin_class_rules_from(&mut self, source: ViewInput) {
+        self.open_rules_from(source, false);
+    }
+    /// Validate a navigation handoff before capturing the same revision-bound shared form.
+    fn open_rules_from(&mut self, source: ViewInput, net: bool) {
+        if !matches!(self.dialog, Dialog::None)
+            || self.files.busy()
+            || self.project_action_pending()
+            || !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session))
+        {
+            return;
+        }
         match Edit::capture(self, source, if net { Page::Net } else { Page::Classes }) {
             Ok(edit) => self.dialog = Dialog::Rules(Box::new(edit)),
             Err(error) => self.message = Some(error),

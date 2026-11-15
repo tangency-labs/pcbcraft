@@ -180,6 +180,8 @@ pub(super) struct Edit {
     unit: units::Unit,
     populated: bool,
     original_copper: u64,
+    original_setup: BoardSetup,
+    original_silkscreen: pcbcraft_engine::board::silkscreen::Settings,
     silkscreen: [Length; 3],
     candidate: Candidate,
     initializing: bool,
@@ -195,6 +197,23 @@ pub(super) struct Edit {
     new_purpose: LayerPurpose,
     new_side: Option<Side>,
     error: Option<String>,
+}
+
+impl Edit {
+    /// Rule-editor navigation cannot discard partial fields, imported profiles or material edits.
+    /// Compare only on navigation, preserving untouched precision and avoiding per-paint validation.
+    fn pending_for_rules(&self) -> bool {
+        self.profile_ticket.is_some()
+            || self.material_edit.is_some()
+            || self.profile_name != "Board setup"
+            || !self.new_name.is_empty()
+            || self.new_purpose != LayerPurpose::User
+            || self.new_side.is_some()
+            || !self.target_thickness.is_empty()
+            || !self.locked.is_empty()
+            || self.candidate.value(self.unit).as_ref() != Ok(&self.original_setup)
+            || self.silk_style().as_ref() != Ok(&self.original_silkscreen)
+    }
 }
 
 /// Friendly purpose names are presentation only; command inputs retain typed layer roles.
@@ -239,6 +258,8 @@ impl PcbApp {
             unit: self.preferences.units,
             populated: board.footprints().next().is_some(),
             original_copper: setup.stackup().strata.len().div_ceil(2) as u64,
+            original_setup: setup.clone(),
+            original_silkscreen: board.silkscreen(),
             candidate: Candidate::new(setup, self.preferences.units),
             silkscreen: [board.silkscreen().text_height_nm, board.silkscreen().stroke_width_nm, board.silkscreen().pad_clearance_nm]
                 .map(|n| Length::new(Some(n), self.preferences.units)),
@@ -285,13 +306,33 @@ impl PcbApp {
                     Page::Materials => edit.materials(ui),
                     Page::Silkscreen => edit.silkscreen(ui),
                     Page::Profiles => profile_action = edit.profiles(ui, profile_busy),
+                    Page::BoardDefaults | Page::NetClasses => {}
                 }
             });
         });
-        edit.page = page;
         if action.close {
             return;
         }
+        if matches!(page, Page::BoardDefaults | Page::NetClasses) {
+            if valid && !edit.pending_for_rules() {
+                match page {
+                    Page::BoardDefaults => self.begin_board_rules_from(edit.source),
+                    Page::NetClasses => self.begin_class_rules_from(edit.source),
+                    _ => {}
+                }
+                if !matches!(self.dialog, Dialog::None) {
+                    ctx.request_repaint();
+                    return;
+                }
+            } else if valid {
+                edit.error = Some("Apply or cancel your board setup changes before opening a rule editor.".into());
+            }
+            // Retain the original page and draft when navigation cannot finish.
+            ctx.request_repaint();
+            self.dialog = Dialog::BoardSetup(edit);
+            return;
+        }
+        edit.page = page;
         if let Some(action) = profile_action {
             self.start_setup_profile(ctx, &mut edit, action);
         }

@@ -51,7 +51,13 @@ and copper-to-edge gaps, track width, radial annular ring, via outside diameter 
 drill diameter. These are illustrative drawings, independent of the entered value;
 the hover and accessible image description identify the measured boundaries.
 
-**Board defaults…** opens the board-scoped form when a board exists, using the same
+**Board Setup → Design rules** also provides **Board defaults** and **Net classes**,
+opening these same editors. Pending or invalid setup changes retain their draft;
+apply or cancel them before leaving Setup for a rule editor. Opening either editor
+does not apply a suggested initial stackup. **Analyze → Rules** remains available
+from either workspace, including schematic-only designs.
+
+**Board defaults…** in Rules opens the board-scoped form when a board exists, using the same
 row layout and illustrations. Built-in values are read-only until **Use built-in
 defaults** is cleared; labels and diagrams remain legible in either state.
 Class definitions and assignment drafts remain disposable until saved; Cancel or

@@ -1423,3 +1423,8 @@ geometry; no KiCad/JLCPCB artwork, external source, asset or dependency was used
 The pinned toolkit has no PCB constraint illustration component. Electronics
 geometry stays in the app, while the chrome form adapter reserves its column and
 continues to compose shared fields, checkboxes, modal surfaces and scrolling.
+
+Board Setup's Design rules destinations reuse its existing Craft navigation rail
+and compact selector to open the same revision-bound board/class editors. Draft
+retention and source-view checks remain host behavior; no new generic control,
+asset, dependency or toolkit revision was introduced.

@@ -12,7 +12,7 @@ pub fn layer_actions_height() -> f32 {
     Tokens::get().control_height * 2.
 }
 
-/// Pages carry presentation labels only; their model and staged changes stay in the app.
+/// Setup pages and rule-editor destinations carry labels only; drafts and transitions stay in the app.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
     #[default]
@@ -21,8 +21,13 @@ pub enum Page {
     Materials,
     Silkscreen,
     Profiles,
+    BoardDefaults,
+    NetClasses,
 }
 impl Page {
+    /// Preserve existing page identities while listing the shared rule-editor destinations last.
+    const ALL: [Self; 7] = [Self::Layers, Self::Stackup, Self::Materials, Self::Silkscreen, Self::Profiles, Self::BoardDefaults, Self::NetClasses];
+
     /// Keep the familiar board-editor/physical-stackup distinction explicit in navigation.
     pub fn title(self) -> &'static str {
         match self {
@@ -31,6 +36,8 @@ impl Page {
             Self::Materials => "Materials",
             Self::Silkscreen => "Silkscreen",
             Self::Profiles => "Profiles",
+            Self::BoardDefaults => "Board defaults",
+            Self::NetClasses => "Net classes",
         }
     }
 }
@@ -54,7 +61,10 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
         ui.painter().vline(rail.right(), rail.y_range(), Stroke::new(1., t.dialog_rule));
         let mut nav = ui.new_child(UiBuilder::new().max_rect(rail.shrink(t.space_12)).layout(Layout::top_down(Align::Min)));
         heading(&mut nav, "Board setup");
-        for value in [Page::Layers, Page::Stackup, Page::Materials, Page::Silkscreen, Page::Profiles] {
+        for value in Page::ALL {
+            if value == Page::BoardDefaults {
+                heading(&mut nav, "Design rules");
+            }
             if nav
                 .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
                     solidcraft_ui_kit::button(
@@ -76,7 +86,11 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
             .selected_text(page.title())
             .width(nav.available_width())
             .show_ui(&mut nav, |ui| {
-                for value in [Page::Layers, Page::Stackup, Page::Materials, Page::Silkscreen, Page::Profiles] {
+                for value in Page::ALL {
+                    if value == Page::BoardDefaults {
+                        ui.separator();
+                        ui.label(crate::shell::dim("Design rules"));
+                    }
                     ui.selectable_value(page, value, value.title());
                 }
             })

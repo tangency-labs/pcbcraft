@@ -647,3 +647,95 @@ fn starting_material_and_copper_presets_stage_real_board_settings() {
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     }
 }
+
+/// Both Board Setup destinations use the existing rule editors without applying the untouched
+/// setup suggestion. Saving rules/classes shares native commands and one-step history.
+#[test]
+fn design_rules_navigation_reuses_editors_without_initializing_setup() {
+    for width in [1200., 700.] {
+        let mut h = harness(width);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "Board setup");
+        page(&mut h, "Board defaults");
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::BoardRules(_)));
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        click(&mut h, "Use built-in defaults");
+        replace(&mut h, "Copper clearance", "0.4 mm");
+        click(&mut h, "Apply");
+        assert!(h.state().session.project().unwrap().board_setup().is_none());
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().effective_rules().values.clearance_nm, 400000);
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        click(&mut h, "Board setup");
+        page(&mut h, "Net classes");
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::Rules(_)));
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        click(&mut h, "New class");
+        replace(&mut h, "Class name", "Signal");
+        click(&mut h, "Copper clearance");
+        replace(&mut h, "Copper clearance value", "0.35 mm");
+        click(&mut h, "Save class");
+        assert_eq!(
+            h.state().session.project().unwrap().net_classes().definitions[0].rules[&pcbcraft_engine::net_classes::Property::ClearanceNm],
+            350000
+        );
+        assert!(h.state().session.project().unwrap().board_setup().is_none());
+        click(&mut h, "Cancel");
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// Leaving setup never discards authored/partial fields or bypasses the originating revision.
+#[test]
+fn design_rules_navigation_preserves_pending_and_stale_setup_drafts() {
+    for width in [1200., 700.] {
+        let mut h = harness(width);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "Board setup");
+        replace(&mut h, "Layer name Top", "My copper");
+        for destination in ["Board defaults", "Net classes"] {
+            page(&mut h, destination);
+            assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+            assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Layer name Top").value().as_deref(), Some("My copper"));
+            assert!(h.query_by_label("Apply or cancel your board setup changes before opening a rule editor.").is_some());
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+        page(&mut h, "Silkscreen");
+        replace(&mut h, "Text height", "incomplete");
+        page(&mut h, "Net classes");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Text height").value().as_deref(), Some("incomplete"));
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        click(&mut h, "Cancel");
+        click(&mut h, "Board setup");
+        h.state_mut().run("project.rename", &json!({"name":"Concurrent edit"}));
+        h.run();
+        let concurrent = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        page(&mut h, "Net classes");
+        assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), concurrent);
+    }
+}
+
+/// Applied boards expose both destinations too; navigation does not rewrite saved setup data.
+#[test]
+fn design_rules_navigation_preserves_existing_setup() {
+    for width in [1200., 700.] {
+        let mut h = harness(width);
+        click(&mut h, "Board setup");
+        click(&mut h, "Apply board setup");
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        for destination in ["Board defaults", "Net classes"] {
+            click(&mut h, "Board setup");
+            page(&mut h, destination);
+            h.run();
+            assert!(matches!(h.state().dialog, Dialog::BoardRules(_) | Dialog::Rules(_)));
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+            click(&mut h, "Cancel");
+        }
+    }
+}

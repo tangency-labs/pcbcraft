@@ -15,7 +15,7 @@
     "failure-review.md": "186c93a7c808630a8e8f84e4ec1b1b9bbe8a69587587bb71d0aa3c6027e068e4",
     "checks.json": "e608d7120f3700d44478ed6727980146d9510f5ef3c066df6dc7f86044b30c11",
     "verification.json": "3e00ec46016c5da79c1264ff2a2d48cce10d0fde6e93fcce457218ae15b7b320",
-    "README.md": "0668ac63f804812224d402c9fd41807c573a9b5f7e9b5d13ba0bf5eaa8275157",
+    "README.md": "ea1e31549c6f67ef59d08a86f00dc9620402ce17a0253b95cc24af826e2874f9",
     "visual/class-dark-wide.png": "3dc4e0a16aeca673e8dba2708710399eb05c3ef020d57f0c8aa407c648e686cf",
     "visual/net-dark-wide.png": "71e4b01616213587b361abd3c1c5aef7c770d6428a7c26eaa98bf4c8b75f6e52",
     "visual/net-light-compact.png": "97dbb495445e3e0ea75f4b4bd5baccd08ca7c108e2425b97bd58594bd5c337f9",
@@ -51,7 +51,14 @@
     "geometry-review/class-light-compact.png": "0b583afa4474e35822e632a00e2de1c55b214d80b102591a8ba140ef35cc2d47",
     "geometry-review/effective-dark-wide.png": "1d1e30e20809237d76be363833d2e58c8619715993bf0c28587efa47bc37f9f9",
     "geometry-review/source.json": "36eb5d25a6ef8b9baba168d6541a544b6dfb04afcacddbf3126efd1721ed7e4a",
-    "geometry-review/verification.json": "62693abd1497bb15de104c2dc18ddf017fdb8a76f1456f99d9852b2c77017d94"
+    "geometry-review/verification.json": "62693abd1497bb15de104c2dc18ddf017fdb8a76f1456f99d9852b2c77017d94",
+    "setup-navigation-review/README.md": "a16e5c2242649f9cde34380404c6e61c8498d8c0f2da07dacffada228fe29b52",
+    "setup-navigation-review/browser-verification.json": "8faa29156ff163570da87c2ab90cba05e0ec6fdc4c11d5bc0741dac9d62bc35e",
+    "setup-navigation-review/menu-dark-compact-browser.png": "08c96c1c3f1e2bce3bf6bb72bb1f3cd9db768c83e13ba3cbc57e364dd839fddd",
+    "setup-navigation-review/menu-light-compact.png": "4d23dd1a39c163ff770dfa643cc73b05ea65b573060dc42b650acd9ce9521c47",
+    "setup-navigation-review/setup-dark-wide.png": "19552cbfdd660f31d6f3265ed8c262d36cf43699065322497e1949b33c4b0119",
+    "setup-navigation-review/source.json": "298df7a31364a28b0b347b878ecb06369c67e80dcf5918c32a500f7d2afb6db9",
+    "setup-navigation-review/verification.json": "d226c55b16d8c60612d20122e77ad864c84e19c5fa4780ea23470f70b1ab83d7"
   },
   "layout_code": "8d942a1cacc7a0281cf447b40f09b1eee88f81b7",
   "active_source_code": "0cca4c2d022a8e54da06caf9dfad3fe2842a2475"

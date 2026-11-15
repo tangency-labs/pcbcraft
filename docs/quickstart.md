@@ -521,6 +521,10 @@ hard limits, routing preferences, conflicts, rule IDs/revisions and assignment
 origins. Naming a net does not classify it. See the [editor workflow](net-class-editor.md)
 for supported targets and the shared MCP commands.
 
+**Board Setup → Design rules** provides **Board defaults** and **Net classes**,
+using the same editors as **Analyze → Rules**. Apply or cancel pending setup edits
+before opening either rule editor.
+
 **Board defaults…** in Rules opens the board form with the same bounded fields and
 dimension drawings as the class editor. Clear **Use built-in
 defaults** to author values, then Apply; checking it restores built-in values.
