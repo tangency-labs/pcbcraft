@@ -15,7 +15,7 @@
     "failure-review.md": "186c93a7c808630a8e8f84e4ec1b1b9bbe8a69587587bb71d0aa3c6027e068e4",
     "checks.json": "e608d7120f3700d44478ed6727980146d9510f5ef3c066df6dc7f86044b30c11",
     "verification.json": "3e00ec46016c5da79c1264ff2a2d48cce10d0fde6e93fcce457218ae15b7b320",
-    "README.md": "ea1e31549c6f67ef59d08a86f00dc9620402ce17a0253b95cc24af826e2874f9",
+    "README.md": "48ed0a2b7aeb029d909b6de72c20f3276bb77fb9c4817fc943791c89ee3d4c52",
     "visual/class-dark-wide.png": "3dc4e0a16aeca673e8dba2708710399eb05c3ef020d57f0c8aa407c648e686cf",
     "visual/net-dark-wide.png": "71e4b01616213587b361abd3c1c5aef7c770d6428a7c26eaa98bf4c8b75f6e52",
     "visual/net-light-compact.png": "97dbb495445e3e0ea75f4b4bd5baccd08ca7c108e2425b97bd58594bd5c337f9",
@@ -58,7 +58,10 @@
     "setup-navigation-review/menu-light-compact.png": "4d23dd1a39c163ff770dfa643cc73b05ea65b573060dc42b650acd9ce9521c47",
     "setup-navigation-review/setup-dark-wide.png": "19552cbfdd660f31d6f3265ed8c262d36cf43699065322497e1949b33c4b0119",
     "setup-navigation-review/source.json": "298df7a31364a28b0b347b878ecb06369c67e80dcf5918c32a500f7d2afb6db9",
-    "setup-navigation-review/verification.json": "d226c55b16d8c60612d20122e77ad864c84e19c5fa4780ea23470f70b1ab83d7"
+    "setup-navigation-review/verification.json": "d226c55b16d8c60612d20122e77ad864c84e19c5fa4780ea23470f70b1ab83d7",
+    "composition-rebase-review/README.md": "70f4a9ac7c206a30e58959be7a22a83659fe7cdbc0b3d84984476a1095139277",
+    "composition-rebase-review/source.json": "619e14d9b1eccb4cec8bfa42b97f125d324c8c915e8ff04dbc3302c66e12ea1a",
+    "composition-rebase-review/verification.json": "8288fa8fe8491cc4cbd85ced04734a3f54c3ec10c6105d173b0d01db8f0c927f"
   },
   "layout_code": "8d942a1cacc7a0281cf447b40f09b1eee88f81b7",
   "active_source_code": "0cca4c2d022a8e54da06caf9dfad3fe2842a2475"

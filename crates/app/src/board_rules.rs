@@ -1,6 +1,6 @@
 //! A disposable rule draft uses the shared settings modal and engine transaction.
 use crate::{Dialog, PcbApp, ViewInput};
-use pcbcraft_chrome::{controls, properties, rule_form as form, shell, units};
+use pcbcraft_chrome::{controls, rule_form as form, shell, units};
 use pcbcraft_engine::board::{rules::Values, view::BoardTarget};
 use pcbcraft_engine::net_classes::Property;
 use serde_json::json;
@@ -111,13 +111,7 @@ impl PcbApp {
                                 }
                                 form::Cell::Diagram => crate::rule_diagram::show(ui, field.property),
                                 form::Cell::Value => {
-                                    ui.add_enabled_ui(!edit.builtin, |ui| {
-                                        ui.add_sized(
-                                            egui::vec2(ui.available_width(), pcbcraft_chrome::Tokens::get().control_height),
-                                            properties::input(&mut field.text),
-                                        )
-                                        .accessible_name(field.label);
-                                    });
+                                    form::length_field(ui, &mut field.text, !edit.builtin, field.label);
                                 }
                                 form::Cell::Source => {
                                     ui.label(shell::dim(if preferred {

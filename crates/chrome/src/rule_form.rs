@@ -100,6 +100,16 @@ pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, headings: [&str; 2], items: &
     });
 }
 
+/// Compose the same bounded dimensional input for board defaults and sparse class fields.
+/// The host supplies edit text and enabled state; this adapter retains shared styling and the
+/// contextual accessible name without parsing values or acquiring document authority.
+pub fn length_field(ui: &mut Ui, text: &mut String, enabled: bool, name: impl Into<String>) -> egui::Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.add_sized(vec2(ui.available_width(), Tokens::get().control_height), crate::properties::input(text)).accessible_name(name)
+    })
+    .inner
+}
+
 /// Reserve the complete column even when a label is short; controls keep their native style.
 fn cell<R>(ui: &mut Ui, width: f32, height: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.allocate_ui_with_layout(vec2(width, height), Layout::left_to_right(Align::Center), |ui| {

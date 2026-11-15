@@ -107,22 +107,25 @@ impl ClassDraft {
 }
 
 /// Resolve actual selected object identities once when Rules opens. Mixed nets require a choice.
-fn selected_target(app: &PcbApp, source: ViewInput) -> Result<Option<ClassTarget>, String> {
-    let project = app.session.project().ok_or("No project open.")?;
-    let view = app.views.view(source.view()).ok_or("The originating view closed.")?;
+fn selected_target(
+    project: &Project,
+    target: Option<DocumentTarget>,
+    schematic: &pcbcraft_engine::selection::Selection,
+    copper: &BTreeSet<Uuid>,
+) -> Result<Option<ClassTarget>, String> {
     let mut targets = Vec::new();
     let mut unsupported = false;
-    match view.target() {
+    match target {
         Some(DocumentTarget::Sheet(sheet)) => {
             let own = project.for_sheet(sheet).ok_or("Sheet unavailable.")?;
-            for wire in own.wires().iter().filter(|wire| view.schematic.selection.wires.contains(&wire.id())) {
+            for wire in own.wires().iter().filter(|wire| schematic.wires.contains(&wire.id())) {
                 if let Some(target) = project.net_class_target_for_endpoint(sheet, wire.endpoints()[0]).map_err(|error| error.to_string())? {
                     targets.push(target);
                 } else {
                     unsupported = true;
                 }
             }
-            for item in own.net_labels().iter().filter(|item| view.schematic.selection.net_labels.contains(&item.object_id())) {
+            for item in own.net_labels().iter().filter(|item| schematic.net_labels.contains(&item.object_id())) {
                 if let Some(target) = project
                     .net_class_target_for_endpoint(sheet, pcbcraft_engine::schematic::WireEndpoint::NetLabel(item.id))
                     .map_err(|error| error.to_string())?
@@ -135,7 +138,7 @@ fn selected_target(app: &PcbApp, source: ViewInput) -> Result<Option<ClassTarget
         }
         Some(DocumentTarget::Board(board)) => {
             let board = project.board_view(board).ok_or("Board unavailable.")?;
-            for id in &view.board.tracks.selected {
+            for id in copper {
                 if let Some(target) = board.net_class_target_for_copper(&id.to_string()).map_err(|error| error.to_string())? {
                     targets.push(target);
                 } else {
@@ -156,8 +159,13 @@ fn selected_target(app: &PcbApp, source: ViewInput) -> Result<Option<ClassTarget
 
 impl Edit {
     /// Capture fresh scoped chooser targets; opening never promotes a net or changes history.
-    fn capture(app: &PcbApp, source: ViewInput, page: Page) -> Result<Self, String> {
-        let project = app.session.snapshot().ok_or("No project open.")?;
+    fn capture(
+        project: Arc<Project>,
+        source: ViewInput,
+        page: Page,
+        unit: units::Unit,
+        selected: Result<Option<ClassTarget>, String>,
+    ) -> Result<Self, String> {
         let registry = project.inspect_net_registry()?;
         let rows = registry["nets"].as_array().ok_or("Net inspection is unavailable.")?;
         let references: BTreeMap<_, _> = project.components().map(|component| (component.id(), component.reference().to_owned())).collect();
@@ -174,13 +182,12 @@ impl Edit {
             let name = if names.is_empty() { "Unnamed".into() } else { names.join(" / ") };
             nets.push(NetChoice { label: format!("{name} · {detail}"), target: ClassTarget::Derived { anchor } });
         }
-        let selected = selected_target(app, source);
         let net_index =
             selected.as_ref().ok().and_then(|selected| selected.as_ref()).and_then(|selected| nets.iter().position(|net| &net.target == selected));
         let mut edit = Self {
             source,
             project,
-            unit: app.preferences.units,
+            unit,
             page,
             selected_class: None,
             draft: None,
@@ -258,10 +265,7 @@ fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft) {
                     form::Cell::Value => {
                         let mut inherited = "Not specified".to_owned();
                         let text = if field.enabled { &mut field.text } else { &mut inherited };
-                        ui.add_enabled_ui(field.enabled, |ui| {
-                            ui.add_sized(egui::vec2(ui.available_width(), pcbcraft_chrome::Tokens::get().control_height), properties::input(text))
-                                .accessible_name(format!("{} value", label(field.property)));
-                        });
+                        form::length_field(ui, text, field.enabled, format!("{} value", label(field.property)));
                     }
                     form::Cell::Source => {
                         ui.label(shell::dim(if !field.enabled {
@@ -461,10 +465,18 @@ impl PcbApp {
         {
             return;
         }
-        match Edit::capture(self, source, if net { Page::Net } else { Page::Classes }) {
+        match self.capture_rules(source, if net { Page::Net } else { Page::Classes }) {
             Ok(edit) => self.dialog = Dialog::Rules(Box::new(edit)),
             Err(error) => self.message = Some(error),
         }
+    }
+    /// Assemble source-view inputs at the shell boundary; reusable draft/selection helpers need
+    /// only the immutable project, explicit selection and captured display/authority data.
+    fn capture_rules(&self, source: ViewInput, page: Page) -> Result<Edit, String> {
+        let view = self.views.view(source.view()).filter(|view| view.accepts(source, &self.session)).ok_or("The originating view changed.")?;
+        let project = self.session.snapshot().ok_or("No project open.")?;
+        let selected = selected_target(&project, view.target(), &view.schematic.selection, &view.board.tracks.selected);
+        Edit::capture(project, source, page, self.preferences.units, selected)
     }
     /// One Apply emits one shared native command. Stale drafts remain inspectable but cannot
     /// write; cancellation changes no document, and successful edits refresh the originating view.
@@ -656,7 +668,7 @@ impl PcbApp {
             } else {
                 let source = self.views.view(edit.source.view()).and_then(|view| view.input(&self.session));
                 if let Some(source) = source {
-                    match Edit::capture(self, source, edit.page) {
+                    match self.capture_rules(source, edit.page) {
                         Ok(mut refreshed) => {
                             if edit.page == Page::Classes {
                                 let id = selected.or_else(|| {

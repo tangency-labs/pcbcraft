@@ -1428,3 +1428,9 @@ Board Setup's Design rules destinations reuse its existing Craft navigation rail
 and compact selector to open the same revision-bound board/class editors. Draft
 retention and source-view checks remain host behavior; no new generic control,
 asset, dependency or toolkit revision was introduced.
+
+The composition follow-up keeps source-view/snapshot collection at the application
+orchestration boundary. Draft and selected-net helpers receive explicit immutable
+model/selection inputs, and board/class dimensional inputs share one chrome
+adapter over the same qualified Craft field. Commands, resolution, source
+authority and saved data remain unchanged; no new dependency or toolkit gap.

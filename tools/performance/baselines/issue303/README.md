@@ -60,3 +60,6 @@ Rules onto the shared form layout and adds dimension drawings to all Rules pages
 
 The [Board Setup navigation follow-up](setup-navigation-review/README.md) adds
 Design rules destinations for the existing board-default and net-class editors.
+
+The [composition-guidance rebase](composition-rebase-review/README.md) records
+unchanged commit replays and the focused draft/input-interface extraction.
