@@ -47,3 +47,7 @@ was created by this local implementation task.
 The [layout follow-up](layout-review/README.md) supersedes the original form
 screenshots after @travle1's local testing feedback, with separate source and
 functional validation records.
+
+The [active-source follow-up](active-source-review/README.md) further separates
+class contributions, effective provenance and unsaved assignment previews. It
+keeps the existing resolution policy and original performance evidence intact.
