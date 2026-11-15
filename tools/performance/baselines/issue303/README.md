@@ -54,3 +54,6 @@ keeps the existing resolution policy and original performance evidence intact.
 
 The [equal-limit follow-up](tie-source-review/README.md) labels matching hard
 bounds explicitly while retaining both contributors in the tooltip and Details.
+
+The [constraint illustration follow-up](geometry-review/README.md) brings Board
+Rules onto the shared form layout and adds dimension drawings to all Rules pages.

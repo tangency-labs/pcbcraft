@@ -521,7 +521,8 @@ hard limits, routing preferences, conflicts, rule IDs/revisions and assignment
 origins. Naming a net does not classify it. See the [editor workflow](net-class-editor.md)
 for supported targets and the shared MCP commands.
 
-**Board defaults…** in Rules opens the existing board form. Clear **Use built-in
+**Board defaults…** in Rules opens the board form with the same bounded fields and
+dimension drawings as the class editor. Clear **Use built-in
 defaults** to author values, then Apply; checking it restores built-in values.
 New routes use those preferences while existing copper keeps its dimensions.
 See [board rules](board-rules.md) for overrides and sources. Starting a route on classified copper adopts that

@@ -46,7 +46,14 @@ assignment. A current net can still be chosen explicitly. Repeated-instance and
 board-transfer qualification belongs to #307; advanced electrical, relationship
 and pour/thermal intent belongs to #304–#306.
 
-**Board defaults…** opens the existing board-scoped form when a board exists.
+The Geometry column marks the measured span beside each dimension: copper-to-copper
+and copper-to-edge gaps, track width, radial annular ring, via outside diameter and
+drill diameter. These are illustrative drawings, independent of the entered value;
+the hover and accessible image description identify the measured boundaries.
+
+**Board defaults…** opens the board-scoped form when a board exists, using the same
+row layout and illustrations. Built-in values are read-only until **Use built-in
+defaults** is cleared; labels and diagrams remain legible in either state.
 Class definitions and assignment drafts remain disposable until saved; Cancel or
 closing Rules changes nothing. Changed drafts prevent navigation that would
 discard their edits. A project revision or originating view-target change disables

@@ -1415,3 +1415,11 @@ The same qualified form rows distinguish class contributions, saved effective
 rules and unsaved assignment previews; technical details identify active,
 overridden, less restrictive and conflicting contributions. No dependency,
 external source, custom drawing or shared toolkit revision was introduced.
+
+The dimensional illustrations and boundary descriptions in Rules are original
+PCBcraft work: copper spacing, board edge spacing, track width, via outer/drill
+diameters and radial annular ring. They use existing theme colors and vector
+geometry; no KiCad/JLCPCB artwork, external source, asset or dependency was used.
+The pinned toolkit has no PCB constraint illustration component. Electronics
+geometry stays in the app, while the chrome form adapter reserves its column and
+continues to compose shared fields, checkboxes, modal surfaces and scrolling.

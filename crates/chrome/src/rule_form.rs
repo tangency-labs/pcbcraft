@@ -9,6 +9,8 @@ pub enum Cell {
     Rule,
     Value,
     Source,
+    /// Host-authored electronics geometry, independent of generic form controls.
+    Diagram,
 }
 
 /// Pad the page inside shared modal chrome without introducing another nested surface.
@@ -31,24 +33,27 @@ pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R
 
 /// Align form fields without another scroll container. The pinned selectable table adds a
 /// horizontal scroll host and row focus targets; forms need one outer vertical scroll owner
-/// so keyboard/accessibility reveal reaches off-screen fields. Narrow hosts stack the label.
+/// so keyboard/accessibility reveal reaches off-screen fields. Host illustrations occupy a
+/// separate fixed-width geometry column; narrow hosts stack the rule above its other cells.
 pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, headings: [&str; 2], items: &mut [T], mut add: impl FnMut(&mut Ui, &mut T, Cell)) {
     let t = Tokens::get();
     let width = ui.available_width();
     ui.add_space(t.space_8);
     ui.push_id(id, |ui| {
         ui.spacing_mut().item_spacing.y = t.space_4;
-        if width >= 560. {
+        let diagram = 104.;
+        let row_height = 52.;
+        if width >= 600. {
             let value = 140.;
-            let rule = (width * 0.44).max(220.);
-            let source = width - rule - value - t.space_12 * 2.;
+            let rule = (width * 0.30).max(216.);
+            let source = width - rule - diagram - value - t.space_12 * 3.;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = t.space_12;
-                cell(ui, rule, |ui| {
+                cell(ui, rule, t.control_height, |ui| {
                     ui.strong(title);
                 });
-                for (name, width) in [(headings[0], value), (headings[1], source)] {
-                    cell(ui, width, |ui| {
+                for (name, width) in [("Geometry", diagram), (headings[0], value), (headings[1], source)] {
+                    cell(ui, width, t.control_height, |ui| {
                         ui.label(crate::shell::dim(name));
                     });
                 }
@@ -58,27 +63,35 @@ pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, headings: [&str; 2], items: &
                 ui.push_id(index, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = t.space_12;
-                        cell(ui, rule, |ui| add(ui, item, Cell::Rule));
-                        cell(ui, value, |ui| add(ui, item, Cell::Value));
-                        cell(ui, source, |ui| add(ui, item, Cell::Source));
+                        for (width, role) in [(rule, Cell::Rule), (diagram, Cell::Diagram), (value, Cell::Value), (source, Cell::Source)] {
+                            cell(ui, width, row_height, |ui| add(ui, item, role));
+                        }
                     })
                 });
             }
         } else {
+            let value = (width * 0.34).min(140.);
+            let source = (width - diagram - value - t.space_8 * 2.).max(1.);
             ui.strong(title);
             ui.separator();
             ui.horizontal(|ui| {
-                cell(ui, (width * 0.46).min(160.), |ui| {
+                cell(ui, diagram, t.control_height, |ui| {
+                    ui.label(crate::shell::dim("Geometry"));
+                });
+                cell(ui, value, t.control_height, |ui| {
                     ui.label(crate::shell::dim(headings[0]));
                 });
-                ui.label(crate::shell::dim(headings[1]));
+                cell(ui, source, t.control_height, |ui| {
+                    ui.label(crate::shell::dim(headings[1]));
+                });
             });
             for (index, item) in items.iter_mut().enumerate() {
                 ui.push_id(index, |ui| {
                     add(ui, item, Cell::Rule);
                     ui.horizontal(|ui| {
-                        cell(ui, (width * 0.46).min(160.), |ui| add(ui, item, Cell::Value));
-                        add(ui, item, Cell::Source);
+                        cell(ui, diagram, row_height, |ui| add(ui, item, Cell::Diagram));
+                        cell(ui, value, row_height, |ui| add(ui, item, Cell::Value));
+                        cell(ui, source, row_height, |ui| add(ui, item, Cell::Source));
                     });
                     ui.add_space(t.space_4);
                 });
@@ -88,8 +101,8 @@ pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, headings: [&str; 2], items: &
 }
 
 /// Reserve the complete column even when a label is short; controls keep their native style.
-fn cell<R>(ui: &mut Ui, width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.allocate_ui_with_layout(vec2(width, Tokens::get().control_height), Layout::left_to_right(Align::Center), |ui| {
+fn cell<R>(ui: &mut Ui, width: f32, height: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(vec2(width, height), Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_width(width);
         ui.set_max_width(width);
         add(ui)

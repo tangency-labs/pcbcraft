@@ -47,6 +47,9 @@ fn class_form_controls_create_edit_cancel_and_exact_units() {
         replace(&mut h, "Class name", "Power");
         assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance value").value().as_deref(), Some("Not specified"));
         assert!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance value").accesskit_node().is_disabled());
+        let diagram = h.get_by_role_and_label(egui::Role::Image, "Copper clearance diagram: Space between copper edges on different nets.");
+        let field = h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance value");
+        assert!(field.rect().width() <= 140.1 && field.rect().left() >= diagram.rect().right());
         click(&mut h, "Copper clearance");
         replace(&mut h, "Copper clearance value", "invalid");
         assert!(h.get_by_role_and_label(egui::Role::Button, "Save class").accesskit_node().is_disabled());

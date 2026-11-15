@@ -61,6 +61,7 @@ mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
+mod rule_diagram;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;

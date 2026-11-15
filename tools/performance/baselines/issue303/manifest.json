@@ -15,7 +15,7 @@
     "failure-review.md": "186c93a7c808630a8e8f84e4ec1b1b9bbe8a69587587bb71d0aa3c6027e068e4",
     "checks.json": "e608d7120f3700d44478ed6727980146d9510f5ef3c066df6dc7f86044b30c11",
     "verification.json": "3e00ec46016c5da79c1264ff2a2d48cce10d0fde6e93fcce457218ae15b7b320",
-    "README.md": "94f408798513ee649adfc01fd2aa1be959fd5d44dbfcb50192ec3818f88149b9",
+    "README.md": "0668ac63f804812224d402c9fd41807c573a9b5f7e9b5d13ba0bf5eaa8275157",
     "visual/class-dark-wide.png": "3dc4e0a16aeca673e8dba2708710399eb05c3ef020d57f0c8aa407c648e686cf",
     "visual/net-dark-wide.png": "71e4b01616213587b361abd3c1c5aef7c770d6428a7c26eaa98bf4c8b75f6e52",
     "visual/net-light-compact.png": "97dbb495445e3e0ea75f4b4bd5baccd08ca7c108e2425b97bd58594bd5c337f9",
@@ -40,7 +40,18 @@
     "tie-source-review/source.json": "2ee9d2458d7bfda4c826f1486e7e11bbce453343b5ce18c9462b1843aad54135",
     "tie-source-review/tie-dark-wide.png": "67464c1a20fb67d44886d22194d6086aa09ba8d9ea9faeecf38a529e300f1f89",
     "tie-source-review/tie-light-compact.png": "6eb5961d48e1960afd443b4840c219116503b8db396ba28e8538adc8f2dec97a",
-    "tie-source-review/verification.json": "c066f0e6124892c85ebc251a85193939fb713eb5f68eef515dbfe33644d0063f"
+    "tie-source-review/verification.json": "c066f0e6124892c85ebc251a85193939fb713eb5f68eef515dbfe33644d0063f",
+    "geometry-review/README.md": "666e5d0fa2eec5bce05228a05cb02d424c8f6a021bffb5d819b76b84b814dac1",
+    "geometry-review/board-dark-wide.png": "253ad8925f7ea2ecfa39f9511542d7d634cc383f7ff344cdeeeb691db70360db",
+    "geometry-review/board-light-compact.png": "85112d54a5754b004284073ca48032c5db4e583e890fdcdb27cb8a624e0972a2",
+    "geometry-review/board-lower-dark-wide.png": "47991bea40b26eab38c2a42cbba352a4d8ba098e9b2ccf216a8f2acc2116da49",
+    "geometry-review/browser-narrow-bottom.png": "f9c5da369f6206d8d8a3999863b6953ff817ab656e0a03fdc9de7af0b26af3dc",
+    "geometry-review/browser.json": "81935718f6bedf831e3161d04020f14cbfee8913e62e6c4795419e4a869c56be",
+    "geometry-review/class-dark-wide.png": "53b7ebb50386eac4de7f8ceff9db3d089db21d6fb826f970576a13031f83d7e6",
+    "geometry-review/class-light-compact.png": "0b583afa4474e35822e632a00e2de1c55b214d80b102591a8ba140ef35cc2d47",
+    "geometry-review/effective-dark-wide.png": "1d1e30e20809237d76be363833d2e58c8619715993bf0c28587efa47bc37f9f9",
+    "geometry-review/source.json": "36eb5d25a6ef8b9baba168d6541a544b6dfb04afcacddbf3126efd1721ed7e4a",
+    "geometry-review/verification.json": "62693abd1497bb15de104c2dc18ddf017fdb8a76f1456f99d9852b2c77017d94"
   },
   "layout_code": "8d942a1cacc7a0281cf447b40f09b1eee88f81b7",
   "active_source_code": "0cca4c2d022a8e54da06caf9dfad3fe2842a2475"

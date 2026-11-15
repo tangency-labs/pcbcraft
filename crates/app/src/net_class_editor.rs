@@ -1,4 +1,5 @@
 //! Shared, revision-bound class authoring and net inspection for schematic and PCB views.
+use crate::rule_diagram::label;
 use crate::{Dialog, PcbApp, ViewInput, editor_view::DocumentTarget};
 use pcbcraft_chrome::{controls, properties, rule_form as form, shell, units};
 use pcbcraft_engine::{
@@ -64,24 +65,6 @@ pub(super) struct Edit {
     bindings: Vec<ClassBinding>,
     selection_error: Option<String>,
     error: Option<String>,
-}
-
-/// Human dimensional labels are shared by the authored and effective presentations.
-fn label(property: Property) -> &'static str {
-    use Property::*;
-    match property {
-        ClearanceNm => "Copper clearance",
-        MinTrackWidthNm => "Minimum track width",
-        EdgeClearanceNm => "Board edge clearance",
-        MinAnnularRingNm => "Minimum annular ring",
-        MinViaDiameterNm => "Minimum via diameter",
-        MaxViaDiameterNm => "Maximum via diameter",
-        MinViaDrillNm => "Minimum via drill",
-        MaxViaDrillNm => "Maximum via drill",
-        PreferredTrackWidthNm => "Preferred track width",
-        PreferredViaDiameterNm => "Preferred via diameter",
-        PreferredViaDrillNm => "Preferred via drill",
-    }
 }
 
 impl ClassDraft {
@@ -268,6 +251,7 @@ fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft) {
                 ["Class value", "Contribution"],
                 &mut fields,
                 |ui, field, cell| match cell {
+                    form::Cell::Diagram => crate::rule_diagram::show(ui, field.property),
                     form::Cell::Rule => {
                         controls::checkbox(ui, &mut field.enabled, label(field.property));
                     }
@@ -379,6 +363,7 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
                 if preview { ["Preview value", "Preview source"] } else { ["Effective value", "Active source"] },
                 &mut fields,
                 |ui, property, cell| match cell {
+                    form::Cell::Diagram => crate::rule_diagram::show(ui, *property),
                     form::Cell::Rule => {
                         ui.label(label(*property));
                     }
