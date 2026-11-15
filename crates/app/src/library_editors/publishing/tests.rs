@@ -8,7 +8,10 @@ fn fixture() -> (PcbApp, tempfile::TempDir) {
     let root = temp.path().join("workshop");
     let manifest = engine::new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap();
     pcbcraft_storage::library::publishing::create(&root, &manifest).unwrap();
-    let symbol = Item::edit_symbol(pcbcraft_engine::library::basic_components().symbol("connector").unwrap()).unwrap();
+    // Keep publication ordinals independent of later bundled redraws, with catalog provenance.
+    let catalog = pcbcraft_engine::Session::default();
+    let original = catalog.libraries().symbol("basic-components", "connector", 2).unwrap();
+    let symbol = Item::edit_symbol(&original).unwrap();
     let footprint: pcbcraft_engine::board::definition::FootprintDefinition =
         serde_json::from_slice(include_bytes!("../../../../../libraries/basic-components/footprints/header-1x02-254.json")).unwrap();
     for mut item in [symbol, Item::edit_footprint(&footprint).unwrap()] {

@@ -1,0 +1,26 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "switch-spst",
+  "revision": 1,
+  "name": "Switch SPST",
+  "reference_prefix": "SW",
+  "default_value": "SW",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "circle", "center_nm": [-1651000, 0], "radius_nm": 254000},
+        {"type": "line", "from_nm": [-1651000, -254000], "to_nm": [1651000, -1524000]},
+        {"type": "circle", "center_nm": [1905000, 0], "radius_nm": 254000}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-3810000, 0], "appearance": {"orientation": "right", "length_nm": 1905000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [3810000, 0], "appearance": {"orientation": "left", "length_nm": 1651000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

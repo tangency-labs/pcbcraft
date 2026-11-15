@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/2",
   "id": "vdd",
-  "revision": 1,
+  "revision": 2,
   "name": "VDD",
   "reference_prefix": "PWR",
   "default_value": "VDD",
@@ -43,57 +43,17 @@
     }
   },
   "terminals": [
-    {
-      "id": "1",
-      "electrical_type": "power_in"
-    }
+    {"id": "1", "electrical_type": "power_in"}
   ],
   "units": [
     {
       "id": "main",
       "drawing": [
-        {
-          "type": "line",
-          "from_nm": [
-            0,
-            0
-          ],
-          "to_nm": [
-            0,
-            -2540000
-          ]
-        },
-        {
-          "type": "line",
-          "from_nm": [
-            -889000,
-            -1651000
-          ],
-          "to_nm": [
-            0,
-            -2540000
-          ]
-        },
-        {
-          "type": "line",
-          "from_nm": [
-            0,
-            -2540000
-          ],
-          "to_nm": [
-            889000,
-            -1651000
-          ]
-        }
+        {"type": "line", "from_nm": [0, 0], "to_nm": [0, -1905000]},
+        {"type": "circle", "center_nm": [0, -2540000], "radius_nm": 635000}
       ],
       "pins": [
-        {
-          "terminal": "1",
-          "at_nm": [
-            0,
-            0
-          ]
-        }
+        {"terminal": "1", "at_nm": [0, 0]}
       ]
     }
   ]

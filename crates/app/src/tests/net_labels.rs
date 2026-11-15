@@ -66,6 +66,8 @@ fn power_placement_edit_move_delete_and_undo() {
     let revision = h.state().session.revision();
     h.key_press(Key::P);
     h.run();
+    h.get_by_label("GND").scroll_to_me();
+    h.run();
     click(&mut h, "GND");
     assert_eq!(h.get_by_label("Value").value().as_deref(), Some("GND"));
     click(&mut h, "Place");
@@ -295,6 +297,8 @@ fn power_placement_reaches_pins_between_grid_points() {
     let screen = at(&h, point);
     assert_ne!(h.state().views.active.camera.snap(screen, h.get_by_label("Schematic canvas").rect()), point);
     h.key_press(Key::P);
+    h.run();
+    h.get_by_label("GND").scroll_to_me();
     h.run();
     click(&mut h, "GND");
     click(&mut h, "Place");

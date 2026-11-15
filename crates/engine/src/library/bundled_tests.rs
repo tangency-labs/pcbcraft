@@ -150,7 +150,7 @@ fn bundled_selections_obey_normal_conflicts_and_content_authority() {
     s.apply("project.new", &json!({})).unwrap();
     let (_, mut docs) = bundled_documents().find(|(id, _)| *id == "basic-components").unwrap();
     s.execute(sources::LOAD, &json!({"source":"another-copy","documents":docs})).unwrap();
-    assert_eq!(s.libraries().search("resistor", Some(sources::Kind::Symbol)).len(), 1);
+    assert_eq!(s.libraries().search("resistor", Some(sources::Kind::Symbol)).into_iter().filter(|(_, item)| item.key.id == "resistor").count(), 1);
     let before = s.snapshot().unwrap();
     let mut symbol: Value = serde_json::from_str(&docs["symbols/resistor.json"]).unwrap();
     symbol["default_value"] = json!("Conflicting");
@@ -246,4 +246,99 @@ fn native_power_roundtrips_with_schematic_only_package_choices() {
     assert_eq!(encode_documents(decode_documents(&with_board).unwrap()).unwrap(), with_board);
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Connector revisions face left and number contacts from top to bottom; their old pins
+/// remain addressable so existing project wires never follow a new drawing implicitly.
+#[test]
+fn revised_connectors_keep_their_pinned_connection_points() {
+    let library = basic_components();
+    for (id, count) in [("connector", 2), ("header-3", 3), ("header-4", 4), ("header-6", 6), ("header-8", 8)] {
+        let definition = library.symbol(id).unwrap();
+        assert_eq!(definition.pins().len(), count);
+        for (index, pin) in definition.pins().iter().enumerate() {
+            assert_eq!(pin.number, (index + 1).to_string());
+            assert_eq!(pin.offset, Point { x_nm: -3 * GRID_NM, y_nm: (2 * index as i64 - count as i64 + 1) * GRID_NM });
+            let appearance = pin.appearance.as_ref().unwrap();
+            assert_eq!(appearance.orientation, crate::schematic::PinOrientation::Right);
+            assert!(appearance.show_number);
+        }
+    }
+    let old = library.symbol_revision("connector", 2).unwrap();
+    assert_eq!(old.default_value(), "Input");
+    assert_eq!(old.pins()[0].offset, Point { x_nm: -3 * GRID_NM, y_nm: 0 });
+    assert_eq!(old.pins()[1].offset, Point { x_nm: 3 * GRID_NM, y_nm: 0 });
+    assert_eq!(library.symbol_revision("header-4", 1).unwrap().pins()[0].offset.x_nm, -5 * GRID_NM);
+    let dual = library.symbol("header-2x3").unwrap();
+    for row in 0..3 {
+        assert_eq!(dual.pins()[2 * row].offset, Point { x_nm: -3 * GRID_NM, y_nm: (2 * row as i64 - 2) * GRID_NM });
+        assert_eq!(dual.pins()[2 * row + 1].offset, Point { x_nm: 3 * GRID_NM, y_nm: (2 * row as i64 - 2) * GRID_NM });
+    }
+}
+
+/// Old and new exact revisions coexist, wire by stable terminal identity and survive native
+/// offline reopen without substituting current geometry, power defaults or authored values.
+#[test]
+fn changed_bundled_revisions_reopen_offline_without_upgrading_instances() {
+    for (library, id, revision) in [
+        ("basic-components", "connector", 2),
+        ("basic-components", "header-4", 1),
+        ("power", "3v3", 1),
+        ("power", "5v", 1),
+        ("power", "12v", 1),
+        ("power", "vdd", 1),
+        ("power", "vss", 1),
+        ("power", "gnda", 1),
+    ] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({})).unwrap();
+        let old = session.libraries().symbol(library, id, revision).unwrap();
+        let latest = session.libraries().latest_symbol(library, id).unwrap();
+        assert_eq!(latest.revision(), revision + 1);
+        assert_ne!(old.default_unit().graphics(), latest.default_unit().graphics());
+        for (index, definition) in [old, latest].into_iter().enumerate() {
+            session.apply(PLACE_SYMBOL, &json!({"library":library,"definition":id,"definition_revision":definition.revision(),"definition_digest":sources::symbol_digest(&definition).unwrap(),"x_nm":index as i64*20*GRID_NM,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        }
+        let before = session.snapshot().unwrap();
+        let a = &before.symbols()[0];
+        let b = &before.symbols()[1];
+        session
+            .apply(
+                crate::CONNECT_PINS,
+                &json!({"from":{"symbol":a.id(),"terminal":"1"},"to":{"symbol":b.id(),"terminal":"1"},"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let before = session.snapshot().unwrap();
+        let documents = encode_documents(before.clone()).unwrap();
+        let mut offline = Session { libraries: Arc::new(sources::Catalog::default()), ..Session::default() };
+        offline.open_snapshot(decode_documents(&documents).unwrap());
+        let after = offline.snapshot().unwrap();
+        for (a, b) in before.symbols().iter().zip(after.symbols()) {
+            assert_eq!(a.definition, b.definition);
+            assert_eq!(a.pins(), b.pins());
+            assert_eq!(a.field_layout, b.field_layout);
+        }
+        assert_eq!(encode_documents(after).unwrap(), documents);
+    }
+}
+
+/// New ground drawings keep deliberately distinct global names; voltage and complementary
+/// supply redraws preserve their electrical names and attach at the same origin as revision 1.
+#[test]
+fn expanded_power_shapes_preserve_explicit_net_semantics() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    for (index, id) in ["gnd", "gnda", "earth", "chassis", "3v3", "5v", "12v", "vcc", "vdd", "vss"].into_iter().enumerate() {
+        let definition = session.libraries().latest_symbol("power", id).unwrap();
+        assert_eq!(definition.pins()[0].offset, Point { x_nm: 0, y_nm: 0 });
+        place(&mut session, "power", id, (index % 5) as i64 * 20 * GRID_NM, (index / 5) as i64 * 20 * GRID_NM, definition.default_value());
+    }
+    let project = session.snapshot().unwrap();
+    let graph = project.electrical_connectivity();
+    let mut nets = std::collections::BTreeSet::new();
+    for (symbol, name) in project.symbols().iter().zip(["GND", "GNDA", "PE", "CHASSIS", "+3V3", "+5V", "+12V", "VCC", "VDD", "VSS"]) {
+        let net = graph.net_index_for(symbol.terminals()[0]).unwrap();
+        assert_eq!(graph.net_name(net), name);
+        assert!(nets.insert(net));
+    }
 }

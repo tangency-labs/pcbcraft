@@ -696,7 +696,41 @@ mod tests {
         assert_eq!(library.problems(), [] as [String; 0]);
         assert_eq!((library.id.as_str(), library.license.as_str()), ("basic-components", "MIT OR Apache-2.0"));
         let ids: Vec<_> = library.symbols().iter().map(|symbol| symbol.id.as_str()).collect();
-        assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "npn", "resistor"]);
+        assert_eq!(
+            ids,
+            [
+                "battery",
+                "capacitor-polarized",
+                "capacitor",
+                "connector",
+                "crystal",
+                "diode",
+                "ferrite-bead",
+                "fuse",
+                "header-2x3",
+                "header-3",
+                "header-4",
+                "header-6",
+                "header-8",
+                "inductor",
+                "led",
+                "nmos",
+                "npn",
+                "op-amp",
+                "photodiode",
+                "pmos",
+                "pnp",
+                "potentiometer",
+                "push-button",
+                "resistor-iec",
+                "resistor",
+                "schottky-diode",
+                "switch-spdt",
+                "switch-spst",
+                "test-point",
+                "zener-diode",
+            ]
+        );
         let led = library.symbol("led").unwrap();
         let names: Vec<_> = led.pins().iter().map(|pin| pin.name.as_deref()).collect();
         assert_eq!(names, [Some("Anode"), Some("Cathode")]);
@@ -708,7 +742,7 @@ mod tests {
     fn compact_revisions_preserve_old_projects_and_choose_newest_in_any_order() {
         for symbol in basic_components().symbols().iter().filter(|symbol| ["capacitor", "connector", "led", "resistor"].contains(&symbol.id.as_str()))
         {
-            assert_eq!(symbol.revision(), if ["resistor", "capacitor"].contains(&symbol.id.as_str()) { 3 } else { 2 });
+            assert_eq!(symbol.revision(), if ["resistor", "capacitor", "connector"].contains(&symbol.id.as_str()) { 3 } else { 2 });
             let old = basic_components().symbol_revision(&symbol.id, 1).unwrap();
             for (new, old) in symbol.pins().iter().zip(old.pins()) {
                 assert_eq!(old.offset.x_nm.abs(), PIN_OFFSET_NM);
@@ -774,7 +808,7 @@ mod tests {
         let pins: Vec<_> = header.pins().iter().map(|pin| (pin.number.as_str(), pin.offset.y_nm, pin.electrical_type)).collect();
         let row = |number, y_nm| (number, y_nm, ElectricalType::Passive);
         assert_eq!(pins, [row("1", -3_810_000), row("2", -1_270_000), row("3", 1_270_000), row("4", 3_810_000)]);
-        assert!(header.default_unit().drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
+        assert!(header.default_unit().graphics().iter().any(|shape| matches!(shape, Shape::Graphic(graphic) if matches!(&graphic.geometry, crate::library_graphics::Geometry::Text { text, .. } if text == "4"))));
         assert!(!header.fits_two_pad_footprint());
         assert!(basic_components().symbol("resistor").unwrap().fits_two_pad_footprint());
     }

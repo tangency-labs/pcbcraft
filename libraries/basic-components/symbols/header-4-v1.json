@@ -1,0 +1,40 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "header-4",
+  "revision": 1,
+  "name": "4-pin header",
+  "reference_prefix": "J",
+  "default_value": "Header",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive"},
+    {"id": "3", "electrical_type": "passive"},
+    {"id": "4", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "rect", "min_nm": [-2540000, -5080000], "max_nm": [1270000, 5080000]},
+        {"type": "line", "from_nm": [-6350000, -3810000], "to_nm": [-2540000, -3810000]},
+        {"type": "line", "from_nm": [-6350000, -1270000], "to_nm": [-2540000, -1270000]},
+        {"type": "line", "from_nm": [-6350000, 1270000], "to_nm": [-2540000, 1270000]},
+        {"type": "line", "from_nm": [-6350000, 3810000], "to_nm": [-2540000, 3810000]},
+        {"type": "circle", "center_nm": [-635000, -3810000], "radius_nm": 508000},
+        {"type": "circle", "center_nm": [-635000, -1270000], "radius_nm": 508000},
+        {"type": "circle", "center_nm": [-635000, 1270000], "radius_nm": 508000},
+        {"type": "circle", "center_nm": [-635000, 3810000], "radius_nm": 508000},
+        {"type": "text", "at_nm": [-4445000, -4572000], "text": "1", "align": "middle"},
+        {"type": "text", "at_nm": [-4445000, -2032000], "text": "2", "align": "middle"},
+        {"type": "text", "at_nm": [-4445000, 508000], "text": "3", "align": "middle"},
+        {"type": "text", "at_nm": [-4445000, 3048000], "text": "4", "align": "middle"}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-6350000, -3810000]},
+        {"terminal": "2", "at_nm": [-6350000, -1270000]},
+        {"terminal": "3", "at_nm": [-6350000, 1270000]},
+        {"terminal": "4", "at_nm": [-6350000, 3810000]}
+      ]
+    }
+  ]
+}

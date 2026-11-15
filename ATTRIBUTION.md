@@ -1480,3 +1480,18 @@ control. Canvas margins reuse PCBcraft's original ribbon grid projection, while
 title-bar drag recognition follows the pinned Craft helper's existing threshold
 behavior, retaining PCBcraft's foreground hit regions and native-grab recovery.
 No dependency, external artwork, EDA implementation or native format was added.
+
+
+## Expanded bundled symbol set
+
+The default-library refresh requested by @travle1 is original PCBcraft work
+under MIT OR Apache-2.0. It adds 24 basic symbol definitions and two ground
+variants, redraws the existing connectors and differentiates supply drawings
+using native strokes and pin appearance. The PNP drawing adapts PCBcraft's
+existing original NPN definition at `d564701`; the new power variants reuse
+PCBcraft's existing power defaults and explicit net behavior from that revision.
+The previous connector and power revisions remain unchanged for project pinning.
+No external symbol library, manufacturer package pinout, EDA implementation,
+artwork or dependency was consulted or incorporated. The existing native source
+loader and schematic painter render the definitions in both builds; this change
+adds no interface controls or toolkit presentation.

@@ -215,7 +215,7 @@ fn first_footprint_is_discoverable_atomic_and_bounded_at_wide_and_compact_sizes(
         assert_eq!(part.packages.len(), 1);
         h.get_by_label("Choose symbol").click();
         h.run();
-        h.get_by_label("Choose item basic-components/connector r2").click();
+        h.get_by_label("Choose item basic-components/connector r3").click();
         h.run();
         h.get_by_label("Choose").click();
         h.run();

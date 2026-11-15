@@ -1,0 +1,22 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "test-point",
+  "revision": 1,
+  "name": "Test point",
+  "reference_prefix": "TP",
+  "default_value": "Test",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "circle", "center_nm": [0, -1905000], "radius_nm": 635000}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [0, 0], "appearance": {"orientation": "up", "length_nm": 1270000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

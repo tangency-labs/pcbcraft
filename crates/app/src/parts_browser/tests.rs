@@ -199,9 +199,9 @@ fn catalog_reaches_existing_library_manager() {
 fn library_search_preserves_native_identity() {
     assert_eq!(matches_sources("CAP", &library::sources::Catalog::bundled())[0].id, "capacitor");
     assert!(matches_sources("zzz", &library::sources::Catalog::bundled()).is_empty());
-    assert_eq!(matches_sources("j", &library::sources::Catalog::bundled()).len(), 2);
+    assert_eq!(matches_sources("j", &library::sources::Catalog::bundled()).len(), 6);
     let catalog = library::sources::Catalog::bundled();
-    assert_eq!(entries("", &catalog).iter().filter(|e| e.in_collection(&Collection::Library("power".into()))).count(), 9);
+    assert_eq!(entries("", &catalog).iter().filter(|e| e.in_collection(&Collection::Library("power".into()))).count(), 11);
 }
 
 /// Registered libraries appear as selectable collections. If a chosen source is removed,
@@ -293,6 +293,8 @@ fn switching_forms_keeps_library_query_selection_and_dock_position() {
 fn compact_placement_and_keyboard_focus_leave_the_catalog_open() {
     let mut h = editor(1400.);
     click(&mut h, "Dock Parts Catalog");
+    h.get_by_label("Capacitor").scroll_to_me();
+    h.run();
     click(&mut h, "Capacitor");
     click(&mut h, "Place");
     assert!(h.state().parts.open);
@@ -406,6 +408,8 @@ fn compact_drags_place_once_and_reject_intervening_edits() {
     for stale in [false, true] {
         let mut h = editor(1400.);
         click(&mut h, "Dock Parts Catalog");
+        h.get_by_label("Capacitor").scroll_to_me();
+        h.run();
         let from = h.get_by_label("Capacitor").rect().center();
         let to = h.get_by_label("Schematic canvas").rect().center() + egui::vec2(100., 0.);
         h.drag_at(from);
@@ -625,6 +629,8 @@ fn repeat_power_uses_fresh_ids_and_stops_after_intervening_edits() {
     click(&mut h, "Cancel");
     h.key_press(Key::P);
     h.run();
+    h.get_by_label("GND").scroll_to_me();
+    h.run();
     click(&mut h, "GND");
     click(&mut h, "Place");
     h.key_press(Key::R);
@@ -685,7 +691,7 @@ fn equivalent_source_registrations_do_not_duplicate_catalog_libraries() {
     h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"folder-copy","documents":docs})).unwrap();
     h.run();
     assert_eq!(collections(&h.state().session.libraries().inspect()).len(), 3);
-    assert_eq!(entries("", h.state().session.libraries()).len(), 15);
+    assert_eq!(entries("", h.state().session.libraries()).len(), 41);
     h.get_by_label("Basic components");
     click(&mut h, "Basic components");
     h.get_by_label("Capacitor");

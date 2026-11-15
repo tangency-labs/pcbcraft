@@ -27,7 +27,7 @@ fn source_commands_place_and_pin_offline_through_the_existing_command_path() {
     let revision = session.revision();
     session.execute(LOAD, &json!({"source":"personal","documents":documents()})).unwrap();
     let search = session.execute(SEARCH, &json!({"query":"RESISTOR"})).unwrap();
-    assert_eq!(search.as_array().unwrap().len(), 5); // external symbol/footprint and built-in symbol/0402/0603
+    assert_eq!(search.as_array().unwrap().len(), 6); // external symbol/footprint and bundled zigzag/rectangle symbols/0402/0603
     assert!(search.as_array().unwrap().iter().any(|item| item["key"]["kind"] == "footprint" && item["source"] == "personal"));
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!(revision, session.revision());

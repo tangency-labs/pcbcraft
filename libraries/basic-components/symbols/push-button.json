@@ -1,0 +1,28 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "push-button",
+  "revision": 1,
+  "name": "Push button (normally open)",
+  "reference_prefix": "SW",
+  "default_value": "Push",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "circle", "center_nm": [-1206500, 0], "radius_nm": 317500},
+        {"type": "circle", "center_nm": [1206500, 0], "radius_nm": 317500},
+        {"type": "line", "from_nm": [-1587500, -825500], "to_nm": [1587500, -825500]},
+        {"type": "line", "from_nm": [0, -825500], "to_nm": [0, -1905000]},
+        {"type": "line", "from_nm": [-825500, -1905000], "to_nm": [825500, -1905000]}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-3810000, 0], "appearance": {"orientation": "right", "length_nm": 2286000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [3810000, 0], "appearance": {"orientation": "left", "length_nm": 2286000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}
