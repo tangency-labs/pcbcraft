@@ -36,7 +36,7 @@ zone markers and a title block. The title block shows parameter values such as
 | --- | --- |
 | Template per size | One template fits every paper size. Template items are anchored to a paper corner. Coline uses one template per size; we don't. |
 | Default paper | Every sheet has paper. New sheets start on A4 landscape with the Default frame. |
-| Existing sheets | On open, a frameless sheet gets the smallest A size that holds its drawing, placed around it by setting `at_nm`, so nothing moves. A drawing larger than A0 gets A0 landscape, centered, and parts of it can lie outside the paper. It works like the bundled-library migration: prepared in memory, no undo step, written on the next save. The first save of an older project therefore changes its sheet files. |
+| Existing sheets | On open, a sheet without paper gets the smallest A size selected to fit its drawing and margin, falling back to A0 landscape. Paper is placed around the drawing, with its top-left corner snapped to the grid and clamped to the schematic coordinate range. Near those limits it may not be centered, and drawing can extend outside the paper. Nothing moves. Like the bundled-library migration, adoption happens in memory without an undo step; the next save writes paper to older sheet files. |
 | Parameter syntax | Coline's `@scope.Name`, ported as a baseline. |
 | Paper colour | The paper follows the schematic palette of the chosen theme: white in the light theme, a darker drawing surface than the canvas in the dark theme, with a visible edge. Symbols and wires use the same theme colours on and off the paper. Custom symbol colours and print styling are deferred to a focused follow-up. |
 | Canvas | The paper outline marks the default export area; it is not an editing boundary. Parts can be placed and moved outside it, for example while rearranging circuits. The canvas around the paper keeps the theme's colour wherever the drawing lies. |
@@ -124,9 +124,10 @@ template. Schema bumps follow [native project storage](native-project-storage.md
 ## Pull requests
 
 1. **Paper on the sheet.** Sheet schema bump with `page`, the `sheet.set_page`
-   command, and the paper drawn with a plain border. Also: grid on the paper
-   only, a blank canvas around it, paper adopted for existing sheets on open,
-   and Fit and Home thumbnails framing the paper.
+   command, and themed paper drawn with a plain border. The grid extends outside
+   the paper by default; **Appearance → Show grid outside paper** can confine it
+   to the paper. Paper is adopted for existing sheets on open. Fit includes paper
+   and drawing, while Home thumbnails frame the paper.
 2. **Parameters.** Port of Coline's parameter model and resolver for the
    project, sheet and instance scopes, with the `parameter.*` commands, the
    storage fields and a Parameters table in Properties.
