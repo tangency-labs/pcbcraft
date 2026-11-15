@@ -239,8 +239,8 @@ fn physical_footprints_on_multiple_sheets_share_the_board_without_aliasing_nets(
         let projected = snapshot.for_sheet(*sheet).unwrap();
         let footprints: Vec<_> = projected.board_view(target).unwrap().footprints().collect();
         assert_eq!(footprints.len(), 2);
-        for (footprint, (_, name)) in footprints.iter().zip(&sheets) {
-            assert_eq!(footprint.pads.iter().find(|pad| pad.number == "2").unwrap().net, Some(format!("{name}: Net 1")));
+        for (index, (footprint, _)) in footprints.iter().zip(&sheets).enumerate() {
+            assert_eq!(footprint.pads.iter().find(|pad| pad.number == "2").unwrap().net, Some(format!("R{}.1", index * 2 + 1)));
             assert_eq!(footprint.pads.iter().find(|pad| pad.number == "1").unwrap().net, None);
         }
     }

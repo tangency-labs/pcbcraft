@@ -5,6 +5,7 @@ mod classes;
 mod commands;
 pub(crate) use classes::target_schema as class_target_schema;
 pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
+pub mod display;
 mod graph;
 mod reconcile;
 mod selection;

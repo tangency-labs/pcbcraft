@@ -8,10 +8,7 @@ use pcbcraft_engine::{
     nets::{Anchor, ClassBinding, ClassTarget},
 };
 use serde_json::json;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,19 +165,11 @@ impl Edit {
     ) -> Result<Self, String> {
         let registry = project.inspect_net_registry()?;
         let rows = registry["nets"].as_array().ok_or("Net inspection is unavailable.")?;
-        let references: BTreeMap<_, _> = project.components().map(|component| (component.id(), component.reference().to_owned())).collect();
         let mut nets = Vec::new();
         for row in rows {
             let anchor: Anchor = serde_json::from_value(row["anchor"].clone()).map_err(|error| error.to_string())?;
-            let names: Vec<String> = serde_json::from_value(row["names"].clone()).map_err(|error| error.to_string())?;
-            let detail = if anchor.terminal.is_empty() {
-                anchor.occurrence.to_string()
-            } else {
-                let component = format!("component-{}", anchor.object);
-                format!("{} pin {}", references.get(&component).map_or(component.as_str(), String::as_str), anchor.terminal)
-            };
-            let name = if names.is_empty() { "Unnamed".into() } else { names.join(" / ") };
-            nets.push(NetChoice { label: format!("{name} · {detail}"), target: ClassTarget::Derived { anchor } });
+            let label = row["name"].as_str().unwrap_or("Unresolved net").to_owned();
+            nets.push(NetChoice { label, target: ClassTarget::Derived { anchor } });
         }
         let net_index =
             selected.as_ref().ok().and_then(|selected| selected.as_ref()).and_then(|selected| nets.iter().position(|net| &net.target == selected));

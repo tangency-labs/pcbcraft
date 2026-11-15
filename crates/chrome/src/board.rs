@@ -252,6 +252,20 @@ fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32)
         std::mem::swap(&mut width, &mut height);
         axis = corners[3] - corners[0];
     }
+    // Fit in an inscribed rectangle, including curved corners rather than just the land's
+    // bounding box. This keeps the two-line annotation out of adjacent clearance gaps.
+    match pad.contour {
+        PadContour::Circle | PadContour::Oval => {
+            width *= std::f32::consts::FRAC_1_SQRT_2;
+            height *= std::f32::consts::FRAC_1_SQRT_2;
+        }
+        PadContour::RoundedRectangle { radius } => {
+            let inset = 2. * radius.min(width.min(height) / 2.) * (1. - std::f32::consts::FRAC_1_SQRT_2);
+            width -= inset;
+            height -= inset;
+        }
+        PadContour::Rectangle => {}
+    }
     if width < 12. || height < 12. {
         return;
     }
@@ -545,3 +559,81 @@ pub fn canvas(p: &Painter, rect: Rect, origin: Pos2, step: f32, opacity: u8, sty
     };
     crate::grid::paint_style(p, rect, origin, step, color, style);
 }
+
+/// Keep domain annotation ink legible against either a dark or a bright copper swatch.
+fn copper_label_ink(copper: Color32) -> Color32 {
+    let [r, g, b, _] = copper.to_normalized_gamma_f32();
+    if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65 { Tokens::get().board_canvas } else { Color32::WHITE }
+}
+
+/// Paint repeated upright names wholly within a visible track's copper. Clipping the centerline
+/// first bounds text preparation for long off-screen segments; sub-legible widths show no text.
+pub fn track_net_label(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, copper: Color32) {
+    let size = (width - 4.).min(14.);
+    if size < 7. {
+        return;
+    }
+    let delta = ends[1] - ends[0];
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let axis = delta / length;
+    let clip = p.clip_rect().shrink(width / 2.);
+    let (mut lo, mut hi) = (0.0_f32, length);
+    for (origin, step, min, max) in [(ends[0].x, axis.x, clip.min.x, clip.max.x), (ends[0].y, axis.y, clip.min.y, clip.max.y)] {
+        if step.abs() <= f32::EPSILON {
+            if origin < min || origin > max {
+                return;
+            }
+        } else {
+            let a = (min - origin) / step;
+            let b = (max - origin) / step;
+            lo = lo.max(a.min(b));
+            hi = hi.min(a.max(b));
+        }
+    }
+    if lo >= hi {
+        return;
+    }
+    let ink = copper_label_ink(copper);
+    let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(size), ink, egui::Align::Center);
+    if galley.size().y > width - 2. || galley.size().x + 16. > hi - lo {
+        return;
+    }
+    let mut angle = axis.y.atan2(axis.x);
+    if angle > std::f32::consts::FRAC_PI_2 {
+        angle -= std::f32::consts::PI;
+    }
+    if angle < -std::f32::consts::FRAC_PI_2 {
+        angle += std::f32::consts::PI;
+    }
+    let count = ((hi - lo) / (galley.size().x + 48.).max(140.)).floor().max(1.) as usize;
+    for i in 0..count {
+        let center = ends[0] + axis * (lo + (hi - lo) * (i as f32 + 0.5) / count as f32);
+        let pos = center - galley.rect.center().to_vec2();
+        p.add(egui::epaint::TextShape::new(pos, galley.clone(), ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+    }
+}
+
+/// Fit a via name in the top annular band, clear of its drill and outer copper boundary.
+/// Ordinary small vias therefore reveal names only at a sufficiently close zoom.
+pub fn via_net_label(p: &Painter, center: Pos2, diameter: f32, drill: f32, name: &str) {
+    let height = (diameter - drill) / 2. - 4.;
+    let size = height.min(14.);
+    if size < 7. || !p.clip_rect().contains(center) {
+        return;
+    }
+    let y = (diameter + drill) / 4.;
+    let outer_y = y + size / 2.;
+    let width = 2. * ((diameter / 2. - 2.).powi(2) - outer_y.powi(2)).max(0.).sqrt();
+    let ink = copper_label_ink(Tokens::get().board_through);
+    let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(size), ink, egui::Align::Center);
+    if galley.size().x > width || galley.size().y > height {
+        return;
+    }
+    p.galley(center - vec2(0., y) - galley.rect.center().to_vec2(), galley, ink);
+}
+
+#[cfg(test)]
+mod net_label_tests;

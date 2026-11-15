@@ -1004,7 +1004,8 @@ fn layer_color(view: BoardView<'_>, appearance: &Appearance, layer: &str) -> egu
 /// active layer reads on top, then vias above all copper. A route committed this frame is
 /// painted where it will land, and `carried` tracks (stretched by a footprint move preview)
 /// are painted at their carried ends. Net focus takes precedence over selection tinting,
-/// matching pads and avoiding a second brightening of selected copper.
+/// matching pads and avoiding a second brightening of selected copper. Optional names come
+/// from the view's immutable connectivity cache; paint never traverses schematic connectivity.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     ui: &Ui,
@@ -1017,6 +1018,7 @@ pub(super) fn paint(
     appearance: &Appearance,
     focus: Option<CopperFocus<'_>>,
     carried: &[Track],
+    names: Option<&std::collections::BTreeMap<Uuid, String>>,
 ) {
     let painter = ui.painter().with_clip_rect(rect);
     let mut tracks: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
@@ -1047,6 +1049,15 @@ pub(super) fn paint(
             .find(|(id, _, _)| *id == track.id)
             .map_or((moved(track.start, selected), moved(track.end, selected)), |(_, start, end)| (*start, *end));
         segment(&track.layer.to_string(), start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
+        if let Some(name) = names.and_then(|names| names.get(&track.id)) {
+            pcbcraft_chrome::board::track_net_label(
+                &painter,
+                [camera.screen(start, rect), camera.screen(end, rect)],
+                width_px(camera, rect, track.width_nm),
+                name,
+                layer_color(view, appearance, &track.layer.to_string()),
+            );
+        }
     }
     let via = |at: Point, diameter_nm: i64, drill_nm: i64, selected: bool, emphasized| {
         pcbcraft_chrome::board::via(
@@ -1087,6 +1098,16 @@ pub(super) fn paint(
     for item in view.vias() {
         let selected = state.selected.contains(&item.id);
         via(moved(item.at, selected), item.diameter_nm, item.drill_nm, selected, focus.map(|focus| focus.contains_copper(&item.id)));
+        let visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
+        if visible && let Some(name) = names.and_then(|names| names.get(&item.id)) {
+            pcbcraft_chrome::board::via_net_label(
+                &painter,
+                camera.screen(moved(item.at, selected), rect),
+                width_px(camera, rect, item.diameter_nm),
+                width_px(camera, rect, item.drill_nm),
+                name,
+            );
+        }
     }
 }
 

@@ -265,7 +265,7 @@ fn snapshot_memberships_distinguish_equal_names_and_report_all_conflicting_nets(
         let violations = shorts(&s, 0);
         assert_eq!(violations.len(), 1, "{violations:#?}");
         assert_eq!(violations[0].nets.len(), 3);
-        assert!(violations[0].nets.iter().all(|net| net.name == "LOCAL" && net.terminals.len() == 1));
+        assert!(violations[0].nets.iter().all(|net| net.name.ends_with("::LOCAL") && net.terminals.len() == 1));
         assert!(violations[0].nets.windows(2).all(|pair| pair[0].net < pair[1].net));
         assert_eq!(violations[0].items.len(), 3);
     }

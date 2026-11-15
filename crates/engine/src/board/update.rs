@@ -31,6 +31,8 @@ pub const FORMAT: &str = "pcbcraft-board-baseline/1";
 const MULTIPAD_FORMAT: &str = "pcbcraft-board-baseline/2";
 /// Historical typed quantities require this vocabulary; older baselines remain text-only.
 pub(crate) const QUANTITY_FORMAT: &str = "pcbcraft-board-baseline/3";
+/// Accepted display names freeze generated metadata and occurrence qualification.
+pub(crate) const DISPLAY_FORMAT: &str = "pcbcraft-board-baseline/4";
 /// Bound decoded history independently of the live component count.
 pub const MAX_BASELINE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -236,8 +238,16 @@ fn primary_quantity_record<'de, D: Deserializer<'de>>(deserializer: D) -> Result
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetState {
+    /// Accepted presentation, independent of authored electrical names and current schematic data.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "display_name_record")]
+    pub display_name: Option<String>,
     pub terminals: Vec<TerminalKey>,
     pub names: Vec<String>,
+}
+
+/// An omitted name preserves legacy input; an explicit null is never a presentation record.
+fn display_name_record<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 /// A proposed or accepted immutable logical input for one addressed physical board.
@@ -316,7 +326,7 @@ impl Baseline {
                 desired.get(&terminal.component).and_then(|package| package.mapping.get(&terminal.terminal)).is_some_and(|pads| pads.pads().len() > 1)
             });
             if terminals.len() >= 2 || (!terminals.is_empty() && (!graph.net_names(index).is_empty() || multiple_lands)) {
-                nets.push(NetState { terminals, names: graph.net_names(index).to_vec() });
+                nets.push(NetState { terminals, names: graph.net_names(index).to_vec(), display_name: Some(graph.net_name(index)) });
             }
         }
         // Unwired terminals are absent from the electrical graph, but their multiple
@@ -327,13 +337,22 @@ impl Baseline {
                 for (terminal, pads) in &package.mapping {
                     let key = TerminalKey { component, terminal: terminal.clone() };
                     if pads.pads().len() > 1 && !connected.contains(&key) {
-                        nets.push(NetState { terminals: vec![key], names: Vec::new() });
+                        nets.push(NetState {
+                            display_name: project
+                                .components
+                                .get(&component)
+                                .map(|part| crate::nets::display::terminal_name(part.reference(), &key.terminal, part.definition.pins())),
+                            terminals: vec![key],
+                            names: Vec::new(),
+                        });
                     }
                 }
             }
         }
         nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
-        let format = if components.values().any(|part| part.primary_quantity.is_some()) {
+        let format = if nets.iter().any(|net| net.display_name.is_some()) {
+            DISPLAY_FORMAT
+        } else if components.values().any(|part| part.primary_quantity.is_some()) {
             QUANTITY_FORMAT
         } else if components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)) {
             MULTIPAD_FORMAT
@@ -425,7 +444,7 @@ impl Baseline {
     /// historical component IDs against the current schematic.
     pub fn validate(&self) -> Result<(), String> {
         self.source.validate()?;
-        if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT | QUANTITY_FORMAT)
+        if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT | QUANTITY_FORMAT | DISPLAY_FORMAT)
             || (self.format == FORMAT && self.components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)))
             || self.project.is_nil()
             || self.board.is_nil()
@@ -448,7 +467,7 @@ impl Baseline {
             crate::schematic::check_reference(&component.reference)?;
             crate::schematic::check_value(&component.value)?;
             if let Some(quantity) = &component.primary_quantity {
-                if self.format != QUANTITY_FORMAT {
+                if !matches!(self.format.as_str(), QUANTITY_FORMAT | DISPLAY_FORMAT) {
                     return Err("historical primary quantities require board baseline format 3".into());
                 }
                 quantity.validate()?;
@@ -468,6 +487,12 @@ impl Baseline {
         }
         let mut seen = BTreeSet::new();
         for net in &self.nets {
+            if (self.format != DISPLAY_FORMAT && net.display_name.is_some())
+                || (self.format == DISPLAY_FORMAT && net.display_name.is_none())
+                || net.display_name.as_ref().is_some_and(|name| name.is_empty() || name.len() > 65_536 || name.chars().any(char::is_control))
+            {
+                return Err("invalid accepted net display name or baseline version".into());
+            }
             if net.terminals.is_empty()
                 || (net.terminals.len() < 2
                     && net.names.is_empty()
@@ -563,10 +588,20 @@ impl Baseline {
             .collect()
     }
 
-    /// Resolve a display name by the traversal's accepted-net index. Its fallback
-    /// ordinal is local to this baseline, never persistent electrical identity.
+    /// Resolve frozen presentation by accepted-net index. Older baselines use their smallest
+    /// authored name or historical reference/designator, without consulting pending schematic data.
     pub(crate) fn net_name(&self, index: usize) -> Option<String> {
-        self.nets.get(index).map(|net| net.names.first().cloned().unwrap_or_else(|| format!("Net {}", index + 1)))
+        self.nets.get(index).map(|net| {
+            net.display_name.clone().or_else(|| net.names.iter().min().cloned()).unwrap_or_else(|| {
+                net.terminals
+                    .iter()
+                    .min_by_key(|key| (key.component, key.terminal.len(), &key.terminal))
+                    .and_then(|key| {
+                        self.components.get(&key.component).map(|part| crate::nets::display::terminal_name(&part.reference, &key.terminal, &[]))
+                    })
+                    .unwrap_or_else(|| "Unresolved net".into())
+            })
+        })
     }
 }
 

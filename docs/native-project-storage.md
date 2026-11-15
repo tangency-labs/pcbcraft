@@ -217,6 +217,18 @@ enrich or upgrade an older baseline. Formats 1/2 omit the new field and retain
 their previous bytes on no-op saves. Older apps reject format 3 instead of
 discarding its metadata; no enclosing board/project vocabulary changes.
 
+Accepted baseline format `pcbcraft-board-baseline/4` retains formats 1–3 and
+requires a bounded nonempty `display_name` on each accepted net. This freezes
+generated reference/pin text and project-wide occurrence qualification separately
+from authored `names` and historical `terminals`; it does not add logical registry
+memberships. Capturing nets through initialization or reviewed Update PCB selects
+format 4. Empty-net baselines retain the earlier version selected by their other
+data. Formats 1–3 reject display metadata, and format 4 rejects missing names,
+control characters and names over 65,536 UTF-8 bytes, within the existing 16 MiB
+baseline budget. Existing baselines are not enriched by inspection or Save.
+A review may explicitly adopt readable-name metadata from an older accepted
+snapshot; ordinary subsequent no-op updates retain the accepted capture.
+
 When a part is deleted, format-3 history retains its last visible reference,
 canonical value and matching typed quantity as display metadata in the same
 undoable deletion. Accepted package and connectivity state remain unchanged

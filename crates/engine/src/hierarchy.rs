@@ -215,19 +215,7 @@ impl Project {
     /// Resolve all sheets through explicit parent/child pins and scoped named anchors.
     /// Hierarchical names alone do not join unrelated sheets; global/power labels do.
     pub fn electrical_connectivity(&self) -> Connectivity {
-        if self.requires_project_graph() {
-            return self.named_connectivity(true);
-        }
-        let symbols: Vec<_> = self.all_symbols().cloned().collect();
-        let wires: Vec<_> = self.sheets.iter().flat_map(|s| s.wires.iter().cloned()).collect();
-        let links = self.sheets.iter().flat_map(|s| s.subsheets.iter()).flat_map(|block| {
-            self.sheets
-                .iter()
-                .find(|s| s.sheet_id == block.child)
-                .into_iter()
-                .flat_map(|s| s.labels.iter().map(|label| [WireEndpoint::SheetPin(label.id), WireEndpoint::Label(label.id)]))
-        });
-        Connectivity::build_linked(&symbols, &wires, links)
+        self.named_connectivity(true)
     }
 
     /// Check interface identities, bounds and a single-parent acyclic tree before adoption.

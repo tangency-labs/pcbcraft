@@ -108,6 +108,7 @@ impl Project {
     /// Derived membership remains in the ordinary netlist; each row here supplies a typed key.
     pub fn inspect_net_registry(&self) -> Result<serde_json::Value, String> {
         let graph = Graph::build(self)?;
+        let electrical = self.electrical_connectivity();
         let nets: Vec<_> = graph
             .networks
             .iter()
@@ -120,7 +121,22 @@ impl Project {
                     .iter()
                     .find(|r| matches!(r.state, State::Active {}) && graph.network(&r.primary) == Some(index))
                     .map(|r| r.id);
-                serde_json::json!({"id":id,"anchor":network.anchors.first(),"names":network.names})
+                let display_name = network
+                    .anchors
+                    .iter()
+                    .find_map(|anchor| {
+                        let endpoint = match anchor.kind {
+                            super::AnchorKind::Terminal => {
+                                self.component_terminal(anchor.object, &anchor.terminal).map(crate::WireEndpoint::Terminal)
+                            }
+                            super::AnchorKind::Label => Some(crate::WireEndpoint::NetLabel(anchor.object)),
+                            super::AnchorKind::Port => Some(crate::WireEndpoint::Label(anchor.object)),
+                            super::AnchorKind::Junction => None,
+                        }?;
+                        electrical.net_index_for_endpoint(endpoint).map(|index| electrical.net_name(index))
+                    })
+                    .unwrap_or_else(|| "Unresolved net".into());
+                serde_json::json!({"id":id,"anchor":network.anchors.first(),"names":network.names,"name":display_name})
             })
             .collect();
         Ok(serde_json::json!({"scope":self.net_scope(),"records":self.net_registry.records,"nets":nets}))

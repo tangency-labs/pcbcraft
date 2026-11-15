@@ -706,7 +706,7 @@ fn inline_symbol_fields_commit_once_and_keep_their_owner() {
         }
         assert_eq!(after.symbols()[0].pins(), before.symbols()[0].pins());
         assert_eq!(after.symbols()[0].field_layout, before.symbols()[0].field_layout);
-        assert!(after.same_connectivity(&before));
+        assert_eq!(after.same_connectivity(&before), label != "Edit Reference");
         click(&mut h, "Undo");
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         click(&mut h, "Redo");

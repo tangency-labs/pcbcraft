@@ -175,8 +175,13 @@ fn accepted_pad_net_lookup_is_bound_to_each_lazy_snapshot_traversal() {
     let ids: Vec<_> = project.components.keys().copied().collect();
     let baseline = Arc::make_mut(Arc::make_mut(&mut project.board).baseline.as_mut().unwrap());
     baseline.nets = vec![
-        NetState { terminals: vec![TerminalKey { component: ids[0], terminal: "1".into() }], names: vec!["RAIL".into(), "VCC".into()] },
         NetState {
+            display_name: None,
+            terminals: vec![TerminalKey { component: ids[0], terminal: "1".into() }],
+            names: vec!["RAIL".into(), "VCC".into()],
+        },
+        NetState {
+            display_name: None,
             terminals: vec![TerminalKey { component: ids[0], terminal: "2".into() }, TerminalKey { component: ids[1], terminal: "1".into() }],
             names: vec![],
         },
@@ -185,7 +190,7 @@ fn accepted_pad_net_lookup_is_bound_to_each_lazy_snapshot_traversal() {
     let original = Arc::new(project);
     let mut older_traversal = original.boards().next().unwrap().footprints();
     let first = older_traversal.next().unwrap();
-    assert_eq!(first.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("RAIL"), Some("Net 2")]);
+    assert_eq!(first.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("RAIL"), Some("R1.2")]);
 
     let mut changed = original.as_ref().clone();
     let baseline = Arc::make_mut(Arc::make_mut(&mut changed.board).baseline.as_mut().unwrap());
@@ -193,7 +198,7 @@ fn accepted_pad_net_lookup_is_bound_to_each_lazy_snapshot_traversal() {
     baseline.nets[1].names = vec!["REVIEWED".into()];
     baseline.validate().unwrap();
     let second = older_traversal.next().unwrap();
-    assert_eq!(second.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("Net 2"), None]);
+    assert_eq!(second.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("R1.2"), None]);
     assert!(older_traversal.next().is_none());
 
     session.open_snapshot(Arc::new(changed));

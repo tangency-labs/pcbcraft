@@ -451,8 +451,11 @@ pub(super) fn show(
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     let ratsnest = state.ratsnest(project, source);
     let requested = std::mem::take(&mut state.net_highlight_requested);
-    let connectivity =
-        (requested || state.highlight_net.is_some() || state.tracks.route_contact().is_some()).then(|| state.copper_connectivity(project, source));
+    let connectivity = (!state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY)
+        || requested
+        || state.highlight_net.is_some()
+        || state.tracks.route_contact().is_some())
+    .then(|| state.copper_connectivity(project, source));
     if requested && let Some(connectivity) = &connectivity {
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
@@ -477,6 +480,7 @@ pub(super) fn show(
         appearance,
         focus,
         &carried,
+        connectivity.as_ref().filter(|_| !state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY)).map(|data| &data.nets),
     );
     let selected_reference = out.reference_pick.clone().or_else(|| out.selection.is_none().then(|| state.reference.selected.clone()).flatten());
     if (!state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) || selected_reference.is_some())
@@ -533,6 +537,11 @@ pub(super) fn show(
             for pad in &mut pads {
                 let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
                 pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+            }
+        }
+        if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
+            for pad in &mut pads {
+                pad.net = None;
             }
         }
         let reference_bounds = reference_bounds(&p, camera, rect, project, state, &footprint, bounds, appearance);

@@ -683,14 +683,14 @@ mod tests {
         assert_eq!(harness.state().views.active.schematic.selection.single_wire(), None);
 
         click(&mut harness, "Expand Nets");
-        click(&mut harness, "Net 1");
+        click(&mut harness, "R1.2");
         assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), None);
         assert_eq!(harness.state().views.active.schematic.selection.single_wire(), Some("wire-4"));
         assert_eq!(harness.state().session.revision(), 4);
 
         click(&mut harness, "Collapse Symbols");
         assert!(harness.query_by_label("R2  R").is_none());
-        harness.get_by_label("Net 1");
+        harness.get_by_label("R1.2");
     }
 
     /// The Browser floats over the canvas: showing or hiding it leaves the canvas's size alone,

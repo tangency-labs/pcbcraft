@@ -1636,3 +1636,12 @@ pinned Craft settings rows, segmented choices, opaque RGB field with its shared
 colour popover, and action buttons through chrome. The thin colour adapter adds
 the host's accessible setting name without replacing the toolkit's drawing or
 interaction. No new dependency, artwork or external EDA source was introduced.
+
+## Readable net names and copper annotations
+
+The canonical-terminal naming policy, UTF-8 token encoding, scoped qualification,
+accepted display snapshots and view-only copper labels for #353 are original
+PCBcraft work under MIT OR Apache-2.0. The toggle reuses the pinned Craft checkbox
+through chrome; annotations extend PCBcraft's existing scaled canvas-text and
+copper painters. No external EDA source, artwork, library data or dependency was
+introduced. Test projects use production commands and native codecs.

@@ -403,7 +403,7 @@ fn equal_names_and_conflicting_islands_preserve_distinct_identity() {
     let report = reports(&session);
     let short = report.violations.iter().find(|finding| finding.kind == Kind::Short).unwrap();
     assert_eq!(short.nets.len(), 2);
-    assert!(short.nets.iter().all(|net| net.name == "LOCAL"));
+    assert!(short.nets.iter().all(|net| net.name.ends_with("::LOCAL")));
     assert!(view(&session).net_class_target_for_copper(&name).is_err(), "conflicting physical contact cannot choose a class target");
     let before = session.snapshot().unwrap();
     assert!(

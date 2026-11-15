@@ -1561,7 +1561,7 @@ mod tests {
         assert!(changed[0].1.contains("\"id\":1001"));
         assert!(changed[0].1.contains("\"reference\":\"R42\""));
         assert_eq!(edited.symbols(), before.symbols());
-        assert!(edited.same_connectivity(&before));
+        assert!(!edited.same_connectivity(&before));
         assert_eq!(edited.pad_for_terminal(pin), Some(pad));
         assert_eq!(edited.terminal_for_pad(pad), Some(pin));
         let reopened = decode(&after).unwrap();

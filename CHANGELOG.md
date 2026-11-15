@@ -13,6 +13,13 @@ canvas. The choice is remembered with your settings and available
 through `app.set_preferences`; each view keeps its saved dock side and floating
 positions, and project data and history are unchanged.
 
+Nets share readable names across schematic browsing, Rules and PCB inspection.
+Unnamed signals use a stable component terminal, such as `U3.OUT` or `R7.2`,
+with sheet paths only when needed to distinguish names. PCB pads, vias and wide
+tracks show fitted labels through the view-local **Layers → Net names** toggle.
+Accepted PCB names remain at their reviewed baseline until Update PCB accepts
+schematic changes; native baseline format 4 preserves that presentation.
+
 PCB views now remember their own snap spacing and presets separately from
 schematic views. Choosing a board grid no longer replaces the schematic startup
 spacing, and switching workspaces restores each editor's choice. Schematic views

@@ -56,6 +56,12 @@ now reuse a layer-aware packed index and support disposable geometry overlays;
 see the [query contract](copper-clearance-query.md) and
 [measurement limits](../tools/performance/baselines/issue244/README.md).
 
+[Shared readable net names](net-labels.md#generated-names-and-copper-labels)
+cover schematic browsing, Rules, PCB inspection and fitted pad/via/track overlays.
+Accepted boards retain their reviewed names until Update PCB; the overlay toggle
+is view-local. Repeated-instance and multiboard naming remains within the current
+single-use/single-board scope.
+
 The engine [sparse net registry](net-registry-storage.md) preserves independent
 UUIDs for named or explicitly promoted nets, with bounded anchors, split/merge
 lineage and explicit ambiguity resolution through shared headless/live MCP

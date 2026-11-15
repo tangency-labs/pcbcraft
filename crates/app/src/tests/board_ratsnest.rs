@@ -442,3 +442,35 @@ fn reference_properties_align_controls_and_keep_actions_visible_in_short_hosts()
     }
     assert!(h.query_all_by_label("Override text size").next().is_none());
 }
+
+/// Copper labels are view-owned presentation. GUI, live commands and restored split views
+/// use one visibility handler without touching bytes, revisions or the other view's choice.
+#[test]
+fn net_names_visibility_is_local_restorable_and_survives_layer_actions() {
+    let mut h = board(true);
+    let before = h.state().session.inspect();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Net names");
+    assert!(h.state().views.active.board.hidden_layers.contains("net_names"));
+    for action in ["Isolate active", "Show all"] {
+        click(&mut h, action);
+        assert!(h.state().views.active.board.hidden_layers.contains("net_names"));
+    }
+    let saved = h.state().views.active.saved_state(&h.state().session).unwrap();
+    let mut restored = crate::editor_view::EditorView::from_state(ViewId(99), &saved, &h.state().session);
+    restored.sync(&h.state().session);
+    assert!(restored.board.hidden_layers.contains("net_names"));
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    h.state_mut().run_window_command(&ctx, "view.set_net_names_visibility", &json!({"view":view,"visible":true})).unwrap();
+    h.run();
+    assert!(!h.state().views.active.board.hidden_layers.contains("net_names"));
+    assert!(restored.board.hidden_layers.contains("net_names"));
+    assert!(h.state_mut().run_window_command(&ctx, "view.set_net_names_visibility", &json!({"view":999,"visible":false})).is_err());
+    h.set_size(egui::vec2(760., 560.));
+    h.run();
+    assert!(h.get_by_label("Net names").rect().bottom() < 540.);
+    assert!(h.get_by_label("Net names").rect().bottom() <= h.get_by_label("Show all").rect().top());
+    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+}

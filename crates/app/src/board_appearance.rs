@@ -14,6 +14,7 @@ use uuid::Uuid;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Connectivity {
     pub(super) copper: Copper,
+    pub(super) names_pending: bool,
     pub(super) nets: BTreeMap<Uuid, String>,
 }
 

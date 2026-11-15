@@ -690,6 +690,10 @@ board placements. **Layout → Modify menu → Delete** provides the same action
 package assignments are retained for re-placement, and undo restores the original
 placements. Active drawing tools and movement previews keep keyboard ownership.
 
+**Layers → Net names** shows readable pad, via and track names when they fit the
+copper. Each view keeps its own overlay choice; document history is unchanged.
+Accepted PCB names wait for reviewed Update PCB when the schematic has changed.
+
 The Layout ribbon's **Active layer** selector and status bar identify the drawing
 layer. Click a row in Layers to activate it, with an arrow and color swatch
 beside its name. The eye at the right toggles visibility independently: a pupil

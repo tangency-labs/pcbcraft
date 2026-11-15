@@ -32,11 +32,59 @@ interfaces. Global labels and definition-declared power terminals join matching
 global names across sheets. Names are case-sensitive, so GND and gnd are distinct.
 A local label joins that connection when a matching global name exists on its sheet.
 
-The Browser, Net Inspector and PCB annotations show resolved names. Inspection
-retains aliases when wires join differently named groups. Global names take
-display priority, followed by lexical ordering within each scope. That ordering
-does not imply that joining different supply names is electrically correct;
-ERC and supply-conflict diagnostics remain separate work.
+The Browser, Net Inspector, Rules chooser and PCB annotations use the same
+readable names. A net with authored names uses the UTF-8 bytewise smallest name;
+inspection retains all aliases. This presentation choice does not resolve an
+electrical conflict or change which labels connect.
+
+## Generated names and copper labels
+
+Unnamed nets with component terminals use **REF.PIN**, such as `U3.OUT` or `R7.2`.
+PIN is the trimmed pin name only when it uniquely identifies one electrical
+terminal across every unit of the component; duplicate, blank or unavailable
+names use the electrical terminal designator. The selected terminal has the
+smallest [canonical terminal-anchor key](net-identity.md#canonical-anchor-key-encoding),
+independent of reference sorting, geometry and wire traversal. A reference or pin
+name edit updates the presentation without changing electrical identity.
+
+Tokens preserve ASCII letters, digits, underscore, hyphen and plus. Other UTF-8
+bytes use uppercase percent escapes, including periods inside tokens:
+`OUT.A` becomes `OUT%2EA`, giving `U3.OUT%2EA`. Distinct nets with equal primary
+names use their full encoded sheet-occurrence path, for example
+`Main/Power::U3.OUT`. Explicit names use the canonical named anchor declaring
+the primary name; generated names use the selected component terminal. A physical terminal drawn on multiple sheets uses the
+lexically smallest encoded path among its appearances. Equal qualified names
+append `~` and the shortest unique lowercase SHA-256 prefix, starting at eight
+characters and extending by two. The scoped derived address hashed here is the
+lowest canonical member-anchor key, which already includes the project and scope;
+promotion does not change that display address. Orphan wire groups show
+**Unconnected**; missing electrical targets show **Unresolved net**.
+
+Generated names and qualification are read-only snapshot data. They neither
+join equal-looking nets nor promote sparse registry records, allocate stable IDs,
+change project bytes or supply command authority. UUIDs and typed anchors remain
+available through explicit identity fields and Details. Shared headless/live
+inspection includes `board.netlist` with its accepted/schematic basis, primary
+names, electrical aliases and typed membership; pending schematic names remain
+in the schematic netlist.
+
+**Layers → Net names** controls the PCB overlay for one view, with
+`view.set_net_names_visibility` providing the same live command. The setting
+survives local arrangements without changing document history. Pads retain their
+numbers and add a net name when both lines fit. Vias fit names inside their
+annular band; sufficiently wide, long visible tracks repeat upright names along
+their axis. Narrow copper, short segments and distant zoom omit text before it
+would overflow copper or become unreadable. Hidden copper layers omit their
+track labels.
+
+An accepted PCB keeps its reviewed name baseline while schematic changes are
+pending. Properties and inspection report **Schematic update pending** for net
+name or membership differences. Reviewed Update PCB accepts the new names with
+connectivity; Cancel changes neither, and Undo/Redo restores the accepted state.
+[Baseline format 4](native-project-storage.md) retains generated names across
+native save/reopen. Older baselines preserve their stored authored names and
+historical reference/designator fallback until an explicit reviewed update
+adopts the complete presentation snapshot.
 
 ## Shared commands
 

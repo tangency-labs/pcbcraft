@@ -138,7 +138,7 @@ fn capture_uses_project_connectivity_instead_of_the_active_sheet_projection() {
     }
     expected.sort();
     let proposed = capture(session.project().unwrap(), 1);
-    assert_eq!(proposed.nets, vec![NetState { terminals: expected, names: vec!["SHARED".into()] }]);
+    assert_eq!(proposed.nets, vec![NetState { display_name: Some("SHARED".into()), terminals: expected, names: vec!["SHARED".into()] }]);
     assert_eq!(session.project().unwrap().for_sheet(remote).unwrap().connectivity().nets[0].len(), 1);
 }
 
@@ -243,7 +243,7 @@ fn malformed_baselines_are_rejected_without_aliasing_history() {
     invalid.source.content_digest = "A".repeat(64);
     assert!(invalid.validate().is_err());
     invalid = baseline.clone();
-    invalid.nets.push(NetState { terminals: vec![TerminalKey { component: id, terminal: "1".into() }; 2], names: Vec::new() });
+    invalid.nets.push(NetState { display_name: None, terminals: vec![TerminalKey { component: id, terminal: "1".into() }; 2], names: Vec::new() });
     assert!(invalid.validate().is_err());
     invalid = baseline.clone();
     invalid.board = Uuid::from_u128(999);
@@ -294,4 +294,92 @@ fn baseline_total_pad_limit_includes_mapped_and_unconnected_pads() {
     let component = invalid["components"].as_object_mut().unwrap().values_mut().next().unwrap();
     component["package"]["unconnected_pads"] = json!(["129"]);
     assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+}
+
+/// An accepted name is a frozen presentation baseline, including generated references and
+/// project-wide scoped qualifications. Review, cancellation, Undo and reopen retain its owner.
+#[test]
+fn accepted_names_wait_for_review_and_survive_cancellation_history_and_native_codecs() {
+    let mut session = fixture();
+    let main = session.project().unwrap().sheet_target();
+    session.apply(crate::sheets::CREATE_SHEET, &json!({"name":"Power","expected_revision":session.revision()})).unwrap();
+    let child = session.project().unwrap().sheets().nth(1).unwrap().target;
+    for sheet in [main, child] {
+        session
+            .apply(
+                crate::net_labels::ADD,
+                &json!({"sheet":sheet.id(),"name":"BUS","style":"local","x_nm":100_000_000,"y_nm":0,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+    }
+    session.apply(CONNECT_PINS,&json!({"sheet":main.id(),"from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"},"expected_revision":session.revision()})).unwrap();
+    session.apply(INITIALIZE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
+    let board = session.project().unwrap().board_target().unwrap();
+    let names = |project: &Project| {
+        project.board_view(board).unwrap().footprints().flat_map(|f| f.pads.into_iter().filter_map(|pad| pad.net)).collect::<BTreeSet<_>>()
+    };
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R1.2".into()]));
+    assert!(session.project().unwrap().net_registry.records.len() <= 2, "unnamed baseline nets stay sparse");
+    session
+        .apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"sheet":main.id(),"symbol":"symbol-2","reference":"R99","value":"R","expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let pending = session.snapshot().unwrap();
+    assert_eq!(pending.for_sheet(main).unwrap().connectivity().net_name(0), "R99.2");
+    assert_eq!(names(&pending), BTreeSet::from(["R1.2".into()]));
+    let inspected = session.inspect();
+    assert_eq!(inspected["project"]["board"]["netlist"]["basis"], "accepted");
+    assert_eq!(inspected["project"]["board"]["netlist"]["nets"][0]["name"], "R1.2");
+    assert_eq!(inspected["project"]["board"]["netlist"]["names_pending"], true);
+    assert!(pending.board_view(board).unwrap().net_names_pending());
+    let before = encode_documents(pending.clone()).unwrap();
+    session.apply(PREVIEW_UPDATE, &json!({"board":board.board,"expected_revision":session.revision()})).unwrap();
+    let token = session.cached_board_update().unwrap().plan_token;
+    session.apply(CANCEL_UPDATE, &json!({"plan_token":token})).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    assert!(session.apply(APPLY_UPDATE, &json!({"board":board.board,"plan_token":token,"expected_revision":session.revision()})).is_err());
+    let reopened = crate::persistence::decode_documents(&before).unwrap();
+    assert_eq!(names(&reopened), BTreeSet::from(["R1.2".into()]));
+    session.apply(PREVIEW_UPDATE, &json!({"board":board.board,"expected_revision":session.revision()})).unwrap();
+    let token = session.cached_board_update().unwrap().plan_token;
+    session.apply(APPLY_UPDATE, &json!({"board":board.board,"plan_token":token,"expected_revision":session.revision()})).unwrap();
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R99.2".into()]));
+    assert!(!session.project().unwrap().board_view(board).unwrap().net_names_pending());
+    session.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R1.2".into()]));
+    session.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R99.2".into()]));
+    assert!(!session.project().unwrap().board_view(board).unwrap().net_names_pending());
+    let packed = crate::persistence::encode_packed(session.snapshot().unwrap()).unwrap();
+    assert_eq!(names(&crate::persistence::decode_packed(&packed).unwrap().project), BTreeSet::from(["R99.2".into()]));
+}
+
+/// Version guards reject display metadata under old vocabularies, including explicit nulls.
+#[test]
+fn accepted_display_metadata_requires_its_version_and_a_nonempty_record() {
+    let mut session = fixture();
+    session
+        .apply(
+            CONNECT_PINS,
+            &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"},"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let baseline = capture(session.project().unwrap(), 91);
+    let encoded = serde_json::to_value(&baseline).unwrap();
+    for format in [FORMAT, MULTIPAD_FORMAT, QUANTITY_FORMAT] {
+        let mut old = encoded.clone();
+        old["format"] = json!(format);
+        assert!(Baseline::decode(&serde_json::to_vec(&old).unwrap()).is_err());
+        old["nets"][0]["display_name"] = serde_json::Value::Null;
+        assert!(Baseline::decode(&serde_json::to_vec(&old).unwrap()).is_err());
+        old["nets"][0].as_object_mut().unwrap().remove("display_name");
+        assert!(Baseline::decode(&serde_json::to_vec(&old).unwrap()).is_ok());
+    }
+    for bad in [json!(null), json!(""), json!("bad\nname"), json!("X".repeat(65_537))] {
+        let mut invalid = encoded.clone();
+        invalid["nets"][0]["display_name"] = bad;
+        assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
 }

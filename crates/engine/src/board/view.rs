@@ -352,6 +352,71 @@ impl<'a> BoardView<'a> {
         })
     }
 
+    /// Inspect the same names used by physical pads and copper, with aliases and typed
+    /// membership kept separate from presentation. Accepted history never follows pending edits.
+    pub fn inspect_netlist(self) -> serde_json::Value {
+        if let Some(baseline) = &self.project.board.baseline {
+            serde_json::json!({"basis":"accepted", "source":baseline.source, "names_pending":self.net_names_pending(),
+                "nets":baseline.nets.iter().enumerate().map(|(index,net)|serde_json::json!({
+                    "name":baseline.net_name(index),"names":net.names,"terminals":net.terminals
+                })).collect::<Vec<_>>()})
+        } else {
+            let mut netlist = self.project.electrical_connectivity().inspect();
+            netlist["basis"] = serde_json::json!("schematic");
+            netlist["names_pending"] = serde_json::json!(false);
+            netlist
+        }
+    }
+
+    /// Whether current schematic membership or its readable names differ from accepted nets.
+    /// This read never accepts an update. Missing sources and split/merged groups stay pending.
+    pub fn net_names_pending(self) -> bool {
+        let Some(baseline) = &self.project.board.baseline else { return false };
+        let graph = self.project.electrical_connectivity();
+        let symbols: std::collections::BTreeMap<_, _> = self.project.all_symbols().map(|s| (s.ordinal, s.component)).collect();
+        let current: Vec<std::collections::BTreeSet<_>> = graph
+            .nets
+            .iter()
+            .map(|pins| {
+                pins.iter()
+                    .filter_map(|pin| {
+                        let component = *symbols.get(&pin.symbol)?;
+                        self.project
+                            .component_is_board_eligible(component)
+                            .then(|| super::update::TerminalKey { component, terminal: pin.number().into() })
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut accepted_groups = std::collections::BTreeSet::new();
+        for (index, net) in baseline.nets.iter().enumerate() {
+            let expected: std::collections::BTreeSet<_> = net.terminals.iter().cloned().collect();
+            let Some(first) = net.terminals.first() else { return true };
+            let source = self.project.component_terminal(first.component, &first.terminal).and_then(|pin| graph.net_index_for(pin));
+            if let Some(source) = source {
+                if current[source] != expected || baseline.net_name(index).as_deref() != Some(graph.net_name(source).as_str()) {
+                    return true;
+                }
+                accepted_groups.insert(source);
+            } else if net.terminals.len() == 1 {
+                let Some(component) =
+                    self.project.components.get(&first.component).filter(|_| self.project.component_is_board_eligible(first.component))
+                else {
+                    return true;
+                };
+                let name = crate::nets::display::terminal_name(component.reference(), &first.terminal, component.definition.pins());
+                if !net.names.is_empty() || baseline.net_name(index).as_deref() != Some(name.as_str()) {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+        current.iter().enumerate().any(|(index, terminals)| {
+            !accepted_groups.contains(&index) && (terminals.len() >= 2 || !terminals.is_empty() && !graph.net_names(index).is_empty())
+        })
+    }
+
     /// Project a disposable reference move through the same silk clipping and transform as export.
     /// The view must belong to this board. Editor-only legacy labels have no physical paths.
     pub fn reference_preview(self, view: &FootprintView<'_>, offset: Point) -> Vec<GraphicView> {
@@ -395,15 +460,15 @@ impl<'a> BoardView<'a> {
     }
 }
 
-/// Derive a sheet-qualified annotation from the terminal's owning sheet. Project-wide board
-/// views must not inherit whichever schematic projection happened to request them.
+/// Read the shared project-qualified name through the terminal's owning sheet. Qualification
+/// is applied only for actual collisions and never depends on the requesting board projection.
 fn net_label(project: &Project, terminal: crate::schematic::Terminal) -> Option<String> {
     let sheet = project.sheets.iter().find(|sheet| sheet.symbols.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).is_ok())?;
     let projection = project.for_sheet(crate::SheetTarget { project: project.id, sheet: sheet.sheet_id })?;
     let connectivity = projection.connectivity();
     let index = connectivity.net_index_for(terminal)?;
     let name = connectivity.net_name(index);
-    Some(if project.sheets.len() > 1 { format!("{}: {name}", sheet.sheet_name) } else { name })
+    Some(name)
 }
 
 /// Reuse saved technical paths for identical immutable board/component inputs. The short cache
