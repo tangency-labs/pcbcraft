@@ -443,7 +443,7 @@ pub(crate) fn show(
     let overlap_index = overlap_cache.get(project, revision, &painter, camera.unit_step());
     let screen = |point| camera.screen(point, rect);
     let unit_step = camera.unit_step();
-    painter.extend(backdrop(&painter, project, camera, rect, rect, display));
+    painter.extend(backdrop(&painter, project, camera, rect, rect, Rect::EVERYTHING, display));
     let mut whole_wires = selected.wires.clone();
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
@@ -1280,8 +1280,18 @@ pub(crate) struct Display {
 /// The sheet's backdrop over `area` of a canvas whose viewport is `canvas`: the paper with its
 /// frame, or the grid everywhere on a sheet without paper. The paper marks the export area, not
 /// an editing boundary, so the canvas around it keeps the theme's colour wherever the drawing
-/// lies. `painter` lays out the frame's texts.
-pub(crate) fn backdrop(painter: &Painter, project: &Project, camera: &Camera, canvas: Rect, area: Rect, display: Display) -> Vec<egui::Shape> {
+/// lies. `painter` lays out the frame's texts, which are kept only within `text_area`, as for
+/// [`pcbcraft_chrome::paper::backdrop`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn backdrop(
+    painter: &Painter,
+    project: &Project,
+    camera: &Camera,
+    canvas: Rect,
+    area: Rect,
+    text_area: Rect,
+    display: Display,
+) -> Vec<egui::Shape> {
     let screen = |point| camera.screen(point, canvas);
     let paper = project.page().zip(project.frame()).map(|(page, frame)| {
         let [min, max] = page.corners();
@@ -1293,7 +1303,7 @@ pub(crate) fn backdrop(painter: &Painter, project: &Project, camera: &Camera, ca
         opacity: display.opacity,
         outside_paper: display.outside_paper,
     };
-    pcbcraft_chrome::paper::backdrop(painter, area, paper.as_ref(), grid, display.appearance)
+    pcbcraft_chrome::paper::backdrop(painter, area, text_area, paper.as_ref(), grid, display.appearance)
 }
 
 /// A sheet frame in screen coordinates. `screen` maps sheet points and `step` is the size of one

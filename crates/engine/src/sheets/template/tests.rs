@@ -141,6 +141,11 @@ fn set_template_is_one_undo_step() {
     assert_eq!(listed["templates"][0]["name"], "default");
     assert_eq!(listed["templates"][0]["revision"], 1);
     assert!(Session::default().execute(LIST_TEMPLATES, &json!({})).is_ok());
+    // `apply` accepts the same read-only query, with or without a project, and changes nothing.
+    let revision = s.revision();
+    assert_eq!(s.apply(LIST_TEMPLATES, &json!({})), Ok(revision));
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    assert!(Session::default().apply(LIST_TEMPLATES, &json!({})).is_ok());
 }
 
 /// The template reference is stored in the page record only when there is one; a sheet with an

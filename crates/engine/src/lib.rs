@@ -2830,6 +2830,11 @@ impl Session {
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        // A read-only query that needs no project: accepted like `execute`, changing nothing.
+        if id == sheets::page::LIST_TEMPLATES {
+            check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
+            return Ok(self.revision);
+        }
         if id.starts_with("library.") {
             self.library_command(id, params)?;
             return Ok(self.revision);

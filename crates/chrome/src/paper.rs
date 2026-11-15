@@ -78,8 +78,11 @@ pub struct Grid {
 /// The backdrop shapes over `area` with resolved personal colours. Without paper, the grid covers the
 /// whole area, as on a sheet that predates paper. With paper, the grid covers the paper, and the
 /// canvas around it too when [`Grid::outside_paper`] is set. The canvas fill never depends on
-/// where the drawing lies. `painter` lays out the frame texts.
-pub fn backdrop(painter: &Painter, area: Rect, paper: Option<&Paper>, grid: Grid, appearance: Appearance) -> Vec<Shape> {
+/// where the drawing lies. `painter` lays out the frame's texts; a text is kept when it touches
+/// `area` and lies entirely within `text_area`. A text can't be clipped like a line, so a caller
+/// that combines several areas under one painter, such as the ribbon margin of a split view,
+/// passes each area's own bounds there; a canvas whose painter clips passes [`Rect::EVERYTHING`].
+pub fn backdrop(painter: &Painter, area: Rect, text_area: Rect, paper: Option<&Paper>, grid: Grid, appearance: Appearance) -> Vec<Shape> {
     let t = Tokens::get();
     let mut shapes = vec![Shape::rect_filled(area, 0, appearance.canvas)];
     let Some(paper) = paper else {
@@ -88,7 +91,7 @@ pub fn backdrop(painter: &Painter, area: Rect, paper: Option<&Paper>, grid: Grid
         }
         return shapes;
     };
-    let (under, over) = layers(painter, area, paper, appearance);
+    let (under, over) = layers(painter, area, text_area, paper, appearance);
     shapes.extend(under);
     let gridded = if grid.outside_paper { area } else { paper.sheet.intersect(area) };
     if gridded.is_positive()
@@ -103,14 +106,14 @@ pub fn backdrop(painter: &Painter, area: Rect, paper: Option<&Paper>, grid: Grid
 /// The paper alone over `area`, without the canvas around it or a grid: for previews such as
 /// Home thumbnails.
 pub fn sheet(painter: &Painter, area: Rect, paper: &Paper, appearance: Appearance) -> Vec<Shape> {
-    let (mut shapes, over) = layers(painter, area, paper, appearance);
+    let (mut shapes, over) = layers(painter, area, Rect::EVERYTHING, paper, appearance);
     shapes.extend(over);
     shapes
 }
 
 /// The optional paper shadow and fill, then the frame and edge over the grid, clipped
-/// to `area`. Uniform presentation omits the shadow and fills with the canvas colour.
-fn layers(painter: &Painter, area: Rect, paper: &Paper, appearance: Appearance) -> (Vec<Shape>, Vec<Shape>) {
+/// to `area`; frame texts must stay within `text_area`. Uniform presentation omits the shadow and fills with the canvas colour.
+fn layers(painter: &Painter, area: Rect, text_area: Rect, paper: &Paper, appearance: Appearance) -> (Vec<Shape>, Vec<Shape>) {
     let t = Tokens::get();
     let mut under = Vec::new();
     let shadow = paper.sheet.translate(theme::SCHEMATIC_PAPER_SHADOW).intersect(area);
@@ -128,7 +131,7 @@ fn layers(painter: &Painter, area: Rect, paper: &Paper, appearance: Appearance) 
         let color = if text.label { t.text_dim } else { t.canvas_ink };
         let galley = canvas_text::layout_runs(painter, &runs(text, color), FontId::proportional(text.size));
         let bounds = Align2([text.align, Align::Center]).anchor_size(text.at, galley.size());
-        if bounds.intersects(area) {
+        if bounds.intersects(area) && text_area.contains_rect(bounds) {
             over.push(Shape::galley(bounds.min, galley, color));
         }
     }
@@ -219,14 +222,14 @@ mod tests {
             theme::apply(&ctx, dark);
             let t = Tokens::get();
             let appearance = Appearance::default();
-            let shapes = backdrop(&painter, area, Some(&paper), grid, appearance);
+            let shapes = backdrop(&painter, area, Rect::EVERYTHING, Some(&paper), grid, appearance);
             let Shape::Rect(surround) = &shapes[0] else { panic!("canvas first") };
             assert_eq!(surround.fill, t.canvas, "the canvas around the paper keeps the theme's colour");
             assert!(shapes.iter().any(|shape| matches!(shape, Shape::Rect(rect) if rect.rect == sheet.intersect(area) && rect.fill == t.canvas)));
             assert!(!shapes.iter().any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill.a() < 255)), "uniform paper has no shadow");
             for color in [t.schematic_paper, Color32::from_rgb(50, 70, 90)] {
                 let appearance = Appearance { paper: Some(color), ..appearance };
-                let styled = backdrop(&painter, area, Some(&paper), grid, appearance);
+                let styled = backdrop(&painter, area, Rect::EVERYTHING, Some(&paper), grid, appearance);
                 assert!(
                     styled
                         .iter()
@@ -237,12 +240,46 @@ mod tests {
             let on_paper = dots(&shapes);
             assert!(!on_paper.is_empty());
             assert!(on_paper.iter().all(|dot| sheet.contains(*dot)), "grid dots only on the paper when outside is off");
-            let everywhere = dots(&backdrop(&painter, area, Some(&paper), Grid { outside_paper: true, ..grid }, appearance));
+            let everywhere = dots(&backdrop(&painter, area, Rect::EVERYTHING, Some(&paper), Grid { outside_paper: true, ..grid }, appearance));
             assert!(everywhere.iter().any(|dot| !sheet.contains(*dot)), "the grid continues outside the paper when on");
-            assert_eq!(everywhere.len(), dots(&backdrop(&painter, area, None, grid, appearance)).len(), "the same grid as a sheet without paper");
-            let off = backdrop(&painter, area, Some(&Paper { sheet: sheet.translate(vec2(1000.0, 0.0)), frame: paper.frame.clone() }), grid, appearance);
+            assert_eq!(
+                everywhere.len(),
+                dots(&backdrop(&painter, area, Rect::EVERYTHING, None, grid, appearance)).len(),
+                "the same grid as a sheet without paper"
+            );
+            let off = backdrop(
+                &painter,
+                area,
+                Rect::EVERYTHING,
+                Some(&Paper { sheet: sheet.translate(vec2(1000.0, 0.0)), frame: paper.frame.clone() }),
+                grid,
+                appearance,
+            );
             assert!(points(&off).iter().all(|p| area.expand(0.01).contains(*p)));
         }
+    }
+
+    /// A text crossing into a neighbouring area is left out of this one, while lines are clipped
+    /// and a text inside the bounds is kept.
+    #[test]
+    fn frame_texts_stay_within_their_text_area() {
+        let sheet = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 200.0));
+        let text =
+            |x: f32| FrameText { at: pos2(x, 100.0), size: 10.0, align: Align::Center, label: false, text: "Title".into(), unknown: Vec::new() };
+        let frame = Frame { lines: vec![[pos2(0.0, 50.0), pos2(400.0, 50.0)]], texts: vec![text(50.0), text(200.0)] };
+        let paper = Paper { sheet, frame };
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx);
+        ctx.begin_pass(egui::RawInput::default());
+        let painter = Painter::new(ctx, egui::LayerId::background(), sheet);
+        let grid = Grid { origin: Pos2::ZERO, step: 10.0, opacity: 0, outside_paper: false };
+        let left = Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0));
+        let galleys = |shapes: &[Shape]| shapes.iter().filter(|shape| matches!(shape, Shape::Text(_))).count();
+        let appearance = Appearance::default();
+        assert_eq!(galleys(&backdrop(&painter, left, Rect::EVERYTHING, Some(&paper), grid, appearance)), 2, "a clipping canvas keeps both");
+        let segment = backdrop(&painter, left, left, Some(&paper), grid, appearance);
+        assert_eq!(galleys(&segment), 1, "the text straddling x = 200 belongs to neither segment");
+        assert!(segment.iter().any(|shape| matches!(shape, Shape::LineSegment { points, .. } if points[1].x == 200.0)), "lines are clipped");
     }
 
     #[test]

@@ -786,7 +786,12 @@ impl PcbApp {
             for (id, pane) in host.rects.iter().filter(|(_, pane)| (pane.top() - top).abs() < 0.5) {
                 let area = Rect::from_min_max(egui::pos2(pane.left(), ribbon.area.top()), egui::pos2(pane.right(), ribbon.area.bottom()))
                     .intersect(ribbon.area);
-                shapes.extend(self.view_background_shapes(ribbon.painter(), *id, area));
+                // Frame texts stay within this pane's span, so one pane's text never covers its
+                // neighbour's margin; at the window's edges the painter clips instead.
+                let left = if (pane.left() - ribbon.area.left()).abs() < 0.5 { f32::NEG_INFINITY } else { pane.left() };
+                let right = if (pane.right() - ribbon.area.right()).abs() < 0.5 { f32::INFINITY } else { pane.right() };
+                let text_area = Rect::from_x_y_ranges(left..=right, f32::NEG_INFINITY..=f32::INFINITY);
+                shapes.extend(self.view_background_shapes(ribbon.painter(), *id, area, text_area));
             }
         }
         ribbon.paint(shapes);
@@ -794,8 +799,9 @@ impl PcbApp {
 
     /// Paint exposed chrome margins with the addressed view's canvas palette and settled grid.
     /// A schematic view extends its sheet's paper backdrop. Missing/library views retain a plain
-    /// canvas background; no input or model state changes. `painter` lays out frame texts.
-    fn view_background_shapes(&self, painter: &egui::Painter, id: ViewId, area: Rect) -> Vec<egui::Shape> {
+    /// canvas background; no input or model state changes. `painter` lays out frame texts, kept
+    /// only within `text_area`.
+    fn view_background_shapes(&self, painter: &egui::Painter, id: ViewId, area: Rect, text_area: Rect) -> Vec<egui::Shape> {
         let t = pcbcraft_chrome::Tokens::get();
         let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
         let Some(view) = self.views.view(id) else { return plain() };
@@ -811,7 +817,7 @@ impl PcbApp {
         } else if let Some(canvas) = view.camera.schematic_rect()
             && let Some(project) = view.snapshot(&self.session)
         {
-            return crate::schematic_canvas::backdrop(painter, &project, &view.camera, canvas, area, self.preferences.schematic_display());
+            return crate::schematic_canvas::backdrop(painter, &project, &view.camera, canvas, area, text_area, self.preferences.schematic_display());
         } else {
             (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
         };
@@ -1186,7 +1192,8 @@ impl PcbApp {
                 }
             });
             if let Some((area, painter, slot)) = header {
-                painter.set(slot, egui::Shape::Vec(self.view_background_shapes(&painter, id, area)));
+                let text_area = Rect::from_x_y_ranges(area.x_range(), f32::NEG_INFINITY..=f32::INFINITY);
+                painter.set(slot, egui::Shape::Vec(self.view_background_shapes(&painter, id, area, text_area)));
             }
         }
         self.sync_library_focus();

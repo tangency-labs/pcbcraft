@@ -157,7 +157,11 @@ impl Thumbnail {
                 placement.turns(),
                 placement.is_mirrored(),
                 Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text),
-                if self.paper.is_some_and(|(sheet, _)| sheet.contains(grid_pos(placement.position))) { appearance.fill() } else { appearance.canvas },
+                if self.paper.as_ref().is_some_and(|(sheet, _)| sheet.contains(grid_pos(placement.position))) {
+                    appearance.fill()
+                } else {
+                    appearance.canvas
+                },
             );
             fields::paint_labels(
                 &painter,
