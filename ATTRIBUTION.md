@@ -52,6 +52,21 @@ when editing, and stores JSON in project/22 and sheet/9. The Properties table is
 original PCBcraft work built on the shared form fields, including the pinned
 Craft text field's inherited-value hint, context menu and focus behavior.
 
+## Sheet templates
+
+The Default template's title block in
+`libraries/basic-frames/templates/default.r1.json` (a 120 × 28 mm block with four
+7 mm rows, a split 70 mm from its left edge, and the Title, Project, Sheet,
+Company, Page, Drawn by, Rev and Date fields with their parameter references) and
+the template validation limits in `crates/engine/src/sheets/template.rs` are ported
+from Coline (`crates/sheet/src/template.rs` and
+`crates/format/src/library/template.rs`) at revision
+`bdd89dfb371e622f9ba94f368190c8c086d170d6`, MIT OR Apache-2.0. PCBcraft's version
+uses Y down, places items from a paper corner so one template fits every paper
+size, stores JSON, and fixes the value columns instead of measuring label widths.
+The zone band, its markers, the frame renderer and the Browser Frame menu are
+original PCBcraft work.
+
 ## Layer-aware spatial queries
 
 The #244 implementation uses `geo-index` 0.4.0 (MIT OR Apache-2.0), pinned by

@@ -429,3 +429,26 @@ fn paper_preferences_are_optional_and_cancelable() {
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     }
 }
+
+/// A sheet's Frame submenu shows its current template, switches between a plain border and the
+/// Default frame through `sheet.set_template`, one undo step each, without moving the paper.
+#[test]
+fn browser_frame_menu_sets_the_sheet_template() {
+    let mut h = sheet_harness(1400.0);
+    let before = h.state().session.snapshot().unwrap();
+    let title = |h: &Harness<'_, PcbApp>| h.state().session.project().unwrap().page().unwrap().template().map(|t| t.title().to_owned());
+    assert_eq!(title(&h).as_deref(), Some("Default"));
+    menu(&mut h, "Main");
+    click(&mut h, "Frame");
+    assert_eq!(h.get_by_role_and_label(egui::Role::RadioButton, "Default").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    click(&mut h, "None");
+    assert_eq!(title(&h), None);
+    assert_eq!(h.state().session.project().unwrap().page().unwrap().at(), before.page().unwrap().at());
+    menu(&mut h, "Main");
+    click(&mut h, "Frame");
+    click(&mut h, "Default");
+    assert_eq!(title(&h).as_deref(), Some("Default"));
+    h.state_mut().run("edit.undo", &Value::Null);
+    h.state_mut().run("edit.undo", &Value::Null);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

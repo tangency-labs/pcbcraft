@@ -21,8 +21,9 @@ pub(crate) struct Thumbnail {
     wires: Vec<Vec<Pos2>>,
     blocks: Vec<(Rect, String)>,
     labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction)>,
-    /// The sheet's paper and its plain border, in grid steps.
-    paper: Option<(Rect, Rect)>,
+    /// The sheet's paper and its frame lines, in grid steps. Frame texts are too small to read
+    /// on a card and are left out.
+    paper: Option<(Rect, Vec<[Pos2; 2]>)>,
     bounds: Rect,
 }
 
@@ -94,12 +95,12 @@ impl Thumbnail {
                 (at, label.name.clone(), label.direction)
             })
             .collect();
-        let paper = project.page().map(|page| {
-            let ([min, max], [inner_min, inner_max]) = (page.corners(), page.border_corners());
-            (Rect::from_two_pos(grid_pos(min), grid_pos(max)), Rect::from_two_pos(grid_pos(inner_min), grid_pos(inner_max)))
+        let paper = project.page().zip(project.frame()).map(|(page, frame)| {
+            let [min, max] = page.corners();
+            (Rect::from_two_pos(grid_pos(min), grid_pos(max)), frame.lines.iter().map(|[a, b]| [grid_pos(*a), grid_pos(*b)]).collect::<Vec<_>>())
         });
-        if let Some((sheet, _)) = paper {
-            bounds = bounds.union(sheet);
+        if let Some((sheet, _)) = &paper {
+            bounds = bounds.union(*sheet);
         }
         Some(Self { symbols, wires, blocks, labels, paper, bounds })
     }
@@ -123,12 +124,12 @@ impl Thumbnail {
         let screen = |point: Pos2| target.center() + (point - bounds.center()) * step;
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(rect));
         painter.rect_filled(rect, 0, appearance.canvas);
-        if let Some((sheet, border)) = self.paper {
+        if let Some((sheet, lines)) = &self.paper {
             let paper = pcbcraft_chrome::paper::Paper {
                 sheet: Rect::from_min_max(screen(sheet.min), screen(sheet.max)),
-                border: Rect::from_min_max(screen(border.min), screen(border.max)),
+                frame: pcbcraft_chrome::paper::Frame { lines: lines.iter().map(|[a, b]| [screen(*a), screen(*b)]).collect(), texts: Vec::new() },
             };
-            painter.extend(pcbcraft_chrome::paper::sheet(rect, paper, appearance));
+            painter.extend(pcbcraft_chrome::paper::sheet(&painter, rect, &paper, appearance));
         }
         for path in &self.wires {
             painter
@@ -272,8 +273,10 @@ mod native_power_tests {
         assert!(text.contains(&"GND"));
         assert!(text.contains(&"VCC"));
         assert!(!text.iter().any(|t| t.starts_with("PWR")));
-        // Six symbol strokes, plus four edges each for the paper and its border.
-        assert_eq!(out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. })).count(), 6 + 8);
+        // Six symbol strokes, the paper's four edges and every frame line.
+        let frame = preview.paper.as_ref().map_or(0, |(_, lines)| lines.len());
+        assert!(frame > 4, "the Default frame has zones and a title block");
+        assert_eq!(out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. })).count(), 6 + 4 + frame);
         assert_eq!(encode_documents(pinned).unwrap(), docs);
     }
 }

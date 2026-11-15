@@ -27,12 +27,36 @@ pub fn layout(painter: &Painter, mut text: String, mut font: FontId, color: Colo
         text.clear();
         1.
     };
-    let raster = RASTER_SIZES.into_iter().find(|size| *size >= requested).unwrap_or(128.);
+    let raster = raster_size(requested);
     font.size = raster;
     let mut job = egui::text::LayoutJob::simple(text, font, color, f32::INFINITY);
     job.halign = align;
-    let galley = painter.layout_job(job);
-    let scale = requested / raster;
+    scaled(painter.layout_job(job), requested / raster, color)
+}
+
+/// Lay out one line of canvas text made of differently coloured runs, such as a resolved
+/// title-block value with an unresolved reference marked. Sizing and raster reuse match
+/// [`layout`]; an invalid size yields empty text.
+pub fn layout_runs(painter: &Painter, runs: &[(&str, Color32)], mut font: FontId) -> Arc<Galley> {
+    let valid = font.size.is_finite() && font.size > 0.;
+    let requested = if valid { font.size } else { 1. };
+    let raster = raster_size(requested);
+    font.size = raster;
+    let mut job = egui::text::LayoutJob::default();
+    for (text, color) in runs.iter().filter(|_| valid) {
+        job.append(text, 0., egui::TextFormat::simple(font.clone(), *color));
+    }
+    let color = runs.first().map_or(Color32::PLACEHOLDER, |(_, color)| *color);
+    scaled(painter.layout_job(job), requested / raster, color)
+}
+
+/// The shared raster bucket for a requested size.
+fn raster_size(requested: f32) -> f32 {
+    RASTER_SIZES.into_iter().find(|size| *size >= requested).unwrap_or(128.)
+}
+
+/// Scale a galley laid out at its raster size to the requested size; scale 1 returns it as is.
+fn scaled(galley: Arc<Galley>, scale: f32, color: Color32) -> Arc<Galley> {
     if scale == 1. {
         return galley;
     }

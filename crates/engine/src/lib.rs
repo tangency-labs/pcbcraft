@@ -166,6 +166,8 @@ enum ParamKind {
     Paper,
     /// `landscape` or `portrait`.
     Orientation,
+    /// A sheet template address, `{library, name, revision}`, or null for none.
+    SheetTemplate,
     /// `project` or `sheet`.
     ParameterScope,
     /// A parameter name: an ASCII letter, then letters, digits and `_`.
@@ -259,6 +261,9 @@ impl ParamKind {
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
             Self::Paper => json!({"type":"string", "enum":sheets::page::Paper::ALL.map(sheets::page::Paper::as_str)}),
             Self::Orientation => json!({"type":"string", "enum":sheets::page::Orientation::ALL.map(sheets::page::Orientation::as_str)}),
+            Self::SheetTemplate => {
+                json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["library","name","revision"],"properties":{"library":{"type":"string","minLength":1,"maxLength":64},"name":{"type":"string","minLength":1,"maxLength":64},"revision":{"type":"integer","minimum":1}}}]})
+            }
             Self::ParameterScope => json!({"type":"string", "enum":["project","sheet"]}),
             Self::ParameterName => json!({"type":"string", "pattern":"^[A-Za-z][A-Za-z0-9_]*$", "maxLength":parameters::MAX_NAME_LEN}),
             Self::ParameterValue => json!({"type":["string","null"], "maxLength":parameters::MAX_VALUE_LEN}),
@@ -548,6 +553,7 @@ impl ParamKind {
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::Paper if value.as_str().and_then(sheets::page::Paper::parse).is_some() => Ok(()),
             Self::Orientation if value.as_str().and_then(sheets::page::Orientation::parse).is_some() => Ok(()),
+            Self::SheetTemplate if value.is_null() || serde_json::from_value::<sheets::template::TemplateRef>(value.clone()).is_ok() => Ok(()),
             Self::ParameterScope if matches!(value.as_str(), Some("project" | "sheet")) => Ok(()),
             Self::ParameterName if value.as_str().is_some_and(parameters::valid_name) => Ok(()),
             Self::ParameterValue if value.is_null() || value.as_str().is_some_and(|v| v.len() <= parameters::MAX_VALUE_LEN) => Ok(()),
@@ -613,6 +619,7 @@ impl ParamKind {
             Self::SheetExtent => Err("must be a positive extent within schematic bounds"),
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::Paper => Err("must be a4, a3, a2, a1 or a0"),
+            Self::SheetTemplate => Err("must be {library, name, revision} or null"),
             Self::Orientation => Err("must be landscape or portrait"),
             Self::ParameterScope => Err("must be project or sheet"),
             Self::ParameterName => Err("must be 1 to 64 ASCII letters, digits and _, starting with a letter"),
@@ -1157,6 +1164,18 @@ const CATALOG: &[Command] = &[
         title: "Page Setup",
         summary: "Set a sheet's paper size and orientation. The paper's top-left corner stays put unless `at` moves it; nothing on the sheet moves. Undoable.",
         params: &[sheets::SHEET, sheets::page::PAPER, sheets::page::ORIENTATION, sheets::page::AT, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheets::page::SET_TEMPLATE,
+        title: "Sheet Frame",
+        summary: "Choose a sheet's frame template from template.list, or null for a plain border. The frame's title block shows the sheet's parameters. Undoable.",
+        params: &[sheets::SHEET, sheets::page::TEMPLATE, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheets::page::LIST_TEMPLATES,
+        title: "List Sheet Templates",
+        summary: "List the frame templates a sheet can use, with the library, name and revision sheet.set_template takes.",
+        params: &[],
     },
     Command {
         id: parameters::SET,
@@ -2549,7 +2568,7 @@ impl Session {
     /// and deletion retains one sheet. Package assignment needs only a project; physical
     /// placement and setup still need a board. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
-        if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
+        if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE | sheets::page::LIST_TEMPLATES) {
             return true;
         }
         if id == board::identity::CREATE_BOARD {
@@ -2583,6 +2602,7 @@ impl Session {
             | hierarchy::DELETE_LABEL
             | sheets::RENAME_SHEET
             | sheets::page::SET_PAGE
+            | sheets::page::SET_TEMPLATE
             | parameters::SET
             | parameters::LIST
             | parameters::RESOLVE
@@ -2744,6 +2764,10 @@ impl Session {
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        if id == sheets::page::LIST_TEMPLATES {
+            check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
+            return Ok(sheets::page::list_templates());
+        }
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
             let text = self.prepare_text_clipboard(id, params)?;
             return Ok(json!({"clipboard":text,"revision":self.revision}));
@@ -2865,6 +2889,7 @@ impl Session {
                 sheets::CREATE_SHEET
                 | sheets::RENAME_SHEET
                 | sheets::page::SET_PAGE
+                | sheets::page::SET_TEMPLATE
                 | parameters::SET
                 | parameters::LIST
                 | parameters::RESOLVE
@@ -2981,6 +3006,7 @@ impl Session {
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
             sheets::page::SET_PAGE => self.set_page(params)?,
+            sheets::page::SET_TEMPLATE => self.set_template(params)?,
             parameters::SET => self.set_parameter(params)?,
             parameters::LIST | parameters::RESOLVE => {
                 self.parameter_query(id, params)?;

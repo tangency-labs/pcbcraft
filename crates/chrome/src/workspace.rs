@@ -335,6 +335,11 @@ pub struct RibbonBackground {
 }
 
 impl RibbonBackground {
+    /// The painter the backdrop goes to, for laying out text in it.
+    pub fn painter(&self) -> &egui::Painter {
+        &self.painter
+    }
+
     /// Complete the backdrop beneath the existing ribbon controls without registering input.
     pub fn paint(self, shapes: Vec<Shape>) {
         self.painter.set(self.shape, Shape::Vec(shapes));

@@ -604,7 +604,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             return Err(format!("{}: sheet format 9 and only sheet format 9 requires paper", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
-        metadata.page = sheet.page.map(crate::sheets::page::Page::try_from).transpose().map_err(|error| format!("{}: {error}", reference.file))?;
+        metadata.page =
+            sheet.page.clone().map(crate::sheets::page::Page::try_from).transpose().map_err(|error| format!("{}: {error}", reference.file))?;
         if let Some(parameters) = sheet.parameters.take() {
             if sheet.format != PAGE_SHEET_FORMAT || parameters.is_empty() {
                 return Err(format!("{}: sheet parameters require sheet format 9 and a nonempty list", reference.file));

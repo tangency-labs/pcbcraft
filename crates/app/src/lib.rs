@@ -1174,11 +1174,16 @@ impl PcbApp {
             self.run(pcbcraft_engine::sheets::page::SET_PAGE, &params);
             return;
         }
+        if let Action::SetTemplate { sheet, template } = action {
+            let params = json!({"sheet":sheet.id(),"template":template,"expected_revision":self.session.revision()});
+            self.run(pcbcraft_engine::sheets::page::SET_TEMPLATE, &params);
+            return;
+        }
         let Some(project) = self.session.project() else {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::UpdatePcb => false,
+            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Schematic { sheet, pick } => project.for_sheet(*sheet).is_some_and(|project| {
                 if pick.wire {
@@ -1199,7 +1204,7 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;

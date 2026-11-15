@@ -1,0 +1,31 @@
+{
+  "schema": "pcbcraft-sheet-template/1",
+  "library": "basic-frames",
+  "name": "default",
+  "revision": 1,
+  "title": "Default",
+  "description": "Border with zone markers and a title block filled from the sheet's parameters.",
+  "border": {"inset_nm": 5000000, "zones": {"band_nm": 5000000, "pitch_nm": 50000000, "size_nm": 2500000}},
+  "items": [
+    {"kind": "rect", "anchor": "bottom_right", "at_nm": [-130000000, -38000000], "size_nm": [120000000, 28000000]},
+    {"kind": "line", "anchor": "bottom_right", "from_nm": [-130000000, -31000000], "to_nm": [-10000000, -31000000]},
+    {"kind": "line", "anchor": "bottom_right", "from_nm": [-130000000, -24000000], "to_nm": [-10000000, -24000000]},
+    {"kind": "line", "anchor": "bottom_right", "from_nm": [-130000000, -17000000], "to_nm": [-10000000, -17000000]},
+    {"kind": "line", "anchor": "bottom_right", "from_nm": [-60000000, -31000000], "to_nm": [-60000000, -10000000]},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-128000000, -34500000], "size_nm": 3500000, "align": "left", "style": "value", "text": "@sheet.Title"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-129000000, -27500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Project"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-117000000, -27500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@project.Name"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-59000000, -27500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Sheet"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-49000000, -27500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@sheet.Name"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-129000000, -20500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Company"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-117000000, -20500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@sheet.Company"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-59000000, -20500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Page"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-49000000, -20500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@instance.Page of @instance.Pages"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-129000000, -13500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Drawn by"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-117000000, -13500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@sheet.DrawnBy"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-59000000, -13500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Rev"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-49000000, -13500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@sheet.Revision"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-34000000, -13500000], "size_nm": 1400000, "align": "left", "style": "label", "text": "Date"},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-26000000, -13500000], "size_nm": 1800000, "align": "left", "style": "value", "text": "@sheet.Date"}
+  ]
+}
