@@ -168,7 +168,7 @@ fn connected_nodes_require_explicit_w_and_start_at_the_pointer() {
         let center = screen(&h, point);
         assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Circle(circle) if circle.center==center && circle.radius==pcbcraft_chrome::theme::WIRE_CURSOR_TARGET_RADIUS
-                && circle.stroke.color==pcbcraft_chrome::Tokens::get().schematic_wire)));
+                && circle.stroke.color==pcbcraft_chrome::Tokens::light().schematic_wire)));
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         let to = Point { y_nm: point.y_nm + 6 * GRID_NM, ..point };
         h.hover_at(screen(&h, to));

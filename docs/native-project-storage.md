@@ -78,6 +78,21 @@ project and saving it unchanged produces no additional diff. Raw decoding and
 journal validation remain byte-preserving; hosts call the shared
 `migrate_bundled_libraries` opening step explicitly.
 
+## Sheet paper adoption
+
+Every sheet has paper (see [Sheet paper records](#sheet-paper-records)). A sheet
+saved before sheet/9 has none, so opening gives it the smallest ISO A paper that
+holds its drawing with a 20 mm margin, centered on the drawing with its top-left
+corner on the 1.27 mm grid. Landscape is tried before portrait at each size; a
+drawing larger than A0 gets A0 landscape. An empty sheet gets the new-sheet paper.
+Nothing on the sheet moves.
+
+Like the library migration, this happens in memory when the desktop app, browser
+or headless storage opens a project. It adds no undo step and doesn't mark the
+project as changed; the open notice says the next Save (or Download) will add
+paper to older sheets. That save rewrites each older sheet document once, as
+sheet/9. `prepare_opened` runs both opening steps; `adopt_paper` runs this one.
+
 ## Board folders and first-save migration
 
 New projects use `pcbcraft-project/16`, extending project/14's `layout_root: "."` and required
@@ -352,6 +367,29 @@ one pin or wire-end marker across the project; removing the last marker allows
 ordinary lower-version encoding again.
 
 See the [no-connect contract](no-connect-markers.md) for commands and checks.
+
+### Sheet paper records
+
+Sheet/9 adds a required `page` record after `id` and is written for every sheet
+with paper, which is every sheet created or opened by this version:
+
+```json
+"page": {"paper":"a4","orientation":"landscape","at_nm":[-148590000,-105410000]}
+```
+
+`paper` is `a4`, `a3`, `a2`, `a1` or `a0`; `orientation` is `landscape` or
+`portrait`; `at_nm` is the paper's top-left corner in sheet nanometres (Y points
+down). The whole paper must lie inside the ±1 m schematic range. Unknown fields,
+null and other sizes are rejected, and older versions reject `page`. Sheet/9 is a
+superset of sheet/8: it always carries the three hierarchy/named arrays, and its
+`generated_legs` and `no_connect_ends` arrays are optional but nonempty when
+present, with the sheet/7 and sheet/8 rules. Changing one sheet's paper changes
+only that sheet's document. The diagnostic single-file encoding refuses paper.
+
+`sheet.set_page` takes `sheet`, `paper`, `orientation` and an optional `at`
+point. Without `at` the paper's top-left corner stays where it is. It is one
+revision-checked project undo step, and setting the current paper changes
+nothing. Inspection reports each sheet's `page` in the same shape.
 
 ### Named net records
 

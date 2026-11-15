@@ -12,10 +12,11 @@ use std::{
     sync::{Barrier, mpsc},
 };
 
-/// Start from the checked-in migration fixture so comparisons retain stable UUIDs.
+/// Start from the checked-in migration fixture so comparisons retain stable UUIDs. The
+/// snapshot is prepared as opening does, so it already has its paper.
 fn session() -> Session {
     let mut s = Session::default();
-    s.open_snapshot(pcbcraft_engine::persistence::migrate_bundled_libraries(legacy_snapshot()).unwrap());
+    s.open_snapshot(pcbcraft_engine::persistence::prepare_opened(legacy_snapshot()).unwrap());
     s
 }
 
@@ -32,7 +33,8 @@ fn legacy_snapshot() -> Arc<Project> {
 }
 
 /// A previous split folder opens through desktop/preview and upgrades on an unchanged Save.
-/// The saved layout is adopted without changing revision or payload bytes.
+/// The saved layout is adopted without changing revision or board and library bytes; sheets
+/// from before paper are rewritten once with the paper adopted on open.
 #[test]
 fn previous_split_folder_opens_previews_and_saves_in_place() {
     let dir = tempfile::tempdir().unwrap();
@@ -55,6 +57,7 @@ fn previous_split_folder_opens_previews_and_saves_in_place() {
     complete(&mut files, &mut s, Ok(Outcome::Opened(opened)));
     let revision = s.revision();
     assert!(!files.dirty(&s), "opening a legacy project does not invent electrical edits");
+    assert!(files.open_notice().contains("add paper to older sheets"), "{}", files.open_notice());
     let result = save(s.snapshot().unwrap(), Some(previous), None);
     assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Message(_))));
     assert_eq!(s.revision(), revision);
@@ -68,6 +71,8 @@ fn previous_split_folder_opens_previews_and_saves_in_place() {
             if path.contains("/starter/") {
                 assert!(!root.join(path).exists());
                 assert!(root.join(path.replace("/starter/", "/basic-components/")).exists());
+            } else if path.starts_with("sheets/") {
+                assert!(fs::read(root.join(path)).unwrap().starts_with(b"{\n  \"format\": \"pcbcraft-sheet/9\""));
             } else {
                 assert_eq!(fs::read(root.join(path)).unwrap(), *bytes);
             }
@@ -1112,7 +1117,8 @@ fn bundled_library_upgrade_is_saved_once_and_preserves_unrelated_source_bytes() 
     for encoding in [Encoding::Json, Encoding::Zip] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join(if encoding == Encoding::Json { "project" } else { "project.pc" });
-        let raw = legacy_snapshot();
+        // Paper is already adopted, so the library migration is the only change on open.
+        let raw = pcbcraft_engine::persistence::adopt_paper(legacy_snapshot());
         let mut documents = encode_documents(raw).unwrap();
         let sheet = documents.keys().find(|path| path.starts_with("sheets/")).unwrap().clone();
         documents.get_mut(&sheet).unwrap().extend_from_slice(b"\n \t");

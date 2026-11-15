@@ -27,6 +27,17 @@ Apply; the original shared creation command adopts validated settings and board
 ownership in one edit. Its setup navigation reuses the existing shared disabled
 controls before board-local rules are available. No dependency, artwork or native format changed.
 
+## Sheet paper
+
+The ISO A paper sizes and the landscape/portrait size rule in
+`crates/engine/src/sheets/page.rs` are ported from Coline
+(`crates/format/src/sheet.rs`, `PaperFormat` and `SheetSize`) at revision
+`bdd89dfb371e622f9ba94f368190c8c086d170d6`, MIT OR Apache-2.0. PCBcraft's version
+uses Y down, places the paper by its top-left corner, stores JSON rather than
+Coline's format, and adds adoption around existing drawings. The paper backdrop,
+palette scopes and Browser Paper menu are original PCBcraft work built on the
+shared Craft menu rows. No other code was copied.
+
 ## Layer-aware spatial queries
 
 The #244 implementation uses `geo-index` 0.4.0 (MIT OR Apache-2.0), pinned by

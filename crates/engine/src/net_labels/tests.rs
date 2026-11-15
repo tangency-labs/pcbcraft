@@ -132,7 +132,7 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let path = format!("sheets/{}.json", main.id());
     assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["project.json", &path]);
-    assert!(String::from_utf8(docs[&path].clone()).unwrap().contains("pcbcraft-sheet/3"));
+    assert!(String::from_utf8(docs[&path].clone()).unwrap().contains("pcbcraft-sheet/9"));
     let reopened = persistence::decode_documents(&docs).unwrap();
     assert_eq!(persistence::encode_documents(reopened.clone()).unwrap(), docs);
     let packed = persistence::encode_packed(reopened.clone()).unwrap();
@@ -232,7 +232,7 @@ fn label_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
     let path = format!("sheets/{}.json", after.sheet_target().id());
     let mut downgraded = documents.clone();
     let mut sheet: Value = serde_json::from_slice(&downgraded[&path]).unwrap();
-    assert_eq!(sheet["format"], "pcbcraft-sheet/5");
+    assert_eq!(sheet["format"], "pcbcraft-sheet/9");
     sheet["format"] = json!("pcbcraft-sheet/3");
     downgraded.insert(path, serde_json::to_vec(&sheet).unwrap());
     assert!(persistence::decode_documents(&downgraded).is_err());

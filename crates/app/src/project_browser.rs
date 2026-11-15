@@ -9,7 +9,11 @@ use std::{
 };
 
 use egui::{Rect, Ui};
-use pcbcraft_chrome::workspace::{self, ToolIcon, TreeIcon, TreeRow};
+use pcbcraft_chrome::{
+    MenuItem,
+    workspace::{self, ToolIcon, TreeIcon, TreeRow},
+};
+use pcbcraft_engine::sheets::page::{Orientation, Page, Paper};
 use pcbcraft_engine::{
     Project, Session,
     schematic::{Point, Terminal},
@@ -47,9 +51,25 @@ impl Node {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Action {
     OpenDocument(DocumentTarget),
-    Schematic { sheet: SheetTarget, pick: Pick },
-    Footprint { board: BoardTarget, id: String, at: Point },
-    ManageSheet { command: &'static str, sheet: Option<SheetTarget> },
+    Schematic {
+        sheet: SheetTarget,
+        pick: Pick,
+    },
+    Footprint {
+        board: BoardTarget,
+        id: String,
+        at: Point,
+    },
+    ManageSheet {
+        command: &'static str,
+        sheet: Option<SheetTarget>,
+    },
+    /// Choose a sheet's paper size and orientation from its context menu.
+    SetPage {
+        sheet: SheetTarget,
+        paper: Paper,
+        orientation: Orientation,
+    },
     UpdatePcb,
 }
 
@@ -61,7 +81,7 @@ impl Action {
             Self::OpenDocument(DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_)) => Some("Open in PCB layout"),
             Self::Schematic { .. } => Some("Show in Schematic"),
             Self::Footprint { .. } => Some("Show in PCB layout"),
-            Self::ManageSheet { .. } | Self::UpdatePcb => None,
+            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::UpdatePcb => None,
         }
     }
 
@@ -71,7 +91,7 @@ impl Action {
             Self::OpenDocument(target) => Some(*target),
             Self::Schematic { sheet, .. } => Some(DocumentTarget::Sheet(*sheet)),
             Self::Footprint { board, .. } => Some(DocumentTarget::Board(*board)),
-            Self::ManageSheet { .. } | Self::UpdatePcb => None,
+            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::UpdatePcb => None,
         }
     }
 }
@@ -111,6 +131,7 @@ struct SheetItems {
     target: SheetTarget,
     name: String,
     ancestors: Vec<SheetTarget>,
+    page: Option<Page>,
     symbols: Vec<Item>,
     nets: Vec<Item>,
 }
@@ -203,7 +224,7 @@ impl SheetItems {
                 target,
             })
             .collect();
-        Self { target: project.sheet_target(), name: project.sheet_name().to_owned(), ancestors: Vec::new(), symbols, nets }
+        Self { target: project.sheet_target(), name: project.sheet_name().to_owned(), ancestors: Vec::new(), page: project.page(), symbols, nets }
     }
 }
 
@@ -324,6 +345,7 @@ impl ProjectBrowser {
             ancestors: lists.sheets.iter().find(|s| active == DocumentTarget::Sheet(s.target)).map_or(&[][..], |s| s.ancestors.as_slice()),
             toggled: &self.toggled,
             active,
+            sheets: &lists.sheets,
             sheet_count: lists.sheets.len(),
             folded: None,
             reset: None,
@@ -437,6 +459,7 @@ struct Tree<'a> {
     toggled: &'a HashMap<Node, bool>,
     ancestors: &'a [SheetTarget],
     active: DocumentTarget,
+    sheets: &'a [SheetItems],
     sheet_count: usize,
     folded: Option<(Node, bool)>,
     reset: Option<Node>,
@@ -444,6 +467,24 @@ struct Tree<'a> {
 }
 
 impl Tree<'_> {
+    /// A Paper submenu listing every size and both orientations, with the sheet's current
+    /// choices checked. Picking a row asks the host to run `sheet.set_page`.
+    fn paper_menu(&mut self, ui: &mut Ui, sheet: SheetTarget, page: Page) {
+        MenuItem::new("Paper").submenu(ui, |ui| {
+            for paper in Paper::ALL {
+                if MenuItem::new(paper.label()).choice(page.paper() == paper).show(ui) {
+                    self.picked = Some(Action::SetPage { sheet, paper, orientation: page.orientation() });
+                }
+            }
+            pcbcraft_chrome::menu::separator(ui);
+            for orientation in Orientation::ALL {
+                if MenuItem::new(orientation.label()).choice(page.orientation() == orientation).show(ui) {
+                    self.picked = Some(Action::SetPage { sheet, paper: page.paper(), orientation });
+                }
+            }
+        });
+    }
+
     /// A single click may navigate sheets or boards within the current workspace, never across it.
     fn same_workspace(&self, action: &Action) -> bool {
         matches!(
@@ -457,10 +498,9 @@ impl Tree<'_> {
         let Some(label) = action.open_label() else {
             return false;
         };
-        let clicked = pcbcraft_chrome::controls::button(ui, label).clicked();
+        let clicked = MenuItem::new(label).show(ui);
         if clicked {
             self.picked = Some(action.clone());
-            ui.close();
         }
         clicked
     }
@@ -468,7 +508,7 @@ impl Tree<'_> {
     /// Select objects on ordinary clicks only in their workspace; explicit opens retain the
     /// existing revision-checked navigation, selection and centering path.
     fn item(&mut self, response: workspace::TreeResponse, action: Action) {
-        response.response.context_menu(|ui| {
+        pcbcraft_chrome::menu::context(&response.response, |ui| {
             self.open_menu(ui, &action);
         });
         if response.clicked && self.same_workspace(&action) {
@@ -493,31 +533,29 @@ impl Tree<'_> {
         let row = TreeRow { depth, fold: Some(open), icon: Some(icon), label, accessibility_label: access.as_deref(), tip: "", selected };
         let response = workspace::tree_row(ui, ui.make_persistent_id(("project_browser", node)), &row);
         if pick.is_some() || matches!(node, Node::Sheets | Node::Sheet(_)) {
-            response.response.context_menu(|ui| {
+            pcbcraft_chrome::menu::context(&response.response, |ui| {
                 if let Some(pick) = &pick
                     && self.open_menu(ui, pick)
                 {
                     self.reset = Some(node);
                 }
-                if matches!(node, Node::Sheet(_) | Node::Board(_)) && pcbcraft_chrome::controls::button(ui, "Update PCB from schematic…").clicked()
-                {
+                if matches!(node, Node::Sheet(_) | Node::Board(_)) && MenuItem::new("Update PCB from schematic…").show(ui) {
                     self.picked = Some(Action::UpdatePcb);
-                    ui.close();
                 }
                 if matches!(node, Node::Sheets | Node::Sheet(_))
-                    && pcbcraft_chrome::controls::enabled_button(ui, self.sheet_count < pcbcraft_engine::sheets::MAX_SHEETS, "New Sheet…").clicked()
+                    && MenuItem::new("New Sheet…").enabled(self.sheet_count < pcbcraft_engine::sheets::MAX_SHEETS).show(ui)
                 {
                     self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::CREATE_SHEET, sheet: None });
-                    ui.close();
                 }
                 if let Node::Sheet(sheet) = node {
-                    if pcbcraft_chrome::controls::button(ui, "Rename Sheet…").clicked() {
+                    if MenuItem::new("Rename Sheet…").show(ui) {
                         self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::RENAME_SHEET, sheet: Some(sheet) });
-                        ui.close();
                     }
-                    if pcbcraft_chrome::controls::enabled_button(ui, self.sheet_count > 1, "Delete Sheet…").clicked() {
+                    if MenuItem::new("Delete Sheet…").enabled(self.sheet_count > 1).show(ui) {
                         self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::DELETE_SHEET, sheet: Some(sheet) });
-                        ui.close();
+                    }
+                    if let Some(page) = self.sheets.iter().find(|row| row.target == sheet).and_then(|row| row.page) {
+                        self.paper_menu(ui, sheet, page);
                     }
                 }
             });

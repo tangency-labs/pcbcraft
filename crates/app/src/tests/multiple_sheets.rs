@@ -246,3 +246,32 @@ fn reopened_arrangement_keeps_sheet_targets_and_board_return_navigation() {
     assert_eq!(app.views.active.target(), Some(DocumentTarget::Sheet(power)));
     assert_eq!(encode_documents(app.session.snapshot().unwrap()).unwrap(), documents);
 }
+
+/// A sheet's Paper submenu shows its current size and orientation, applies a choice as one undo
+/// step through `sheet.set_page`, and keeps everything on the sheet in place.
+#[test]
+fn browser_paper_menu_sets_the_sheet_paper() {
+    use pcbcraft_engine::sheets::page::{Orientation, Paper};
+    let mut h = sheet_harness(1400.0);
+    let before = h.state().session.snapshot().unwrap();
+    let page = |h: &Harness<'_, PcbApp>| {
+        let page = h.state().session.project().unwrap().page().unwrap();
+        (page.paper(), page.orientation())
+    };
+    assert_eq!(page(&h), (Paper::A4, Orientation::Landscape));
+    menu(&mut h, "Main");
+    click(&mut h, "Paper");
+    assert_eq!(h.get_by_role_and_label(egui::Role::RadioButton, "A4").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    click(&mut h, "A3");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Landscape));
+    menu(&mut h, "Main");
+    click(&mut h, "Paper");
+    click(&mut h, "Portrait");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Portrait));
+    let after = h.state().session.project().unwrap();
+    assert_eq!(after.page().unwrap().at(), before.page().unwrap().at(), "the paper's corner stays put");
+    assert_eq!(after.symbols(), before.symbols());
+    h.state_mut().run("edit.undo", &Value::Null);
+    h.state_mut().run("edit.undo", &Value::Null);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

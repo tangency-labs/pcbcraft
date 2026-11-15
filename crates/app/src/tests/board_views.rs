@@ -234,7 +234,7 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_symbol(), Some("symbol-2"));
     assert!(h.state().views.view(ViewId(0)).unwrap().schematic.selection.is_empty());
     let schematic_rect = h.get_by_label("Schematic canvas 1").rect();
-    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && schematic_rect.contains(text.pos) && text.fallback_color==Tokens::get().schematic_highlight)));
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && schematic_rect.contains(text.pos) && text.fallback_color==Tokens::light().schematic_highlight)));
     h.key_press(Key::Delete);
     h.run();
     let deleted = h.state().session.inspect();
@@ -499,7 +499,7 @@ fn pcb_grid_preferences_are_shared_display_settings() {
         let lines = h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::LineSegment {stroke, ..} if stroke.color == color)).count();
         (dots, lines)
     };
-    let schematic_marks = marks(&h, Tokens::get().canvas_grid);
+    let schematic_marks = marks(&h, Tokens::light().canvas_grid);
     assert!(schematic_marks.0 > 0);
     assert_eq!(h.state().preferences.board_grid_style, Style::Off);
     assert_eq!(marks(&h, Tokens::get().board_grid), (0, 0));
@@ -531,7 +531,7 @@ fn pcb_grid_preferences_are_shared_display_settings() {
                 h.get_by_label("Grid 10 mil");
             }
         }
-        assert_eq!(marks(&h, Tokens::get().canvas_grid), schematic_marks);
+        assert_eq!(marks(&h, Tokens::light().canvas_grid), schematic_marks);
         assert_eq!(h.state().views.view(id).unwrap().camera.saved_state(), camera);
         assert_eq!(h.state().views.view(id).unwrap().camera.snap(board_rect.center() + egui::vec2(13.0, 9.0), board_rect), snap);
         assert_eq!(h.state().session.revision(), revision);

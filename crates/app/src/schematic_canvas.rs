@@ -315,6 +315,9 @@ pub(crate) fn show(
     editing: Option<&crate::inline_text::Target>,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
+    // Everything drawn on paper uses the light palette in either theme; menus opened from the
+    // canvas return to the chosen theme themselves.
+    let _paper_palette = project.page().is_some().then(pcbcraft_chrome::theme::paper_palette);
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
@@ -433,9 +436,8 @@ pub(crate) fn show(
     let tokens = Tokens::get();
     let overlap_index = overlap_cache.get(project, revision, &painter, camera.unit_step());
     let screen = |point| camera.screen(point, rect);
-    let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let unit_step = camera.unit_step();
-    canvas_grid::paint(&painter, rect, origin, camera.snap_step(), grid_opacity);
+    painter.extend(backdrop(project, camera, rect, rect, grid_opacity));
     let mut whole_wires = selected.wires.clone();
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
@@ -855,7 +857,7 @@ pub(crate) fn show(
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
             }
             if let Some(leg) = leg.clone() {
-                return wire_menu(ui, &painter, rect, camera, leg, grab);
+                return wire_menu(ui, &painter, rect, camera, leg, grab, project.page().is_some());
             }
             let Some(id) = target.clone() else {
                 return tool_menu::idle(ui, camera.snap_nm(), unit).map(|action| Click::ToolAction(action, ui.ctx().clone()));
@@ -1068,8 +1070,16 @@ pub(crate) fn show(
 /// The wire context menu offers Slice (when the leg
 /// has a grid point to split at), Break (when the leg has any attachment), Delete Segment
 /// and Delete Wire, plus Select Wire for whole-route selection. The hovered row previews
-/// its effect on the canvas.
-fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: wires::LegTarget, grab: Option<wires::ReshapeDrag>) -> Option<Click> {
+/// its effect on the canvas, in the paper palette when `on_paper`.
+fn wire_menu(
+    ui: &mut Ui,
+    painter: &Painter,
+    rect: Rect,
+    camera: &Camera,
+    leg: wires::LegTarget,
+    grab: Option<wires::ReshapeDrag>,
+    on_paper: bool,
+) -> Option<Click> {
     if MenuItem::new("Grab").shortcut("G").enabled(grab.is_some()).show(ui) {
         return grab.map(Click::GrabReshape);
     }
@@ -1092,6 +1102,8 @@ fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: w
             picked = Some(action);
         }
     }
+    // The menu draws in the chosen theme; its preview is drawn on the sheet, like the canvas.
+    let _paper_palette = on_paper.then(theme::paper_palette);
     wires::paint_leg_preview(painter, rect, camera, &leg, hovered);
     picked.map(|action| Click::WireEdit(action, leg))
 }
@@ -1216,6 +1228,21 @@ fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str,
     );
     let defaults = symbol.definition.defaults.clone().unwrap_or_default();
     fields::paint_labels(painter, symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
+}
+
+/// The sheet's backdrop over `area` of a canvas whose viewport is `canvas`: the paper with its
+/// border and the grid on it, or the grid everywhere on a sheet without paper.
+pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: Rect, grid_opacity: u8) -> Vec<egui::Shape> {
+    let screen = |point| camera.screen(point, canvas);
+    let paper = project.page().map(|page| {
+        let ([min, max], [inner_min, inner_max]) = (page.corners(), page.border_corners());
+        pcbcraft_chrome::paper::Paper {
+            sheet: Rect::from_two_pos(screen(min), screen(max)),
+            border: Rect::from_two_pos(screen(inner_min), screen(inner_max)),
+        }
+    });
+    let grid = pcbcraft_chrome::paper::Grid { origin: screen(Point { x_nm: 0, y_nm: 0 }), step: camera.snap_step(), opacity: grid_opacity };
+    pcbcraft_chrome::paper::backdrop(area, paper, grid)
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

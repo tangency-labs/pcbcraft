@@ -21,6 +21,8 @@ pub(crate) struct Thumbnail {
     wires: Vec<Vec<Pos2>>,
     blocks: Vec<(Rect, String)>,
     labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction)>,
+    /// The sheet's paper and its plain border, in grid steps.
+    paper: Option<(Rect, Rect)>,
     bounds: Rect,
 }
 
@@ -92,7 +94,14 @@ impl Thumbnail {
                 (at, label.name.clone(), label.direction)
             })
             .collect();
-        Some(Self { symbols, wires, blocks, labels, bounds })
+        let paper = project.page().map(|page| {
+            let ([min, max], [inner_min, inner_max]) = (page.corners(), page.border_corners());
+            (Rect::from_two_pos(grid_pos(min), grid_pos(max)), Rect::from_two_pos(grid_pos(inner_min), grid_pos(inner_max)))
+        });
+        if let Some((sheet, _)) = paper {
+            bounds = bounds.union(sheet);
+        }
+        Some(Self { symbols, wires, blocks, labels, paper, bounds })
     }
 
     /// An empty saved schematic has its own placeholder rather than pretending a load failed.
@@ -100,18 +109,27 @@ impl Thumbnail {
         self.symbols.is_empty() && self.wires.is_empty() && self.blocks.is_empty() && self.labels.is_empty()
     }
 
-    /// Fit the saved geometry in the card and paint with the active theme. Canvas labels follow
+    /// Fit the saved geometry and its paper in the card. The drawing on paper uses the light
+    /// palette, like the canvas; without paper it uses the active theme. Canvas labels follow
     /// the existing zoom threshold; library strokes, rotations and wire corners use the same data.
     pub(crate) fn paint(&self, painter: &Painter, rect: Rect) {
         if self.is_empty() || !rect.is_positive() {
             return;
         }
+        let _paper_palette = self.paper.is_some().then(theme::paper_palette);
         let t = Tokens::get();
         let target = rect.shrink(t.space_8);
         let bounds = self.bounds.expand(theme::SCHEMATIC_FIT_MARGIN / theme::SCHEMATIC_GRID_SPACING);
         let step = (target.width() / bounds.width()).min(target.height() / bounds.height()).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
         let screen = |point: Pos2| target.center() + (point - bounds.center()) * step;
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(rect));
+        if let Some((sheet, border)) = self.paper {
+            let paper = pcbcraft_chrome::paper::Paper {
+                sheet: Rect::from_min_max(screen(sheet.min), screen(sheet.max)),
+                border: Rect::from_min_max(screen(border.min), screen(border.max)),
+            };
+            painter.extend(pcbcraft_chrome::paper::sheet(rect, paper));
+        }
         for path in &self.wires {
             painter
                 .add(egui::Shape::line(path.iter().copied().map(screen).collect(), Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.schematic_wire)));
@@ -238,7 +256,8 @@ mod native_power_tests {
         let ctx = egui::Context::default();
         pcbcraft_chrome::fonts::install(&ctx);
         ctx.begin_pass(egui::RawInput::default());
-        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(300., 180.)));
+        // The preview frames the whole A4 sheet; a large card keeps field text above the label zoom.
+        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(1600., 1100.)));
         let mut out = ctx.end_pass();
         out.textures_delta.clear();
         let text: Vec<_> = out
@@ -252,7 +271,8 @@ mod native_power_tests {
         assert!(text.contains(&"GND"));
         assert!(text.contains(&"VCC"));
         assert!(!text.iter().any(|t| t.starts_with("PWR")));
-        assert_eq!(out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. })).count(), 6);
+        // Six symbol strokes, plus four edges each for the paper and its border.
+        assert_eq!(out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. })).count(), 6 + 8);
         assert_eq!(encode_documents(pinned).unwrap(), docs);
     }
 }

@@ -39,7 +39,7 @@ fn finishing_a_redraw_keeps_the_path_shown_in_its_preview() {
     let expected = vec![grid(-4, 0), grid(-4, 10), grid(10, 10)];
     let points: Vec<_> = expected.iter().map(|&p| screen(&h, p)).collect();
     assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,
-        egui::Shape::Path(path) if path.stroke.color==egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::get().accent) && path.points==points)));
+        egui::Shape::Path(path) if path.stroke.color==egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::light().accent) && path.points==points)));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     click_point(&mut h, grid(10, 10));
     assert_eq!(h.state().message, None);

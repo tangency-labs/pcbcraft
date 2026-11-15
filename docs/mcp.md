@@ -118,6 +118,9 @@ For a project with several sheets, pass its inspected sheet UUID as `sheet` to
 schematic commands and footprint placement. Omission remains compatible with
 single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`,
 `sheet.rename` and `sheet.delete` use the same project-wide undo history as edits.
+`sheet.set_page` sets a sheet's `paper` (`a4` to `a0`) and `orientation`
+(`landscape` or `portrait`), keeping the paper's top-left corner unless `at` moves
+it; each inspected sheet reports its `page`.
 Inspection includes each sheet's own schematic, while the legacy top-level
 `schematic` is available only for single-sheet projects.
 

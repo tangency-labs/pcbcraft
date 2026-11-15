@@ -10,8 +10,44 @@ use egui::{Color32, CornerRadius, Stroke};
 
 thread_local! {
     /// Theme state belongs to the UI thread drawing the frame, so tests running side by side can't
-    /// change one another's palette.
+    /// change one another's palette. This is the palette [`Tokens::get`] returns, which a
+    /// [`PaletteScope`] can change for a while.
     static DARK: Cell<bool> = const { Cell::new(true) };
+    /// The theme the person chose, unaffected by any [`PaletteScope`].
+    static CHOSEN_DARK: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Schematic paper is white in both themes, so drawings print as they look.
+pub const SCHEMATIC_PAPER: Color32 = Color32::WHITE;
+/// Width of the plain border drawn inside the paper, in logical points.
+pub const SCHEMATIC_PAPER_BORDER: f32 = 1.0;
+/// Offset and opacity of the soft shadow that lifts the paper off the canvas.
+pub const SCHEMATIC_PAPER_SHADOW: egui::Vec2 = egui::vec2(2.0, 3.0);
+pub const SCHEMATIC_PAPER_SHADOW_ALPHA: u8 = 40;
+
+/// Restores the palette that was current when the scope began, when dropped. Create one with
+/// [`paper_palette`] or [`chrome_palette`]; scopes nest.
+#[must_use = "the palette reverts when the scope is dropped"]
+pub struct PaletteScope {
+    previous: bool,
+}
+
+impl Drop for PaletteScope {
+    fn drop(&mut self) {
+        DARK.set(self.previous);
+    }
+}
+
+/// Paint content that sits on schematic paper: until the scope drops, [`Tokens::get`] returns
+/// the light palette in either theme. Chrome drawn from inside the scope, such as a context
+/// menu, takes a [`chrome_palette`] scope to return to the chosen theme.
+pub fn paper_palette() -> PaletteScope {
+    PaletteScope { previous: DARK.replace(false) }
+}
+
+/// Paint interface chrome in the chosen theme, even inside a [`paper_palette`] scope.
+pub fn chrome_palette() -> PaletteScope {
+    PaletteScope { previous: DARK.replace(CHOSEN_DARK.get()) }
 }
 
 /// Default schematic zoom and drawing weights, in logical points.
@@ -381,9 +417,16 @@ impl Tokens {
         self
     }
 
-    /// The current palette on this thread.
+    /// The current palette on this thread, which is the light palette inside a
+    /// [`paper_palette`] scope.
     pub fn get() -> Self {
         if is_dark() { Self::dark() } else { Self::light() }
+    }
+
+    /// The palette of the theme the person chose, ignoring any [`PaletteScope`]: for surfaces
+    /// around the paper.
+    pub fn chrome() -> Self {
+        if CHOSEN_DARK.get() { Self::dark() } else { Self::light() }
     }
 }
 
@@ -434,6 +477,7 @@ fn visuals(t: Tokens, dark: bool) -> egui::Visuals {
 /// changes, not every frame: it asks for a repaint.
 pub fn apply(ctx: &egui::Context, dark: bool) {
     DARK.set(dark);
+    CHOSEN_DARK.set(dark);
     solidcraft_theme::set_dark(dark);
     let t = Tokens::get();
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });

@@ -121,7 +121,7 @@ fn no_connect_tool_shows_a_cursor_before_finding_a_pin() {
             .iter()
             .filter_map(|shape| match &shape.shape {
                 egui::Shape::LineSegment { points, stroke }
-                    if stroke.color == Tokens::get().accent && points.iter().all(|point| point.distance(pointer) < 90.) =>
+                    if stroke.color == Tokens::light().accent && points.iter().all(|point| point.distance(pointer) < 90.) =>
                 {
                     Some(*points)
                 }
@@ -300,7 +300,7 @@ fn no_connect_shared_terminal_color_matches_the_report_on_every_sheet() {
             app.views.active.open_document(crate::editor_view::DocumentTarget::Sheet(sheet), &app.session);
             h.run();
             let center = h.get_by_label("No connect U1 pin 3").rect().center();
-            let expected = if connected { Tokens::get().error } else { Tokens::get().schematic_no_connect };
+            let expected = if connected { Tokens::light().error } else { Tokens::light().schematic_no_connect };
             let crosses = h
                 .output()
                 .shapes
@@ -708,7 +708,7 @@ fn no_connect_hover_approach_and_fast_click_do_not_start_wires() {
                 assert!(
                     !h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Circle(circle)
                     if (circle.radius-pcbcraft_chrome::theme::WIRE_CURSOR_TARGET_RADIUS).abs()<0.01
-                    && circle.center.distance(center)<0.01 && circle.stroke.color==Tokens::get().schematic_wire)),
+                    && circle.center.distance(center)<0.01 && circle.stroke.color==Tokens::light().schematic_wire)),
                     "connection ring at offset={offset:?}"
                 );
                 // Move back out, then press at the new location immediately: no settled frame.

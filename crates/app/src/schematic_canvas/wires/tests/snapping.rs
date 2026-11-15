@@ -32,7 +32,7 @@ fn key_ctrl(h: &mut Harness<'_, PcbApp>, key: egui::Key) {
 fn preview_ends_at(h: &Harness<'_, PcbApp>, end: Pos2) -> bool {
     h.output().shapes.iter().any(|shape| {
         matches!(&shape.shape,egui::Shape::Path(path)
-        if path.stroke.color==egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::get().accent)
+        if path.stroke.color==egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::light().accent)
         && path.points.last().is_some_and(|p|p.distance(end)<0.001))
     })
 }
@@ -170,7 +170,7 @@ fn crosshair_at(h: &Harness<'_, PcbApp>, pointer: Pos2) -> bool {
     let arm = pointer + vec2(pcbcraft_chrome::theme::WIRE_CURSOR_GAP, 0.0);
     h.output().shapes.iter().any(|shape| {
         matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
-            if stroke.color == pcbcraft_chrome::Tokens::get().schematic_wire && points[0].distance(arm) < 0.001)
+            if stroke.color == pcbcraft_chrome::Tokens::light().schematic_wire && points[0].distance(arm) < 0.001)
     })
 }
 

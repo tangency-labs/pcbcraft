@@ -197,8 +197,10 @@ impl Project {
 
     /// Allocate an independent occurrence for a new sheet after adoption; legacy documents keep
     /// their compatibility representation until first Save. Failure publishes no sheet or ID.
+    /// The sheet starts on [`Page::new_sheet`](crate::sheets::page::Page::new_sheet) paper.
     pub(crate) fn new_sheet_record(&self, id: Uuid, name: String) -> Result<SchematicSheet, CommandError> {
         let mut sheet = SchematicSheet::empty(id, name);
+        sheet.page = Some(crate::sheets::page::Page::new_sheet());
         sheet.occurrence_id = self.circuit_use.map(|_| crate::fresh_id()).transpose()?;
         Ok(sheet)
     }

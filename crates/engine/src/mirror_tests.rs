@@ -194,7 +194,7 @@ fn clipboard_preserves_mirroring_through_paste_rotation() {
     }
 }
 
-/// Mirrored placements use sheet/6, keep only the true flag on disk, reopen from folders and
+/// Mirrored placements need sheet/6 (paper makes new sheets sheet/9), keep only the true flag on disk, reopen from folders and
 /// archives deterministically, and downgrade exactly when the last mirror is removed.
 #[test]
 fn mirrored_symbols_persist_as_sheet_six_and_downgrade_deterministically() {
@@ -209,14 +209,14 @@ fn mirrored_symbols_persist_as_sheet_six_and_downgrade_deterministically() {
     let mirrored = session.snapshot().unwrap();
     let documents = encode_documents(mirrored.clone()).unwrap();
     let sheet = std::str::from_utf8(&documents[&sheet_path]).unwrap();
-    assert!(sheet.contains("\"format\": \"pcbcraft-sheet/6\""));
+    assert!(sheet.contains("\"format\": \"pcbcraft-sheet/9\""));
     assert!(sheet.contains("\"mirrored\":true"), "{sheet}");
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     let archive = encode_packed(mirrored.clone()).unwrap();
     assert_eq!(encode_documents(decode_packed(&archive).unwrap().project).unwrap(), documents);
 
     let mut older = documents.clone();
-    older.insert(sheet_path.clone(), sheet.replace("pcbcraft-sheet/6", "pcbcraft-sheet/5").into_bytes());
+    older.insert(sheet_path.clone(), sheet.replace("pcbcraft-sheet/9", "pcbcraft-sheet/5").into_bytes());
     assert!(decode_documents(&older).unwrap_err().contains("sheet format 6"));
 
     // The diagnostic single-document codec refuses mirrors instead of silently dropping them.
@@ -295,7 +295,7 @@ fn reopened_project_removes_generated_named_contact_leg_after_mirror() {
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
     let sheet_path = documents.keys().find(|path| path.starts_with("sheets/")).unwrap().clone();
     let sheet = std::str::from_utf8(&documents[&sheet_path]).unwrap();
-    assert!(sheet.contains("\"format\": \"pcbcraft-sheet/7\""), "{sheet}");
+    assert!(sheet.contains("\"format\": \"pcbcraft-sheet/9\""), "{sheet}");
     assert!(sheet.contains("\"generated_legs\": ["), "{sheet}");
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     assert!(encode(session.snapshot().unwrap()).unwrap_err().contains("generated named-contact legs"));
