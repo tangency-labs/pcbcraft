@@ -275,3 +275,59 @@ fn browser_paper_menu_sets_the_sheet_paper() {
     h.state_mut().run("edit.undo", &Value::Null);
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Reducing paper around existing drawing keeps off-paper ink readable and Fit includes it.
+#[test]
+fn reduced_paper_keeps_off_paper_drawing_readable_in_both_themes() {
+    for dark in [true, false] {
+        let mut h = sheet_harness(1400.);
+        h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
+        let apply = |h: &mut Harness<'_, PcbApp>, command: &str, mut params: Value| {
+            params["expected_revision"] = json!(h.state().session.revision());
+            h.state_mut().session.apply(command, &params).unwrap();
+        };
+        apply(&mut h, PLACE_RESISTOR, json!({"x_nm":250_000_000,"y_nm":0}));
+        let sheet = h.state().session.project().unwrap().sheet_target().id();
+        apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a3","orientation":"landscape","at":{"x_nm":-100_000_000,"y_nm":-100_000_000}}));
+        h.run();
+        let surround = |h: &Harness<'_, PcbApp>| {
+            let canvas = h.get_by_label("Schematic canvas").rect();
+            let shapes = crate::schematic_canvas::backdrop(h.state().session.project().unwrap(), &h.state().views.active.camera, canvas, canvas, 100);
+            let egui::Shape::Rect(rect) = &shapes[0] else { panic!("canvas surround first") };
+            rect.fill
+        };
+        let assert_heading = |h: &Harness<'_, PcbApp>, tokens: pcbcraft_chrome::Tokens| {
+            let title = h.state().views.active.sheet_path(&h.state().session).unwrap();
+            for (label, ink) in [(title.as_str(), tokens.text), ("1 / 1", tokens.text_dim)] {
+                assert!(
+                    h.output()
+                        .shapes
+                        .iter()
+                        .any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label && text.fallback_color == ink)),
+                    "heading {label} must match the painted surround"
+                );
+            }
+        };
+        assert_eq!(surround(&h), pcbcraft_chrome::Tokens::chrome().canvas);
+        assert_heading(&h, pcbcraft_chrome::Tokens::chrome());
+        let symbols = h.state().session.project().unwrap().symbols().to_vec();
+        apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a4","orientation":"landscape"}));
+        h.run();
+        assert_eq!(surround(&h), pcbcraft_chrome::Tokens::light().canvas);
+        assert_heading(&h, pcbcraft_chrome::Tokens::light());
+        assert_eq!(h.state().session.project().unwrap().symbols(), symbols);
+        let revision = h.state().session.revision();
+        click(&mut h, "Fit schematic");
+        let project = h.state().session.project().unwrap();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let camera = &h.state().views.active.camera;
+        for [low, high] in [project.page().unwrap().corners(), project.drawing_bounds().unwrap()] {
+            assert!(canvas.contains_rect(egui::Rect::from_two_pos(camera.screen(low, canvas), camera.screen(high, canvas))));
+        }
+        assert_eq!(h.state().session.revision(), revision);
+        apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a3","orientation":"landscape"}));
+        h.run();
+        assert_eq!(surround(&h), pcbcraft_chrome::Tokens::chrome().canvas);
+        assert_heading(&h, pcbcraft_chrome::Tokens::chrome());
+    }
+}

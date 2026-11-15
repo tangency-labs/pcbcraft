@@ -1181,7 +1181,14 @@ impl PcbApp {
                             [pcbcraft_chrome::Tokens::get().board_ink; 2],
                         );
                     } else {
-                        workspace::sheet_heading(ui.painter(), canvas, covered[0], &path, &count);
+                        let ink = match self.views.active.target() {
+                            Some(DocumentTarget::Sheet(target)) => schematic_canvas::heading_ink(ui.ctx(), target),
+                            _ => {
+                                let t = pcbcraft_chrome::Tokens::get();
+                                [t.text, t.text_dim]
+                            }
+                        };
+                        workspace::canvas_heading(ui.painter(), canvas, covered[0], Rect::NOTHING, &path, &count, ink);
                     }
                 }
             });

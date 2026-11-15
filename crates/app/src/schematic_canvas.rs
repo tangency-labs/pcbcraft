@@ -437,7 +437,13 @@ pub(crate) fn show(
     let overlap_index = overlap_cache.get(project, revision, &painter, camera.unit_step());
     let screen = |point| camera.screen(point, rect);
     let unit_step = camera.unit_step();
-    painter.extend(backdrop(project, camera, rect, rect, grid_opacity));
+    let background = backdrop(project, camera, rect, rect, grid_opacity);
+    let heading = match background.first() {
+        Some(egui::Shape::Rect(rect)) if rect.fill == Tokens::light().canvas => Tokens::light(),
+        _ => Tokens::chrome(),
+    };
+    with_heading_inks(ui.ctx(), |inks| inks.insert(project.sheet_target(), [heading.text, heading.text_dim]));
+    painter.extend(background);
     let mut whole_wires = selected.wires.clone();
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
@@ -1248,6 +1254,38 @@ pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: R
         low.x_nm < min.x_nm || low.y_nm < min.y_nm || high.x_nm > max.x_nm || high.y_nm > max.y_nm
     });
     pcbcraft_chrome::paper::backdrop(area, paper, grid, off_paper)
+}
+
+/// Heading colours published by this pass's canvas paint, without retaining model snapshots.
+#[derive(Clone, Default)]
+struct HeadingInks {
+    pass: u64,
+    sheets: std::collections::HashMap<pcbcraft_engine::SheetTarget, [egui::Color32; 2]>,
+}
+
+/// Keep the paint-to-heading handoff within one UI pass; old sheets cannot retain entries.
+fn with_heading_inks<R>(
+    ctx: &egui::Context,
+    use_inks: impl FnOnce(&mut std::collections::HashMap<pcbcraft_engine::SheetTarget, [egui::Color32; 2]>) -> R,
+) -> R {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| {
+        let inks = data.get_temp_mut_or_default::<HeadingInks>(egui::Id::unique("schematic_heading_inks"));
+        if inks.pass != pass {
+            inks.pass = pass;
+            inks.sheets.clear();
+        }
+        use_inks(&mut inks.sheets)
+    })
+}
+
+/// Match the addressed sheet's actually painted surround, falling back to chrome before paint.
+/// Reading this handoff does not repeat the drawing-bounds scan used by the backdrop.
+pub(crate) fn heading_ink(ctx: &egui::Context, target: pcbcraft_engine::SheetTarget) -> [egui::Color32; 2] {
+    with_heading_inks(ctx, |inks| inks.get(&target).copied()).unwrap_or_else(|| {
+        let t = Tokens::chrome();
+        [t.text, t.text_dim]
+    })
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

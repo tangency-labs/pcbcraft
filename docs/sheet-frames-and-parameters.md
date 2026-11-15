@@ -139,9 +139,9 @@ in a separate PR.
 
 ## Sources
 
-Coline at `bdd89dfb371e622f9ba94f368190c8c086d170d6`, MIT OR Apache-2.0. It is
-already approved in [PORTING-NOTES.md](../PORTING-NOTES.md). Each PR adds its
-[ATTRIBUTION.md](../ATTRIBUTION.md) entry.
+Coline at `bdd89dfb371e622f9ba94f368190c8c086d170d6`, MIT OR Apache-2.0. The
+paper-size adaptation is recorded in [ATTRIBUTION.md](../ATTRIBUTION.md#sheet-paper).
+Each later adaptation must record its source, revision, licence and changes there.
 
 | Coline file | Use |
 | --- | --- |
