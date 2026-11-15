@@ -191,6 +191,8 @@ fn classify_route(h: &mut Harness<'_, PcbApp>, name: &str, rules: Value) -> Uuid
 fn classified_route_uses_defaults_halo_and_shared_undo() {
     for (theme, size) in [(ThemeChoice::Dark, egui::vec2(1400., 900.)), (ThemeChoice::Light, egui::vec2(960., 640.))] {
         let mut h = routable();
+        let id = h.state().views.active.id();
+        h.state_mut().set_view_grid(id, 50 * pcbcraft_chrome::grid::NM_PER_MIL);
         h.set_size(size);
         h.state_mut().preferences.theme = theme;
         h.run();
@@ -322,6 +324,8 @@ fn routing_crosshair_follows_the_mouse_between_grid_points() {
     use pcbcraft_chrome::theme::{WIRE_CURSOR_GAP, WIRE_CURSOR_SNAP_RADIUS};
 
     let mut h = routable();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_grid(id, 50 * pcbcraft_chrome::grid::NM_PER_MIL);
     h.key_press(Key::X);
     h.run();
     let grid = Point { x_nm: 5_080_000, y_nm: 2_540_000 };

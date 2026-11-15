@@ -44,10 +44,10 @@ fn ribbon_grid_visibility_is_independent_between_workspaces() {
         app.preferences.board_grid_style = grid::Style::Lines;
         let mut h = Harness::builder().with_size(egui::vec2(width, 850.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
+        let spacing = h.state().views.active.camera.snap_nm();
         choose(&mut h, "Choose workspace", "Schematic");
         click(&mut h, "View");
         let before = h.state().session.snapshot().unwrap();
-        let spacing = h.state().views.active.camera.snap_nm();
         click(&mut h, "Show grid");
         assert!(!h.state().preferences.grid_visible(false));
         assert!(h.state().preferences.grid_visible(true));
