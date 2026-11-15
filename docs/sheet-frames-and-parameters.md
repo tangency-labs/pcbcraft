@@ -33,7 +33,7 @@ zone markers and a title block. The title block shows parameter values such as
 | --- | --- |
 | Template per size | One template fits every paper size. Template items are anchored to a paper corner. Coline uses one template per size; we don't. |
 | Default paper | Every sheet has paper. New sheets start on A4 landscape with the Default frame. |
-| Existing sheets | On open, a frameless sheet gets the smallest A size that holds its drawing, placed around it by setting `at_nm`, so nothing moves. It works like the bundled-library migration: prepared in memory, no undo step, written on the next save. The first save of an older project therefore changes its sheet files. |
+| Existing sheets | On open, a frameless sheet gets the smallest A size that holds its drawing, placed around it by setting `at_nm`, so nothing moves. A drawing larger than A0 gets A0 landscape, centered, and parts of it can lie outside the paper. It works like the bundled-library migration: prepared in memory, no undo step, written on the next save. The first save of an older project therefore changes its sheet files. |
 | Parameter syntax | Coline's `@scope.Name`, ported as a baseline. |
 | Paper colour | The paper is white in both themes. Frame, symbol and wire colours on the paper stay the light palette. A dark paper is deferred, because it needs its own symbol colours. |
 | Canvas | The area outside the paper is blank. The grid is drawn on the paper only. |
