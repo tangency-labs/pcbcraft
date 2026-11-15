@@ -233,8 +233,8 @@ Ribbon command groups use the shared ribbon renderer and its button metrics;
 PCBcraft supplies qualified electronics glyphs, enabled/selected state and menu
 actions. The host retains horizontal scrolling and per-workspace tab contents.
 Inline ribbon fields align with the shared group height. App-bar quick actions
-and arrangement tabs use shared button presentation within PCBcraft's existing
-native title-bar placement.
+use shared button presentation within PCBcraft's existing native title-bar
+placement; saved layout actions use shared menu rows under File.
 
 Ribbon buttons use the toolkit's standard 76-point width, wrapping longer
 labels onto two lines. A group grows evenly when its caption needs more room.
