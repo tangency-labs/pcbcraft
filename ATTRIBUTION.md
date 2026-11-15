@@ -1639,9 +1639,9 @@ interaction. No new dependency, artwork or external EDA source was introduced.
 
 ## Readable net names and copper annotations
 
-The canonical-terminal naming policy, UTF-8 token encoding, scoped qualification,
-accepted display snapshots and view-only copper labels for #353 are original
-PCBcraft work under MIT OR Apache-2.0. The toggle reuses the pinned Craft checkbox
+The net-owned numbering policy, legacy-number adoption, UTF-8 token encoding,
+scoped qualification, accepted display snapshots and view-only copper labels for
+#353 are original PCBcraft work under MIT OR Apache-2.0. The toggle reuses the pinned Craft checkbox
 through chrome; annotations extend PCBcraft's existing scaled canvas-text and
 copper painters. No external EDA source, artwork, library data or dependency was
 introduced. Test projects use production commands and native codecs.

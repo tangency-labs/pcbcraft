@@ -22,43 +22,27 @@ fn project_names_are_read_only_canonical_and_follow_reference_history() {
     )
     .unwrap();
     let project = s.snapshot().unwrap();
+    let project_registry = project.net_registry.clone();
     let before = crate::persistence::encode_documents(project.clone()).unwrap();
     let revision = s.revision();
-    assert_eq!(project.connectivity().net_name(0), "R1.2");
-    assert_eq!(project.electrical_connectivity().net_name(0), "R1.2");
-    assert_eq!(project.inspect_net_registry().unwrap()["nets"][0]["name"], "R1.2");
+    assert_eq!(project.connectivity().net_name(0), "Net-0001");
+    assert_eq!(project.electrical_connectivity().net_name(0), "Net-0001");
+    assert_eq!(project.inspect_net_registry().unwrap()["nets"][0]["name"], "Net-0001");
     assert_eq!(crate::persistence::encode_documents(project).unwrap(), before);
     assert_eq!(s.revision(), revision);
-    assert!(s.project().unwrap().net_registry.records.is_empty());
+    assert_eq!(s.project().unwrap().net_registry, project_registry);
 }
 
 /// Every ambiguous primary gains a path, and colliding digest prefixes extend together.
 #[test]
 fn equal_scoped_names_qualify_all_members_and_extend_digest_collisions() {
     let names = qualify(
-        vec!["U3.OUT".into(); 3],
+        vec!["Net-(U3-OUT)".into(); 3],
         vec!["Main".into(), "Main".into(), "Power".into()],
         vec![format!("12345678aa{}", "0".repeat(54)), format!("12345678bb{}", "0".repeat(54)), "c".repeat(64)],
         &[false; 3],
     );
-    assert_eq!(names, ["Main::U3.OUT~12345678aa", "Main::U3.OUT~12345678bb", "Power::U3.OUT"]);
-}
-
-/// Logical pin metadata must identify exactly one terminal across the complete component.
-#[test]
-fn unique_names_across_all_units_win_and_duplicate_names_use_designators() {
-    let definition = crate::library::parse_symbol(include_str!("../../../../../examples/native-parts/symbols/dual-amplifier.json")).unwrap();
-    let mut pins = definition.pins().to_vec();
-    pins[0].name = Some(" OUT.A ".into());
-    pins[1].name = Some("GND".into());
-    pins[2].name = Some(" GND ".into());
-    pins[3].name = Some("  ".into());
-    pins[4].name = None;
-    assert_eq!(terminal_name("U3", &pins[0].number, &pins), "U3.OUT%2EA");
-    for pin in &pins[1..5] {
-        assert_eq!(terminal_name("U3", &pin.number, &pins), format!("U3.{}", pin.number));
-    }
-    assert_eq!(terminal_name("J2", "9", &[]), "J2.9");
+    assert_eq!(names, ["Main::Net-(U3-OUT)~12345678aa", "Main::Net-(U3-OUT)~12345678bb", "Power::Net-(U3-OUT)"]);
 }
 
 /// Sheet projections retain the qualification decision from the complete project.
@@ -98,10 +82,10 @@ fn reference_edits_and_explicit_name_adoption_keep_typed_identity() {
     let before = s.snapshot().unwrap();
     let id = before.net_registry.records[0].id;
     s.apply(crate::SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"Z99","value":"R","expected_revision":s.revision()})).unwrap();
-    assert_eq!(s.project().unwrap().connectivity().net_name(0), "Z99.2");
+    assert_eq!(s.project().unwrap().connectivity().net_name(0), "Net-0001");
     assert_eq!(s.project().unwrap().net_registry.records[0].id, id);
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.project().unwrap().connectivity().net_name(0), "R1.2");
+    assert_eq!(s.project().unwrap().connectivity().net_name(0), "Net-0001");
     s.apply("edit.redo", &json!({})).unwrap();
     let at = s.project().unwrap().symbols()[0].pins()[1];
     for (name, style) in [("ZZZ", "global"), ("AAA", "local")] {
@@ -116,9 +100,10 @@ fn reference_edits_and_explicit_name_adoption_keep_typed_identity() {
     assert_eq!(reopened.connectivity().net_name(0), "AAA");
 }
 
-/// Split/merge and anchor deletion recompute presentation without changing the identity policy.
+/// Splits and merges follow persistent identity policy; deleting an anchor preserves the
+/// surviving branch number rather than substituting another component reference.
 #[test]
-fn topology_changes_select_the_lowest_surviving_terminal_and_undo_exactly() {
+fn topology_changes_preserve_surviving_numbers_and_undo_exactly() {
     let mut s = Session::default();
     s.apply("project.new", &json!({})).unwrap();
     for i in 0..6 {
@@ -132,16 +117,16 @@ fn topology_changes_select_the_lowest_surviving_terminal_and_undo_exactly() {
         let graph = s.project().unwrap().electrical_connectivity();
         (0..graph.nets.len()).map(|i| graph.net_name(i)).collect::<BTreeSet<_>>()
     };
-    assert_eq!(names(&s), BTreeSet::from(["R1.1".into(), "R4.1".into()]));
+    assert_eq!(names(&s), BTreeSet::from(["Net-0001".into(), "Net-0002".into()]));
     s.apply(CONNECT_PINS, &json!({"from":endpoint(4),"to":endpoint(5),"expected_revision":s.revision()})).unwrap();
     let bridge = s.project().unwrap().wires().last().unwrap().id();
-    assert_eq!(names(&s), BTreeSet::from(["R1.1".into()]));
+    assert_eq!(names(&s), BTreeSet::from(["Net-0003".into()]));
     s.apply(crate::DELETE_WIRE, &json!({"wire":bridge,"expected_revision":s.revision()})).unwrap();
-    assert_eq!(names(&s), BTreeSet::from(["R1.1".into(), "R4.1".into()]));
+    assert_eq!(names(&s), BTreeSet::from(["Net-0003".into(), "Net-0004".into()]));
     s.apply(crate::DELETE_SYMBOL, &json!({"symbol":"symbol-2","expected_revision":s.revision()})).unwrap();
-    assert_eq!(names(&s), BTreeSet::from(["R2.1".into(), "R4.1".into()]));
+    assert_eq!(names(&s), BTreeSet::from(["Net-0003".into(), "Net-0004".into()]));
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(names(&s), BTreeSet::from(["R1.1".into(), "R4.1".into()]));
+    assert_eq!(names(&s), BTreeSet::from(["Net-0003".into(), "Net-0004".into()]));
 }
 
 /// Reserved-looking authored names remain ordinary electrical text; orphan geometry is not
@@ -222,13 +207,13 @@ fn physical_edits_retain_the_project_naming_cache() {
     )
     .unwrap();
     let before = s.snapshot().unwrap();
-    assert_eq!(before.electrical_connectivity().net_name(0), "R1.2");
+    assert_eq!(before.electrical_connectivity().net_name(0), "Net-0001");
     let footprint = before.boards().next().unwrap().footprints().next().unwrap().id;
     s.apply(crate::SET_FOOTPRINT_TRANSFORM, &json!({"footprint":footprint,"x_nm":10_000_000,"y_nm":0,"rotation":0,"expected_revision":s.revision()}))
         .unwrap();
     let after = s.snapshot().unwrap();
     assert!(std::sync::Arc::ptr_eq(&before.named_graph, &after.named_graph));
-    assert_eq!(after.electrical_connectivity().net_name(0), "R1.2");
+    assert_eq!(after.electrical_connectivity().net_name(0), "Net-0001");
 }
 
 /// A first physical owner changes canonical scoped addresses, so cached sheet qualification expires.
@@ -245,7 +230,7 @@ fn first_board_creation_invalidates_sheet_name_qualification() {
     )
     .unwrap();
     let before = s.snapshot().unwrap();
-    assert_eq!(before.connectivity().net_name(0), "R1.2");
+    assert_eq!(before.connectivity().net_name(0), "Net-0001");
     s.apply(crate::board::identity::CREATE_BOARD, &json!({"expected_revision":s.revision()})).unwrap();
     let after = s.snapshot().unwrap();
     assert!(!before.same_connectivity(&after));

@@ -62,8 +62,8 @@ Accepted boards retain their reviewed names until Update PCB; the overlay toggle
 is view-local. Repeated-instance and multiboard naming remains within the current
 single-use/single-board scope.
 
-The engine [sparse net registry](net-registry-storage.md) preserves independent
-UUIDs for named or explicitly promoted nets, with bounded anchors, split/merge
+The engine [persistent net registry](net-registry-storage.md) preserves independent
+UUIDs and neutral numbers for meaningful nets, with bounded anchors, split/merge
 lineage and explicit ambiguity resolution through shared headless/live MCP
 commands. It survives undo, save/reopen and first-board creation without storing
 a second connectivity graph. [Net-class assignments](net-class-assignments.md)

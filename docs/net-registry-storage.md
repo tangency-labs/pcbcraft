@@ -1,7 +1,8 @@
-# Sparse persistent net registry
+# Persistent net registry
 
-This implements slice 3 of [the net registry plan](net-registry-path.md), #230,
-using the single-use sheet occurrences from #229.
+The identity foundation implements slice 3 of [the net registry plan](net-registry-path.md),
+#230, using the single-use sheet occurrences from #229. Net-owned generated
+numbers extend it under [#353](https://github.com/tangency-labs/pcbcraft/issues/353).
 The existing `project.json`, registered board folders and container-v3 `.pc`
 archives remain the storage layout. Connectivity continues to come from wiring,
 named anchors and hierarchy; the registry records identity and reconciliation.
@@ -12,7 +13,13 @@ The low-level codec preserves existing project bytes when no registry is present
 the ordinary first-save board-folder/occurrence migration still applies.
 The first record selects project/17 and, for board projects, instances/2, unless
 another feature requires a newer envelope. [Class bindings](net-class-assignments.md)
-select project/21 and board-owned instances/3 in the same registry home.
+select project/21 and board-owned instances/3 in the same registry home when
+numbered names are absent. Net-owned generated numbers select **project/23** and
+board-owned **instances/4** instead, with optional class catalogs, assignments and
+no-connect intent in that envelope. Every stored record then has a positive
+`generated_number`; duplicate numbers, explicit nulls, missing numbers and use
+under older headers are rejected. Active, ambiguous and retired records reserve
+their numbers, which are never inferred from component references.
 `net_registry` is optional within the existing schematic/board instance home;
 an explicitly empty or malformed registry is rejected. The registry stores
 UUID-sorted records, each with one primary anchor, up to three ordered fallbacks,
@@ -64,8 +71,11 @@ second source. No remaining meaningful network retires the identity without
 promoting orphan geometry. Later edits keep ambiguity branch references current;
 resolving an ambiguity is explicit stored state.
 
-Named nets are promoted by authored electrical changes; compatibility projects
-are not rewritten or promoted by reading or an unchanged save. Explicit promotion
+All meaningful nets created by electrical changes receive identities and numbers.
+Compatibility projects are not rewritten or promoted by reading or an unchanged
+save. Before their first topology edit, the transaction adopts the numbers shown
+by its before graph and then reconciles the result, preserving a surviving net's
+number even when the edit deletes its original representative component. Explicit promotion
 uses `nets.promote`, and `nets.resolve_ambiguity` selects a branch. Both commands
 are revision-checked, undoable and exposed to headless/live MCP through the shared
 catalog and existing live dispatch/refusal policy. There is no new UI. First-board creation moves
@@ -88,7 +98,7 @@ current networks, each with a nullable persistent ID, canonical typed anchor and
 names. Ordinary project inspection includes this under `project.net_registry`
 only when records exist; its existing netlist remains the derived membership
 view. Explicit inspection of an older project remains read-only. Copies do not
-inherit source registry identities; named pasted nets receive destination IDs
+inherit source registry identities or numbers; pasted meaningful nets receive destination IDs and numbers
 through the normal reconciliation transaction.
 
 ## Verification boundary

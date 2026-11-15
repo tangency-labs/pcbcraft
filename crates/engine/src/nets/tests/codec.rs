@@ -125,7 +125,7 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
             instance["format"] = json!("pcbcraft-instances/1");
             downgraded.insert(path.clone(), serde_json::to_vec(&instance).unwrap());
         }
-        assert!(decode_documents(&downgraded).unwrap_err().contains("Net registry records require project format 17"));
+        assert!(decode_documents(&downgraded).unwrap_err().contains("Generated net numbers require project format 23"));
         for absent in [true, false] {
             let mut missing = docs.clone();
             let mut value = original.clone();

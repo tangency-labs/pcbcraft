@@ -1100,12 +1100,14 @@ pub(crate) fn diagnostic_test_file(project: Arc<Project>, encoding: Encoding) ->
 #[cfg(test)]
 mod tests {
     /// Diagnostic single-document files have no directory layout. Compare electrical inspection
-    /// independently from board `file` paths, which are covered by the split-layout tests.
+    /// independently from board paths and the registry deliberately omitted by the historical
+    /// snapshot adapter; current identities are covered by the split-layout tests.
     fn without_storage_paths(mut project: serde_json::Value) -> serde_json::Value {
         project.as_object_mut().unwrap().remove("sheet_instances");
         for sheet in project["sheets"].as_array_mut().unwrap() {
             sheet.as_object_mut().unwrap().remove("page");
         }
+        project.as_object_mut().unwrap().remove("net_registry");
         for board in project["boards"].as_array_mut().unwrap() {
             board.as_object_mut().unwrap().remove("file");
         }

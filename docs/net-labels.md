@@ -39,34 +39,38 @@ electrical conflict or change which labels connect.
 
 ## Generated names and copper labels
 
-Unnamed nets with component terminals use **REF.PIN**, such as `U3.OUT` or `R7.2`.
-PIN is the trimmed pin name only when it uniquely identifies one electrical
-terminal across every unit of the component; duplicate, blank or unavailable
-names use the electrical terminal designator. The selected terminal has the
-smallest [canonical terminal-anchor key](net-identity.md#canonical-anchor-key-encoding),
-independent of reference sorting, geometry and wire traversal. A reference or pin
-name edit updates the presentation without changing electrical identity.
+Meaningful unnamed nets use neutral names such as **Net-0001**. The number belongs
+to the persistent net identity, rather than a component or pin. Renaming or deleting
+its representative component does not rename a surviving net. An authored signal
+name takes precedence, while the saved number remains available if that name is
+removed. Bare unused pins and unnamed one-pin/orphan stubs remain unconnected.
 
-Tokens preserve ASCII letters, digits, underscore, hyphen and plus. Other UTF-8
-bytes use uppercase percent escapes, including periods inside tokens:
-`OUT.A` becomes `OUT%2EA`, giving `U3.OUT%2EA`. Distinct nets with equal primary
-names use their full encoded sheet-occurrence path, for example
-`Main/Power::U3.OUT`. Explicit names use the canonical named anchor declaring
-the primary name; generated names use the selected component terminal. A physical terminal drawn on multiple sheets uses the
-lexically smallest encoded path among its appearances. Equal qualified names
-append `~` and the shortest unique lowercase SHA-256 prefix, starting at eight
-characters and extending by two. The scoped derived address hashed here is the
-lowest canonical member-anchor key, which already includes the project and scope;
-promotion does not change that display address. Orphan wire groups show
-**Unconnected**; missing electrical targets show **Unresolved net**.
+New or changed electrical networks receive numbers in the same shared transaction
+that reconciles their identities. Continuations keep their number; a split keeps
+it on the identity's selected continuation and assigns fresh numbers to the other
+meaningful branches. A true merge receives a fresh identity and number. Retired
+numbers remain reserved. Undo/Redo restores the recorded decisions instead of
+renumbering the graph. See [net identity](net-identity.md) for ambiguous splits.
 
-Generated names and qualification are read-only snapshot data. They neither
-join equal-looking nets nor promote sparse registry records, allocate stable IDs,
-change project bytes or supply command authority. UUIDs and typed anchors remain
-available through explicit identity fields and Details. Shared headless/live
-inspection includes `board.netlist` with its accepted/schematic basis, primary
-names, electrical aliases and typed membership; pending schematic names remain
-in the schematic netlist.
+Opening or inspecting an older project does not allocate IDs or modify its files.
+Its read-only projected numbers are adopted from the **before** graph on the next
+topology transaction, so deleting an old naming anchor cannot change the number
+during that adoption. Physical edits and unchanged saves leave the registry alone.
+Numbers are display data, not command authority: UUIDs and typed anchors still
+determine the net and all electrical operations.
+
+Authored names retain bytewise alias selection and scoped qualification. Equal
+primary names gain encoded occurrence paths; a generated name colliding with an
+authored literal uses `Generated` as its qualifier, independent of component
+location. Remaining collisions use the shortest unique lowercase SHA-256 prefix,
+starting at eight characters and extending by two. Tokens keep ASCII letters,
+digits, underscore, hyphen and plus; other UTF-8 bytes use uppercase percent
+escapes. Unavailable electrical targets show **Unresolved net**.
+
+Shared headless/live inspection includes `board.netlist` with its
+accepted/schematic basis, primary names, electrical aliases and typed membership;
+pending schematic names remain in the schematic netlist. The accepted board
+keeps its reviewed names until Update PCB accepts the new presentation.
 
 **Layers → Net names** controls the PCB overlay for one view, with
 `view.set_net_names_visibility` providing the same live command. The setting

@@ -399,13 +399,12 @@ impl<'a> BoardView<'a> {
                 }
                 accepted_groups.insert(source);
             } else if net.terminals.len() == 1 {
-                let Some(component) =
+                let Some(_component) =
                     self.project.components.get(&first.component).filter(|_| self.project.component_is_board_eligible(first.component))
                 else {
                     return true;
                 };
-                let name = crate::nets::display::terminal_name(component.reference(), &first.terminal, component.definition.pins());
-                if !net.names.is_empty() || baseline.net_name(index).as_deref() != Some(name.as_str()) {
+                if !net.names.is_empty() || baseline.net_name(index).as_deref() != Some("Unconnected") {
                     return true;
                 }
             } else {

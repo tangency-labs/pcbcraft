@@ -318,20 +318,21 @@ fn accepted_names_wait_for_review_and_survive_cancellation_history_and_native_co
     let names = |project: &Project| {
         project.board_view(board).unwrap().footprints().flat_map(|f| f.pads.into_iter().filter_map(|pad| pad.net)).collect::<BTreeSet<_>>()
     };
-    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R1.2".into()]));
-    assert!(session.project().unwrap().net_registry.records.len() <= 2, "unnamed baseline nets stay sparse");
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["Net-0003".into()]));
+    assert_eq!(session.project().unwrap().net_registry.records.len(), 3, "the two named nets and wired unnamed net already own identities");
+    let at = session.project().unwrap().for_sheet(main).unwrap().symbols()[0].pins()[1];
     session
         .apply(
-            crate::SET_SYMBOL_FIELDS,
-            &json!({"sheet":main.id(),"symbol":"symbol-2","reference":"R99","value":"R","expected_revision":session.revision()}),
+            crate::net_labels::ADD,
+            &json!({"sheet":main.id(),"name":"UPDATED","style":"local","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":session.revision()}),
         )
         .unwrap();
     let pending = session.snapshot().unwrap();
-    assert_eq!(pending.for_sheet(main).unwrap().connectivity().net_name(0), "R99.2");
-    assert_eq!(names(&pending), BTreeSet::from(["R1.2".into()]));
+    assert_eq!(pending.for_sheet(main).unwrap().connectivity().net_name(0), "UPDATED");
+    assert_eq!(names(&pending), BTreeSet::from(["Net-0003".into()]));
     let inspected = session.inspect();
     assert_eq!(inspected["project"]["board"]["netlist"]["basis"], "accepted");
-    assert_eq!(inspected["project"]["board"]["netlist"]["nets"][0]["name"], "R1.2");
+    assert_eq!(inspected["project"]["board"]["netlist"]["nets"][0]["name"], "Net-0003");
     assert_eq!(inspected["project"]["board"]["netlist"]["names_pending"], true);
     assert!(pending.board_view(board).unwrap().net_names_pending());
     let before = encode_documents(pending.clone()).unwrap();
@@ -341,19 +342,19 @@ fn accepted_names_wait_for_review_and_survive_cancellation_history_and_native_co
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     assert!(session.apply(APPLY_UPDATE, &json!({"board":board.board,"plan_token":token,"expected_revision":session.revision()})).is_err());
     let reopened = crate::persistence::decode_documents(&before).unwrap();
-    assert_eq!(names(&reopened), BTreeSet::from(["R1.2".into()]));
+    assert_eq!(names(&reopened), BTreeSet::from(["Net-0003".into()]));
     session.apply(PREVIEW_UPDATE, &json!({"board":board.board,"expected_revision":session.revision()})).unwrap();
     let token = session.cached_board_update().unwrap().plan_token;
     session.apply(APPLY_UPDATE, &json!({"board":board.board,"plan_token":token,"expected_revision":session.revision()})).unwrap();
-    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R99.2".into()]));
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["UPDATED".into()]));
     assert!(!session.project().unwrap().board_view(board).unwrap().net_names_pending());
     session.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R1.2".into()]));
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["Net-0003".into()]));
     session.apply("edit.redo", &json!({})).unwrap();
-    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["R99.2".into()]));
+    assert_eq!(names(session.project().unwrap()), BTreeSet::from(["UPDATED".into()]));
     assert!(!session.project().unwrap().board_view(board).unwrap().net_names_pending());
     let packed = crate::persistence::encode_packed(session.snapshot().unwrap()).unwrap();
-    assert_eq!(names(&crate::persistence::decode_packed(&packed).unwrap().project), BTreeSet::from(["R99.2".into()]));
+    assert_eq!(names(&crate::persistence::decode_packed(&packed).unwrap().project), BTreeSet::from(["UPDATED".into()]));
 }
 
 /// Version guards reject display metadata under old vocabularies, including explicit nulls.

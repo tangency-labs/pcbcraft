@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 mod codec;
+mod numbering;
 mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
@@ -67,16 +68,16 @@ fn round_trip(session: &Session) {
     assert_eq!(decode_packed(&encode_packed(project).unwrap()).unwrap().documents, docs);
 }
 
-/// Reading never creates identities; explicit promotion is undoable and idempotent, while the
-/// empty-registry project retains project/16 and its exact original document bytes.
+/// Authoring a meaningful net assigns its number once; inspection and explicit promotion of
+/// that existing identity are idempotent and leave the document and history untouched.
 #[test]
-fn promotion_is_sparse_revision_checked_undoable_and_read_only_inspection_allocates_nothing() {
+fn automatic_numbering_and_idempotent_promotion_are_read_only_on_inspection() {
     let (mut session, pins) = circuit(2, false);
     connect(&mut session, &pins[0], &pins[1]);
     let original = session.snapshot().unwrap();
     let docs = encode_documents(original.clone()).unwrap();
     let revision = session.revision();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
+    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/23");
     assert_eq!(session.inspect(), session.inspect());
     assert_eq!(session.revision(), revision);
     assert!(Arc::ptr_eq(&original, &session.snapshot().unwrap()));
@@ -87,7 +88,7 @@ fn promotion_is_sparse_revision_checked_undoable_and_read_only_inspection_alloca
     assert_eq!(project.net_registry.record(id).unwrap().fallbacks.len(), 1);
     let saved = encode_documents(project.clone()).unwrap();
     let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/17");
+    assert_eq!(entry["format"], "pcbcraft-project/23");
     assert!(entry["schematic_instances"]["net_registry"].is_object());
     assert!(!saved.keys().any(|path| path.ends_with("board.json") || path.ends_with("instances.json")));
     let revision = session.revision();
@@ -100,9 +101,7 @@ fn promotion_is_sparse_revision_checked_undoable_and_read_only_inspection_alloca
     assert!(session.apply(PROMOTE, &json!({"anchor":pins[0],"expected_revision":revision-1})).is_err());
     assert!(Arc::ptr_eq(&project, &session.snapshot().unwrap()));
     round_trip(&session);
-    apply(&mut session, "edit.undo", json!({}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), docs);
-    apply(&mut session, "edit.redo", json!({}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
 }
 
@@ -268,8 +267,11 @@ fn exhausted_registry_preserves_the_project_revision_history_and_update_preview(
     let mut template = project.net_registry.record(id).unwrap().clone();
     template.state =
         State::Retired { snapshot: crate::board::update::capture_source(&project).unwrap(), reason: Retirement::Removed, successors: Vec::new() };
-    project.net_registry =
-        Arc::new(Registry { records: (1..=MAX_RECORDS as u128).map(|id| Record { id: Uuid::from_u128(id), ..template.clone() }).collect() });
+    project.net_registry = Arc::new(Registry {
+        records: (1..=MAX_RECORDS as u128)
+            .map(|id| Record { id: Uuid::from_u128(id), generated_number: Some(id as u32), ..template.clone() })
+            .collect(),
+    });
     project.net_registry.validate(&project).unwrap();
     session.open_snapshot(Arc::new(project));
     apply(&mut session, crate::board::update::PREVIEW_UPDATE, json!({}));
@@ -360,7 +362,7 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     let entry: Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
     assert!(entry.get("schematic_instances").is_none());
     let path = project.instances_document_path().unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after[&path]).unwrap()["format"], "pcbcraft-instances/2");
+    assert_eq!(serde_json::from_slice::<Value>(&after[&path]).unwrap()["format"], "pcbcraft-instances/4");
     round_trip(&session);
     apply(&mut session, "edit.undo", json!({}));
     assert_eq!(session.project().unwrap().net_registry, old);
@@ -369,22 +371,22 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
 }
 
-/// Joining a meaningful derived network is a real merge with source-qualified derived lineage;
+/// Joining two meaningful networks is a real merge with source-qualified persistent lineage;
 /// merely adding a previously bare pin to the same net keeps the resulting UUID.
 #[test]
-fn registered_and_meaningful_derived_sources_merge_but_bare_pins_continue() {
+fn registered_meaningful_sources_merge_but_bare_pins_continue() {
     let (mut session, pins) = circuit(5, false);
     connect(&mut session, &pins[0], &pins[1]);
     let old = promote(&mut session, &pins[0]);
     connect(&mut session, &pins[2], &pins[3]);
-    assert_eq!(session.project().unwrap().net_registry.records.len(), 1);
+    assert_eq!(session.project().unwrap().net_registry.records.len(), 2);
     connect(&mut session, &pins[1], &pins[2]);
     let merged = id_for(&session, &pins[0]);
     assert_ne!(old, merged);
     let lineage = &session.project().unwrap().net_registry.record(merged).unwrap().lineage;
     assert_eq!(lineage.len(), 2);
     assert!(lineage.iter().any(|source| source.net == Some(old)));
-    assert!(lineage.iter().any(|source| source.net.is_none()));
+    assert!(lineage.iter().all(|source| source.net.is_some()));
     connect(&mut session, &pins[3], &pins[4]);
     assert_eq!(id_for(&session, &pins[4]), merged);
     round_trip(&session);
@@ -423,8 +425,8 @@ fn canonical_creation_priority_explicit_selection_and_four_anchor_cap() {
     assert_eq!(reserved.len(), MAX_RECORDS);
 }
 
-/// Non-anchor geometry edits change only their authored sheet; accepted baseline membership
-/// never causes sparse identity promotion, including on a physically assigned board.
+/// Non-anchor geometry edits change only their authored sheet; physical baseline acceptance
+/// preserves the existing net-owned numbers and does not assign additional identities.
 #[test]
 fn non_anchor_wire_edits_leave_registry_bytes_and_baseline_nets_derived() {
     let (mut session, pins) = circuit(2, true);
@@ -438,7 +440,7 @@ fn non_anchor_wire_edits_leave_registry_bytes_and_baseline_nets_derived() {
         );
     }
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({}));
-    assert!(session.project().unwrap().net_registry.records.is_empty());
+    assert_eq!(session.project().unwrap().net_registry.records.len(), 1);
     let baseline = session.project().unwrap().board.baseline.clone().unwrap();
     promote(&mut session, &pins[0]);
     let project = session.project().unwrap();
@@ -479,7 +481,7 @@ fn retired_identity_is_not_reactivated_by_recreating_identical_connectivity() {
     apply(&mut session, crate::DELETE_WIRE, json!({"wire":wire}));
     assert!(matches!(session.project().unwrap().net_registry.record(old).unwrap().state, State::Retired { reason: Retirement::Removed, .. }));
     connect(&mut session, &pins[0], &pins[1]);
-    assert_eq!(session.project().unwrap().net_registry.records.len(), 1);
+    assert_eq!(session.project().unwrap().net_registry.records.len(), 2);
     assert_ne!(promote(&mut session, &pins[0]), old);
     round_trip(&session);
 }
@@ -525,7 +527,7 @@ fn multiunit_terminal_keys_span_sheets_and_promote_once() {
     let b = graph.target(other, &b).unwrap();
     assert_eq!(a.canonical_key().unwrap(), b.canonical_key().unwrap());
     assert!(a.occurrence.is_nil());
-    assert_eq!(project.net_registry.record(id).unwrap().primary, a);
+    assert!(project.net_registry.record(id).unwrap().anchors().any(|anchor| *anchor == a));
     assert_eq!(project.net_registry.records.len(), 1);
     round_trip(&session);
 }

@@ -67,6 +67,37 @@ fn source_anchor(anchor: &Anchor, scope: Scope) -> Anchor {
     Anchor { scope, ..anchor.clone() }
 }
 
+/// Persist the exact numbers previously shown by a legacy graph before an edit can remove
+/// its naming anchors. Current explicit records keep their IDs, primary choices and bindings.
+fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering::Plan) -> Result<(), CommandError> {
+    let mut ids = registry.records.iter().map(|record| record.id).collect();
+    let mut last = plan.records.values().copied().chain(plan.networks.iter().flatten().copied()).max().unwrap_or(0);
+    for record in &mut registry.records {
+        if record.generated_number.is_none() {
+            record.generated_number =
+                Some(match plan.records.get(&record.id).copied().or_else(|| graph.network(&record.primary).and_then(|index| plan.networks[index])) {
+                    Some(number) => number,
+                    None => super::numbering::allocate(&mut last).map_err(CommandError::InvalidParams)?,
+                });
+        }
+    }
+    let existing: BTreeSet<_> = registry
+        .records
+        .iter()
+        .filter(|record| matches!(record.state, State::Active {}))
+        .filter_map(|record| graph.network(&record.primary))
+        .collect();
+    for (index, network) in graph.networks.iter().enumerate().filter(|(_, network)| network.meaningful()) {
+        if !existing.contains(&index) {
+            let mut record = network.record(allocate(&mut ids)?, None).map_err(CommandError::InvalidParams)?;
+            record.generated_number = plan.networks[index];
+            registry.records.push(record);
+        }
+    }
+    registry.records.sort_by_key(|record| record.id);
+    Ok(())
+}
+
 impl Project {
     /// Reconcile one canonical candidate before history publication. Non-anchor changes keep exact
     /// registry bytes; allocation/validation failure leaves the owning session untouched.
@@ -100,8 +131,16 @@ impl Project {
             if old_scope != scope {
                 requalify(&mut explicit, scope);
             }
+            let identity_changed = old_scope != scope || explicit != *before.net_registry;
+            if identity_changed {
+                let plan = super::numbering::plan(&registry, &old.networks).map_err(CommandError::InvalidParams)?;
+                adopt_numbers(&mut explicit, &after, &plan)?;
+            }
             if explicit != *self.net_registry {
                 self.net_registry = Arc::new(explicit);
+            }
+            if identity_changed {
+                self.invalidate_net_presentation();
             }
             if !self.net_registry.records.is_empty() {
                 self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
@@ -109,6 +148,8 @@ impl Project {
             return Ok(());
         }
         before.net_registry.validate(before).map_err(CommandError::InvalidParams)?;
+        let plan = super::numbering::plan(&registry, &old.networks).map_err(CommandError::InvalidParams)?;
+        adopt_numbers(&mut registry, &old, &plan)?;
         let mut by_source = BTreeMap::<usize, Record>::new();
         for record in &registry.records {
             if matches!(record.state, State::Active {}) {
@@ -144,12 +185,10 @@ impl Project {
         let mut ids = result.keys().copied().collect();
         let mut assigned = vec![None; after.networks.len()];
         let mut capture = None;
+        let mut last_number = registry.records.iter().filter_map(|record| record.generated_number).max().unwrap_or(0);
         for (index, network) in after.networks.iter().enumerate().filter(|(_, n)| n.meaningful()) {
             let parents = &sources[index];
             let persistent = parents.iter().any(|source| by_source.contains_key(source));
-            if !persistent && network.names.is_empty() {
-                continue;
-            }
             let retained = if parents.len() == 1 {
                 parents.first().and_then(|source| by_source.get(source)).filter(|r| chosen.get(&r.id) == Some(&Some(index)))
             } else {
@@ -159,6 +198,7 @@ impl Project {
                 network.retained(retained).map_err(CommandError::InvalidParams)?
             } else {
                 let mut record = network.record(allocate(&mut ids)?, None).map_err(CommandError::InvalidParams)?;
+                record.generated_number = Some(super::numbering::allocate(&mut last_number).map_err(CommandError::InvalidParams)?);
                 if persistent || parents.len() > 1 {
                     let snapshot = source_capture(&mut capture, before)?;
                     for source in parents {
@@ -169,7 +209,7 @@ impl Project {
                             .ok_or_else(|| CommandError::InvalidParams("Source network has no identity anchor.".into()))?;
                         record.lineage.push(Lineage {
                             snapshot: snapshot.clone(),
-                            net: by_source.get(source).map(|r| r.id),
+                            net: by_source.get(source).filter(|r| before.net_registry.record(r.id).is_some()).map(|r| r.id),
                             anchor: source_anchor(primary, old_scope),
                         });
                     }
@@ -237,6 +277,7 @@ impl Project {
             return Ok(());
         }
         self.net_registry = Arc::new(next);
+        self.invalidate_net_presentation();
         if !self.net_registry.records.is_empty() {
             if self.layout.is_none() {
                 *self = self.with_board_folders(".").map_err(CommandError::InvalidParams)?;
@@ -247,5 +288,14 @@ impl Project {
             self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
         }
         Ok(())
+    }
+
+    /// Number adoption changes presentation without changing electrical topology. Drop both
+    /// the project graph and sheet projections so readers cannot keep a provisional name.
+    fn invalidate_net_presentation(&mut self) {
+        self.named_graph = Arc::default();
+        for sheet in Arc::make_mut(&mut self.sheets) {
+            sheet.connectivity = Arc::default();
+        }
     }
 }

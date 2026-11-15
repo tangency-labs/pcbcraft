@@ -254,9 +254,9 @@ fn rule_changes_preserve_net_registry_identity_and_instance_bytes() {
         session.apply(crate::ASSIGN_FOOTPRINT,&json!({"component":component,"library":footprint.library,"definition":footprint.id,"definition_revision":footprint.revision,"mapping":{"1":"1","2":"2"},"expected_revision":session.revision()})).unwrap();
     }
     session.apply(crate::board::update::INITIALIZE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
-    assert!(session.project().unwrap().net_registry.records.is_empty());
+    assert_eq!(session.project().unwrap().net_registry.records.len(), 1);
     set(&mut session, json!(Values::default())).unwrap();
-    assert!(session.project().unwrap().net_registry.records.is_empty());
+    assert_eq!(session.project().unwrap().net_registry.records.len(), 1);
     let symbol = session.project().unwrap().symbols()[0].id();
     session.apply(crate::nets::PROMOTE, &json!({"anchor":{"symbol":symbol,"terminal":"1"},"expected_revision":session.revision()})).unwrap();
     let registry = session.project().unwrap().inspect_net_registry().unwrap();

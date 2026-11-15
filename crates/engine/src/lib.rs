@@ -4132,7 +4132,7 @@ mod wiring_tests {
         let schematic = &second["project"]["schematic"];
         let path = json!([{"x_nm": -5_080_000, "y_nm": 0}, {"x_nm": 5_080_000, "y_nm": 0}]);
         assert_eq!(schematic["wires"][0], json!({"id": "wire-5", "from": a, "to": b, "path": path}), "inspection reports the drawn route");
-        assert_eq!(schematic["netlist"]["nets"], json!([{"name":"R1.1","terminals": [a, b, c]}]));
+        assert_eq!(schematic["netlist"]["nets"], json!([{"name":"Net-0001","terminals": [a, b, c]}]));
         assert_eq!(schematic["netlist"]["unconnected"].as_array().unwrap().len(), 3);
 
         let undone = session.execute("edit.undo", &Value::Null).unwrap();

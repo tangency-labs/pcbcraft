@@ -337,14 +337,7 @@ impl Baseline {
                 for (terminal, pads) in &package.mapping {
                     let key = TerminalKey { component, terminal: terminal.clone() };
                     if pads.pads().len() > 1 && !connected.contains(&key) {
-                        nets.push(NetState {
-                            display_name: project
-                                .components
-                                .get(&component)
-                                .map(|part| crate::nets::display::terminal_name(part.reference(), &key.terminal, part.definition.pins())),
-                            terminals: vec![key],
-                            names: Vec::new(),
-                        });
+                        nets.push(NetState { display_name: Some("Unconnected".into()), terminals: vec![key], names: Vec::new() });
                     }
                 }
             }
@@ -597,7 +590,9 @@ impl Baseline {
                     .iter()
                     .min_by_key(|key| (key.component, key.terminal.len(), &key.terminal))
                     .and_then(|key| {
-                        self.components.get(&key.component).map(|part| crate::nets::display::terminal_name(&part.reference, &key.terminal, &[]))
+                        self.components
+                            .get(&key.component)
+                            .map(|part| format!("{}.{}", crate::nets::display::token(&part.reference), crate::nets::display::token(&key.terminal)))
                     })
                     .unwrap_or_else(|| "Unresolved net".into())
             })

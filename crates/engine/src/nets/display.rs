@@ -7,7 +7,7 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Encode a presentation token byte-for-byte, keeping the separator punctuation unambiguous.
+/// Encode presentation tokens byte-for-byte, including punctuation and non-ASCII text.
 pub fn token(value: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut result = String::new();
@@ -23,14 +23,6 @@ pub fn token(value: &str) -> String {
     result
 }
 
-/// Select a unique trimmed logical pin name across the component's complete multi-unit table.
-/// Ambiguous, empty or unavailable metadata falls back to the electrical terminal designator.
-pub(crate) fn terminal_name(reference: &str, terminal: &str, pins: &[crate::schematic::PinDefinition]) -> String {
-    let name = pins.iter().find(|pin| pin.number == terminal).and_then(|pin| pin.name.as_deref()).map(str::trim).filter(|name| !name.is_empty());
-    let name = name.filter(|name| pins.iter().filter(|pin| pin.name.as_deref().map(str::trim) == Some(*name)).count() == 1).unwrap_or(terminal);
-    format!("{}.{}", token(reference), token(name))
-}
-
 /// Full current occurrence path. The supported hierarchy has one occurrence per sheet.
 fn path(project: &Project, mut sheet: uuid::Uuid) -> String {
     let mut segments = Vec::new();
@@ -44,7 +36,8 @@ fn path(project: &Project, mut sheet: uuid::Uuid) -> String {
 }
 
 /// Derive all primary names together so qualification is project-wide, before sheet projection.
-/// Canonical anchors select endpoints; geometry, references and iteration order never do.
+/// Stored net numbers own generated names. Legacy graphs project the same numbers that their
+/// next topology transaction will adopt, without mutating the document during inspection.
 pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
     let mut endpoints = BTreeMap::new();
     let connected_symbols: BTreeSet<_> = graph.nets.iter().flatten().map(|terminal| terminal.symbol).collect();
@@ -101,8 +94,8 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
     let mut paths = Vec::new();
     let mut primaries = Vec::new();
     let mut fallback = Vec::new();
-    for index in 0..graph.nets.len() {
-        let anchors =
+    let groups: Vec<_> = (0..graph.nets.len())
+        .map(|index| {
             graph.endpoints(index).filter_map(|end| endpoints.get(&end)).fold(BTreeMap::<Anchor, String>::new(), |mut anchors, (anchor, path)| {
                 anchors
                     .entry(anchor.clone())
@@ -113,30 +106,39 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
                     })
                     .or_insert_with(|| path.clone());
                 anchors
-            });
-        let terminal = anchors.keys().find(|anchor| anchor.kind == AnchorKind::Terminal && project.components.contains_key(&anchor.object));
-        fallback.push(graph.net_names(index).is_empty() && terminal.is_none());
-        let name = graph
-            .net_names(index)
-            .iter()
-            .min()
-            .cloned()
-            .or_else(|| {
-                terminal.and_then(|anchor| {
-                    let component = project.components.get(&anchor.object)?;
-                    Some(terminal_name(component.reference(), &anchor.terminal, component.definition.pins()))
-                })
             })
-            .unwrap_or_else(|| "Unconnected".into());
+        })
+        .collect();
+    let networks: Vec<_> = groups
+        .iter()
+        .enumerate()
+        .map(|(index, anchors)| super::graph::Network {
+            anchors: anchors.keys().filter(|anchor| anchor.kind != AnchorKind::Junction).cloned().collect(),
+            names: graph.net_names(index).iter().cloned().collect(),
+        })
+        .collect();
+    let numbering = super::numbering::plan(&project.net_registry, &networks).ok();
+    for (index, anchors) in groups.iter().enumerate() {
+        let terminal = anchors.keys().find(|anchor| anchor.kind == AnchorKind::Terminal && project.components.contains_key(&anchor.object));
+        let number = numbering.as_ref().and_then(|plan| plan.networks[index]);
+        fallback.push(graph.net_names(index).is_empty() && number.is_none());
+        let name =
+            graph.net_names(index).iter().min().cloned().or_else(|| number.map(super::numbering::name)).unwrap_or_else(|| "Unconnected".into());
         // Explicit local names retain the occurrence that declares the chosen name, even when
         // hierarchy brings a lower component terminal onto the same resolved network.
         let named_anchor = graph.net_names(index).first().and_then(|name| {
             graph.endpoints(index).filter(|end| named.get(end) == Some(name)).filter_map(|end| endpoints.get(&end).map(|(anchor, _)| anchor)).min()
         });
         let selected = named_anchor.or(terminal).or_else(|| anchors.keys().next());
-        paths.push(selected.and_then(|key| anchors.get(key)).cloned().unwrap_or_default());
-        // A derived scoped address is its canonical supported anchor; it is never saved as a net ID.
-        let address = anchors.keys().next().and_then(|a| a.canonical_key().ok()).unwrap_or_default();
+        let generated = graph.net_names(index).is_empty() && number.is_some();
+        paths.push(if generated { "Generated".into() } else { selected.and_then(|key| anchors.get(key)).cloned().unwrap_or_default() });
+        // Generated collision qualifiers depend on the net-owned number, never its current
+        // representative component. Authored names retain their scoped anchor address.
+        let address = if generated {
+            format!("{}:{}", project.id, number.unwrap_or_default()).into_bytes()
+        } else {
+            anchors.keys().next().and_then(|anchor| anchor.canonical_key().ok()).unwrap_or_default()
+        };
         addresses.push(format!("{:x}", Sha256::digest(address)));
         primaries.push(name);
     }

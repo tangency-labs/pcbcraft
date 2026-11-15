@@ -174,7 +174,7 @@ mod tests {
             )
             .unwrap();
         harness.run();
-        harness.get_by_label("Net R1.2");
+        harness.get_by_label("Net Net-0001");
         harness.get_by_label("R1.2");
         harness.get_by_label("R2.1");
         harness.get_by_label("R1.1");
@@ -193,7 +193,7 @@ mod tests {
         click(&mut harness, "Search nets or pins");
         harness.get_by_label("Search nets or pins").type_text("R1.2");
         harness.run();
-        harness.get_by_label("Net R1.2");
+        harness.get_by_label("Net Net-0001");
         harness.get_by_label("R1.2");
         assert!(harness.query_by_label("R1.1").is_none());
         assert_eq!(harness.state().session.revision(), revision);

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct Network {
     /// Logical members used only as transient continuation evidence.
     pub anchors: BTreeSet<Anchor>,
-    /// Authored names that make a singleton eligible for sparse promotion.
+    /// Authored names that make a singleton a meaningful electrical network.
     pub names: BTreeSet<String>,
 }
 
@@ -30,6 +30,7 @@ impl Network {
         }
         Ok(Record {
             id,
+            generated_number: None,
             primary: primary.clone(),
             fallbacks: self.anchors.iter().filter(|a| *a != primary).take(3).cloned().collect(),
             lineage: Vec::new(),
@@ -46,7 +47,12 @@ impl Network {
             Ok(Record { primary: primary.clone(), fallbacks: surviving.into_iter().skip(1).collect(), ..record.clone() })
         } else {
             let next = self.record(record.id, None)?;
-            Ok(Record { lineage: record.lineage.clone(), class_bindings: record.class_bindings.clone(), ..next })
+            Ok(Record {
+                generated_number: record.generated_number,
+                lineage: record.lineage.clone(),
+                class_bindings: record.class_bindings.clone(),
+                ..next
+            })
         }
     }
 }

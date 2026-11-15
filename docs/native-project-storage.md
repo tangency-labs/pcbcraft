@@ -18,6 +18,13 @@ in the entry point; only projects with authored classes select that version.
 Project/22 adds [project parameters](#parameter-records); only projects with a
 stored project value select it.
 
+Project/23 adds persistent generated net numbers to the same instance registry,
+using instances/4 when board-owned. A stored record's positive `generated_number`
+is unique across live and historical identities. This envelope can also carry
+class catalogs, assignments and no-connect intent. Older envelopes reject the
+number field; older files retain their exact no-op encoding until an electrical
+transaction adopts the numbers. See [net registry storage](net-registry-storage.md).
+
 ## File encodings and save behavior
 
 The working form is a project folder with a plain UTF-8 JSON `project.json` entry
@@ -126,7 +133,7 @@ board folder. Unaffected payload bytes and all component/package identities stay
 unchanged; the [occurrence contract](sheet-occurrence-storage.md) defines the IDs,
 validation and first-board transfer.
 
-The first persistent net record selects `pcbcraft-project/17`. Board projects
+Unnumbered legacy net records use `pcbcraft-project/17`. Board projects
 then use `pcbcraft-instances/2` with `net_registry` beside the occurrence records;
 schematic-only projects place it under `schematic_instances.net_registry` in the
 entry point. The header and registry presence must agree, and empty/null
@@ -134,8 +141,8 @@ registries are refused. Existing projects without records retain their low-level
 encoding; Open and inspection never promote nets. Older readers must refuse
 these headers rather than discard identity, lineage or unresolved decisions.
 
-A nonempty project class catalog selects project/20; saved
-[net-class bindings](net-class-assignments.md) select project/21 and board-owned
+Without generated-number metadata, a nonempty project class catalog selects
+project/20; saved [net-class bindings](net-class-assignments.md) select project/21 and board-owned
 instances/3. Bindings remain inside the same logical registry and carry class and
 origin net UUIDs, while physical board and sheet formats stay unchanged. Older
 headers refuse the new vocabulary, and the new envelope requires actual bindings.
@@ -249,8 +256,8 @@ See [board-rules.md](board-rules.md) for validation, resolution and reset behavi
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17` or `/19` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent |
-| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1`, `/2` with a net registry | Matching board UUID header, one circuit use and one occurrence per sheet, optional sparse net registry; schematic-only projects embed these records in `project.json` instead |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21` or `/22` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent, versions 20/21 add class catalogs and bindings, and version 22 adds net-owned generated numbers |
+| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/4` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, and version 4 adds generated net numbers; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/19` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |

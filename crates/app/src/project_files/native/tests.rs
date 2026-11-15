@@ -83,7 +83,7 @@ fn assert_connectivity(schematic: &Value) {
     assert_eq!(
         schematic["netlist"],
         json!({
-            "nets":[{"name":"R1.2","terminals":[left, right]}],
+            "nets":[{"name":"Net-0001","terminals":[left, right]}],
             "unconnected":[{"symbol":"symbol-2", "terminal":"1"}, {"symbol":"symbol-3", "terminal":"2"}]
         })
     );

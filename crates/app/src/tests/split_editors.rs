@@ -129,7 +129,7 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
     click(&mut h, "R1  R");
     assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().schematic_highlight);
     click(&mut h, "Expand Nets");
-    click(&mut h, "R1.2");
+    click(&mut h, "Unconnected");
     assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_wire(), Some(wire.as_str()));
     let rect = canvas(&h, 0);
     assert!(h.output().shapes.iter().any(|shape| match &shape.shape {
@@ -760,7 +760,7 @@ fn browser_follow_reveals_wire_bounds_in_the_uncovered_target() {
     h.state_mut().views.other_mut().camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Nets");
-    click(&mut h, "R1.2");
+    click(&mut h, "Unconnected");
     let project = h.state().session.project().unwrap();
     let rect = canvas(&h, 1);
     let uncovered = workspace::catalog::uncovered(rect, &[h.state().browser.rect(), h.state().parts.rect()]);
