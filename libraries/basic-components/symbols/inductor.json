@@ -1,0 +1,27 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "inductor",
+  "revision": 2,
+  "name": "Inductor",
+  "reference_prefix": "L",
+  "default_value": "L",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "graphic", "graphic": {"geometry": {"type": "arc", "center": {"x_nm": 0, "y_nm": -3048000}, "radius_nm": 1016000, "start_degrees": -90, "sweep_degrees": 180}, "stroke_nm": 120000, "fill": "none"}},
+        {"type": "graphic", "graphic": {"geometry": {"type": "arc", "center": {"x_nm": 0, "y_nm": -1016000}, "radius_nm": 1016000, "start_degrees": -90, "sweep_degrees": 180}, "stroke_nm": 120000, "fill": "none"}},
+        {"type": "graphic", "graphic": {"geometry": {"type": "arc", "center": {"x_nm": 0, "y_nm": 1016000}, "radius_nm": 1016000, "start_degrees": -90, "sweep_degrees": 180}, "stroke_nm": 120000, "fill": "none"}},
+        {"type": "graphic", "graphic": {"geometry": {"type": "arc", "center": {"x_nm": 0, "y_nm": 3048000}, "radius_nm": 1016000, "start_degrees": -90, "sweep_degrees": 180}, "stroke_nm": 120000, "fill": "none"}}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [0, -6350000], "appearance": {"orientation": "down", "length_nm": 2286000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [0, 6350000], "appearance": {"orientation": "up", "length_nm": 2286000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

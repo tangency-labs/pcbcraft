@@ -19,59 +19,85 @@ pub struct FormAction {
     pub compact: bool,
 }
 
-/// Show the Parts Catalog with a bounded browsing area and shared modal actions. Dock switches
+/// Open the expanded Parts Catalog at 70% of the viewport with a remembered resize corner. Dock switches
 /// presentation; Manage libraries remains available independently of placement validity.
 /// Inactive hosts paint disabled controls and cannot dispatch actions.
-pub fn parts_form(ctx: &egui::Context, enabled: bool, active: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
+pub fn parts_form(ctx: &egui::Context, enabled: bool, active: bool, repeat: &mut bool, add: impl FnOnce(&mut Ui)) -> FormAction {
     let t = Tokens::get();
     let id = egui::Id::unique("parts_catalog");
     let frame = kit::navigation_popup_frame().inner_margin(0);
     let mut closed = false;
     let mut compact = false;
+    let mut libraries = false;
     let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
         if !active {
             ui.disable();
         }
-        let width = 1108.0_f32.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
-        ui.set_width(width);
+        let maximum = (ctx.content_rect().size() - vec2(t.space_16, t.space_16) * 2.0).max(egui::Vec2::ZERO);
         let field_style = ui.style().clone();
-        kit::scope(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let (header, close) = form_header(ui, "Parts Catalog");
-            closed = close;
-            let dock = Rect::from_center_size(
-                header.right_center() - vec2(t.space_24 + t.control_height / 2.0 + t.space_8 + t.space_24, 0.0),
-                vec2(t.space_24 * 2.0, t.control_height),
-            );
-            compact = kit::button_at(ui, "dock_parts_catalog", dock, "Dock", kit::Button::Normal)
-                .accessible_name("Dock Parts Catalog")
-                .on_hover_text("Show compact catalog")
-                .clicked();
-            let footer_height = t.form_footer_height + t.space_4;
-            let height = (ctx.content_rect().height() - header.height() - footer_height - t.space_24 * 2.0).clamp(0.0, t.control_height * 18.0);
-            let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-            let mut content = ui.new_child(UiBuilder::new().id_salt("parts_catalog_body").max_rect(body));
-            content.set_clip_rect(ui.clip_rect().intersect(body));
-            content.set_style(field_style);
-            content.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
-            add(&mut content);
-            // The catalog owns Enter confirmation, including its search and popup focus rules.
-            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-            kit::footer(
-                ui,
-                "Place",
-                "Cancel",
-                enabled,
-                kit::Footer { apply: Some("Manage libraries…"), confirm: true, secondary_left: true, ..Default::default() },
-            )
-        })
+        // ModalHost supplies the qualified surface and input boundary but has no sizing API.
+        // Compose egui's persisted resize region inside it, keeping all form chrome shared.
+        egui::Resize::default()
+            .id(id.with("size"))
+            .default_size(ctx.content_rect().size() * 0.7)
+            .min_size(vec2(600.0, 400.0).min(maximum))
+            .max_size(maximum)
+            .with_stroke(false)
+            .resizable(active)
+            .show(ui, |ui| {
+                kit::scope(ui, |ui| {
+                    let size = ui.available_size();
+                    let width = size.x;
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let (header, close) = form_header(ui, "Parts Catalog");
+                    closed = close;
+                    let dock = Rect::from_center_size(
+                        header.right_center() - vec2(t.space_24 + t.control_height / 2.0 + t.space_8 + t.space_24, 0.0),
+                        vec2(t.space_24 * 2.0, t.control_height),
+                    );
+                    compact = kit::button_at(ui, "dock_parts_catalog", dock, "Dock", kit::Button::Normal)
+                        .accessible_name("Dock Parts Catalog")
+                        .on_hover_text("Show compact catalog")
+                        .clicked();
+                    let footer_height = t.form_footer_height;
+                    let height = (size.y - header.height() - footer_height).max(0.0);
+                    let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+                    let mut content = ui.new_child(UiBuilder::new().id_salt("parts_catalog_body").max_rect(body));
+                    content.set_clip_rect(ui.clip_rect().intersect(body));
+                    content.set_style(field_style);
+                    content.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
+                    add(&mut content);
+                    // The catalog owns Enter confirmation, including its search and popup focus rules.
+                    ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                    let footer = Rect::from_min_size(ui.cursor().min, vec2(width, footer_height));
+                    let action = kit::footer(ui, "Place", "Cancel", enabled, kit::Footer::default());
+                    // The standalone footer has no public leading-content slot. Keep its
+                    // surface/actions and compose shared controls in the unused leading band.
+                    let place_width =
+                        ui.painter().layout_no_wrap("Place".into(), fonts::interface_heading(ui, t.font_label), t.text).size().x + 2. * t.space_16;
+                    let cancel_width =
+                        ui.painter().layout_no_wrap("Cancel".into(), egui::FontId::proportional(t.font_label), t.text).size().x + 2. * t.space_12;
+                    let mut left = footer.shrink2(vec2(t.space_12, t.space_8 + t.space_2));
+                    left.max.x -= (place_width.max(t.space_24 * 3.) + cancel_width + t.space_6 + t.space_8).min(left.width());
+                    ui.scope_builder(
+                        UiBuilder::new().id_salt("catalog_footer_options").max_rect(left).layout(Layout::left_to_right(Align::Center)),
+                        |ui| {
+                            libraries = crate::controls::button(ui, "Manage libraries…").clicked();
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                repeat_placement(ui, repeat);
+                            });
+                        },
+                    );
+                    action
+                })
+            })
     });
     let cancelled = modal.inner == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
     if active {
         FormAction {
             close: closed || cancelled || modal.should_close(),
             primary: modal.inner == kit::Action::Ok,
-            libraries: modal.inner == kit::Action::Apply,
+            libraries,
             compact,
             ..Default::default()
         }
@@ -251,16 +277,16 @@ pub enum Region {
 
 /// Keep desktop catalogs in three panes. Compact hosts move library selection into the caller's
 /// toolbar, retaining results beside preview or in two tabs when neither pane would remain useful.
-pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, Region)) {
+pub fn panes(ui: &mut Ui, preview: &mut crate::library_workspace::ColumnWidth, mut add: impl FnMut(&mut Ui, Region)) {
     let t = Tokens::get();
     let area = ui.available_rect_before_wrap();
-    let library = if area.width() >= 900. { t.form_card_width - 32. } else { 0. };
+    let library = if area.width() >= 900. { 176. } else { 0. };
     let content = Rect::from_min_max(pos2(area.left() + library, area.top()), area.max);
     if library > 0. {
         let rect = Rect::from_min_max(area.min, pos2(content.left(), area.bottom()));
         pane(ui, rect, true, |ui| add(ui, Region::Libraries));
     }
-    if content.width() < 600. {
+    if content.width() < 560. {
         let id = ui.scope_id().with("catalog_pane");
         let mut tab = ui.ctx().data_mut(|d| *d.get_temp_mut_or_default::<usize>(id));
         let tabs = Rect::from_min_size(content.min, vec2(content.width(), t.form_header_height));
@@ -272,9 +298,23 @@ pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, Region)) {
         let rect = Rect::from_min_max(pos2(content.left(), tabs.bottom()), content.max);
         pane(ui, rect, false, |ui| add(ui, if tab == 0 { Region::Results } else { Region::Preview }));
     } else {
-        let x = content.left() + content.width() * 0.54;
-        pane(ui, Rect::from_min_max(content.min, pos2(x, content.bottom())), false, |ui| add(ui, Region::Results));
-        pane(ui, Rect::from_min_max(pos2(x, content.top()), content.max), true, |ui| add(ui, Region::Preview));
+        let width = preview.width(280.).clamp(240., content.width() - 320.);
+        let edge = content.right() - width;
+        let width = preview.resize(
+            ui,
+            ui.scope_id().with("catalog_preview_width"),
+            280.,
+            crate::library_workspace::Sash {
+                bounds: Rect::from_min_max(pos2(edge - t.space_4, content.top()), pos2(edge + t.space_4, content.bottom())),
+                name: "Resize catalog preview",
+                min: 240.,
+                max: content.width() - 320.,
+                leading: true,
+            },
+        );
+        let x = content.right() - width;
+        pane(ui, Rect::from_min_max(content.min, pos2(x - t.space_4, content.bottom())), false, |ui| add(ui, Region::Results));
+        pane(ui, Rect::from_min_max(pos2(x + t.space_4, content.top()), content.max), true, |ui| add(ui, Region::Preview));
     }
 }
 /// Each pane owns its clipping/scrolling and receives standard Craft spacing.
@@ -375,6 +415,64 @@ pub fn footprint_result(ui: &mut Ui, label: &str, name: &str, detail: &str, sele
     response
 }
 
+/// The expanded chooser uses the toolkit table with visible-row virtualization and fixed headers.
+/// Compact dock density remains independent, and explicit selection reveal scrolls only once.
+pub fn part_list<T>(ui: &mut Ui, items: &[T], reveal: Option<usize>, mut add: impl FnMut(&mut Ui, &mut kit::Table<'_>, &T)) {
+    let columns = [kit::Column::new("Part", 3.).flex(), kit::Column::new("Default value", 1.5).flex(), kit::Column::new("Library source", 2.).flex()];
+    kit::table_custom(ui, "catalog_parts", &columns, "No matching parts", |ui, table| {
+        table.headers(ui, |_, _| false);
+        let mut scroll = egui::ScrollArea::vertical().id_salt("catalog_part_rows").auto_shrink([false, false]);
+        ui.spacing_mut().scroll.floating = false;
+        if let Some(index) = reveal.filter(|i| *i < items.len()) {
+            scroll = scroll.vertical_scroll_offset(index as f32 * kit::table_row_height());
+        }
+        if items.len() <= 64 {
+            scroll.show(ui, |ui| {
+                for item in items {
+                    add(ui, table, item);
+                }
+            });
+        } else {
+            scroll.show_rows(ui, kit::table_row_height(), items.len(), |ui, rows| {
+                for item in &items[rows] {
+                    add(ui, table, item);
+                }
+            });
+        }
+    });
+}
+
+/// Full-width selectable table rows keep drag, focus and double-click authority with the caller.
+pub fn part_row(
+    ui: &mut Ui,
+    table: &mut kit::Table<'_>,
+    name: &str,
+    value: &str,
+    library: &str,
+    identity: Option<&str>,
+    selected: bool,
+) -> egui::Response {
+    let accessible = identity.map_or_else(|| name.to_owned(), |identity| format!("{name} · {identity}"));
+    table
+        .row(ui, &accessible, selected, |row| {
+            for (text, primary) in [(name, true), (value, false), (library, false)] {
+                row.cell(|ui| {
+                    let t = Tokens::get();
+                    kit::paint_text(
+                        ui,
+                        ui.max_rect(),
+                        text,
+                        egui::FontId::proportional(t.font_body),
+                        if primary { t.text } else { t.text_dim },
+                        false,
+                    );
+                });
+            }
+        })
+        .interact(Sense::click_and_drag())
+        .on_hover_text(format!("{name}\n{value} · {library}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,5 +501,22 @@ mod tests {
         let rect = egui::AreaState::load(&ctx, egui::Id::unique("board_setup_form")).unwrap().rect();
         assert!(rect.left() >= 0. && rect.right() <= 760., "{rect:?}");
         assert!((rect.center().x - 380.).abs() < 2., "{rect:?}");
+    }
+
+    /// Twenty thousand results still prepare only visible, single-line table rows.
+    #[test]
+    fn expanded_list_virtualizes_dense_rows() {
+        let ctx = egui::Context::default();
+        let items: Vec<_> = (0..20_000).collect();
+        let mut count = 0;
+        let output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(700., 600.))), ..Default::default() }, |ui| {
+                part_list(ui, &items, None, |ui, table, n| {
+                    count += 1;
+                    let _ = part_row(ui, table, &format!("Part {n}"), "10k", "demo", None, false);
+                });
+            });
+        output.drop_without_applying_deltas();
+        assert!(count > 10 && count < 40, "painted {count} rows");
     }
 }

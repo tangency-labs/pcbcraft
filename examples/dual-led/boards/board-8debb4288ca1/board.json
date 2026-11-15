@@ -1,0 +1,436 @@
+{
+  "format": "pcbcraft-board/15",
+  "setup": {
+    "layers": [
+    {"id":"0a692149-7896-4205-b29b-9f1909999a2e","name":"Back mask","purpose":"mask","side":"back"}
+
+    ,
+    {"id":"0b79c2d1-628f-4b2a-a603-126868af6d96","name":"Front fabrication","purpose":"fabrication","side":"front"}
+
+    ,
+    {"id":"32ad06eb-4f12-4295-b9ea-a7094e968f22","name":"Back paste","purpose":"paste","side":"back"}
+
+    ,
+    {"id":"4fca95cf-6c3d-42ff-b0ed-1be527cc0196","name":"Back courtyard","purpose":"courtyard","side":"back"}
+
+    ,
+    {"id":"57dcb8f8-7b88-4209-9de9-c7693f917930","name":"Bottom","purpose":"copper","side":"back"}
+
+    ,
+    {"id":"78c016a9-ef4c-4c28-b71c-ec55bea50db0","name":"Front courtyard","purpose":"courtyard","side":"front"}
+
+    ,
+    {"id":"799488b6-e348-4187-b785-68763a41b01f","name":"Front silkscreen","purpose":"silkscreen","side":"front"}
+
+    ,
+    {"id":"8b56770b-ae37-45b1-b1b5-05c0f8730a3b","name":"Board Outline","purpose":"outline"}
+
+    ,
+    {"id":"904a7125-1b2a-40c6-a116-650be3b9272f","name":"Front mask","purpose":"mask","side":"front"}
+
+    ,
+    {"id":"bce3692a-ae11-48fd-b565-361ddd56eb8d","name":"Top","purpose":"copper","side":"front"}
+
+    ,
+    {"id":"bf6ada2a-1a43-4659-95a1-685b9da1ff9a","name":"Front paste","purpose":"paste","side":"front"}
+
+    ,
+    {"id":"c53dbdd8-5b69-40f8-86ac-70fae2f28e4c","name":"Back silkscreen","purpose":"silkscreen","side":"back"}
+
+    ,
+    {"id":"dff5b2fa-1cb0-4980-8380-cd4d531475d2","name":"Back fabrication","purpose":"fabrication","side":"back"}
+    ],
+    "stackup": {
+      "id": "d2374ef7-053e-4903-a3aa-c2e2c66d195c",
+      "strata": [
+    {"kind":"copper","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d"}
+
+    ,
+    {"kind":"dielectric","id":"c1b64162-cbd7-4f98-92d8-032241f5d0aa"}
+
+    ,
+    {"kind":"copper","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930"}
+      ]
+    }
+  },
+  "baseline": {
+    "format": "pcbcraft-board-baseline/1",
+    "project": "19c9b4d6-180f-4c57-bcd1-1b9fd1ababd3",
+    "board": "8debb428-8ca1-4d03-8435-8eec9ed98c8f",
+    "source": {"capture_id":"7808d3b6-9db6-4b83-a428-eb675846f76d","content_digest":"3492032e6e6c6f26af7e3636eaf2b1f424e70aa59ffb1a8cf3c608ced81d47af"},
+    "components": {
+      "2":{"library":"basic-components","definition":"connector","revision":4,"reference":"J1","value":"3.3 V input","terminals":["1","2"],"package":{"library":"basic-components","definition":"header-1x02-254","revision":3,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "5":{"library":"basic-components","definition":"connector","revision":4,"reference":"J2","value":"Collector probes","terminals":["1","2"],"package":{"library":"basic-components","definition":"header-1x02-254","revision":3,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "7":{"library":"basic-components","definition":"resistor","revision":3,"reference":"R1","value":"470","terminals":["1","2"],"package":{"library":"basic-components","definition":"resistor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "9":{"library":"basic-components","definition":"led","revision":2,"reference":"D1","value":"Green","terminals":["1","2"],"package":{"library":"basic-components","definition":"led-0402","revision":4,"mapping":{"1":"2","2":"1"}}}
+      ,
+      "11":{"library":"basic-components","definition":"npn","revision":1,"reference":"Q1","value":"PMBT3904","terminals":["1","2","3"],"package":{"library":"basic-components","definition":"sot23","revision":4,"mapping":{"1":"1","2":"2","3":"3"}}}
+      ,
+      "14":{"library":"basic-components","definition":"resistor","revision":3,"reference":"R2","value":"470","terminals":["1","2"],"package":{"library":"basic-components","definition":"resistor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "16":{"library":"basic-components","definition":"led","revision":2,"reference":"D2","value":"Amber","terminals":["1","2"],"package":{"library":"basic-components","definition":"led-0402","revision":4,"mapping":{"1":"2","2":"1"}}}
+      ,
+      "18":{"library":"basic-components","definition":"npn","revision":1,"reference":"Q2","value":"PMBT3904","terminals":["1","2","3"],"package":{"library":"basic-components","definition":"sot23","revision":4,"mapping":{"1":"1","2":"2","3":"3"}}}
+      ,
+      "20":{"library":"basic-components","definition":"resistor-iec","revision":1,"reference":"R3","value":"100k","terminals":["1","2"],"package":{"library":"basic-components","definition":"resistor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "22":{"library":"basic-components","definition":"resistor-iec","revision":1,"reference":"R4","value":"100k","terminals":["1","2"],"package":{"library":"basic-components","definition":"resistor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "24":{"library":"basic-components","definition":"capacitor","revision":3,"reference":"C1","value":"4.7uF","terminals":["1","2"],"package":{"library":"basic-components","definition":"capacitor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "26":{"library":"basic-components","definition":"capacitor","revision":3,"reference":"C2","value":"4.7uF","terminals":["1","2"],"package":{"library":"basic-components","definition":"capacitor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "28":{"library":"basic-components","definition":"capacitor","revision":3,"reference":"C3","value":"100nF","terminals":["1","2"],"package":{"library":"basic-components","definition":"capacitor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "30":{"library":"basic-components","definition":"capacitor","revision":3,"reference":"C4","value":"10uF","terminals":["1","2"],"package":{"library":"basic-components","definition":"capacitor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+    },
+    "nets": [
+      {"terminals":[{"component":2,"terminal":"1"},{"component":7,"terminal":"1"},{"component":14,"terminal":"1"},{"component":20,"terminal":"1"},{"component":22,"terminal":"1"},{"component":28,"terminal":"1"},{"component":30,"terminal":"1"}],"names":["+3V3"]}
+      ,
+      {"terminals":[{"component":2,"terminal":"2"},{"component":11,"terminal":"2"},{"component":18,"terminal":"2"},{"component":28,"terminal":"2"},{"component":30,"terminal":"2"}],"names":["GND"]}
+      ,
+      {"terminals":[{"component":5,"terminal":"1"},{"component":9,"terminal":"2"},{"component":11,"terminal":"3"},{"component":24,"terminal":"1"}],"names":["COL_A"]}
+      ,
+      {"terminals":[{"component":5,"terminal":"2"},{"component":16,"terminal":"2"},{"component":18,"terminal":"3"},{"component":26,"terminal":"1"}],"names":["COL_B"]}
+      ,
+      {"terminals":[{"component":7,"terminal":"2"},{"component":9,"terminal":"1"}],"names":["LED_A"]}
+      ,
+      {"terminals":[{"component":11,"terminal":"1"},{"component":20,"terminal":"2"},{"component":26,"terminal":"2"}],"names":["BASE_A"]}
+      ,
+      {"terminals":[{"component":14,"terminal":"2"},{"component":16,"terminal":"1"}],"names":["LED_B"]}
+      ,
+      {"terminals":[{"component":18,"terminal":"1"},{"component":22,"terminal":"2"},{"component":24,"terminal":"2"}],"names":["BASE_B"]}
+    ]
+  },
+  "graphics": {
+    "layers": [
+    ],
+    "items": [
+    {"id":"35cfb00b-e7c6-484c-9c57-c6c6d8d8c59d","layer":"8b56770b-ae37-45b1-b1b5-05c0f8730a3b","points":[{"x_nm":-20000000,"y_nm":-15000000},{"x_nm":20000000,"y_nm":-15000000},{"x_nm":20000000,"y_nm":15000000},{"x_nm":-20000000,"y_nm":15000000}],"closed":true}
+    ]
+  },
+  "tracks": [
+    {"id":"03ff93b2-cdc9-4385-8511-898103e84af4","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-1000000,"y_nm":1000000},"end":{"x_nm":-4000000,"y_nm":4000000}}
+
+    ,
+    {"id":"0404e782-a5cf-46ff-8c3b-401f0b71eb8f","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":12000000,"y_nm":-10500000},"end":{"x_nm":12000000,"y_nm":-7200000}}
+
+    ,
+    {"id":"0840e20e-5230-4a00-8f96-692089ddf71f","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-4000000,"y_nm":4000000},"end":{"x_nm":-8000000,"y_nm":4000000}}
+
+    ,
+    {"id":"085db2e0-1202-4e53-b1d1-ca12e756c944","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":13730000,"y_nm":11270000},"end":{"x_nm":13730000,"y_nm":9000000}}
+
+    ,
+    {"id":"0e184896-cb3d-40ce-976d-1e9cff903252","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":3000000,"y_nm":-4250000},"end":{"x_nm":3000000,"y_nm":-3000000}}
+
+    ,
+    {"id":"0ee7f575-913e-404e-8d47-173755ff1b0e","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-9000000,"y_nm":-11500000},"end":{"x_nm":-10000000,"y_nm":-12500000}}
+
+    ,
+    {"id":"12db690a-8cbb-4176-9e57-d5ebc54711ef","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":6000000,"y_nm":0},"end":{"x_nm":6000000,"y_nm":-1200000}}
+
+    ,
+    {"id":"152252f5-520c-4d0a-953d-a2f3c6788aed","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-9000000,"y_nm":6000000},"end":{"x_nm":-5000000,"y_nm":6000000}}
+
+    ,
+    {"id":"16f00fe3-8ef7-466d-bfa6-476a6338d161","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-2200000,"y_nm":6000000},"end":{"x_nm":-1000000,"y_nm":6000000}}
+
+    ,
+    {"id":"1792576d-3207-4f12-9c8f-14b31fb3a517","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-9000000,"y_nm":-10450000},"end":{"x_nm":-9000000,"y_nm":-11500000}}
+
+    ,
+    {"id":"17ec330d-fec7-41ac-9131-459ce4c53fa7","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":3000000,"y_nm":4000000},"end":{"x_nm":0,"y_nm":4000000}}
+
+    ,
+    {"id":"19225bcf-7b78-4426-a202-3014fd1bff08","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-12500000,"y_nm":10230000},"end":{"x_nm":-12500000,"y_nm":11000000}}
+
+    ,
+    {"id":"1d57bbf3-b6f7-4502-8130-b19e8f3a6249","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-6000000,"y_nm":-1200000},"end":{"x_nm":-9000000,"y_nm":1800000}}
+
+    ,
+    {"id":"1d874999-66b0-427b-95b4-6128a46bba5d","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":9000000,"y_nm":-10450000},"end":{"x_nm":9000000,"y_nm":-11500000}}
+
+    ,
+    {"id":"22da4ba1-e200-4a55-b902-f40452a8f46e","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-3000000,"y_nm":-7000000},"end":{"x_nm":-1000000,"y_nm":-5000000}}
+
+    ,
+    {"id":"260bac0d-04ba-4a99-8f83-e0cb5b11f37c","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":10000000,"y_nm":2800000},"end":{"x_nm":12000000,"y_nm":2800000}}
+
+    ,
+    {"id":"262235f0-18a4-4edc-a102-47a63e76082a","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-12000000,"y_nm":-7200000},"end":{"x_nm":-6000000,"y_nm":-1200000}}
+
+    ,
+    {"id":"266517a5-3ced-477a-b19b-a3d3d42196c4","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-5000000,"y_nm":6000000},"end":{"x_nm":-4000000,"y_nm":7000000}}
+
+    ,
+    {"id":"27f7920b-c4f2-42e2-8e4a-30688a9f3d02","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":4000000,"y_nm":2000000},"end":{"x_nm":4000000,"y_nm":3000000}}
+
+    ,
+    {"id":"285eb6a6-3ea8-414e-b10f-2e65ba67c14b","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":0,"y_nm":4000000},"end":{"x_nm":-1000000,"y_nm":5000000}}
+
+    ,
+    {"id":"28ec9542-8517-4b94-935c-4fda727dfa2e","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":8000000,"y_nm":3050000},"end":{"x_nm":8000000,"y_nm":11000000}}
+
+    ,
+    {"id":"2cb1fbc3-84c9-43e5-95d2-a45802bd59e2","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":12000000,"y_nm":2800000},"end":{"x_nm":16270000,"y_nm":7070000}}
+
+    ,
+    {"id":"2e4d1887-2309-4725-a5dc-3878d55bf796","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-12500000,"y_nm":4500000},"end":{"x_nm":-12500000,"y_nm":11000000}}
+
+    ,
+    {"id":"30eea10b-8659-4bff-8ecb-a00ca9168c5c","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":1000000,"y_nm":0},"end":{"x_nm":4000000,"y_nm":3000000}}
+
+    ,
+    {"id":"37c5777a-2dea-4089-a9df-2a2d7c1e30be","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-13000000,"y_nm":4000000},"end":{"x_nm":-12500000,"y_nm":4500000}}
+
+    ,
+    {"id":"3f06d537-d3c0-4620-b552-cfbd41083f5a","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-17000000,"y_nm":-1775000},"end":{"x_nm":-15775000,"y_nm":-3000000}}
+
+    ,
+    {"id":"3fdc02c4-8d1f-41fc-88e6-249550f78282","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-2000000,"y_nm":6000000},"end":{"x_nm":-2000000,"y_nm":8000000}}
+
+    ,
+    {"id":"411e56b7-a8aa-4cc6-abee-50714b828808","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-2000000,"y_nm":8000000},"end":{"x_nm":-1000000,"y_nm":9000000}}
+
+    ,
+    {"id":"42e11d63-081a-48c7-a916-b644ac221d92","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-1000000,"y_nm":5000000},"end":{"x_nm":-1000000,"y_nm":6000000}}
+
+    ,
+    {"id":"440ed25d-990d-416f-bba6-71a1276a9022","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":6000000,"y_nm":-1200000},"end":{"x_nm":10000000,"y_nm":2800000}}
+
+    ,
+    {"id":"4d6c01d1-ac2e-4feb-a2a4-dea7697a0df9","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-13730000,"y_nm":9000000},"end":{"x_nm":-12500000,"y_nm":10230000}}
+
+    ,
+    {"id":"5311aab8-787c-4bd2-8ed5-4b1b405ab31c","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":12000000,"y_nm":13000000},"end":{"x_nm":13730000,"y_nm":11270000}}
+
+    ,
+    {"id":"550f8cbb-9dfd-4af9-bfa2-fd1c9d24e5e6","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-4000000,"y_nm":7000000},"end":{"x_nm":-4000000,"y_nm":11000000}}
+
+    ,
+    {"id":"568779ba-4023-45db-81ec-3918ead3f347","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-9000000,"y_nm":-5250000},"end":{"x_nm":-9000000,"y_nm":-3000000}}
+
+    ,
+    {"id":"56bb0129-b8b3-4323-a5e6-14f374570b36","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-14200000,"y_nm":0},"end":{"x_nm":-13000000,"y_nm":0}}
+
+    ,
+    {"id":"58d7d4ff-f467-4a75-9e1d-7115650dcf92","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-16270000,"y_nm":9000000},"end":{"x_nm":-17000000,"y_nm":8270000}}
+
+    ,
+    {"id":"590f2d7b-c43c-4df7-b00e-c733c2659640","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-17000000,"y_nm":8270000},"end":{"x_nm":-17000000,"y_nm":-1775000}}
+
+    ,
+    {"id":"5f7b15d2-6244-45cf-a0a0-5c75eca14e16","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-15800000,"y_nm":4000000},"end":{"x_nm":-17000000,"y_nm":4000000}}
+
+    ,
+    {"id":"629f30d0-6f1c-4f1b-bdc3-424cd76ab63d","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":4000000,"y_nm":3000000},"end":{"x_nm":3000000,"y_nm":4000000}}
+
+    ,
+    {"id":"62d3cfec-1d27-47ff-8261-0e037a3388f6","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-12500000,"y_nm":500000},"end":{"x_nm":-12500000,"y_nm":4500000}}
+
+    ,
+    {"id":"62d48ec5-bc57-4676-b5dd-628402fe4664","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":9000000,"y_nm":-11500000},"end":{"x_nm":10000000,"y_nm":-12500000}}
+
+    ,
+    {"id":"69a08cbb-ba28-4e13-9224-41dfcacdb226","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":10000000,"y_nm":-12500000},"end":{"x_nm":12000000,"y_nm":-10500000}}
+
+    ,
+    {"id":"6a3d1224-49c2-40bf-9c2e-f05292b34e5e","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":6950000,"y_nm":2000000},"end":{"x_nm":8000000,"y_nm":3050000}}
+
+    ,
+    {"id":"6b34dfab-4f19-42f2-a262-5a0f4b967a57","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":3000000,"y_nm":-7000000},"end":{"x_nm":1000000,"y_nm":-5000000}}
+
+    ,
+    {"id":"6c76d918-efea-4821-b502-322ed285ef06","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-3000000,"y_nm":-5750000},"end":{"x_nm":-3000000,"y_nm":-7000000}}
+
+    ,
+    {"id":"6f450b65-4036-4cbe-a94b-da2737d63fbf","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":5050000,"y_nm":2000000},"end":{"x_nm":4000000,"y_nm":2000000}}
+
+    ,
+    {"id":"733f5c8f-2426-42aa-b773-77611079d1f7","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":2225000,"y_nm":1275000},"end":{"x_nm":2200000,"y_nm":6000000}}
+
+    ,
+    {"id":"835b969e-df5e-46c1-8658-4b28fca1d4d5","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":5000000,"y_nm":8000000},"end":{"x_nm":5000000,"y_nm":6000000}}
+
+    ,
+    {"id":"88d26d89-5b12-4efc-95e4-970292808ec3","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-2000000,"y_nm":13000000},"end":{"x_nm":12000000,"y_nm":13000000}}
+
+    ,
+    {"id":"8b47d8cb-8ebd-43a0-bd2c-9f1e37f21106","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-5050000,"y_nm":2000000},"end":{"x_nm":-5050000,"y_nm":3000000}}
+
+    ,
+    {"id":"8d5a04dd-e456-4ffd-8863-0fa40a7d5bb8","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-14200000,"y_nm":4000000},"end":{"x_nm":-13000000,"y_nm":4000000}}
+
+    ,
+    {"id":"8e9d9808-547a-4756-9b47-cdb5d9ab36ad","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-5050000,"y_nm":3000000},"end":{"x_nm":-6000000,"y_nm":3950000}}
+
+    ,
+    {"id":"8f8b62ee-017c-488a-9875-eb2dbdcc56fa","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-12000000,"y_nm":-10500000},"end":{"x_nm":-12000000,"y_nm":-7200000}}
+
+    ,
+    {"id":"90d32edd-13b3-486a-a912-e393aba1232b","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-6950000,"y_nm":2000000},"end":{"x_nm":-8000000,"y_nm":2000000}}
+
+    ,
+    {"id":"9ecfce3b-1bfc-4fa6-8997-b9ccdee7809f","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-10000000,"y_nm":-12500000},"end":{"x_nm":-12000000,"y_nm":-10500000}}
+
+    ,
+    {"id":"a47fbd92-9814-4b01-9ff4-5f293811e4a8","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-13000000,"y_nm":0},"end":{"x_nm":-12500000,"y_nm":500000}}
+
+    ,
+    {"id":"a706a0ba-9529-4763-9052-cc503eeac204","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-12500000,"y_nm":11000000},"end":{"x_nm":8000000,"y_nm":11000000}}
+
+    ,
+    {"id":"a7663e0b-af17-4f0d-9e09-ba787078a8ae","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-9000000,"y_nm":1800000},"end":{"x_nm":-9000000,"y_nm":6000000}}
+
+    ,
+    {"id":"b10a9450-d071-4e6f-addc-a76c72382b91","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-3800000,"y_nm":6000000},"end":{"x_nm":-5000000,"y_nm":6000000}}
+
+    ,
+    {"id":"b9e6c89f-0905-4b16-bf17-a71f97a3bc13","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":1000000,"y_nm":-5000000},"end":{"x_nm":1000000,"y_nm":0}}
+
+    ,
+    {"id":"bd6e6c5a-b042-44c0-b02e-71126e20f7cb","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":6000000,"y_nm":0},"end":{"x_nm":3500000,"y_nm":0}}
+
+    ,
+    {"id":"be2a305b-02d9-4296-af00-3f52eb75b19f","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":3800000,"y_nm":6000000},"end":{"x_nm":5000000,"y_nm":6000000}}
+
+    ,
+    {"id":"c2f34892-7832-427e-b6cb-a8296e631ae5","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":9000000,"y_nm":-5250000},"end":{"x_nm":9000000,"y_nm":-3000000}}
+
+    ,
+    {"id":"c321f11f-7a3a-4e76-8692-8b44e93e98ee","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-6000000,"y_nm":3950000},"end":{"x_nm":-6000000,"y_nm":11000000}}
+
+    ,
+    {"id":"c7940157-2272-48a4-925a-48c8b8cfe77a","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-17000000,"y_nm":-3000000},"end":{"x_nm":9000000,"y_nm":-3000000}}
+
+    ,
+    {"id":"c7dd02aa-8906-40c1-8a47-6aea3b0d5e6b","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-1000000,"y_nm":-5000000},"end":{"x_nm":-1000000,"y_nm":1000000}}
+
+    ,
+    {"id":"d3abdbbc-c760-4d68-b92d-60b670838bf3","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":16270000,"y_nm":7070000},"end":{"x_nm":16270000,"y_nm":9000000}}
+
+    ,
+    {"id":"d3b839bf-e4e6-4ef1-b276-317f89cac3b4","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":3000000,"y_nm":-5750000},"end":{"x_nm":3000000,"y_nm":-7000000}}
+
+    ,
+    {"id":"e09696f5-825a-46af-9e8a-92972b36bbca","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-6000000,"y_nm":0},"end":{"x_nm":-6000000,"y_nm":-1200000}}
+
+    ,
+    {"id":"e25ef149-850a-4f39-ae89-4c8dde91ccab","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-8000000,"y_nm":2000000},"end":{"x_nm":-8000000,"y_nm":4000000}}
+
+    ,
+    {"id":"e28379ce-472f-431f-9086-e079c7acc321","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-4000000,"y_nm":11000000},"end":{"x_nm":-2000000,"y_nm":13000000}}
+
+    ,
+    {"id":"e40cc5be-67c2-4e32-8881-ccd9e5b39896","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":4000000,"y_nm":9000000},"end":{"x_nm":5000000,"y_nm":8000000}}
+
+    ,
+    {"id":"e63f19ec-c69b-4ce7-b01f-f478a824fa90","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-3000000,"y_nm":5000000},"end":{"x_nm":-2000000,"y_nm":6000000}}
+
+    ,
+    {"id":"e6e50b0d-72cc-49e8-b679-54599212780c","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":12000000,"y_nm":-7200000},"end":{"x_nm":6000000,"y_nm":-1200000}}
+
+    ,
+    {"id":"e7aa3bc1-3e6f-491c-aadd-4f43784bbe2c","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-9000000,"y_nm":-6750000},"end":{"x_nm":-9000000,"y_nm":-9550000}}
+
+    ,
+    {"id":"e9608523-70a0-4171-bb8e-b61064ab621b","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-15800000,"y_nm":0},"end":{"x_nm":-17000000,"y_nm":0}}
+
+    ,
+    {"id":"e9dbdd2b-8ea1-4e62-b8a5-cafac07bd2f3","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-1000000,"y_nm":9000000},"end":{"x_nm":4000000,"y_nm":9000000}}
+
+    ,
+    {"id":"eaa896e8-5f36-4a01-9901-014c621fba82","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":3500000,"y_nm":0},"end":{"x_nm":2225000,"y_nm":1275000}}
+
+    ,
+    {"id":"ef260909-ed9c-404f-a961-25422b43faf5","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":-3000000,"y_nm":-4250000},"end":{"x_nm":-3000000,"y_nm":-3000000}}
+
+    ,
+    {"id":"f0eac43c-c30b-4efa-a396-96fd95cef92e","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-7000000,"y_nm":5000000},"end":{"x_nm":-3000000,"y_nm":5000000}}
+
+    ,
+    {"id":"f73aa7f7-0f1f-48ff-8581-e0fc9ed71b74","layer":"bce3692a-ae11-48fd-b565-361ddd56eb8d","width_nm":250000,"start":{"x_nm":9000000,"y_nm":-6750000},"end":{"x_nm":9000000,"y_nm":-9550000}}
+
+    ,
+    {"id":"fb696066-44fe-4365-b505-5241364f1305","layer":"57dcb8f8-7b88-4209-9de9-c7693f917930","width_nm":250000,"start":{"x_nm":-8000000,"y_nm":4000000},"end":{"x_nm":-7000000,"y_nm":5000000}}
+  ],
+  "vias": [
+    {"id":"046714fa-563f-4857-9172-026c37f16240","at":{"x_nm":-6000000,"y_nm":-1200000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"0f8450e3-d016-4cc4-aedf-8491b98ba0ee","at":{"x_nm":5000000,"y_nm":6000000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"29c21ea1-c001-477b-a070-044e06ed0603","at":{"x_nm":-1000000,"y_nm":6000000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"3f557705-fe66-416d-ad06-2f7962d7e83c","at":{"x_nm":-5000000,"y_nm":6000000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"4e2db9a5-0d58-44dc-9ad7-fae5b3e67cd7","at":{"x_nm":10000000,"y_nm":-12500000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"5e3c1b48-76c9-4c43-af5f-5301575c077d","at":{"x_nm":-10000000,"y_nm":-12500000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"6461e199-cff6-4454-80f9-22fc7665a7d7","at":{"x_nm":3000000,"y_nm":-7000000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"70e2a687-7805-4394-b011-adc100a5e68a","at":{"x_nm":4000000,"y_nm":3000000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"7c3171ab-bf10-46dd-9012-d7908a6399f5","at":{"x_nm":-3000000,"y_nm":-7000000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"afcf23d8-7ac4-4f88-bbb2-fcd3d272fcdc","at":{"x_nm":6000000,"y_nm":-1200000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"c36ef9cb-b389-40c9-9065-74245e8cb82f","at":{"x_nm":-8000000,"y_nm":4000000},"diameter_nm":600000,"drill_nm":300000}
+  ],
+  "footprints": [
+    {"id":121,"component":2,"definition":"header-1x02-254","definition_revision":3,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-15000000,"y_nm":9000000}
+
+    ,
+    {"id":122,"component":5,"definition":"header-1x02-254","definition_revision":3,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":15000000,"y_nm":9000000}
+
+    ,
+    {"id":123,"component":9,"definition":"led-0402","definition_revision":4,"library":"basic-components","mapping":{"1":"2","2":"1"},"x_nm":-9000000,"y_nm":-10000000,"rotation":270}
+
+    ,
+    {"id":125,"component":16,"definition":"led-0402","definition_revision":4,"library":"basic-components","mapping":{"1":"2","2":"1"},"x_nm":9000000,"y_nm":-10000000,"rotation":270}
+
+    ,
+    {"id":127,"component":7,"definition":"resistor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-9000000,"y_nm":-6000000,"rotation":90}
+
+    ,
+    {"id":129,"component":14,"definition":"resistor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":9000000,"y_nm":-6000000,"rotation":90}
+
+    ,
+    {"id":131,"component":11,"definition":"sot23","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2","3":"3"},"x_nm":-6000000,"y_nm":1000000,"reference_offset":{"x_nm":-2400000,"y_nm":0}}
+
+    ,
+    {"id":133,"component":18,"definition":"sot23","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2","3":"3"},"x_nm":6000000,"y_nm":1000000,"reference_offset":{"x_nm":2400000,"y_nm":0}}
+
+    ,
+    {"id":135,"component":20,"definition":"resistor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-3000000,"y_nm":-5000000,"rotation":90}
+
+    ,
+    {"id":137,"component":22,"definition":"resistor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":3000000,"y_nm":-5000000,"rotation":90}
+
+    ,
+    {"id":139,"component":24,"definition":"capacitor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-3000000,"y_nm":6000000}
+
+    ,
+    {"id":140,"component":26,"definition":"capacitor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":3000000,"y_nm":6000000}
+
+    ,
+    {"id":141,"component":28,"definition":"capacitor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-15000000,"y_nm":4000000}
+
+    ,
+    {"id":142,"component":30,"definition":"capacitor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-15000000,"y_nm":0}
+  ]
+}

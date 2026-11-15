@@ -298,3 +298,40 @@ fn desktop_native_part_relocation_and_offline_handoff() {
         }
     }
 }
+
+/// Saved built-in exclusions must be applied before the first restored external read captures authority.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn restored_sources_capture_applied_builtin_preferences() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, text) in documents() {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({}));
+    app.library_preferences.basic_components = false;
+    app.library_sources = Sources::restore(Some(json!([{"source":"restored","path":root.path().to_str().unwrap(),"name":"Workshop"}]).to_string()));
+    let project = app.session.snapshot().unwrap();
+    let revision = app.session.revision();
+    let ctx = egui::Context::default();
+    ctx.run_ui(
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.))), ..Default::default() },
+        |ui| app.frame(ui),
+    )
+    .drop_without_applying_deltas();
+    assert!(!app.session.libraries().builtin_enabled("basic-components"));
+    if let Some(job) = app.library_sources.job.as_mut() {
+        assert_eq!(job.generation, app.session.libraries().generation());
+        let result = job.receive.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        let (send, receive) = mpsc::channel();
+        send.send(result).unwrap();
+        job.receive = receive;
+        app.poll_library_sources(&ctx);
+    }
+    assert!(!app.session.libraries().search("Workshop", Some(Kind::Symbol)).is_empty());
+    assert_eq!(app.library_sources.statuses["restored"], "Available");
+    assert!(Arc::ptr_eq(&project, &app.session.snapshot().unwrap()));
+    assert_eq!(app.session.revision(), revision);
+}

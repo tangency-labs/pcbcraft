@@ -27,7 +27,7 @@ fn source_commands_place_and_pin_offline_through_the_existing_command_path() {
     let revision = session.revision();
     session.execute(LOAD, &json!({"source":"personal","documents":documents()})).unwrap();
     let search = session.execute(SEARCH, &json!({"query":"RESISTOR"})).unwrap();
-    assert_eq!(search.as_array().unwrap().len(), 5); // external symbol/footprint and built-in symbol/0402/0603
+    assert_eq!(search.as_array().unwrap().len(), 8); // external symbol/footprint and bundled zigzag/rectangle symbols plus four resistor packages
     assert!(search.as_array().unwrap().iter().any(|item| item["key"]["kind"] == "footprint" && item["source"] == "personal"));
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!(revision, session.revision());
@@ -245,4 +245,27 @@ fn explicit_revision_search_is_shared_and_never_falls_back_from_conflicts() {
     assert!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor","include_older":true})).unwrap()).is_empty());
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), revision);
+}
+
+/// Excluding a built-in collection changes discovery, not pinned project bytes or authored history.
+#[test]
+fn builtin_switches_are_independent_reversible_and_keep_pinned_projects() {
+    let mut session = crate::Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let definition = session.libraries().latest_symbol("basic-components", "resistor").unwrap();
+    session.apply(crate::PLACE_SYMBOL,&json!({"library":"basic-components","definition":"resistor","definition_revision":definition.revision(),"definition_digest":super::symbol_digest(&definition).unwrap(),"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let before = crate::persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+    let revision = session.revision();
+    session.set_builtin_library_enabled("basic-components", false).unwrap();
+    assert!(session.libraries().latest_symbol("basic-components", "resistor").is_none());
+    assert!(session.libraries().latest_symbol("starter", "resistor").is_none());
+    assert!(session.libraries().latest_symbol("power", "gnd").is_some());
+    assert!(session.libraries().search("", Some(Kind::Footprint)).is_empty());
+    assert_eq!(session.revision(), revision);
+    assert_eq!(crate::persistence::encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    session.set_builtin_library_enabled("power", false).unwrap();
+    assert!(session.libraries().search("", None).is_empty());
+    session.set_builtin_library_enabled("basic-components", true).unwrap();
+    assert!(session.libraries().latest_symbol("basic-components", "resistor").is_some());
+    assert!(session.libraries().latest_symbol("power", "gnd").is_none());
 }

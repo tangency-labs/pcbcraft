@@ -1,0 +1,33 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "pmos",
+  "revision": 1,
+  "name": "P-channel MOSFET",
+  "reference_prefix": "Q",
+  "default_value": "PMOS",
+  "terminals": [
+    {"id": "1", "electrical_type": "input", "name": "Gate"},
+    {"id": "2", "electrical_type": "passive", "name": "Source"},
+    {"id": "3", "electrical_type": "passive", "name": "Drain"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "line", "from_nm": [-1587500, -2540000], "to_nm": [-1587500, 2540000]},
+        {"type": "line", "from_nm": [0, -3175000], "to_nm": [0, -1905000]},
+        {"type": "line", "from_nm": [0, -635000], "to_nm": [0, 635000]},
+        {"type": "line", "from_nm": [0, 1905000], "to_nm": [0, 3175000]},
+        {"type": "polyline", "points_nm": [[0, -2540000], [2540000, -2540000], [2540000, -3810000]]},
+        {"type": "polyline", "points_nm": [[0, 2540000], [2540000, 2540000], [2540000, 3810000]]},
+        {"type": "polyline", "points_nm": [[0, 0], [1270000, 0], [1270000, 2540000], [2540000, 2540000]]},
+        {"type": "polyline", "points_nm": [[635000, -381000], [1270000, 0], [635000, 381000]]}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 3492500, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [5080000, 3810000], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "3", "at_nm": [5080000, -3810000], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

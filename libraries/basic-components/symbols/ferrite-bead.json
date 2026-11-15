@@ -1,0 +1,24 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "ferrite-bead",
+  "revision": 1,
+  "name": "Ferrite bead",
+  "reference_prefix": "FB",
+  "default_value": "Ferrite",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "graphic", "graphic": {"geometry": {"type": "polyline", "points": [{"x_nm": -1587500, "y_nm": 635000}, {"x_nm": -635000, "y_nm": 1587500}, {"x_nm": 1587500, "y_nm": -635000}, {"x_nm": 635000, "y_nm": -1587500}], "closed": true}, "stroke_nm": 120000, "fill": "none"}}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 4127500, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [5080000, 0], "appearance": {"orientation": "left", "length_nm": 4127500, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

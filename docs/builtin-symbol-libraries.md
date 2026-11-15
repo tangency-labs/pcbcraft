@@ -24,6 +24,11 @@ and an editable initial Value. Power placements have normal components, unit
 placements and terminal endpoints. Fields, attributes, properties, G/M/R,
 library-copy authoring, deletion and undo follow the component paths.
 
+The [bundled symbol inventory](symbol-library.md#bundled-libraries) lists the
+expanded default set, connector orientation and generic terminal conventions.
+Redraws retain the previous native revisions alongside the new definitions, so
+source discovery changes new placements without moving existing pinned pins.
+
 ## Definition format
 
 `pcbcraft-symbol/2` adds two optional fields:

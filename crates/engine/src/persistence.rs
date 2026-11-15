@@ -1121,26 +1121,26 @@ mod tests {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "All parts", "create_board":true})).unwrap();
         for (index, definition) in crate::library::basic_components().symbols().iter().enumerate() {
-            let x_nm = index as i64 * 25_400_000;
+            let x_nm = (index % 6) as i64 * 25_400_000;
+            let y_nm = (index / 6) as i64 * 25_400_000;
             session
-                .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
+                .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": y_nm, "expected_revision": session.revision()}))
                 .unwrap();
         }
         let symbols = session.inspect()["project"]["schematic"]["symbols"].clone();
         let summary: Vec<_> =
             symbols.as_array().unwrap().iter().map(|symbol| (symbol["kind"].clone(), symbol["reference"].clone(), symbol["value"].clone())).collect();
-        assert_eq!(
-            summary,
-            [
-                ("capacitor", "C1", "C"),
-                ("connector", "J1", "Input"),
-                ("header-4", "J2", "Header"),
-                ("led", "D1", "LED"),
-                ("npn", "Q1", "NPN"),
-                ("resistor", "R1", "R"),
-            ]
-            .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
-        );
+        let mut prefixes = std::collections::BTreeMap::new();
+        let expected: Vec<_> = crate::library::basic_components()
+            .symbols()
+            .iter()
+            .map(|definition| {
+                let ordinal = prefixes.entry(definition.reference_prefix()).or_insert(0);
+                *ordinal += 1;
+                (json!(definition.id), json!(format!("{}{ordinal}", definition.reference_prefix())), json!(definition.default_value()))
+            })
+            .collect();
+        assert_eq!(summary, expected);
         let loaded = decode(&encode(session.snapshot().unwrap()).unwrap()).unwrap();
         let mut reopened = Session::default();
         reopened.open_snapshot(loaded);
@@ -1176,7 +1176,7 @@ mod tests {
         let state = session.inspect();
         let header = &state["project"]["schematic"]["symbols"][1];
         assert_eq!(header["pins"].as_array().unwrap().len(), 4);
-        assert_eq!(header["pins"][3], json!({"number": "4", "electrical_type": "passive", "x_nm": 44_450_000, "y_nm": 3_810_000}));
+        assert_eq!(header["pins"][3], json!({"number": "4", "electrical_type": "passive", "x_nm": 46_990_000, "y_nm": 3_810_000}));
         assert_eq!(state["project"]["schematic"]["symbols"][0]["pins"][1]["name"], "Cathode");
         let net = &state["project"]["schematic"]["netlist"]["nets"][0]["terminals"];
         assert_eq!(net, &json!([{"symbol": "symbol-2", "terminal": "2"}, {"symbol": "symbol-3", "terminal": "4"}]));

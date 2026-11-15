@@ -1480,3 +1480,97 @@ control. Canvas margins reuse PCBcraft's original ribbon grid projection, while
 title-bar drag recognition follows the pinned Craft helper's existing threshold
 behavior, retaining PCBcraft's foreground hit regions and native-grab recovery.
 No dependency, external artwork, EDA implementation or native format was added.
+
+
+## Expanded bundled symbol set
+
+The default-library refresh requested by @travle1 is original PCBcraft work
+under MIT OR Apache-2.0. It adds 24 basic symbol definitions and two ground
+variants, redraws the existing connectors and differentiates supply drawings
+using native strokes and pin appearance. The PNP drawing adapts PCBcraft's
+existing original NPN definition at `d564701`; the new power variants reuse
+PCBcraft's existing power defaults and explicit net behavior from that revision.
+The previous connector and power revisions remain unchanged for project pinning.
+No external symbol library, manufacturer package pinout, EDA implementation,
+artwork or dependency was consulted or incorporated. The existing native source
+loader and schematic painter render the definitions in both builds; this change
+adds no interface controls or toolkit presentation.
+
+
+## Complete dual LED flasher demo
+
+The replacement Dual LED schematic, symmetric board placement, two-layer routing
+plan and command-generated folder/archive are original PCBcraft work under
+MIT OR Apache-2.0, requested by @travle1. They reuse the original bundled NPN,
+LED, passive, header and Power records, including the refreshed connector and
+rectangular resistor. Existing package source notices remain pinned with the
+example. The generator composes public schematic, footprint, reference, copper
+and checking commands; its modules introduce no alternate project writer or
+routing implementation. No external circuit file, EDA implementation, artwork,
+library record or dependency was consulted or incorporated. Checker and editing
+regressions use the production native codecs and independently stated net sets.
+
+
+## Symbol drawing feedback and sensor-node demo
+
+The connector pin-one marker removal, wider six-pin rows, semicircular inductor
+turns, straight MOSFET leads and capacitor wire clearance follow @travle1's
+feedback. These are original native drawings under MIT OR Apache-2.0; previous
+symbol revisions remain intact. The example-only command/output helpers extract
+PCBcraft's original `indicator_demo` implementation from `557f333` and are reused
+by both generators. No alternate project writer, production router or dependency
+was introduced.
+
+The ATtiny402/TMP102 sensor-node circuit, symbol/footprint records, placement and
+routing plan are original PCBcraft work under MIT OR Apache-2.0. Factual pinouts
+and package dimensions follow Microchip DS40002318A (2021), pp. 13, 17 and
+496–498, including C04-2057-SN Rev F lands:
+https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATtiny202-204-402-404-406-DataSheet-DS40002318A.pdf
+and TI SBOS397I (June 2024), p. 3, address table and DRL0006A package/land drawing
+4223266/F (November 2024), pp. 30–31:
+https://www.ti.com/lit/ds/symlink/tmp102.pdf
+The example library records the exact dimension locators; silk, courtyards and
+reference lettering are original. The PDFs and manufacturer artwork are not
+bundled. No external EDA implementation, symbol/footprint library or firmware
+was incorporated. Existing passive/LED/package notices remain with the pinned
+records. Project documents and archives are generated through shared native
+commands and production codecs; the tests independently state the intended nets.
+
+The ferrite bead redraw follows @travle1's further visual feedback. Its tilted
+rectangular outline and leads ending at the body follow the schematic convention
+shown in Texas Instruments SLUAAI2 (December 2021), Figure 1-5:
+https://www.ti.com/document-viewer/lit/html/sluaai2
+The native geometry is independently drawn under MIT OR Apache-2.0; manufacturer
+images are not imported or bundled. At @travle1's direction, this unpublished
+first draft is replaced in place without a separate discarded revision. Terminal
+positions are unchanged, and every visible stroke uses the same physical width.
+
+## Expanded built-in footprints and library discovery controls
+
+The built-in physical catalog now includes original 0805/1206 resistor lands,
+SOIC-8, SOT-563, SOT-323, SOD-123 and additional 2.54 mm headers. The SOIC-8,
+SOT-563 and three/four-pin header geometry was authored for the sensor demo and
+is reused under new `basic-components` identities; project-pinned demo records
+remain unchanged. Dimensional references and original land/courtyard choices
+are recorded in each native JSON definition and `docs/footprint-library.md`.
+No vendor artwork or third-party library assets are included, and demo choices
+are not manufacturing qualification.
+
+Library preferences and placement comparisons compose the pinned Craft settings
+and property controls through `crates/chrome`. Its `ModalHost` lacks a resize
+builder, so the expanded Parts Catalog composes egui's persisted `Resize` region
+inside the shared modal surface, header and footer. No toolkit dependency or
+external implementation was changed.
+
+The expanded catalog also reuses Craft's dense table and existing preview-column
+sash, along with the Library Manager's symbol/footprint navigation. The standalone
+Craft footer does not expose its leading content slot publicly, so the adapter
+retains its surface and action buttons while composing the shared library button
+and Repeat placement checkbox into its unused leading band.
+
+The connector/header follow-up removes internal decorative strokes and superseded
+bundled connector/header revisions at @travle1's request. Numbered integrated pins
+and attachment positions remain unchanged. Both distributed demos are regenerated
+through their original command builders and native codecs with the corrected
+definitions. This is original drawing data; no external artwork, source or
+dependency was introduced.

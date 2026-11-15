@@ -508,7 +508,7 @@ window while another remains dismisses only its views, without a save prompt or
 an implicit split elsewhere. Each window uses the same title-bar style and has
 its own panels. Every window's operating-system title, which the taskbar and
 window switcher show, names its focused document, such as
-`Dual LED · editing demo › Main — PCBCraft`; Home shows `PCBCraft` alone.
+`Dual LED · transistor flasher › Main — PCBCraft`; Home shows `PCBCraft` alone.
 
 Right-click a split pane's header for **Open beside**, **Open in new window**, **Detach
 view**, **Dock in main window** or **Close view**, as applicable. These actions

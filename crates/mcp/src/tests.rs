@@ -110,7 +110,7 @@ fn publication_preparation_mcp_returns_documents_without_paths_or_project_change
     let part = pcbcraft_engine::part_authoring::Record::new_part(pcbcraft_engine::library::parts::Reference {
         library: "basic-components".into(),
         id: "connector".into(),
-        revision: 1,
+        revision: 4,
     })
     .unwrap();
     let prepared = body(&call(

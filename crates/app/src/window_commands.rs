@@ -133,6 +133,7 @@ mod live {
         /// A typed engine authoring transaction.
         LibraryAction,
         PartRecord,
+        PlacementFilter,
         PartReference,
         PartReferenceField,
         /// A runtime document ID from inspect_editor.library_editors.
@@ -183,6 +184,9 @@ mod live {
                 Self::PartReference => {
                     json!({"type":"object","properties":{"library":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX}},"required":["library","id","revision"],"additionalProperties":false})
                 }
+                Self::PlacementFilter => {
+                    json!({"type":"object","properties":{"enabled":{"type":"boolean"},"manufacturer":{"type":"boolean"},"footprint":{"type":"boolean"},"category":{"type":["object","null"]},"parameters":{"type":"array","maxItems":32,"items":{"type":"object"}}},"additionalProperties":false,"description":"Complete placement filter: enabled, manufacturer/MPN required, footprint/map required, optional exact native category record, and parameters [{field, requirement?}]. Requirements use native typed exact/at_least/at_most/range/one_of operators; omitted requirement means presence. Inspect library_preferences.filter for its current shape. This affects placement discovery only."})
+                }
                 Self::PartRecord => {
                     json!({"type":"object","description":"A bounded native pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
                 }
@@ -214,6 +218,7 @@ mod live {
         /// Check a raw value without coercion, giving the reason it doesn't fit.
         fn validate(self, value: &Value) -> Result<(), String> {
             let fits = match self {
+                Self::PlacementFilter => return crate::placement_filters::filter_from_value(value).map(|_| ()),
                 Self::PrimitiveIds => value.as_array().is_some_and(|items| {
                     items.len() <= 512
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
@@ -256,6 +261,7 @@ mod live {
                 Self::PartReferenceField => "must identify symbol, category, part or a footprint's stable package".into(),
                 Self::PartReference => "must contain an exact native library reference".into(),
                 Self::PartRecord => "must contain a bounded native part or manufacturer record".into(),
+                Self::PlacementFilter => "must contain valid bounded placement criteria".into(),
                 Self::LibraryAction => "must be a bounded native authoring Action".into(),
                 Self::LibraryDocument => "must be a library document ID from inspect_editor.library_editors".into(),
                 Self::LibraryRevision => "must be the library document revision from inspect_editor.library_editors".into(),
@@ -983,6 +989,13 @@ mod live {
             title: "Preferences",
             summary: "Change any of the person's settings, as the Preferences window does. Settings not given stay as they are; an invalid one changes none.",
             params: &[
+                setting("builtin_basic_components", "Include built-in Basic components for new library choices", Kind::Bool),
+                setting("builtin_power", "Include built-in Power for new library choices", Kind::Bool),
+                setting(
+                    "placement_filter",
+                    "Replace the Parts Catalog placement filter; omitted properties use inclusive defaults",
+                    Kind::PlacementFilter,
+                ),
                 setting("theme", "The palette; system follows the desktop", Kind::Choice(THEMES)),
                 setting("scale_percent", "The interface scale", Kind::Integer { min: 75, max: 200, step: 5 }),
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
@@ -1241,6 +1254,7 @@ mod live {
                 "tabs": app.arrangements.tabs().into_iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
             },
             "preferences": inspect_preferences(&app.preferences),
+            "library_preferences": app.library_preferences,
         })
     }
 
@@ -1661,7 +1675,12 @@ mod live {
                     }
                     self.close_editor_host(host, ctx);
                 }
-                ("app.set_preferences", _, _) => self.preferences = updated_preferences(self.preferences, params),
+                ("app.set_preferences", _, _) => {
+                    let libraries = self.library_preferences.updated(params)?;
+                    self.preferences = updated_preferences(self.preferences, params);
+                    self.library_preferences = libraries;
+                    self.sync_library_preferences();
+                }
                 ("app.set_home", _, _) => {
                     self.library_editors.focus(None)?;
                     if params["shown"].as_bool() == Some(true) {
@@ -1709,6 +1728,39 @@ mod live {
                 assert!(command.params.iter().all(|param| !param.summary.is_empty()));
             }
             assert!(!pcbcraft_engine::catalog().iter().any(|command| pcbcraft_mcp::is_window_command(command.id)));
+        }
+
+        /// GUI and live discovery preferences share typed validation; refusal changes no state.
+        #[test]
+        fn library_preferences_command_is_atomic_and_does_not_edit_the_project() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let before = app.session.snapshot().unwrap();
+            let revision = app.session.revision();
+            app.run_window_command(
+                &ctx,
+                "app.set_preferences",
+                &json!({"builtin_basic_components":false,"placement_filter":{"enabled":true,"manufacturer":true}}),
+            )
+            .unwrap();
+            assert!(!app.session.libraries().builtin_enabled("basic-components"));
+            assert!(app.library_preferences.filter.manufacturer);
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+            assert_eq!(app.session.revision(), revision);
+            let saved = app.library_preferences.clone();
+            let theme = app.preferences.theme;
+            assert!(
+                app.run_window_command(
+                    &ctx,
+                    "app.set_preferences",
+                    &json!({"theme":"light","builtin_power":false,"placement_filter":{"parameters":[{"field":"missing"}]}})
+                )
+                .is_err()
+            );
+            assert_eq!(app.library_preferences, saved);
+            assert_eq!(app.preferences.theme, theme);
+            assert!(app.session.libraries().builtin_enabled("power"));
         }
 
         /// Parameters are checked before anything changes, including step and bounds.

@@ -119,11 +119,15 @@ the same `VCC` net name, which can be changed before placement.
    **Basic components** and **Power** libraries load through the same native source path
    as added libraries. Sources marks them **Built-in** and keeps their registrations
    read-only; external sources remain removable. Select a library,
-   search for a capacitor and click the result to inspect its preview. Choose
+   search for a capacitor and click the result to inspect its preview. The
+   expanded list has symbol and package previews with independent zoom/Fit
+   controls; its window and preview divider are resizable. **Preferences →
+   Libraries** controls built-in availability and placement filters. Choose
    **Place**, then click the canvas to place it. **R** rotates the placement
    preview and **Esc** cancels it. **Repeat placement** keeps placing copies with
    the same rotation and is enabled by default for new settings. Toggle it in the
-   catalog or the active tool's right-click menu, then press **Esc** to stop.
+   expanded catalog's bottom action bar or the active tool's right-click menu,
+   then press **Esc** to stop.
    Double-clicking a result or pressing **Enter**
    also starts placement; dragging a result onto the canvas places it directly.
    Overlapping drawings show an amber count badge with references on hover.
@@ -431,8 +435,10 @@ made during that move; both the schematic and PCB views share that history.
 Save and reopen the folder/archive to check the stored position and orientation.
 A concurrent edit or a change of focused view cancels unfinished input.
 
-The [Dual LED demo](../examples/README.md) contains physical SMD packages with
-rounded rectangular copper pads, body outlines, courtyards and silkscreen. Older generic
+The [sensor node demo](../examples/README.md) contains a small MCU, an I²C
+temperature sensor, two status LEDs and a routed two-layer board. The
+[transistor flasher](../examples/flasher.md) is a second example. Its pinned SMD packages include rounded copper pads, body outlines,
+courtyards and silkscreen. Older generic
 placements retain pad-center markers; opening them does not assign a package.
 Board-wide text height, stroke width and pad clearance are in **Board setup →
 Silkscreen**, where **Apply board setup** applies them together with any staged layer

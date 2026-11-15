@@ -1,6 +1,6 @@
 # Starter physical footprints
 
-`libraries/basic-components/footprints` contains six original SMD definitions and a plated header under
+`libraries/basic-components/footprints` contains eighteen original SMD and plated-header definitions under
 MIT OR Apache-2.0. The engine embeds these definitions for shared command use;
 the Parts card browses symbols while the package chooser offers footprints in both editors. `pcb.place_footprint` pins the
 selected definition into the project and validates its terminal-to-pad mapping.
@@ -85,6 +85,14 @@ revision 1 definitions retain their rectangular copper and graphics.
 | `led-0402` | 0.70 × 0.50 | X ±0.450 | [Kingbright APG1005CGC-T](https://www.kingbrightusa.com/images/catalog/spec/apg1005cgc-t.pdf), DSAM9856 V11B, 12-Mar-2025, p. 1 |
 | `header-1x02-254` | 1.70 × 1.70, 1.00 drill | X ±1.270 | Original demo header; square pad 1 and circular pad 2 |
 | `sot23` | 0.60 × 0.70 | 1: (−0.95, 1.00), 2: (0.95, 1.00), 3: (0, −1.00) | Original demo lands; body and 1.9 mm same-side pin pitch from [Nexperia SOT23](https://assets.nexperia.com/documents/outline-drawing/SOT23.pdf), 12-Oct-2022 |
+| `resistor-0805` | 0.95 × 1.45 | X ±0.975 | Vishay 20035, 14-Apr-2026, p. 11, 0805 reflow pattern |
+| `resistor-1206` | 1.05 × 1.80 | X ±1.275 | Same Vishay reference, 1206 reflow pattern |
+| `soic8` | 1.55 × 0.60 | X ±2.70, Y at 1.27 pitch | [Microchip ATtiny402 DS40002318A](https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATtiny202-204-402-404-406-DataSheet-DS40002318A.pdf), pp. 496–498; C04-2057-SN Rev F |
+| `sot563` | 0.67 × 0.30 | Three per side at 0.50 pitch | [TI TMP102](https://www.ti.com/lit/ds/symlink/tmp102.pdf), SBOS397I, DRL0006A drawing 4223266/F (Nov-2024); 1.48 mm row centers |
+| `sot323` | 0.50 × 0.60 | 1: (−0.65, 0.90), 2: (0.65, 0.90), 3: (0, −0.90) | Original demo lands; body/pitch facts from [Nexperia SOT323](https://assets.nexperia.com/documents/package-information/SOT323.pdf), 27-May-2022 |
+| `sod123` | 1.00 × 1.30 | X ±1.65, cathode pad 1 | Original demo lands; body/lead facts from [Nexperia SOD123](https://assets.nexperia.com/documents/outline-drawing/SOD123.pdf), 27-May-2022 |
+| `header-1x03-254`, `header-1x04-254`, `header-1x06-254`, `header-1x08-254` | 1.70 × 1.70, 1.00 drill | One column, Y at 2.54 pitch | Original generic header geometry; square pad 1 |
+| `header-2x03-254` | 1.70 × 1.70, 1.00 drill | X ±1.27, Y −2.54/0/2.54 | Original generic header, odd pins left/even pins right |
 
 These JSON definitions and vector graphics are original work from published
 dimensional facts. No manufacturer artwork, PDF, third-party footprint library

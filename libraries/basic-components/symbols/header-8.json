@@ -1,0 +1,36 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "header-8",
+  "revision": 2,
+  "name": "8-pin header",
+  "reference_prefix": "J",
+  "default_value": "Conn_01x08",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive"},
+    {"id": "3", "electrical_type": "passive"},
+    {"id": "4", "electrical_type": "passive"},
+    {"id": "5", "electrical_type": "passive"},
+    {"id": "6", "electrical_type": "passive"},
+    {"id": "7", "electrical_type": "passive"},
+    {"id": "8", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "rect", "min_nm": [-1270000, -10160000], "max_nm": [1270000, 10160000]}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-3810000, -8890000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "2", "at_nm": [-3810000, -6350000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "3", "at_nm": [-3810000, -3810000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "4", "at_nm": [-3810000, -1270000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "5", "at_nm": [-3810000, 1270000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "6", "at_nm": [-3810000, 3810000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "7", "at_nm": [-3810000, 6350000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "8", "at_nm": [-3810000, 8890000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}}
+      ]
+    }
+  ]
+}

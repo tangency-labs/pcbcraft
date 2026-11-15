@@ -142,6 +142,20 @@ impl PcbApp {
         }
         let Some(project) = self.session.snapshot() else { return };
         let mut catalog = project.footprint_catalog();
+        if !self.library_preferences.basic_components {
+            let pinned = pcbcraft_engine::library::sources::inventory::Inventory::from_project(&project).ok();
+            catalog.retain(|d| {
+                d.library != "basic-components"
+                    || pinned.as_ref().is_some_and(|i| {
+                        i.footprint(&pcbcraft_engine::library::parts::Reference {
+                            library: d.library.clone(),
+                            id: d.id.clone(),
+                            revision: d.revision,
+                        })
+                        .is_some()
+                    })
+            });
+        }
         for (_, item) in self.session.libraries().search("", Some(pcbcraft_engine::library::sources::Kind::Footprint)) {
             if let Some(definition) = item.footprint()
                 && !catalog

@@ -6,9 +6,27 @@ use std::{collections::BTreeSet, sync::Arc};
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
 pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
-pub(crate) const BASIC_COMPONENT_IDS: [&str; 7] =
-    ["resistor-0402", "resistor-0603", "capacitor-0402", "capacitor-0603", "led-0402", "sot23", "header-1x02-254"];
-const BASIC_COMPONENTS: [&str; 7] = [
+pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
+    "resistor-0402",
+    "resistor-0603",
+    "capacitor-0402",
+    "capacitor-0603",
+    "led-0402",
+    "sot23",
+    "header-1x02-254",
+    "resistor-0805",
+    "resistor-1206",
+    "soic8",
+    "sot563",
+    "sot323",
+    "sod123",
+    "header-1x03-254",
+    "header-1x04-254",
+    "header-1x06-254",
+    "header-1x08-254",
+    "header-2x03-254",
+];
+const BASIC_COMPONENTS: [&str; 18] = [
     include_str!("../../../../libraries/basic-components/footprints/resistor-0402.json"),
     include_str!("../../../../libraries/basic-components/footprints/resistor-0603.json"),
     include_str!("../../../../libraries/basic-components/footprints/capacitor-0402.json"),
@@ -16,6 +34,17 @@ const BASIC_COMPONENTS: [&str; 7] = [
     include_str!("../../../../libraries/basic-components/footprints/led-0402.json"),
     include_str!("../../../../libraries/basic-components/footprints/sot23.json"),
     include_str!("../../../../libraries/basic-components/footprints/header-1x02-254.json"),
+    include_str!("../../../../libraries/basic-components/footprints/resistor-0805.json"),
+    include_str!("../../../../libraries/basic-components/footprints/resistor-1206.json"),
+    include_str!("../../../../libraries/basic-components/footprints/soic8.json"),
+    include_str!("../../../../libraries/basic-components/footprints/sot563.json"),
+    include_str!("../../../../libraries/basic-components/footprints/sot323.json"),
+    include_str!("../../../../libraries/basic-components/footprints/sod123.json"),
+    include_str!("../../../../libraries/basic-components/footprints/header-1x03-254.json"),
+    include_str!("../../../../libraries/basic-components/footprints/header-1x04-254.json"),
+    include_str!("../../../../libraries/basic-components/footprints/header-1x06-254.json"),
+    include_str!("../../../../libraries/basic-components/footprints/header-1x08-254.json"),
+    include_str!("../../../../libraries/basic-components/footprints/header-2x03-254.json"),
 ];
 
 /// A physical land relative to its footprint origin. Surface lands bind to the component

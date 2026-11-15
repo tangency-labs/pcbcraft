@@ -1,0 +1,27 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "potentiometer",
+  "revision": 1,
+  "name": "Potentiometer",
+  "reference_prefix": "RV",
+  "default_value": "R",
+  "terminals": [
+    {"id": "1", "electrical_type": "passive"},
+    {"id": "2", "electrical_type": "passive", "name": "Wiper"},
+    {"id": "3", "electrical_type": "passive"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "rect", "min_nm": [-3175000, -1270000], "max_nm": [3175000, 1270000]},
+        {"type": "polyline", "points_nm": [[-508000, 2032000], [0, 1270000], [508000, 2032000]]}
+      ],
+      "pins": [
+        {"terminal": "1", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 1905000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "2", "at_nm": [0, 3810000], "appearance": {"orientation": "up", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "3", "at_nm": [5080000, 0], "appearance": {"orientation": "left", "length_nm": 1905000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

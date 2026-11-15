@@ -1,0 +1,32 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "op-amp",
+  "revision": 1,
+  "name": "Operational amplifier",
+  "reference_prefix": "U",
+  "default_value": "OpAmp",
+  "terminals": [
+    {"id": "+", "electrical_type": "input", "name": "Non-inverting"},
+    {"id": "-", "electrical_type": "input", "name": "Inverting"},
+    {"id": "OUT", "electrical_type": "output", "name": "Output"},
+    {"id": "V+", "electrical_type": "power_in", "name": "Positive supply"},
+    {"id": "V-", "electrical_type": "power_in", "name": "Negative supply"}
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {"type": "polyline", "points_nm": [[-3175000, -3810000], [3810000, 0], [-3175000, 3810000], [-3175000, -3810000]]},
+        {"type": "text", "at_nm": [-2413000, -1270000], "text": "+", "align": "middle"},
+        {"type": "text", "at_nm": [-2413000, 1270000], "text": "-", "align": "middle"}
+      ],
+      "pins": [
+        {"terminal": "+", "at_nm": [-6350000, -1270000], "appearance": {"orientation": "right", "length_nm": 3175000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "-", "at_nm": [-6350000, 1270000], "appearance": {"orientation": "right", "length_nm": 3175000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "OUT", "at_nm": [6350000, 0], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "V+", "at_nm": [0, -5080000], "appearance": {"orientation": "down", "length_nm": 2984500, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 650000}},
+        {"terminal": "V-", "at_nm": [0, 5080000], "appearance": {"orientation": "up", "length_nm": 2984500, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 650000}}
+      ]
+    }
+  ]
+}

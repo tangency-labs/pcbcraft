@@ -235,6 +235,8 @@ pub(crate) struct PreferencesWindow {
     kept: Preferences,
     /// The slider's displayed value while a pointer gesture still owns it.
     pending_scale: Option<u16>,
+    libraries: Option<crate::placement_filters::Editor>,
+    pub(crate) return_to_catalog: bool,
 }
 
 /// What the window asks the app to do after a frame.
@@ -251,14 +253,16 @@ const APPEARANCE: usize = 0;
 const NAVIGATION: usize = 1;
 const VIEWS: usize = 2;
 const SCHEMATIC: usize = 3;
-const SHORTCUTS: usize = 4;
+const LIBRARIES: usize = 4;
+const SHORTCUTS: usize = 5;
 /// The AI page follows Shortcuts, as SolidCraft's Assistant page does. Desktop only.
 #[cfg(not(target_arch = "wasm32"))]
-const AI: usize = 5;
+const AI: usize = 6;
 
 /// The settings a page draws, and the shortcut list the read-only Shortcuts page shows.
 pub(crate) struct PageData<'a> {
     pub preferences: &'a mut Preferences,
+    libraries: &'a mut crate::placement_filters::Editor,
     pub shortcuts: &'a [(&'static str, &'static str, String)],
     pending_scale: &'a mut Option<u16>,
     /// The Assistant draws the AI page and may ask to add an agent from it.
@@ -271,9 +275,13 @@ pub(crate) struct PageData<'a> {
 impl PreferencesWindow {
     /// Open on Appearance, remembering the current settings for Cancel.
     pub(crate) fn new(preferences: Preferences) -> Self {
-        Self { state: WindowState::default(), kept: preferences, pending_scale: None }
+        Self { state: WindowState::default(), kept: preferences, pending_scale: None, libraries: None, return_to_catalog: false }
     }
 
+    /// Open placement discovery settings while retaining the originating catalog's browsing state.
+    pub(crate) fn at_libraries(preferences: Preferences) -> Self {
+        Self { state: WindowState { page: LIBRARIES, query: String::new() }, return_to_catalog: true, ..Self::new(preferences) }
+    }
     /// Open on Views from the View ribbon, with the same Apply and Cancel behavior.
     pub(crate) fn at_views(preferences: Preferences) -> Self {
         Self { state: WindowState { page: VIEWS, query: String::new() }, ..Self::new(preferences) }
@@ -300,23 +308,29 @@ impl PreferencesWindow {
         ctx: &egui::Context,
         preferences: &mut Preferences,
         shortcuts: &[(&'static str, &'static str, String)],
+        library_preferences: &mut crate::placement_filters::Settings,
+        catalog: &pcbcraft_engine::library::sources::Catalog,
         #[cfg(not(target_arch = "wasm32"))] assistant: &mut crate::assistant::Assistant,
     ) -> Outcome {
+        let libraries = self.libraries.get_or_insert_with(|| crate::placement_filters::Editor::new(library_preferences.clone(), catalog));
         #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
         let mut pages: Vec<Page<PageData<'_>>> = vec![
             Page { icon: MenuIcon::Appearance, label: "Appearance", draw: appearance },
             Page { icon: MenuIcon::Navigation, label: "Navigation", draw: navigation },
             Page { icon: MenuIcon::Settings, label: "Views", draw: views },
             Page { icon: MenuIcon::Settings, label: "Schematic", draw: schematic },
+            Page { icon: MenuIcon::Settings, label: "Libraries", draw: library_page },
             Page { icon: MenuIcon::Keyboard, label: "Shortcuts", draw: shortcuts_page },
         ];
         #[cfg(not(target_arch = "wasm32"))]
         pages.push(Page { icon: MenuIcon::Assistant, label: "AI", draw: ai_page });
         // Search results span pages, so there is no single page whose defaults to restore.
-        let defaults_enabled = matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS | SCHEMATIC) && !settings::searching(&self.state.query);
-        let footer = Footer { apply_enabled: *preferences != self.kept, defaults_enabled };
+        let defaults_enabled =
+            matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS | SCHEMATIC | LIBRARIES) && !settings::searching(&self.state.query);
+        let footer = Footer { apply_enabled: *preferences != self.kept || libraries.dirty(), defaults_enabled };
         let mut data = PageData {
             preferences,
+            libraries,
             shortcuts,
             pending_scale: &mut self.pending_scale,
             #[cfg(not(target_arch = "wasm32"))]
@@ -335,6 +349,18 @@ impl PreferencesWindow {
         {
             return Outcome::AddAgent(form);
         }
+        if matches!(action, settings::Action::Apply | settings::Action::Ok) {
+            match data.libraries.value() {
+                Ok(value) => {
+                    *library_preferences = value.clone();
+                    data.libraries.applied(value);
+                }
+                Err(error) => {
+                    data.libraries.error = Some(error);
+                    return Outcome::Open;
+                }
+            }
+        }
         match action {
             settings::Action::None => Outcome::Open,
             settings::Action::Ok => Outcome::Closed,
@@ -347,6 +373,9 @@ impl PreferencesWindow {
                 Outcome::Closed
             }
             settings::Action::Defaults => {
+                if self.state.page == LIBRARIES {
+                    data.libraries.defaults();
+                }
                 restore_page_defaults(data.preferences, self.state.page);
                 Outcome::Open
             }
@@ -563,6 +592,11 @@ fn shortcuts_page(ui: &mut Ui, data: &mut PageData<'_>) {
             }
         });
     }
+}
+
+/// Personal discovery controls apply only after the shared Preferences footer confirms them.
+fn library_page(ui: &mut Ui, data: &mut PageData<'_>) {
+    data.libraries.show(ui);
 }
 
 #[cfg(test)]

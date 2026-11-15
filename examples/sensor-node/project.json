@@ -1,0 +1,60 @@
+{
+  "format": "pcbcraft-project/17",
+  "id": "49d1dd8d-efe9-4fe4-b7bf-d28c66cff6d6",
+  "name": "Sensor node · MCU and I²C",
+  "numeric_id_high_water": 171,
+  "layout_root": ".",
+  "boards": [{"id":"870bbdf6-a063-4bbb-8bba-76b1c182de8c","name":"Board","folder":"board-870bbdf6a063"}],
+  "sheets": [{"id":"774efbd7-cba3-4b0a-bb8c-da307088f546","name":"Main","file":"sheets/774efbd7-cba3-4b0a-bb8c-da307088f546.json"}],
+  "components": [
+    {"id":2,"library":"sensor-demo","definition":"attiny402","definition_revision":1,"reference_number":1,"reference":"U1","value":"ATtiny402"}
+
+    ,
+    {"id":3,"library":"sensor-demo","definition":"tmp102","definition_revision":1,"reference_number":2,"reference":"U2","value":"TMP102"}
+
+    ,
+    {"id":4,"library":"basic-components","definition":"connector","definition_revision":4,"reference_number":1,"reference":"J1","value":"3.3 V input"}
+
+    ,
+    {"id":7,"library":"basic-components","definition":"header-4","definition_revision":3,"reference_number":2,"reference":"J2","value":"I²C expansion"}
+
+    ,
+    {"id":9,"library":"basic-components","definition":"header-3","definition_revision":2,"reference_number":3,"reference":"J3","value":"UPDI"}
+
+    ,
+    {"id":11,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":1,"reference":"C1","value":"100nF"}
+
+    ,
+    {"id":13,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":2,"reference":"C2","value":"100nF"}
+
+    ,
+    {"id":15,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":3,"reference":"C3","value":"4.7uF"}
+
+    ,
+    {"id":17,"library":"power","definition":"3v3","definition_revision":2,"reference_number":1,"reference":"PWR1","value":"+3V3","metadata":{"fields":{},"attributes":{"do_not_populate":false,"exclude_from_bom":true,"exclude_from_board":true,"exclude_from_simulation":false,"exclude_from_position_files":true}}}
+
+    ,
+    {"id":18,"library":"power","definition":"gnd","definition_revision":1,"reference_number":2,"reference":"PWR2","value":"GND","metadata":{"fields":{},"attributes":{"do_not_populate":false,"exclude_from_bom":true,"exclude_from_board":true,"exclude_from_simulation":false,"exclude_from_position_files":true}}}
+
+    ,
+    {"id":35,"library":"basic-components","definition":"led","definition_revision":2,"reference_number":1,"reference":"D1","value":"Status · green"}
+
+    ,
+    {"id":37,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":1,"reference":"R1","value":"1k"}
+
+    ,
+    {"id":44,"library":"basic-components","definition":"led","definition_revision":2,"reference_number":2,"reference":"D2","value":"Activity · amber"}
+
+    ,
+    {"id":46,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":2,"reference":"R2","value":"1k"}
+
+    ,
+    {"id":91,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":3,"reference":"R3","value":"4.7k"}
+
+    ,
+    {"id":99,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":4,"reference":"R4","value":"4.7k"}
+
+    ,
+    {"id":107,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":5,"reference":"R5","value":"10k"}
+  ]
+}

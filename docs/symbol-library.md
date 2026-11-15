@@ -14,18 +14,36 @@ ordinary symbol instances. Build-time embedding supplies their native documents
 to desktop and browser; folder and portable-bundle loading use the same parser.
 The definitions are original work under MIT OR Apache-2.0.
 
-```text
-libraries/basic-components/
-  library.json        manifest: format, id, name, license
-  symbols/
-    capacitor.json    latest symbol revision
-    connector.json
-    header-4.json
-    led.json
-    npn.json
-    resistor.json
-    *-v1.json         preserved revision 1 definitions
-```
+The default set contains 30 basic symbols and 11 power symbols:
+
+| Group | Symbols |
+| --- | --- |
+| Passives | Zigzag and rectangular resistors, potentiometer, ordinary and polarized capacitors, inductor, ferrite bead, fuse, crystal |
+| Semiconductors | Diode, Schottky diode, Zener diode, LED, photodiode, NPN/PNP transistors, N/P-channel MOSFETs |
+| Switching and supply | SPST and SPDT switches, normally open push button, battery, test point |
+| Connectors | 1×2, 1×3, 1×4, 1×6, 1×8 and 2×3 headers |
+| Amplifiers | Generic operational amplifier with explicit positive/negative supply pins |
+| Power | GND, GNDA, earth (PE), chassis, +3V3, +5V, +12V, VCC, VCC bar, VDD and VSS |
+
+Single-row connectors have left-side attachment points, top-to-bottom pin
+numbering and 2.54 mm row spacing, except the six-pin header, which uses
+5.08 mm spacing for more room. The 2×3 header also uses 5.08 mm rows, with
+odd numbers on the left and even numbers on the right, ordered top to bottom. Generic connector
+values describe the contact arrangement rather than assuming an input role.
+
+New diode symbols use terminal 1 for cathode and 2 for anode. The existing LED
+retains its historical 1-anode/2-cathode mapping. NPN and PNP use 1-base,
+2-emitter and 3-collector; MOSFETs use 1-gate, 2-source and 3-drain, with the
+body connected to the source in their drawing. The generic amplifier uses
+functional terminal IDs `+`, `-`, `OUT`, `V+` and `V-`; it does not claim a
+particular manufacturer's package pinout. These are schematic definitions;
+footprints and terminal-to-pad mappings remain separate, explicit assignments.
+
+Supply drawings distinguish VCC's upward arrow, VDD's circle and VSS's downward
+arrow. Fixed positive voltage presets use bars; GNDA uses a triangle, while GND,
+earth and chassis retain their respective ground drawings. The component Value
+continues to determine each power symbol's global net name. Earth (`PE`) and
+chassis (`CHASSIS`) do not implicitly join `GND` or `GNDA`.
 
 The manifest:
 
@@ -35,14 +53,26 @@ The manifest:
 
 New placements use the highest loaded revision of each symbol ID. The browser
 lists that revision once; older revisions stay available for projects that pin
-them. Revision 2 shortens the default leads while keeping the pins on the grid:
-resistor endpoints are 5.08 mm from center, capacitor endpoints 2.54 mm, and LED
-and connector endpoints 3.81 mm. The original `*-v1.json` files retain the former
-6.35 mm endpoints. Changing a drawing or pin position requires a new revision
-so reopening an older project cannot silently move its connections. Resistor and
-capacitor revision 3 retain revision 2 geometry but use neutral `R` and `C` values
-for new generic placements. The `*-v2.json` copies preserve the former `1k` and
-`100nF` defaults for pinned revisions and migration.
+them. Earlier compact revisions shortened the default leads while keeping the pins on
+the grid: resistor endpoints are 5.08 mm from center, capacitor endpoints
+2.54 mm, and LED endpoints 3.81 mm. Original `*-v1.json` files retain the former
+6.35 mm endpoints. Resistor and capacitor revision 3 use neutral `R` and `C`
+values, with `*-v2.json` preserving the former `1k` and `100nF` defaults.
+
+Connector and header bodies use a plain rectangle with numbered leads ending at
+the body edge. Their unpublished definitions were corrected in place, and
+superseded connector/header records were removed from the bundle. Inductor
+revision 2 uses four semicircular coil turns; MOSFET revision 2 has straight
+gate, source and drain leads. The new ferrite bead uses a tilted rectangular
+outline with straight leads ending at its edges and no conductor stroke inside
+the body; its unpublished draft was corrected in place.
+Earlier records for the other symbols remain alongside them. Power redraws introduce revision
+2 for +3V3, +5V, +12V, GNDA, VDD and
+VSS, with revision 1 retained beside each. Changes to shipped drawings, defaults
+or pin positions require a new revision so an older project's pinned drawing
+and connections cannot silently change. New symbols on an unpublished development
+branch may be corrected in place before their first release. All unchanged
+definitions retain their existing revisions.
 
 ## Symbol format `pcbcraft-symbol/1`
 

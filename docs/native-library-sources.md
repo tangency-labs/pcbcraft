@@ -105,8 +105,8 @@ native relative paths to UTF-8 file contents, validated with the same engine
 rules on both platforms. Press **A** in Schematic to use the existing Parts
 Catalog placement picker; Library browsing itself never places an item.
 
-The source loader accepts at most 18 registrations including the bundled libraries, 256 files per
-source, 1 MiB per file and 8 MiB of decoded UTF-8 content per source. Bundles are
+The source loader accepts at most 32 registrations including the bundled libraries, 8,192 files per
+source, 1 MiB per file and 32 MiB of decoded UTF-8 content per source. Bundles are
 also bounded to 16 MiB before decoding. Folder reads reject symlinks, special
 files and nested item directories. Other root files, such as a library's license
 text, are not treated as native item documents; retain those notices with the
@@ -354,3 +354,52 @@ Categories are optional typed specification definitions. The bundled starter
 collections do not contain categories; an empty chooser reports that none are
 loaded. The Native Parts Demo includes resistor, connector and IC categories and
 can be loaded through Add library when testing typed fields.
+
+## Personal discovery preferences
+
+Preferences → Libraries has separate **Basic components** and **Power** switches.
+They control available built-in sources for new choices; project-pinned symbols
+and footprints remain available offline and retain their geometry. External
+registrations are managed through the existing library source manager.
+
+The same page configures optional **Parts Catalog placement filters**. Require a
+manufacturer/MPN, a resolved footprint with a valid pin map, or select a category
+and require typed parameters to be present or match Exact, At least, At most,
+Range or One of comparisons. The existing category schema defines field identity,
+type and units. Missing specifications fail a required condition; choosing an
+orderable part uses that record's specifications rather than generic assumptions.
+Schematic-only power symbols remain available. These personal settings filter the
+placement chooser only, leaving Parts Library authoring and existing project
+edits unchanged; they are not a project validation policy.
+
+The expanded catalog starts at about 70% of the window and remembers resizing
+through its lower-right corner. Its result cache tracks source and filter changes,
+while the existing list renderer draws only visible rows. Search covers all
+loaded libraries, part names/IDs and manufacturer/MPN metadata. Native source
+bounds allow 32 registrations including built-ins, 8,192 files per source and
+32 MiB per source, with the existing 1 MiB per-file limit.
+
+Expanded Parts Catalog results use a dense table with Part, Default value and
+Library source columns, with the selected symbol and package details on the
+right. The four tile-size buttons remain confined to the compact panel. The
+preview divider is draggable and its width is saved independently of the dialog
+size; the initial preview is narrower so additional results fit beside it.
+
+Live MCP uses `app.set_preferences` for the same discovery settings:
+`builtin_basic_components`, `builtin_power` and an optional complete
+`placement_filter` object. Missing top-level settings stay unchanged, while the
+filter object replaces its prior criteria. Inspection returns
+`library_preferences` including the exact saved category and typed comparisons.
+Invalid criteria reject the complete settings update before changing preferences,
+source availability or project state.
+
+The right pane shows separate symbol and selected-package footprint canvases,
+using the Library Manager's independent Fit/zoom controls, wheel zoom and drag
+pan. Changing the selected package resets only its physical preview. Symbol-only
+records and unassigned packages show their missing-footprint state without
+inventing a physical association; package choice remains explicit.
+
+Repeat placement is in the expanded catalog's bottom action bar beside Cancel
+and Place. Browser folder and bundle preflight receive their bounds from the
+same engine constants as native loading, including the 64 MiB escaped bundle
+transport bound.

@@ -69,39 +69,72 @@ pub(super) fn entries(query: &str, catalog: &Catalog) -> Vec<Entry> {
     );
     entries
 }
+/// Keep a reusable part when at least one concrete choice satisfies the current criteria.
+/// Schematic-only power symbols remain available; raw physical symbols cannot supply MPN facts.
+pub(super) fn matches_filter(entry: &Entry, catalog: &Catalog, filter: &pcbcraft_engine::library::filter::Filter) -> bool {
+    if !filter.active() || entry.0.power_terminal().is_some() {
+        return true;
+    }
+    let Some(part) = &entry.1 else {
+        return false;
+    };
+    let mut choice = initial(part.clone());
+    if filter.matches(&choice) {
+        return true;
+    }
+    for id in part.definition.packages.keys() {
+        choice.package = Some(id.clone());
+        if filter.matches(&choice) {
+            return true;
+        }
+    }
+    for m in catalog.manufacturers_for(&part.definition.reference()) {
+        choice.package = Some(m.package.clone());
+        choice.manufacturer = Some(m);
+        choice.manufacturer_primary_default();
+        if filter.matches(&choice) {
+            return true;
+        }
+    }
+    false
+}
 impl PartsBrowser {
     /// Selecting a row discards only the previous uncommitted catalog selection, never project state.
     pub(super) fn select_entry(&mut self, entry: &Entry) {
+        self.symbol_camera = Default::default();
+        self.footprint_camera = Default::default();
+        self.preview_footprint = None;
         self.selected = Some(entry.key());
         self.value = entry.default_value().to_owned();
         self.part = entry.1.clone().map(initial);
     }
     /// Package and manufacturer choices capture the same typed selection used by placement commands.
     pub(super) fn part_controls(&mut self, ui: &mut Ui, catalog: &Catalog) {
+        if self.mode == Mode::Compact {
+            self.package_control(ui);
+        }
         let Some(part) = &mut self.part else {
             return;
         };
-        properties::field(ui, "Package", |ui| {
-            let label =
-                part.package.as_ref().and_then(|id| part.resolved.definition.packages.get(id)).map_or("Unassigned", |package| package.name.as_str());
-            let response =
-                egui::ComboBox::from_id_salt("part_package").width(ui.available_width()).truncate().selected_text(label).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut part.package, None, "Unassigned");
-                    for (id, package) in &part.resolved.definition.packages {
-                        ui.selectable_value(&mut part.package, Some(id.clone()), &package.name);
-                    }
-                });
-            response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Package"));
-        });
         properties::field(ui, "Manufacturer part", |ui| {
-            let label =
-                part.manufacturer.as_ref().map(|record| format!("{} · {}", record.manufacturer, record.mpn)).unwrap_or_else(|| "Generic".into());
+            let label = part.manufacturer.as_ref().map(|record| format!("{} · {}", record.manufacturer, record.mpn)).unwrap_or_else(|| {
+                if self.filter.manufacturer && self.filter.active() { "Choose manufacturer part".into() } else { "Generic".into() }
+            });
             let response =
                 egui::ComboBox::from_id_salt("part_manufacturer").width(ui.available_width()).truncate().selected_text(label).show_ui(ui, |ui| {
-                    if ui.selectable_label(part.manufacturer.is_none(), "Generic").clicked() {
+                    let mut generic = part.clone();
+                    generic.manufacturer = None;
+                    if self.filter.matches(&generic) && ui.selectable_label(part.manufacturer.is_none(), "Generic").clicked() {
                         part.manufacturer = None;
                     }
                     for record in catalog.manufacturers_for(&part.resolved.definition.reference()) {
+                        let mut candidate = part.clone();
+                        candidate.package = Some(record.package.clone());
+                        candidate.manufacturer = Some(record.clone());
+                        candidate.manufacturer_primary_default();
+                        if !self.filter.matches(&candidate) {
+                            continue;
+                        }
                         let selected = part.manufacturer.as_ref().is_some_and(|current| current.reference() == record.reference());
                         if ui.selectable_label(selected, format!("{} · {}", record.manufacturer, record.mpn)).clicked() {
                             part.package = Some(record.package.clone());
@@ -141,9 +174,31 @@ impl PartsBrowser {
             _ => {}
         }
     }
+    /// Package selection sits beside its physical preview in the expanded catalog.
+    pub(super) fn package_control(&mut self, ui: &mut Ui) {
+        let Some(part) = &mut self.part else {
+            return;
+        };
+        properties::field(ui, "Package", |ui| {
+            let label =
+                part.package.as_ref().and_then(|id| part.resolved.definition.packages.get(id)).map_or("Unassigned", |package| package.name.as_str());
+            let response =
+                egui::ComboBox::from_id_salt("part_package").width(ui.available_width()).truncate().selected_text(label).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut part.package, None, "Unassigned");
+                    for (id, package) in &part.resolved.definition.packages {
+                        ui.selectable_value(&mut part.package, Some(id.clone()), &package.name);
+                    }
+                });
+            response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Package"));
+        });
+    }
     /// Normalization and fixed-value checks use the engine's explicit category binding.
     pub(super) fn capture_part(&self) -> Result<Option<Selection>, String> {
-        self.part.as_ref().map(|part| part.with_primary_value(&self.value)).transpose()
+        let part = self.part.as_ref().map(|part| part.with_primary_value(&self.value)).transpose()?;
+        if part.as_ref().is_some_and(|part| !self.filter.matches(part)) {
+            return Err("Choose a part matching the active placement filters.".into());
+        }
+        Ok(part)
     }
     /// Click, Enter and drag all retain the same package, MPN and canonical primary requirement.
     pub(super) fn capture_placement(&self, entry: &Entry, value: &str) -> Option<Placement> {
@@ -156,6 +211,9 @@ impl PartsBrowser {
             entry.1.clone().map(initial).map(|part| part.with_primary_value(value)).transpose().ok()?
         };
         if part.as_ref().is_some_and(|part| part.manufacturer.is_some() && part.compatibility()["status"] != "meets_requirements") {
+            return None;
+        }
+        if part.as_ref().is_some_and(|part| !self.filter.matches(part)) {
             return None;
         }
         Some(Placement { definition: entry.0.clone(), value: value.to_owned(), part })

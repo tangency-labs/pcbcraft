@@ -1,0 +1,21 @@
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"resistor-iec","revision":1,"name":"Resistor (rectangle)","reference_prefix":"R","default_value":"R","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
+,
+  "terminals":[
+    {"id":"1","electrical_type":"passive"}
+    ,
+    {"id":"2","electrical_type":"passive"}
+  ]
+  ,
+  "units":[
+    {"id":"main"
+    ,
+      "drawing":[
+        {"type":"rect","min_nm":[-3175000,-1270000],"max_nm":[3175000,1270000]}
+      ]
+      ,
+      "pins":[
+        {"terminal":"1","at_nm":[-5080000,0],"appearance":{"orientation":"right","length_nm":1905000,"style":"line","show_name":false,"show_number":false,"name_height_nm":800000,"number_height_nm":650000}}
+        ,
+        {"terminal":"2","at_nm":[5080000,0],"appearance":{"orientation":"left","length_nm":1905000,"style":"line","show_name":false,"show_number":false,"name_height_nm":800000,"number_height_nm":650000}}
+      ]}
+  ]}

@@ -59,7 +59,7 @@ fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
                 Ok(text) => {
                     total += text.len();
                     if total > MAX_SOURCE_BYTES {
-                        return Err("Library source exceeds 8 MiB".into());
+                        return Err("Library source exceeds 32 MiB".into());
                     }
                     documents.insert(relative, text);
                 }

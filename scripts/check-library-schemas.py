@@ -74,7 +74,7 @@ def validate(paths, sources):
     """Check discovered records against their directory kind; explicit files use their own formats."""
     checks = validators()
     bundled = [path for library in sorted((ROOT / "libraries").iterdir()) if library.is_dir() for path in records(library)]
-    examples = records(ROOT / "examples/native-library") + records(ROOT / "examples/native-parts")
+    examples = records(ROOT / "examples/native-library") + records(ROOT / "examples/native-parts") + records(ROOT / "examples/sensor-node-library")
     discovered = bundled + examples + [path for source in sources for path in records(source)]
     inputs = [(path, path.parent.name) for path in discovered] + [(path, None) for path in paths]
     prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/"}

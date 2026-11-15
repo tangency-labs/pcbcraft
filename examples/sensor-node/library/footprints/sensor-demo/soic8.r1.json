@@ -1,0 +1,178 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "sensor-demo",
+  "id": "soic8",
+  "revision": 1,
+  "name": "SOIC-8, 3.9 mm body",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATtiny202-204-402-404-406-DataSheet-DS40002318A.pdf",
+    "locator": "DS40002318A (2021), pp. 13, 496–498; Microchip C04-2057-SN Rev F recommended 1.27 mm pitch, 5.40 mm row centers, 1.55 x 0.60 mm lands; original rounded corners (0.05 mm), courtyard, silk and reference lettering"
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -2700000,
+        "y_nm": -1905000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": -2700000,
+        "y_nm": -635000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "3",
+      "center": {
+        "x_nm": -2700000,
+        "y_nm": 635000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "4",
+      "center": {
+        "x_nm": -2700000,
+        "y_nm": 1905000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "5",
+      "center": {
+        "x_nm": 2700000,
+        "y_nm": 1905000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "6",
+      "center": {
+        "x_nm": 2700000,
+        "y_nm": 635000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "7",
+      "center": {
+        "x_nm": 2700000,
+        "y_nm": -635000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "8",
+      "center": {
+        "x_nm": 2700000,
+        "y_nm": -1905000
+      },
+      "width_nm": 1550000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    }
+  ],
+  "graphics": [
+    {
+      "purpose": "fabrication",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 3900000,
+      "height_nm": 4900000,
+      "rotation": 0
+    },
+    {
+      "purpose": "courtyard",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 7450000,
+      "height_nm": 5500000,
+      "rotation": 0
+    }
+  ],
+  "silkscreen": [
+    {
+      "points": [
+        {
+          "x_nm": -1600000,
+          "y_nm": -2600000
+        },
+        {
+          "x_nm": 1600000,
+          "y_nm": -2600000
+        },
+        {
+          "x_nm": 1600000,
+          "y_nm": 2600000
+        },
+        {
+          "x_nm": -1600000,
+          "y_nm": 2600000
+        }
+      ],
+      "closed": true
+    },
+    {
+      "points": [
+        {
+          "x_nm": -1600000,
+          "y_nm": -2600000
+        },
+        {
+          "x_nm": -1000000,
+          "y_nm": -2000000
+        }
+      ],
+      "closed": false
+    }
+  ],
+  "reference": "pcbcraft-technical-1"
+}

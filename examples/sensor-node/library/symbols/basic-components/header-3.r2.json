@@ -1,0 +1,25 @@
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"header-3","revision":2,"name":"3-pin header","reference_prefix":"J","default_value":"Conn_01x03","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
+,
+  "terminals":[
+    {"id":"1","electrical_type":"passive"}
+    ,
+    {"id":"2","electrical_type":"passive"}
+    ,
+    {"id":"3","electrical_type":"passive"}
+  ]
+  ,
+  "units":[
+    {"id":"main"
+    ,
+      "drawing":[
+        {"type":"rect","min_nm":[-1270000,-3810000],"max_nm":[1270000,3810000]}
+      ]
+      ,
+      "pins":[
+        {"terminal":"1","at_nm":[-3810000,-2540000],"appearance":{"orientation":"right","length_nm":2540000,"style":"line","show_name":false,"show_number":true,"name_height_nm":800000,"number_height_nm":1000000}}
+        ,
+        {"terminal":"2","at_nm":[-3810000,0],"appearance":{"orientation":"right","length_nm":2540000,"style":"line","show_name":false,"show_number":true,"name_height_nm":800000,"number_height_nm":1000000}}
+        ,
+        {"terminal":"3","at_nm":[-3810000,2540000],"appearance":{"orientation":"right","length_nm":2540000,"style":"line","show_name":false,"show_number":true,"name_height_nm":800000,"number_height_nm":1000000}}
+      ]}
+  ]}

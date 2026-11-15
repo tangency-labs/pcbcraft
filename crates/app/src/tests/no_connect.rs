@@ -337,7 +337,14 @@ fn no_connect_clicks_the_drawn_pin_lead_at_every_pose() {
             click(&mut h, "Mark unused pins or wire ends (Q)");
             let p = h.state().session.project().unwrap();
             let symbol = &p.symbols()[0];
-            let (x_nm, y_nm) = place(-4_445_000, -3_810_000, symbol.turns(), symbol.is_mirrored());
+            let lead = &symbol.unit_definition().pins()[0];
+            let end = lead.appearance.as_ref().unwrap().end(lead.offset);
+            let (x_nm, y_nm) = place(
+                lead.offset.x_nm + 3 * (end.x_nm - lead.offset.x_nm) / 4,
+                lead.offset.y_nm + 3 * (end.y_nm - lead.offset.y_nm) / 4,
+                symbol.turns(),
+                symbol.is_mirrored(),
+            );
             let canvas = h.get_by_label("Schematic canvas").rect();
             let point = h.state().views.active.camera.screen(Point { x_nm: symbol.position.x_nm + x_nm, y_nm: symbol.position.y_nm + y_nm }, canvas);
             assert!(point.distance(pin(&h, 0)) > 12.);

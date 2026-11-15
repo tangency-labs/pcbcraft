@@ -54,12 +54,14 @@ mod part_documents;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
+mod placement_filters;
 mod preferences;
 mod project_browser;
 mod project_files;
 mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod requirement_input;
 mod ribbon;
 mod rule_diagram;
 mod schematic_canvas;
@@ -271,6 +273,7 @@ pub struct PcbApp {
     fabrication_exports: board_outputs::Exports,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
+    library_preferences: placement_filters::Settings,
     browser: project_browser::ProjectBrowser,
     /// The ribbon's stable saved slot, mapped to the active workspace's visual tab order.
     ribbon_tab: usize,
@@ -390,6 +393,7 @@ impl PcbApp {
             properties_open: true,
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
             preferences,
+            library_preferences: placement_filters::Settings::parse(cc.storage.and_then(|s| s.get_string(placement_filters::STORAGE_KEY))),
             board_appearance: board_appearance::Appearance::from_storage(
                 cc.storage.and_then(|storage| storage.get_string(board_appearance::STORAGE_KEY)),
             ),
@@ -2242,12 +2246,18 @@ impl PcbApp {
             Dialog::Preferences(mut window) => {
                 let shortcuts = shortcut_list(ctx, self.preferences.navigation);
                 #[cfg(not(target_arch = "wasm32"))]
-                let outcome = window.show(ctx, &mut self.preferences, &shortcuts, &mut self.assistant);
+                let outcome =
+                    window.show(ctx, &mut self.preferences, &shortcuts, &mut self.library_preferences, self.session.libraries(), &mut self.assistant);
                 #[cfg(target_arch = "wasm32")]
-                let outcome = window.show(ctx, &mut self.preferences, &shortcuts);
+                let outcome = window.show(ctx, &mut self.preferences, &shortcuts, &mut self.library_preferences, self.session.libraries());
                 match outcome {
                     preferences::Outcome::Open => self.dialog = Dialog::Preferences(window),
-                    preferences::Outcome::Closed => ctx.request_repaint(),
+                    preferences::Outcome::Closed => {
+                        if window.return_to_catalog {
+                            self.parts.open = true;
+                        }
+                        ctx.request_repaint();
+                    }
                     #[cfg(not(target_arch = "wasm32"))]
                     preferences::Outcome::AddAgent(form) => {
                         self.dialog = Dialog::Agent { form, return_to: Some(window) };
@@ -2392,6 +2402,8 @@ impl PcbApp {
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        // Apply source availability before restored readers capture their catalog generation.
+        self.sync_library_preferences();
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
         self.sync_style(&ctx);
@@ -2685,13 +2697,15 @@ impl eframe::App for PcbApp {
     /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
         let before = self.preferences;
+        let previous_libraries = self.library_preferences.clone();
         self.frame(ui);
         #[cfg(not(target_arch = "wasm32"))]
         if !self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             // Release the native surface after the frame; surviving host/window IDs stay put.
             frame.retire_root_window();
         }
-        let changed = self.preferences != before || self.board_appearance.dirty || self.routing_presets.dirty;
+        let changed =
+            self.preferences != before || self.library_preferences != previous_libraries || self.board_appearance.dirty || self.routing_presets.dirty;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
         #[cfg(not(target_arch = "wasm32"))]
@@ -2717,6 +2731,7 @@ impl eframe::App for PcbApp {
             storage.set_string(arrangements::STORAGE_KEY, text);
         }
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
+        storage.set_string(placement_filters::STORAGE_KEY, serde_json::to_string(&self.library_preferences).unwrap_or_default());
         if let Some(text) = self.routing_presets.storage_text() {
             storage.set_string(board_presets::STORAGE_KEY, text);
             self.routing_presets.dirty = false;
