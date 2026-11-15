@@ -15,9 +15,10 @@ positions, and project data and history are unchanged.
 
 PCB views now remember their own snap spacing and presets separately from
 schematic views. Choosing a board grid no longer replaces the schematic startup
-spacing, and switching workspaces restores each editor's choice. Both default to
-50 mil: previously saved schematic spacings still apply to schematic views, while
-PCB views start at 50 mil and keep the first board choice afterward.
+spacing, and switching workspaces restores each editor's choice. Schematic views
+start at 50 mil and PCB views at a finer 10 mil (0.254 mm); previously saved
+schematic spacings still apply to schematic views, and saved board choices,
+including an explicit 50 mil, are kept.
 
 Intentional no-connect crosses can be placed on schematic pins with Q or Capture
 and removed through pin context menus. A focused check reports unmarked pins and

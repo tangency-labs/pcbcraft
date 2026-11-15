@@ -667,6 +667,8 @@ fn footprint_rotation_follows_the_screen_in_both_board_views() {
 #[test]
 fn footprint_drag_rotation_and_undo_share_one_command() {
     let mut h = editable_board();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_grid(id, 50 * pcbcraft_chrome::grid::NM_PER_MIL);
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
     let start = board_point(&h, Point { x_nm: 0, y_nm: 0 });

@@ -85,7 +85,8 @@ with Y increasing down), the **Grid** button and the display unit. Click the uni
 chooses it too. Switching only changes how lengths read: geometry, grid spacing and the
 project stay exactly as they were, with no undo step. 100 mil is exactly 2.54 mm.
 The **Grid** button sets the focused pane's snap spacing:
-100, 50 (the default, where symbol pins sit), 25, 10 or 5 mil, or any other spacing
+100, 50 (the schematic default, where symbol pins sit), 25, 10 (the PCB default)
+or 5 mil, or any other spacing
 typed with or without a unit (`20`, `20 mil`, `0.5 mm`, from 0.01 mm to 1000 mil). A bare
 number is read in the display unit, and a typed unit overrides it.
 **N** steps the focused pane finer and **Shift+N** coarser. A new spacing never moves
@@ -95,7 +96,8 @@ how far apart the drawn dots are (for example *Grid 10 mil · dots 50 mil*). Eac
 keeps its own spacing through focus changes, splitting and reopening files; the last
 one chosen is kept with your preferences, not in the project. Schematic and PCB panes
 remember their spacing separately, so changing the board grid does not replace the
-schematic's startup choice (and the reverse). Both start at 50 mil until changed.
+schematic's startup choice (and the reverse). Schematic panes start at 50 mil and PCB panes
+at 10 mil until changed; a saved choice, including an explicit 50 mil board grid, is kept.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays

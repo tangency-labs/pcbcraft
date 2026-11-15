@@ -675,6 +675,7 @@ mod tests {
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
         assert_eq!(older.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM);
         assert_eq!(older.board_grid_nm, grid::BOARD_SPACING_DEFAULT_NM);
+        assert_eq!(Preferences::default().board_grid_nm, 254_000, "the PCB grid defaults to 10 mil");
         assert_eq!(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm, 635_000);
         assert_eq!(Preferences::parse("{\"board_grid_nm\":254000}").board_grid_nm, 254_000);
         // An out-of-range spacing resets only itself; a value of the wrong type is unreadable,

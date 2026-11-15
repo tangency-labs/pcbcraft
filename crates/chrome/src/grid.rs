@@ -18,12 +18,12 @@ pub use crate::units::NM_PER_MIL;
 pub const SCHEMATIC_SPACING_DEFAULT_NM: i64 = 50 * NM_PER_MIL;
 /// The schematic spacings offered in the grid menu, coarsest first.
 pub const SCHEMATIC_SPACING_PRESETS_NM: [i64; 5] = [100 * NM_PER_MIL, 50 * NM_PER_MIL, 25 * NM_PER_MIL, 10 * NM_PER_MIL, 5 * NM_PER_MIL];
-/// The PCB grid when nothing has been chosen: 50 mil (1.27 mm), retaining the spacing PCB views
-/// inherited before they remembered their own. It can diverge from the schematic default later
-/// without changing existing schematic or board behavior.
-pub const BOARD_SPACING_DEFAULT_NM: i64 = 50 * NM_PER_MIL;
-/// The PCB spacings offered in the grid menu, coarsest first. They currently match the schematic
-/// presets but stay a separate list so board work can choose different defaults in one place.
+/// The PCB grid when nothing has been chosen: 10 mil (0.254 mm), a finer starting point for
+/// placement and routing than the schematic's pin pitch. Saved board spacings are kept as
+/// authored, including an explicit 50 mil choice.
+pub const BOARD_SPACING_DEFAULT_NM: i64 = 10 * NM_PER_MIL;
+/// The PCB spacings offered in the grid menu, coarsest first. They match the schematic presets
+/// but stay a separate list so board work can choose different defaults in one place.
 pub const BOARD_SPACING_PRESETS_NM: [i64; 5] = [100 * NM_PER_MIL, 50 * NM_PER_MIL, 25 * NM_PER_MIL, 10 * NM_PER_MIL, 5 * NM_PER_MIL];
 /// The spacings a person can choose: 0.01 mm up to 1000 mil (25.4 mm).
 pub const SPACING_RANGE_NM: RangeInclusive<i64> = 10_000..=1000 * NM_PER_MIL;
@@ -467,6 +467,6 @@ mod tests {
     fn board_presets_include_the_board_default_and_stay_in_range() {
         assert!(BOARD_SPACING_PRESETS_NM.contains(&BOARD_SPACING_DEFAULT_NM));
         assert!(BOARD_SPACING_PRESETS_NM.iter().chain([&BOARD_SPACING_DEFAULT_NM]).all(|nm| SPACING_RANGE_NM.contains(nm)));
-        assert_eq!(cycle(BOARD_SPACING_DEFAULT_NM, &BOARD_SPACING_PRESETS_NM, true), Some(25 * NM_PER_MIL));
+        assert_eq!(cycle(BOARD_SPACING_DEFAULT_NM, &BOARD_SPACING_PRESETS_NM, true), Some(5 * NM_PER_MIL));
     }
 }
