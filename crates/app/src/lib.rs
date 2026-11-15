@@ -590,6 +590,13 @@ impl PcbApp {
             self.ask_name("project.rename");
         }
 
+        if !self.home {
+            let tabs = self.arrangements.tabs();
+            if let Some(intent) = pcbcraft_chrome::arrangements::menu(ui, &tabs, self.arrangements.active()) {
+                self.arrangement_intent(ui.ctx(), intent);
+            }
+        }
+
         // SolidCraft ends File with Preferences and Keyboard Shortcuts, above Quit.
         menu::separator(ui);
         let preferences_shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
@@ -793,9 +800,6 @@ impl PcbApp {
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
     /// Disabling application actions leaves the integrated native window controls available.
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
-        let tabs = if self.home { Vec::new() } else { self.arrangements.tabs() };
-        let active_arrangement = self.arrangements.active();
-        let mut arrangement_action = None;
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
@@ -834,7 +838,7 @@ impl PcbApp {
                     }
                 }
             },
-            |ui| arrangement_action = pcbcraft_chrome::arrangements::tabs(ui, &tabs, active_arrangement),
+            |_| {},
             |ui, width| {
                 if width >= 950.0 {
                     ui.label(dim(format!("v{VERSION}")));
@@ -856,9 +860,6 @@ impl PcbApp {
                 }
             },
         );
-        if let Some(intent) = arrangement_action {
-            self.arrangement_intent(ui.ctx(), intent);
-        }
         #[cfg(not(target_arch = "wasm32"))]
         if assistant_clicked {
             self.toggle_assistant(ui.ctx());

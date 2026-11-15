@@ -267,18 +267,18 @@ window; double-click those areas to maximize or restore it. Drag an edge or
 corner to resize. These controls also work while a project dialog is open,
 without enabling the editing controls behind it.
 
-The project name stays separate from the top **Views** arrangement tab. Its tooltip
-explains the arrangement and its right-click actions. Use the
-**+** beside it to name a setup, starting with the current views and windows or a
-single view. Right-click any arrangement tab for **Rename…**, **Duplicate…** or
-**Delete…**. Renaming or deleting an inactive tab leaves the current setup in
+Saved view setups are available under **File → Layouts**, leaving the top bar for
+the project title and window controls. Use **New arrangement** to name a setup,
+starting with the current views and windows or a single view. Each layout's submenu offers
+**Activate**, **Rename…**, **Duplicate…** and **Delete…**. Renaming or deleting an inactive layout leaves the current setup in
 place. Naming opens a dialog in the window you are using;
 **Cancel** or **Esc** discards the draft. Each arrangement remembers
 its panes, document navigation, cameras, panels and desktop windows locally; reopening
 the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
-strip; split panes each show one document header whose **×** closes the pane.
+strip; split panes each show one document header whose **×** closes the pane,
+with the canvas background continuing through the space beside the tab.
 The engine supports up to 64 sheets and zero or one physical board. Right-click
 **Sheets** in the Browser and choose **New Sheet…**, or use
 **Sheets → New sheet**; sheet rows also offer

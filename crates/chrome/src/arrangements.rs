@@ -1,6 +1,6 @@
-//! Named arrangements of project views and windows in the title bar.
+//! Menu access to named arrangements of project views and windows.
 
-use egui::{Role, Ui, WidgetInfo};
+use egui::Ui;
 
 /// Presentation intents; the host validates identities and owns all layout changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,59 +12,45 @@ pub enum Intent {
     Remove(u64),
 }
 
-/// Show only arrangement tabs and a plus. Opening a tab’s context menu does not select
-/// that arrangement; each action carries the clicked tab’s identity to the host.
-/// Tab tooltips explain the remembered view layout and available context actions.
-pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> {
-    if tabs.is_empty() {
-        return None;
-    }
+/// Keep saved layouts reachable in File without persistent title-bar tabs.
+/// Selection and management emit intents; the host retains validation and window ownership.
+/// Tall lists use the shared scrolling-menu rows within the viewport, including the New action.
+pub fn menu(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> {
     let mut intent = None;
-    ui.horizontal(|ui| {
-        let label = "+";
-        let button_width = ui.painter().layout_no_wrap(label.into(), egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color()).size().x
-            + 2.0 * ui.spacing().button_padding.x;
-        let width = (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(0.0);
-        egui::ScrollArea::horizontal()
-            .id_salt("arrangement_tabs")
-            .max_width(width)
-            .min_scrolled_width(0.0)
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (id, name) in tabs {
-                        ui.push_id(id, |ui| {
-                            let selected = *id == active;
-                            let response = solidcraft_ui_kit::button(ui, name, if selected { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost });
-                            response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, format!("Arrangement {name}")));
-                            response.context_menu(|ui| {
-                                for (label, pick) in
-                                    [("Rename…", Intent::Rename(*id)), ("Duplicate…", Intent::Duplicate(*id)), ("Delete…", Intent::Remove(*id))]
-                                {
-                                    if crate::controls::enabled_button(ui, !matches!(pick, Intent::Remove(_)) || tabs.len() > 1, label).clicked() {
-                                        intent = Some(pick);
-                                        ui.close_kind(egui::UiKind::Menu);
-                                    }
-                                }
-                            });
-                            if response
-                                .on_hover_text(
-                                    "An arrangement of this project's workspaces, split panes and windows. Right-click to rename, duplicate or delete.",
-                                )
-                                .clicked()
-                            {
-                                intent = Some(Intent::Select(*id));
-                            }
-                        });
-                    }
+    crate::menu::MenuItem::new("Layouts").enabled(!tabs.is_empty()).submenu(ui, |ui| {
+        let t = crate::Tokens::get();
+        let room = (ui.ctx().content_rect().height() - 2.0 * t.space_12).max(0.0);
+        ui.set_width((t.control_height * 8.0 + t.space_12).min((ui.ctx().content_rect().width() - 2.0 * t.space_12).max(0.0)));
+        let estimate = (tabs.len() + 1) as f32 * solidcraft_theme::Tokens::get().control_height + t.space_8 + 1.0;
+        let id = ui.scope_id().with(("saved_layout_rows", tabs));
+        solidcraft_ui_kit::menu::scroll_rows(ui, id, room, estimate, |ui| {
+            for (id, name) in tabs {
+                ui.push_id(id, |ui| {
+                    crate::menu::MenuItem::new(name).choice(*id == active).submenu(ui, |ui| {
+                        if crate::menu::MenuItem::new("Activate").show(ui) {
+                            intent = Some(Intent::Select(*id));
+                        }
+                        intent = actions(ui, *id, tabs.len()).or(intent);
+                    });
                 });
-            });
-        let create = crate::controls::button(ui, label);
-        create.widget_info(|| WidgetInfo::labeled(Role::Button, true, "New arrangement"));
-        if create.on_hover_text("New arrangement").clicked() {
-            intent = Some(Intent::New);
-        }
+            }
+            crate::menu::separator(ui);
+            if crate::menu::MenuItem::new("New arrangement").show(ui) {
+                intent = Some(Intent::New);
+            }
+        });
     });
+    intent
+}
+
+/// Use the same full-width Craft rows for active and inactive layout actions.
+fn actions(ui: &mut Ui, id: u64, count: usize) -> Option<Intent> {
+    let mut intent = None;
+    for (label, pick) in [("Rename…", Intent::Rename(id)), ("Duplicate…", Intent::Duplicate(id)), ("Delete…", Intent::Remove(id))] {
+        if crate::menu::MenuItem::new(label).enabled(!matches!(pick, Intent::Remove(_)) || count > 1).show(ui) {
+            intent = Some(pick);
+        }
+    }
     intent
 }
 

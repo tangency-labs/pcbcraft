@@ -1441,3 +1441,13 @@ Rules modal. The shell owns revision-checked commands, retained drafts and nativ
 source-window placement. It reuses the existing Craft page rail/selector, fields,
 scroll host and footer; no nested modal, new generic control, dependency or artwork
 was introduced.
+
+## Window and pane chrome simplification
+
+The File → Layouts presentation reuses the qualified pinned Craft menu surface,
+rows and submenu behavior through chrome; saved view setup identities and storage
+remain PCBcraft-owned. Pane tabs retain the same shared tab shape and close
+control. Canvas margins reuse PCBcraft's original ribbon grid projection, while
+title-bar drag recognition follows the pinned Craft helper's existing threshold
+behavior, retaining PCBcraft's foreground hit regions and native-grab recovery.
+No dependency, external artwork, EDA implementation or native format was added.

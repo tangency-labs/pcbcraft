@@ -546,9 +546,9 @@ its panes or resetting its camera. Closing the last editor window, or choosing
 **File → Quit** from any window, uses one **Save / Don’t Save / Cancel** decision
 for the project. Canceling or failing a save leaves the project open.
 
-The top **Views** tab represents a named arrangement of the project's panes and
-windows. Use **+** to add one, or right-click a tab to rename, duplicate or delete
-it. Arrangements restore when a saved project is reopened on the same computer;
+Saved arrangements of the project's panes and windows are available under
+**File → Layouts**. Use **New arrangement** to add one; each layout's submenu
+offers **Activate**, **Rename…**, **Duplicate…** and **Delete…**. Arrangements restore when a saved project is reopened on the same computer;
 they live in user-local app settings and do not change or travel with project
 files. Unsaved projects keep arrangements only for the session until their first
 successful save. See the [arrangement persistence details](board-workspace-plan.md#named-arrangements-and-reopening-a-project).

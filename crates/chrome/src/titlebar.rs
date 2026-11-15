@@ -40,17 +40,18 @@ fn finish_native_grab(ctx: &egui::Context) {
     }
 }
 
-/// Hand the initial primary press to the OS immediately, before egui's drag threshold.
-/// Waiting for motion can lose the native press serial. Double clicks toggle maximization.
+/// Keep ordinary title-bar clicks in the app so a double click can maximize/restore.
+/// As in the shared Craft title-bar helper, start the native move only after egui's
+/// drag threshold. The host uses separate foreground regions to stay usable above modals.
 pub(crate) fn drag_area(ui: &mut Ui, rect: Rect, region: &'static str) {
     if !rect.is_positive() {
         return;
     }
     let native = ui.new_child(egui::UiBuilder::new().layer_id(interaction_layer()).max_rect(rect));
     let response = native.interact(rect, ui.scope_id().with(("window-drag", region)), Sense::click_and_drag());
-    if response.double_clicked() {
+    if response.double_clicked_by(PointerButton::Primary) {
         ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!is_maximized(ui)));
-    } else if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.button_pressed(PointerButton::Primary)) {
+    } else if response.drag_started_by(PointerButton::Primary) {
         begin_native_grab(ui.ctx(), ViewportCommand::StartDrag);
     }
 }
