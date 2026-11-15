@@ -112,17 +112,41 @@ fn track_names_fit_visible_copper_and_remain_upright() {
     assert!(!text.is_empty() && text.len() < 8, "preparation is bounded by the visible span");
 }
 
-/// Via text stays in the annular band and never covers an ordinary small via or its drill.
+/// Short via names become readable at working zoom, while long names need more space. Both
+/// the name and its backing stay inside the via outline and centered across the hole.
 #[test]
-fn via_names_need_legible_annular_space() {
-    assert!(text_shapes(|p| via_net_label(p, pos2(200., 200.), 16., 8., "U3.OUT")).is_empty());
-    let text = text_shapes(|p| via_net_label(p, pos2(200., 200.), 180., 40., "U3.OUT"));
-    assert_eq!(text.len(), 1);
-    let label = &text[0];
-    let bounds = label.galley.rect.translate(label.pos.to_vec2());
-    assert!(bounds.bottom() < 180.);
-    for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
-        assert!(corner.distance(pos2(200., 200.)) < 90.);
+fn via_names_use_the_full_diameter() {
+    let center = pos2(200., 200.);
+    assert!(text_shapes(|p| via_net_label(p, center, 16., "GND")).is_empty());
+    assert!(text_shapes(|p| via_net_label(p, center, 36., "ALERT_N")).is_empty());
+    assert!(text_shapes(|p| via_net_label(p, center, 48., "ALERT_N")).is_empty());
+    for (diameter, name) in [(36., "GND"), (60., "ALERT_N"), (180., "U3.OUT")] {
+        let text = text_shapes(|p| via_net_label(p, center, diameter, name));
+        assert_eq!(text.len(), 1, "{name} at {diameter}");
+        let bounds = text[0].visual_bounding_rect();
+        assert!(bounds.center().distance(center) < 0.01);
+        let backing = bounds.expand(2.);
+        for corner in [backing.left_top(), backing.right_top(), backing.left_bottom(), backing.right_bottom()] {
+            assert!(corner.distance(center) < diameter / 2. - 2.);
+        }
+    }
+}
+
+/// Via overlays use consistent contrast across hole and copper in either theme, and disappear
+/// as a whole at viewport edges rather than leaving fragments of the name.
+#[test]
+fn via_names_keep_contrast_and_avoid_viewport_clipping() {
+    for light in [false, true] {
+        let labels = text_shapes(|p| {
+            p.ctx().set_visuals(if light { egui::Visuals::light() } else { egui::Visuals::dark() });
+            via(p, pos2(200., 200.), 30., 18., false, false, None);
+            via_net_label(p, pos2(200., 200.), 60., "GND");
+            via_net_label(p, pos2(2., 200.), 60., "GND");
+            via_net_label(p, pos2(200., 2.), 60., "GND");
+            via_net_label(p, pos2(200., 200.), 60., "");
+        });
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].fallback_color, copper_label_ink(Tokens::get().board_canvas));
     }
 }
 

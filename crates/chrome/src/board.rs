@@ -626,23 +626,35 @@ fn track_net_labels(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, copper
 mod track_labels;
 pub use track_labels::TrackLabels;
 
-/// Fit a via name in the top annular band, clear of its drill and outer copper boundary.
-/// Ordinary small vias therefore reveal names only at a sufficiently close zoom.
-pub fn via_net_label(p: &Painter, center: Pos2, diameter: f32, drill: f32, name: &str) {
-    let height = (diameter - drill) / 2. - 4.;
-    let size = height.min(14.);
-    if size < 7. || !p.clip_rect().contains(center) {
+/// Center a readable name across the via's full diameter, independently of its drill size.
+/// A tight canvas-colored backing maintains contrast across both ring and hole. Hide names
+/// that cannot fit inside the circular outline at 11 pt or would be clipped by the viewport.
+pub fn via_net_label(p: &Painter, center: Pos2, diameter: f32, name: &str) {
+    if name.is_empty() || !diameter.is_finite() || diameter <= 10. || !p.clip_rect().contains(center) {
         return;
     }
-    let y = (diameter + drill) / 4.;
-    let outer_y = y + size / 2.;
-    let width = 2. * ((diameter / 2. - 2.).powi(2) - outer_y.powi(2)).max(0.).sqrt();
-    let ink = copper_label_ink(Tokens::get().board_through);
-    let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(size), ink, egui::Align::Center);
-    if galley.size().x > width || galley.size().y > height {
+    let backing = Tokens::get().board_canvas;
+    let ink = copper_label_ink(backing);
+    let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(14.), ink, egui::Align::Center);
+    let extent = galley.mesh_bounds.size().length();
+    if !extent.is_finite() || extent <= f32::EPSILON {
         return;
     }
-    p.galley(center - vec2(0., y) - galley.rect.center().to_vec2(), galley, ink);
+    // Reserving ten points on the diagonal keeps the text and its two-point backing inside
+    // the circle, including its corners, with at least two points clear of the outer edge.
+    let scale = ((diameter - 10.) / extent).min(1.);
+    if 14. * scale < 11. {
+        return;
+    }
+    let mut text = egui::epaint::TextShape::new(Pos2::ZERO, galley, ink);
+    text.transform(egui::emath::TSTransform::from_scaling(scale));
+    text.pos = center - text.galley.mesh_bounds.center().to_vec2();
+    let bounds = text.visual_bounding_rect().expand(2.);
+    if !p.clip_rect().contains_rect(bounds) {
+        return;
+    }
+    p.rect_filled(bounds, 1., backing);
+    p.add(text);
 }
 
 #[cfg(test)]

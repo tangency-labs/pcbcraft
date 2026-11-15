@@ -1106,7 +1106,6 @@ pub(super) fn paint(
                 &painter,
                 camera.screen(moved(item.at, selected), rect),
                 width_px(camera, rect, item.diameter_nm),
-                width_px(camera, rect, item.drill_nm),
                 name,
             );
         }
