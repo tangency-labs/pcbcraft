@@ -28,7 +28,30 @@ fn replace(h: &mut Harness<'_, PcbApp>, label: &str, text: &str) {
     h.run();
 }
 
-/// Cancel, invalid dimensions, unit mixing and exact untouched precision work without a board.
+/// A PCB workspace may display a schematic-only project; class authoring must stay available
+/// while physical-board actions and the board-default editor remain disabled.
+#[test]
+fn pcb_rules_entry_does_not_require_a_physical_board() {
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    app.views.active.switch(crate::Workspace::Board, &app.session);
+    h.run();
+    crate::tests::click_tab(&mut h, "Analyze");
+    assert!(!h.get_by_role_and_label(egui::Role::Button, "Edit net classes, assignments and board defaults.").accesskit_node().is_disabled());
+    for label in ["Run design rules check", "Measure distance"] {
+        assert!(h.get_by_role_and_label(egui::Role::Button, label).accesskit_node().is_disabled());
+    }
+    click(&mut h, "Edit net classes, assignments and board defaults.");
+    assert!(h.get_by_role_and_label(egui::Role::Button, "Board defaults…").accesskit_node().is_disabled());
+    click(&mut h, "New class");
+    replace(&mut h, "Class name", "Signal");
+    click(&mut h, "Save class");
+    assert_eq!(h.state().session.project().unwrap().net_classes().definitions[0].name, "Signal");
+    assert!(h.state().session.project().unwrap().board_target().is_none());
+}
+
+/// Mixed-unit GUI edits match canonical MCP updates without a board, including exact untouched
+/// values, stale MCP rejection, cancellation and native history.
 #[test]
 fn class_form_controls_create_edit_cancel_and_exact_units() {
     for width in [1200., 700., 400.] {
@@ -66,6 +89,9 @@ fn class_form_controls_create_edit_cancel_and_exact_units() {
         assert_eq!(class.rules[&Property::ClearanceNm], 350001);
         assert_eq!(class.rules[&Property::PreferredTrackWidthNm], 508000);
         assert_eq!(class.rules.len(), 2);
+        let mut canonical = pcbcraft_mcp::Headless::with_project(h.state().session.snapshot().unwrap());
+        use pcbcraft_mcp::Backend;
+        let canonical_revision = canonical.call("project.inspect", json!({})).unwrap()["revision"].clone();
         replace(&mut h, "Class name", "Power renamed");
         assert_eq!(
             h.get_by_role_and_label(egui::Role::TextInput, "Class name").value().as_deref(),
@@ -76,6 +102,14 @@ fn class_form_controls_create_edit_cancel_and_exact_units() {
         let class = h.state().session.project().unwrap().net_classes().get(id).unwrap();
         assert_eq!(class.rules[&Property::ClearanceNm], 350001);
         assert_eq!(class.revision, 2);
+        let params = json!({"command":net_classes::UPDATE,"inspect":false,"params":{
+            "class":id,"name":"Power renamed","rules":{"clearance_nm":350001,"preferred_track_width_nm":508000},
+            "expected_revision":canonical_revision}});
+        canonical.call("engine.execute", params.clone()).unwrap();
+        let canonical_saved = canonical.call("project.inspect", json!({})).unwrap();
+        assert_eq!(canonical_saved["project"], h.state().session.inspect()["project"], "mixed-unit GUI values match canonical MCP dimensions");
+        assert!(canonical.call("engine.execute", params).is_err(), "canonical MCP rejects the earlier revision");
+        assert_eq!(canonical.call("project.inspect", json!({})).unwrap(), canonical_saved);
         let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
         click(&mut h, "Cancel");
@@ -186,7 +220,7 @@ fn class_form_original_view_target_cannot_be_replaced_by_active_focus() {
 }
 
 /// Signal/Power authored through the shared forms reach PCB contact policy and DRC, survive
-/// Update PCB and a split editor, and reopen with the same UUID/revision/binding sources.
+/// Update PCB and a split editor, and match live/headless MCP inspection and native reopen.
 #[test]
 fn two_classes_reach_pcb_update_split_and_native_reopen() {
     use pcbcraft_engine::{CONNECT_PINS, INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL};
@@ -266,6 +300,33 @@ fn two_classes_reach_pcb_update_split_and_native_reopen() {
     }
     let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let reopened = decode_documents(&saved).unwrap();
+    let mut headless = pcbcraft_mcp::Headless::with_project(h.state().session.snapshot().unwrap());
+    use pcbcraft_mcp::Backend;
+    for (target, inspected) in &expected {
+        let params = json!({"command":pcbcraft_engine::nets::INSPECT_CLASSES,"params":{"target":target},"inspect":false});
+        assert_eq!(headless.call("engine.execute", params.clone()).unwrap()["net_assignments"], *inspected);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ctx = h.ctx.clone();
+            let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+            let live = pcbcraft_mcp::live::call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap();
+            assert_eq!(live["net_assignments"], *inspected, "live/headless queries retain bindings, values and source identities");
+        }
+    }
+    let project = h.state().session.project().unwrap();
+    let classes: Vec<Uuid> =
+        expected.iter().map(|(_, inspected)| serde_json::from_value(inspected["resolution"]["classes"][0].clone()).unwrap()).collect();
+    let conflicting = project.resolve_net_classes(&classes, project.board_target()).unwrap();
+    assert!(!conflicting.conflicts.is_empty());
+    let params = json!({"command":net_classes::RESOLVE,"params":{"classes":classes,"board":project.board_target().unwrap().board},"inspect":false});
+    assert_eq!(headless.call("engine.execute", params.clone()).unwrap()["resolution"], json!(conflicting));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ctx = h.ctx.clone();
+        let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+        let live = pcbcraft_mcp::live::call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap();
+        assert_eq!(live["resolution"], json!(conflicting), "conflict and contribution data matches the Rules resolver");
+    }
     for (target, inspected) in expected {
         assert_eq!(reopened.inspect_net_classes(&target).unwrap(), inspected);
     }

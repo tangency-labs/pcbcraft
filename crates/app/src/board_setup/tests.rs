@@ -140,6 +140,28 @@ fn short_board_setup_forms_keep_actions_and_names_reachable() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// Wide but short windows retain the rail; scrolling its last page into view must expose a
+/// clickable row inside the navigation viewport without changing the document.
+#[test]
+fn short_wide_setup_navigation_reaches_rule_pages() {
+    for height in [360., 420.] {
+        let mut h = harness(1200.);
+        h.set_size(egui::vec2(1200., height));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "Board setup");
+        assert!(h.query_by_label("Board setup page").is_none());
+        h.get_by_role_and_label(egui::Role::Button, "Net classes").scroll_to_me();
+        h.run();
+        assert!(crate::tests::fully_visible(&h, "Net classes"), "{height}: last navigation row must scroll into view");
+        click(&mut h, "Net classes");
+        click(&mut h, "New class");
+        h.get_by_role_and_label(egui::Role::TextInput, "Class name");
+        click(&mut h, "Cancel");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// Invalid names cannot commit, while one valid name/thickness edit retains all IDs and is one undo step.
 #[test]
 fn board_setup_names_and_stackup_validate_before_atomic_apply() {

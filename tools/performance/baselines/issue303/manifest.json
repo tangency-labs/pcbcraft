@@ -15,7 +15,7 @@
     "failure-review.md": "186c93a7c808630a8e8f84e4ec1b1b9bbe8a69587587bb71d0aa3c6027e068e4",
     "checks.json": "e608d7120f3700d44478ed6727980146d9510f5ef3c066df6dc7f86044b30c11",
     "verification.json": "3e00ec46016c5da79c1264ff2a2d48cce10d0fde6e93fcce457218ae15b7b320",
-    "README.md": "eaaedf5df808ceb93776293540f4454780d14e2e4efc4a3d444b9dd00e16aee3",
+    "README.md": "fb0b31414ea3360e0d589d3c00e06d558d709051d2c58c5be85371bf62f1d1eb",
     "visual/class-dark-wide.png": "3dc4e0a16aeca673e8dba2708710399eb05c3ef020d57f0c8aa407c648e686cf",
     "visual/net-dark-wide.png": "71e4b01616213587b361abd3c1c5aef7c770d6428a7c26eaa98bf4c8b75f6e52",
     "visual/net-light-compact.png": "97dbb495445e3e0ea75f4b4bd5baccd08ca7c108e2425b97bd58594bd5c337f9",
@@ -73,7 +73,14 @@
     "inline-setup-review/failure-review.md": "b04171bfbe87de584feb832a407b9f9efbd4d14b568444310986d6e318132661",
     "inline-setup-review/retained-dark-wide.png": "780d1fc20d1b9bc2e5d9e8414c9dbbe27fda60de2bda9031f061657e3c25b300",
     "inline-setup-review/source.json": "e93ea40782f7d727f92728df38e85d0f1812475c8ce17c19747b5f226ff0198f",
-    "inline-setup-review/verification.json": "147a2aaba8754ba421acec29dacf8513f34995a63a9e9f5f5464388a2d4f58a5"
+    "inline-setup-review/verification.json": "147a2aaba8754ba421acec29dacf8513f34995a63a9e9f5f5464388a2d4f58a5",
+    "rabbit-review/README.md": "6d9ae6bf48456116f7526c55bf50125ac46cb166291d105a35a8c45fc8799b01",
+    "rabbit-review/browser-short-classes.png": "5ccaecaaba3e6231615fae9ed8df5e34bee4dff74c2aea1a8be58f0ed0f4c6b5",
+    "rabbit-review/browser.json": "63b3d255dfb51ae4c4ec7c3eba060cc1f9bce745e24fb44f4ac41bdeab6ccd5e",
+    "rabbit-review/checks.json": "0074f99a24adb131bb54ce8e5a2aba44872c19ba7515486f3969bfeee2c84f33",
+    "rabbit-review/short-dark.png": "407a00fd4d2841ee7207670f84a77faa367cfb975bba64bc634b9969b95cc9b6",
+    "rabbit-review/short-light.png": "f8bd8f49430cd4f4830a45ca78eb88fe074e78c01371fb022f6e08a1a4cb8c9f",
+    "rabbit-review/verification.json": "cfc37bf5c81dd169f4e6b0bc458a618f8745c1d7f91b051663455a77dbc45e0f"
   },
   "layout_code": "8d942a1cacc7a0281cf447b40f09b1eee88f81b7",
   "active_source_code": "0cca4c2d022a8e54da06caf9dfad3fe2842a2475"

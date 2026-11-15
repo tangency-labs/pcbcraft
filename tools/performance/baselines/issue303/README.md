@@ -66,3 +66,6 @@ unchanged commit replays and the focused draft/input-interface extraction.
 
 The [embedded Board Setup follow-up](inline-setup-review/README.md) replaces those
 destinations with retained pages inside Setup and fixes source-window hosting.
+
+The [CodeRabbit follow-up](rabbit-review/README.md) repairs no-board Rules access
+and short-window navigation, and adds explicit GUI/MCP parity comparisons.

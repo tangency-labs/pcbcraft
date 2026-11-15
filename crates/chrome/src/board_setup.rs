@@ -42,7 +42,7 @@ impl Page {
     }
 }
 
-/// Wide editors have a stable navigation rail; compact windows keep full labels in a selector.
+/// Wide editors have an independently scrolling navigation rail; compact windows use a selector.
 /// Validation stays below the scrolling page so it remains visible beside the fixed form actions.
 pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce(&mut Ui, Page)) {
     let previous = *page;
@@ -60,24 +60,28 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
         ui.painter().rect_filled(rail, 0, t.dialog_footer);
         ui.painter().vline(rail.right(), rail.y_range(), Stroke::new(1., t.dialog_rule));
         let mut nav = ui.new_child(UiBuilder::new().max_rect(rail.shrink(t.space_12)).layout(Layout::top_down(Align::Min)));
-        heading(&mut nav, "Board setup");
-        for value in Page::ALL {
-            if value == Page::BoardDefaults {
-                heading(&mut nav, "Design rules");
+        nav.set_clip_rect(ui.clip_rect().intersect(rail));
+        egui::ScrollArea::vertical().id_salt("setup_navigation").auto_shrink([false, false]).show(&mut nav, |nav| {
+            crate::workspace::describe_scroll_viewport(nav);
+            heading(nav, "Board setup");
+            for value in Page::ALL {
+                if value == Page::BoardDefaults {
+                    heading(nav, "Design rules");
+                }
+                if nav
+                    .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
+                        solidcraft_ui_kit::button(
+                            ui,
+                            value.title(),
+                            if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
+                        )
+                    })
+                    .clicked()
+                {
+                    *page = value;
+                }
             }
-            if nav
-                .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
-                    solidcraft_ui_kit::button(
-                        ui,
-                        value.title(),
-                        if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
-                    )
-                })
-                .clicked()
-            {
-                *page = value;
-            }
-        }
+        });
         body.min.x = rail.right();
     } else {
         let bar = Rect::from_min_size(body.min, vec2(body.width(), t.form_header_height));
