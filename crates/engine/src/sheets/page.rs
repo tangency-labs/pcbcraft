@@ -184,17 +184,20 @@ impl Page {
     /// [`Page::new_sheet`].
     pub fn around(bounds: Option<[Point; 2]>) -> Self {
         let Some([min, max]) = bounds else { return Self::new_sheet() };
-        let need = Point { x_nm: max.x_nm - min.x_nm + 2 * ADOPT_MARGIN_NM, y_nm: max.y_nm - min.y_nm + 2 * ADOPT_MARGIN_NM };
         let center = Point { x_nm: min.x_nm + (max.x_nm - min.x_nm) / 2, y_nm: min.y_nm + (max.y_nm - min.y_nm) / 2 };
-        let (paper, orientation) = Paper::ALL
+        // Check the placed page: near the range's edge, centering is clamped and can shift the
+        // paper off a drawing that its size alone would hold.
+        Paper::ALL
             .into_iter()
-            .flat_map(|paper| Orientation::ALL.map(|orientation| (paper, orientation)))
-            .find(|&(paper, orientation)| {
-                let size = Self { paper, orientation, at: center }.size();
-                size.x_nm >= need.x_nm && size.y_nm >= need.y_nm
+            .flat_map(|paper| Orientation::ALL.map(|orientation| Self::centered(paper, orientation, center)))
+            .find(|page| {
+                let [low, high] = page.corners();
+                low.x_nm <= min.x_nm - ADOPT_MARGIN_NM
+                    && low.y_nm <= min.y_nm - ADOPT_MARGIN_NM
+                    && high.x_nm >= max.x_nm + ADOPT_MARGIN_NM
+                    && high.y_nm >= max.y_nm + ADOPT_MARGIN_NM
             })
-            .unwrap_or((Paper::A0, Orientation::Landscape));
-        Self::centered(paper, orientation, center)
+            .unwrap_or_else(|| Self::centered(Paper::A0, Orientation::Landscape, center))
     }
 
     /// The ISO paper size.

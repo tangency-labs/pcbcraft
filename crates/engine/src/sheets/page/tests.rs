@@ -163,6 +163,17 @@ fn adopted_paper_falls_back_to_a0_and_stays_in_range() {
     let corner = [Point { x_nm: 990_000_000, y_nm: 990_000_000 }, Point { x_nm: 990_000_000, y_nm: 990_000_000 }];
     let page = Page::around(Some(corner));
     assert!(Page::new(page.paper(), page.orientation(), page.at()).is_ok());
+    // Near the range's edge, centering is clamped; a size is chosen only if its placed paper
+    // still holds the drawing, otherwise the A0 fallback applies.
+    for x_nm in [999_700_000, -999_700_000, 990_000_000] {
+        let edge = Point { x_nm, y_nm: 0 };
+        let page = Page::around(Some([edge, edge]));
+        let [low, high] = page.corners();
+        let holds = (low.x_nm..=high.x_nm).contains(&x_nm);
+        assert!(holds || (page.paper(), page.orientation()) == (Paper::A0, Orientation::Landscape), "{x_nm}: {page:?}");
+    }
+    let near = Point { x_nm: 900_000_000, y_nm: 0 };
+    assert_eq!(Page::around(Some([near, near])).paper(), Paper::A4, "a small drawing near the edge still gets A4");
     let tall = [Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 100_000_000, y_nm: 250_000_000 }];
     assert_eq!(Page::around(Some(tall)).orientation(), Orientation::Portrait);
 }

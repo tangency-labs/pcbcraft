@@ -34,6 +34,7 @@ fn rotated_led_labels_clear_the_drawing() {
                 turns,
                 false,
                 Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE),
+                pcbcraft_chrome::Tokens::get().canvas,
             );
             fields::paint_labels(
                 &painter,
@@ -106,6 +107,7 @@ fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
             0,
             false,
             Stroke::new(1., egui::Color32::WHITE),
+            pcbcraft_chrome::Tokens::get().canvas,
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
@@ -157,4 +159,21 @@ fn disabled_no_connect_canvas_returns_focus_loss_cancellation() {
     });
     output.textures_delta.clear();
     assert!(matches!(result, Some(Click::CancelNoConnect)));
+}
+
+/// Background-filled drawing takes the surface it sits on: the paper inside the sheet's page and
+/// the canvas around it, in either theme.
+#[test]
+fn symbol_backgrounds_match_the_surface_under_them() {
+    let mut session = Session::default();
+    session.execute("project.new", &json!({"name": "Surfaces"})).unwrap();
+    let project = session.snapshot().unwrap();
+    let [min, max] = project.page().unwrap().corners();
+    for dark in [true, false] {
+        pcbcraft_chrome::theme::apply(&egui::Context::default(), dark);
+        let t = Tokens::get();
+        assert_eq!(surface_at(&project, Point { x_nm: 0, y_nm: 0 }), t.schematic_paper);
+        assert_eq!(surface_at(&project, min), t.schematic_paper, "the paper's edge is on the paper");
+        assert_eq!(surface_at(&project, Point { x_nm: max.x_nm + GRID_NM, y_nm: 0 }), t.canvas);
+    }
 }

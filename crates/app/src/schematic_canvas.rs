@@ -211,7 +211,16 @@ pub(crate) fn paint_preview_transformed(
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
-    paint_symbol(painter, definition.default_unit(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
+    paint_symbol(
+        painter,
+        definition.default_unit(),
+        center,
+        step,
+        0,
+        false,
+        Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color),
+        Tokens::get().canvas,
+    );
 }
 
 /// What a wire's context menu asks for.
@@ -483,6 +492,7 @@ pub(crate) fn show(
                 symbol.turns(),
                 symbol.is_mirrored(),
                 Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
+                surface_at(project, symbol.position),
             );
         }
     }
@@ -525,7 +535,7 @@ pub(crate) fn show(
                 && let Some(preview) =
                     SymbolPlacement::preview_unit(definition.clone(), unit, *turns, definition.defaults.clone().unwrap_or_default().field_layout)
             {
-                paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent);
+                paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent, surface_at(project, at));
                 overlap_index.preview(ui, camera, rect, drawing, *turns, false, at);
             }
         }
@@ -1185,7 +1195,7 @@ fn placement_preview(
         return None;
     }
     let preview = SymbolPlacement::preview_unit(definition.clone(), unit, turns, definition.defaults.clone().unwrap_or_default().field_layout)?;
-    paint_unit_template(&ui.painter_at(rect), &preview, value, screen(point), camera.unit_step(), tokens.accent);
+    paint_unit_template(&ui.painter_at(rect), &preview, value, screen(point), camera.unit_step(), tokens.accent, surface_at(project, point));
     overlaps.preview(ui, camera, rect, preview.unit_definition(), turns, false, point);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
@@ -1199,11 +1209,20 @@ fn placement_preview(
 fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: &str, center: Pos2, step: f32, turns: u8, color: egui::Color32) {
     let defaults = definition.defaults.clone().unwrap_or_default();
     let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout);
-    paint_unit_template(painter, &symbol, value, center, step, color);
+    paint_unit_template(painter, &symbol, value, center, step, color, Tokens::get().canvas);
 }
 
 /// Preview the selected drawing with the same fields and geometry as its committed placement.
-fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str, center: Pos2, step: f32, color: egui::Color32) {
+/// `background` is the surface under the preview, as for [`paint_symbol`].
+fn paint_unit_template(
+    painter: &Painter,
+    symbol: &SymbolPlacement,
+    value: &str,
+    center: Pos2,
+    step: f32,
+    color: egui::Color32,
+    background: egui::Color32,
+) {
     paint_symbol(
         painter,
         symbol.unit_definition(),
@@ -1212,9 +1231,22 @@ fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str,
         symbol.turns(),
         symbol.is_mirrored(),
         Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
+        background,
     );
     let defaults = symbol.definition.defaults.clone().unwrap_or_default();
     fields::paint_labels(painter, symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
+}
+
+/// The colour of the surface under `point` on the sheet: the paper inside the sheet's page,
+/// the canvas around it or on a sheet without paper. Background-filled drawing uses it so a
+/// filled body matches what it sits on.
+pub(crate) fn surface_at(project: &Project, point: Point) -> egui::Color32 {
+    let t = Tokens::get();
+    let on_paper = project.page().is_some_and(|page| {
+        let [min, max] = page.corners();
+        (min.x_nm..=max.x_nm).contains(&point.x_nm) && (min.y_nm..=max.y_nm).contains(&point.y_nm)
+    });
+    if on_paper { t.schematic_paper } else { t.canvas }
 }
 
 /// How the schematic grid is drawn, from the person's preferences. Drawing only: snapping
@@ -1330,8 +1362,10 @@ fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored
 }
 
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
-/// turned with the symbol.
+/// turned with the symbol. `background` is the colour of the surface under the symbol, which
+/// background-filled library graphics take: see [`surface_at`].
 /// Part instance fields are drawn separately so their layout never changes the body or pins.
+#[allow(clippy::too_many_arguments)]
 fn paint_symbol(
     painter: &Painter,
     definition: &pcbcraft_engine::schematic::SymbolUnit,
@@ -1340,6 +1374,7 @@ fn paint_symbol(
     turns: u8,
     mirrored: bool,
     stroke: Stroke,
+    background: egui::Color32,
 ) {
     let color = stroke.color;
     let xy = |point: &Point| {
@@ -1361,10 +1396,10 @@ fn paint_symbol(
                         |p| center + vec2(p.x_nm as f32, p.y_nm as f32) * (step / GRID),
                         step / GRID,
                         color,
-                        Tokens::get().canvas,
+                        background,
                     );
                 } else {
-                    crate::definition_graphics::paint(painter, graphic, |p| xy(&p), step / GRID, color, Tokens::get().canvas);
+                    crate::definition_graphics::paint(painter, graphic, |p| xy(&p), step / GRID, color, background);
                 }
             }
             Shape::Line(from, to) => {
@@ -1402,7 +1437,8 @@ pub(crate) fn paint_part_preview(
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
-    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, pcbcraft_chrome::Tokens::get().canvas_ink));
+    let t = pcbcraft_chrome::Tokens::get();
+    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
     if let Some(pin) = terminal.and_then(|terminal| unit.pins().iter().find(|pin| pin.number == terminal)) {
         let at = center + egui::vec2(pin.offset.x_nm as f32, pin.offset.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
         painter.circle_stroke(at, 6., Stroke::new(2., pcbcraft_chrome::Tokens::get().accent));

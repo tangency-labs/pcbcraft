@@ -86,13 +86,14 @@ fn wire_no_connect_storage_roundtrips_and_rejects_invalid_records() {
         bad.insert(sheet_path.clone(), serde_json::to_vec(&value).unwrap());
         assert!(persistence::decode_documents(&bad).is_err());
     }
+    // Sheet/6 needs neither paper nor generated legs, so the refusal must be the wire-end rule.
     let mut old = docs.clone();
     let mut value = sheet;
-    value["format"] = json!("pcbcraft-sheet/7");
-    // Sheet/7 would also reject sheet/9's paper; remove it so only the wire ends are tested.
+    value["format"] = json!("pcbcraft-sheet/6");
     value.as_object_mut().unwrap().remove("page").unwrap();
     old.insert(sheet_path.clone(), serde_json::to_vec(&value).unwrap());
-    assert!(persistence::decode_documents(&old).is_err());
+    let error = persistence::decode_documents(&old).map(|_| ()).unwrap_err();
+    assert!(error.to_string().contains("No-connect wire ends require sheet format 8"), "{error}");
 }
 
 /// The marker follows moved endpoints and copied IDs. New wires at the marked end are

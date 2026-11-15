@@ -257,7 +257,7 @@ pub(super) fn paint_handles(painter: &Painter, rect: Rect, project: &Project, ca
         if let WireEndpoint::Junction(_) = end
             && let Some(point) = project.endpoint_position(end)
         {
-            painter.rect_filled(square(point), 0.0, tokens.canvas);
+            painter.rect_filled(square(point), 0.0, super::surface_at(project, point));
             painter.rect_stroke(square(point), 0.0, Stroke::new(1.5, tokens.accent), egui::StrokeKind::Middle);
         }
     }

@@ -101,7 +101,7 @@ fn drawing_text_extents_match_painting_and_warn_beyond_the_anchor() {
                         let painter = ctx.layer_painter(egui::LayerId::background());
                         let world = bounds(&painter, &unit, turns, mirrored, Point { x_nm: 0, y_nm: 0 }, step).unwrap();
                         let center = pos2(400., 400.);
-                        paint_symbol(&painter, &unit, center, step, turns, mirrored, Stroke::new(1., egui::Color32::WHITE));
+                        paint_symbol(&painter, &unit, center, step, turns, mirrored, Stroke::new(1., egui::Color32::WHITE), egui::Color32::BLACK);
                         let mut output = ctx.end_pass();
                         output.textures_delta.clear();
                         let rendered = output

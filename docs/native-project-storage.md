@@ -86,8 +86,9 @@ selected to fit its drawing with a 20 mm margin. Landscape is tried before
 portrait at each size; a drawing larger than A0 gets A0 landscape. Paper is
 centered around the drawing, with its top-left corner snapped to the 1.27 mm
 grid and clamped to the schematic coordinate range. Near those limits it may
-not be centered. Drawing can extend outside the paper if it is too large or
-paper placement is clamped. An empty sheet gets the new-sheet paper. Nothing
+not be centered; a size is chosen only if the clamped paper still holds the
+drawing and margin. Drawing extends outside the paper only with the A0
+fallback. An empty sheet gets the new-sheet paper. Nothing
 on the sheet moves.
 
 Like the library migration, this happens in memory when the desktop app, browser
