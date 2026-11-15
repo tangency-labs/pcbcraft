@@ -20,6 +20,9 @@ zone markers and a title block. The title block shows parameter values such as
   `crates/engine/src/schematic.rs`), and paper must fit inside it.
 - The Browser's sheet menu has a **Paper** submenu; there is no Page setup
   dialog or frame chooser yet.
+- The paper is drawn in the theme's schematic palette, and the canvas around it
+  stays editable. **Appearance → Show grid outside paper** chooses whether the
+  grid continues there.
 - The schematic Y axis points down (`canvas_camera.rs`, `screen`). Coline's Y
   axis points up from the paper's bottom-left corner, so ported geometry must be
   flipped.
@@ -35,8 +38,9 @@ zone markers and a title block. The title block shows parameter values such as
 | Default paper | Every sheet has paper. New sheets start on A4 landscape with the Default frame. |
 | Existing sheets | On open, a frameless sheet gets the smallest A size that holds its drawing, placed around it by setting `at_nm`, so nothing moves. A drawing larger than A0 gets A0 landscape, centered, and parts of it can lie outside the paper. It works like the bundled-library migration: prepared in memory, no undo step, written on the next save. The first save of an older project therefore changes its sheet files. |
 | Parameter syntax | Coline's `@scope.Name`, ported as a baseline. |
-| Paper colour | The paper is white in both themes. Frame, symbol and wire colours on the paper stay the light palette. A dark paper is deferred, because it needs its own symbol colours. |
-| Canvas | The area outside the paper is blank. The grid is drawn on the paper only. |
+| Paper colour | The paper follows the schematic palette of the chosen theme: white in the light theme, a darker drawing surface than the canvas in the dark theme, with a visible edge. Symbols and wires use the same theme colours on and off the paper. Custom symbol colours and print styling are deferred to a focused follow-up. |
+| Canvas | The paper outline marks the default export area; it is not an editing boundary. Parts can be placed and moved outside it, for example while rearranging circuits. The canvas around the paper keeps the theme's colour wherever the drawing lies. |
+| Grid | **Appearance → Show grid outside paper**, on by default, continues the schematic grid across the canvas. Turned off, the grid is drawn on the paper only. There is no mode that hides the paper or its outline. |
 
 ## Frame layers
 

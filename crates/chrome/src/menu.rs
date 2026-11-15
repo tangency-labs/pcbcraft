@@ -98,10 +98,8 @@ pub fn help<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
         .map(|shown| shown.inner)
 }
 
-/// Open a pointer context menu with the same surface and rows as the menu bar. The menu uses
-/// the chosen theme even when opened from a canvas painting on paper.
+/// Open a pointer context menu with the same surface and rows as the menu bar.
 pub fn context<R>(response: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
-    let _chrome = crate::theme::chrome_palette();
     egui::Popup::context_menu(response).frame(frame()).show(|ui| {
         ui.set_min_width(120.0);
         ui.spacing_mut().item_spacing.y = 0.0;

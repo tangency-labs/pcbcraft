@@ -103,6 +103,10 @@ pub struct Preferences {
     pub grid_opacity_percent: u8,
     /// Schematic grid visibility is independent of PCB grid visibility and snapping.
     pub schematic_grid_visible: bool,
+    /// Whether the schematic grid continues on the canvas outside the sheet's paper. On by
+    /// default, so parts can still be arranged on a grid off the paper; off leaves a clean
+    /// surround. Drawing only: snapping is the same either way.
+    pub schematic_grid_outside_paper: bool,
     /// PCB grid visibility preserves the selected dot or line style when hidden.
     pub board_grid_visible: bool,
     /// Display style for every PCB view. Off is the default, including for older saved settings.
@@ -140,6 +144,7 @@ impl Default for Preferences {
             navigation: Navigation::default(),
             grid_opacity_percent: grid::OPACITY_DEFAULT,
             schematic_grid_visible: true,
+            schematic_grid_outside_paper: true,
             board_grid_visible: true,
             board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
@@ -157,6 +162,12 @@ impl Preferences {
     pub(crate) fn grid_opacity(self, board: bool) -> u8 {
         let visible = if board { self.board_grid_visible } else { self.schematic_grid_visible };
         if visible { self.grid_opacity_percent } else { 0 }
+    }
+
+    /// How schematic views draw their grid: the effective opacity and whether it continues
+    /// outside the paper.
+    pub(crate) fn schematic_grid(self) -> crate::schematic_canvas::GridDisplay {
+        crate::schematic_canvas::GridDisplay { opacity: self.grid_opacity(false), outside_paper: self.schematic_grid_outside_paper }
     }
 
     /// Whether the workspace currently draws a grid, including legacy opacity-zero and PCB-Off settings.
@@ -392,6 +403,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.scale_percent = defaults.scale_percent;
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
             preferences.schematic_grid_visible = defaults.schematic_grid_visible;
+            preferences.schematic_grid_outside_paper = defaults.schematic_grid_outside_paper;
             preferences.board_grid_visible = defaults.board_grid_visible;
             preferences.board_grid_style = defaults.board_grid_style;
             preferences.units = defaults.units;
@@ -418,7 +430,8 @@ fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
     });
 }
 
-/// Theme, interface scale, PCB grid display, shared grid opacity and display units.
+/// Theme, interface scale, PCB grid display, shared grid opacity, the schematic grid outside
+/// the paper and display units.
 /// The PCB style reflects effective visibility; choosing dots or lines restores a hidden grid.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Appearance", "How PCBCraft looks. Cancel restores your previous settings.");
@@ -469,6 +482,10 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
             grid::opacity_control(ui, &mut preferences.grid_opacity_percent);
         });
         settings::hint(ui, "Only the grid fades. Snapping still follows the grid at 0%.");
+        settings::row_with_keywords(ui, "Show grid outside paper", &["schematic", "sheet", "page", "surround", "off-paper"], |ui| {
+            settings::checkbox(ui, "Enabled", "Show grid outside paper", &mut preferences.schematic_grid_outside_paper);
+        });
+        settings::hint(ui, "Schematic only. Parts can be placed outside the paper either way.");
         settings::row_with_keywords(ui, "Units", &["mil", "mm", "millimetres", "millimeters", "metric", "imperial", "inch"], |ui| {
             settings::segmented(ui, &mut preferences.units, &[(Unit::Mil, "mil"), (Unit::Mm, "mm")]);
         });
@@ -635,6 +652,7 @@ mod tests {
             },
             grid_opacity_percent: 35,
             schematic_grid_visible: false,
+            schematic_grid_outside_paper: false,
             board_grid_visible: true,
             board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
@@ -650,6 +668,8 @@ mod tests {
         }
         // Settings saved before units existed show mils, as the grid did then.
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":40}").units, Unit::Mil);
+        // Settings saved before paper keep the grid outside it, as the canvas did then.
+        assert!(Preferences::parse("{\"grid_opacity_percent\":40}").schematic_grid_outside_paper);
         let hidden = Preferences { grid_opacity_percent: 0, ..Preferences::default() };
         assert_eq!(Preferences::parse(&hidden.to_text()), hidden);
     }
@@ -712,6 +732,7 @@ mod tests {
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
             schematic_grid_visible: false,
+            schematic_grid_outside_paper: false,
             board_grid_visible: false,
             board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,

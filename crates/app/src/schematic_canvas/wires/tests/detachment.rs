@@ -240,7 +240,7 @@ fn detached_pieces_translate_freely_in_both_axes() {
             let preview_points = expected.map(|point| screen(&h, point)).to_vec();
             assert!(
                 h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path)
-                if path.points==preview_points && path.stroke.color==egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::light().accent))),
+                if path.points==preview_points && path.stroke.color==egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::get().accent))),
                 "the detached preview must follow both pointer axes"
             );
             h.key_press(egui::Key::Escape);

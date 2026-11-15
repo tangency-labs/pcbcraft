@@ -308,12 +308,14 @@ fn recent_cards_show_native_power_symbols_in_both_themes() {
         h.state_mut().files.recent = crate::recent_projects::RecentProjects::parse(&history);
         open_home(&mut h);
         finish_previews(&mut h);
-        // The card frames the whole A4 sheet, so these small symbols draw without labels; their
-        // strokes use the paper's light ink in either theme.
-        let ink = pcbcraft_chrome::Tokens::light().text;
+        // The card frames the whole A4 sheet, so these small symbols draw without labels; the
+        // paper and the strokes follow the theme, like the canvas.
+        let ink = pcbcraft_chrome::Tokens::get().text;
         let strokes = h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == ink)).count();
         assert!(strokes >= 6, "{strokes} power symbol strokes");
-        assert!(h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == pcbcraft_chrome::theme::SCHEMATIC_PAPER)));
+        assert!(
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == pcbcraft_chrome::Tokens::get().schematic_paper))
+        );
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         assert_eq!(h.state().session.revision(), revision);
         assert_eq!(saved_bytes(&path), bytes);

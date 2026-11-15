@@ -1529,7 +1529,7 @@ impl PcbApp {
                             input_enabled,
                             input_enabled,
                             self.preferences.navigation,
-                            self.preferences.grid_opacity(false),
+                            self.preferences.schematic_grid(),
                             self.preferences.auto_heal_wires,
                             self.parts.repeats(),
                             self.preferences.units,

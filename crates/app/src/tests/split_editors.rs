@@ -89,13 +89,13 @@ fn linked_highlights_are_visible_without_becoming_edit_selections() {
         assert_eq!(h.state().views.active.id(), ViewId(source));
         assert!(view(&h, target).schematic.selection.is_empty());
         assert_eq!(h.state().views.highlight_for(ViewId(target), &h.state().session), view(&h, source).schematic.selection);
-        assert_eq!(reference_color(&h, source, "R1"), Tokens::light().accent);
-        assert_eq!(reference_color(&h, target, "R1"), Tokens::light().schematic_highlight);
+        assert_eq!(reference_color(&h, source, "R1"), Tokens::get().accent);
+        assert_eq!(reference_color(&h, target, "R1"), Tokens::get().schematic_highlight);
         for id in [0, 1] {
             assert_eq!(view(&h, id).camera.screen(origin, canvas(&h, id)), centers[id as usize]);
         }
         focus_tab(&mut h, target as usize);
-        assert_eq!(reference_color(&h, target, "R1"), Tokens::light().schematic_highlight);
+        assert_eq!(reference_color(&h, target, "R1"), Tokens::get().schematic_highlight);
         h.key_press(Key::Delete);
         h.run();
         assert_eq!(h.state().session.revision(), revision);
@@ -108,7 +108,7 @@ fn linked_highlights_are_visible_without_becoming_edit_selections() {
         h.key_press(Key::Escape);
         h.run();
         assert!(h.state().views.highlight_for(ViewId(source), &h.state().session).is_empty());
-        assert_eq!(reference_color(&h, target, "R1"), Tokens::light().text);
+        assert_eq!(reference_color(&h, target, "R1"), Tokens::get().text);
     }
 }
 
@@ -127,14 +127,14 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Symbols");
     click(&mut h, "R1  R");
-    assert_eq!(reference_color(&h, 0, "R1"), Tokens::light().schematic_highlight);
+    assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().schematic_highlight);
     click(&mut h, "Expand Nets");
     click(&mut h, "Net 1");
     assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_wire(), Some(wire.as_str()));
     let rect = canvas(&h, 0);
     assert!(h.output().shapes.iter().any(|shape| match &shape.shape {
         egui::Shape::Path(path) =>
-            path.stroke.color == egui::epaint::ColorMode::Solid(Tokens::light().schematic_highlight)
+            path.stroke.color == egui::epaint::ColorMode::Solid(Tokens::get().schematic_highlight)
                 && path.points.iter().all(|point| rect.contains(*point)),
         _ => false,
     }));
@@ -903,7 +903,7 @@ fn grid_opacity_reaches_both_views_without_changing_editor_state() {
                     focus_tab(&mut h, focused);
                     for id in [0, 1] {
                         let dots = grid_dots(&h, id);
-                        if let Some(color) = pcbcraft_chrome::grid::color(Tokens::light().canvas_grid, opacity) {
+                        if let Some(color) = pcbcraft_chrome::grid::color(Tokens::get().canvas_grid, opacity) {
                             assert_eq!(dots.iter().map(|(point, _)| *point).collect::<Vec<_>>(), positions[id as usize]);
                             assert!(dots.iter().all(|(_, fill)| *fill == color));
                         } else {
@@ -911,8 +911,8 @@ fn grid_opacity_reaches_both_views_without_changing_editor_state() {
                         }
                         assert_eq!((view(&h, id).camera.zoom(), view(&h, id).camera.screen(origin, canvas(&h, id))), cameras[id as usize]);
                     }
-                    assert_eq!(reference_color(&h, 0, "R1"), Tokens::light().accent);
-                    assert_eq!(reference_color(&h, 1, "R1"), Tokens::light().schematic_highlight);
+                    assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().accent);
+                    assert_eq!(reference_color(&h, 1, "R1"), Tokens::get().schematic_highlight);
                     assert_eq!(view(&h, 0).schematic.selection.single_symbol(), Some("symbol-2"));
                     assert!(view(&h, 1).schematic.selection.is_empty());
                 }

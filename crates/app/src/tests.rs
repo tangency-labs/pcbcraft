@@ -1306,8 +1306,9 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     assert_eq!(schematic.symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
 }
 
-/// Fit frames an empty sheet's whole paper, painted white, without advancing the project
-/// revision. Grid dots appear only on the paper.
+/// Fit frames an empty sheet's whole paper, painted in the theme's paper colour, without
+/// advancing the project revision. Grid dots continue outside the paper by default and stay on
+/// it when the person turns that off.
 #[test]
 fn zoom_to_fit_on_an_empty_sheet_frames_its_paper() {
     let mut harness = harness();
@@ -1325,17 +1326,30 @@ fn zoom_to_fit_on_an_empty_sheet_frames_its_paper() {
     assert!(canvas.contains_rect(paper), "{paper:?} inside {canvas:?}");
     assert!(paper.width() > canvas.width() / 2.0 || paper.height() > canvas.height() / 2.0, "Fit zooms to the paper");
     let shapes = &harness.output().shapes;
-    assert!(shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == pcbcraft_chrome::theme::SCHEMATIC_PAPER && r.rect == paper)));
-    let dots: Vec<_> = shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Circle(dot) if canvas.contains(dot.center) && dot.radius == pcbcraft_chrome::theme::SCHEMATIC_GRID_DOT_RADIUS => {
-                Some(dot.center)
-            }
-            _ => None,
-        })
-        .collect();
-    assert!(!dots.is_empty() && dots.iter().all(|dot| paper.contains(*dot)), "grid dots only on the paper");
+    assert!(
+        shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == pcbcraft_chrome::Tokens::get().schematic_paper && r.rect == paper))
+    );
+    let dots = |harness: &Harness<'_, PcbApp>| -> Vec<egui::Pos2> {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Circle(dot) if canvas.contains(dot.center) && dot.radius == pcbcraft_chrome::theme::SCHEMATIC_GRID_DOT_RADIUS => {
+                    Some(dot.center)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(dots(&harness).iter().any(|dot| !paper.contains(*dot)), "grid dots continue outside the paper by default");
+    harness.state_mut().preferences.schematic_grid_outside_paper = false;
+    harness.run();
+    let on_paper = dots(&harness);
+    assert!(!on_paper.is_empty() && on_paper.iter().all(|dot| paper.contains(*dot)), "grid dots only on the paper when turned off");
+    assert_eq!(harness.state().session().revision(), 1);
 }
 
 /// Resolve the actual library pin through the canvas camera so fixture geometry can evolve.
@@ -1511,7 +1525,7 @@ fn dragging_a_part_onto_the_sheet_places_it() {
         .iter()
         .filter_map(|shape| match &shape.shape {
             egui::Shape::LineSegment { points, stroke }
-                if stroke.color == Tokens::light().accent && points.iter().all(|point| canvas.contains(*point)) =>
+                if stroke.color == Tokens::get().accent && points.iter().all(|point| canvas.contains(*point)) =>
             {
                 Some(egui::Rect::from_two_pos(points[0], points[1]))
             }
@@ -1795,7 +1809,7 @@ mod live_mcp {
 
     /// Locate the painted wire in the frame, including the orthogonal path after a pin moves.
     fn painted_wire(harness: &Harness<'_, PcbApp>) -> Vec<egui::Pos2> {
-        let color = Tokens::light().schematic_wire;
+        let color = Tokens::get().schematic_wire;
         harness
             .output()
             .shapes

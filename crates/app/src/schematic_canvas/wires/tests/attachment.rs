@@ -36,7 +36,7 @@ fn endpoint_drags_attach_to_pins_and_junctions() {
         let pos = screen(&h, point);
         assert!(
             h.output().shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Circle(circle) if circle.center == pos && circle.stroke.color == pcbcraft_chrome::Tokens::light().accent)),
+            egui::Shape::Circle(circle) if circle.center == pos && circle.stroke.color == pcbcraft_chrome::Tokens::get().accent)),
             "the exact attachment target has a visible ring"
         );
         drop(&mut h, end);

@@ -146,7 +146,7 @@ fn disabled_no_connect_canvas_returns_focus_loss_cancellation() {
             false,
             false,
             Navigation::default(),
-            35,
+            super::GridDisplay { opacity: 35, outside_paper: true },
             true,
             false,
             pcbcraft_chrome::units::Unit::Mil,

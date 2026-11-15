@@ -811,7 +811,7 @@ impl PcbApp {
         } else if let Some(canvas) = view.camera.schematic_rect()
             && let Some(project) = view.snapshot(&self.session)
         {
-            return crate::schematic_canvas::backdrop(&project, &view.camera, canvas, area, self.preferences.grid_opacity(false));
+            return crate::schematic_canvas::backdrop(&project, &view.camera, canvas, area, self.preferences.schematic_grid());
         } else {
             (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
         };
@@ -1134,7 +1134,7 @@ impl PcbApp {
                                     false,
                                     false,
                                     self.preferences.navigation,
-                                    self.preferences.grid_opacity(false),
+                                    self.preferences.schematic_grid(),
                                     self.preferences.auto_heal_wires,
                                     self.parts.repeats(),
                                     self.preferences.units,
@@ -1181,14 +1181,7 @@ impl PcbApp {
                             [pcbcraft_chrome::Tokens::get().board_ink; 2],
                         );
                     } else {
-                        let ink = match self.views.active.target() {
-                            Some(DocumentTarget::Sheet(target)) => schematic_canvas::heading_ink(ui.ctx(), target),
-                            _ => {
-                                let t = pcbcraft_chrome::Tokens::get();
-                                [t.text, t.text_dim]
-                            }
-                        };
-                        workspace::canvas_heading(ui.painter(), canvas, covered[0], Rect::NOTHING, &path, &count, ink);
+                        workspace::sheet_heading(ui.painter(), canvas, covered[0], &path, &count);
                     }
                 }
             });

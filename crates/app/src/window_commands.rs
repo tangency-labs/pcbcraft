@@ -1001,6 +1001,7 @@ mod live {
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
                 setting("grid_opacity_percent", "How strongly the grid shows; 0 hides it", Kind::Integer { min: 0, max: 100, step: 5 }),
                 setting("schematic_grid_visible", "Show the schematic grid; true restores zero opacity", Kind::Bool),
+                setting("schematic_grid_outside_paper", "Continue the schematic grid on the canvas outside the sheet's paper", Kind::Bool),
                 setting("board_grid_visible", "Show the PCB grid; true overrides Off and zero opacity", Kind::Bool),
                 setting("board_grid_style", "How PCB views draw their grid", Kind::Choice(BOARD_GRIDS)),
                 setting("selection_follow", "Which views pan to reveal another view's selection", Kind::Choice(FOLLOW)),
@@ -1059,6 +1060,7 @@ mod live {
             "units": preferences.units.symbol(),
             "grid_opacity_percent": preferences.grid_opacity_percent,
             "schematic_grid_visible": preferences.schematic_grid_visible,
+            "schematic_grid_outside_paper": preferences.schematic_grid_outside_paper,
             "board_grid_visible": preferences.board_grid_visible,
             "board_grid_style": match preferences.board_grid_style {
                 grid::Style::Off => "off",
@@ -1104,6 +1106,9 @@ mod live {
                 "lines" => grid::Style::Lines,
                 _ => grid::Style::Off,
             };
+        }
+        if let Some(outside) = params.get("schematic_grid_outside_paper").and_then(Value::as_bool) {
+            preferences.schematic_grid_outside_paper = outside;
         }
         for (key, board) in [("board_grid_visible", true), ("schematic_grid_visible", false)] {
             if let Some(visible) = params.get(key).and_then(Value::as_bool) {
@@ -1823,14 +1828,16 @@ mod live {
         fn preferences_round_trip_through_their_command_names() {
             let changed = updated_preferences(
                 Preferences::default(),
-                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots", "panel_style": "compact"}),
+                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots", "panel_style": "compact", "schematic_grid_outside_paper": false}),
             );
             assert_eq!(changed.panel_style, PanelStyle::Compact);
+            assert!(!changed.schematic_grid_outside_paper);
             assert!(changed.navigation.middle_drag_zoom && changed.navigation.right_drag_pan);
             let inspected = inspect_preferences(&changed);
             assert_eq!(inspected["panel_style"], "compact");
             assert_eq!(inspected["middle_drag_zoom"], true);
             assert_eq!(inspected["right_drag_pan"], true);
+            assert_eq!(inspected["schematic_grid_outside_paper"], false);
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);
             assert_eq!(updated_preferences(changed, &json!({})), changed);
             assert_eq!(changed.scale_percent, Preferences::default().scale_percent);

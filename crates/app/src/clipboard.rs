@@ -501,7 +501,7 @@ impl PcbApp {
             false,
             true,
             self.preferences.navigation,
-            self.preferences.grid_opacity(false),
+            self.preferences.schematic_grid(),
             false,
             false,
             self.preferences.units,

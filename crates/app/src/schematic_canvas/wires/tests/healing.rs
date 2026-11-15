@@ -27,7 +27,7 @@ fn new_wire_preview_retracts_self_overlap_before_commit() {
     let expected = vec![grid(-8, 0), grid(-6, 0), grid(-6, 5), grid(-2, 5), grid(-2, 9)];
     let points: Vec<_> = expected.iter().map(|&point| screen(&h, point)).collect();
     assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,
-        egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::light().accent) && path.points == points)),
+        egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::get().accent) && path.points == points)),
         "the active preview should remove the doubled-back vertical spur");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     h.key_press(egui::Key::Enter);

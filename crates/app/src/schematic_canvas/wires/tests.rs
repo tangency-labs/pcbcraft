@@ -196,7 +196,7 @@ fn assert_painted(h: &Harness<'_, PcbApp>, id: u64, route: &[Point], color: egui
 /// repaint the shared result and use one undo history without changing the grid preference.
 #[test]
 fn split_wire_actions_share_history_and_keep_highlights_view_local() {
-    let ink = pcbcraft_chrome::Tokens::light();
+    let ink = pcbcraft_chrome::Tokens::get();
     for narrow in [false, true] {
         for source in [0, 1] {
             for (action, expected) in [

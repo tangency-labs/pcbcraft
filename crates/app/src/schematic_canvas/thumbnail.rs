@@ -109,14 +109,13 @@ impl Thumbnail {
         self.symbols.is_empty() && self.wires.is_empty() && self.blocks.is_empty() && self.labels.is_empty()
     }
 
-    /// Fit the saved geometry and its paper in the card. The drawing on paper uses the light
-    /// palette, like the canvas; without paper it uses the active theme. Canvas labels follow
+    /// Fit the saved geometry and its paper in the card and paint with the active theme, like
+    /// the canvas. Canvas labels follow
     /// the existing zoom threshold; library strokes, rotations and wire corners use the same data.
     pub(crate) fn paint(&self, painter: &Painter, rect: Rect) {
         if self.is_empty() || !rect.is_positive() {
             return;
         }
-        let _paper_palette = self.paper.is_some().then(theme::paper_palette);
         let t = Tokens::get();
         let target = rect.shrink(t.space_8);
         let bounds = self.bounds.expand(theme::SCHEMATIC_FIT_MARGIN / theme::SCHEMATIC_GRID_SPACING);

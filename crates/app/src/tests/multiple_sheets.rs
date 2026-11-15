@@ -276,9 +276,11 @@ fn browser_paper_menu_sets_the_sheet_paper() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
-/// Reducing paper around existing drawing keeps off-paper ink readable and Fit includes it.
+/// Reducing paper around existing drawing leaves that drawing editable outside the paper: the
+/// canvas keeps the theme's background and heading, the grid continues there unless the person
+/// turns it off, and Fit includes it.
 #[test]
-fn reduced_paper_keeps_off_paper_drawing_readable_in_both_themes() {
+fn off_paper_drawing_keeps_the_theme_background_and_grid() {
     for dark in [true, false] {
         let mut h = sheet_harness(1400.);
         h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
@@ -290,44 +292,54 @@ fn reduced_paper_keeps_off_paper_drawing_readable_in_both_themes() {
         let sheet = h.state().session.project().unwrap().sheet_target().id();
         apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a3","orientation":"landscape","at":{"x_nm":-100_000_000,"y_nm":-100_000_000}}));
         h.run();
-        let surround = |h: &Harness<'_, PcbApp>| {
+        click(&mut h, "Fit schematic");
+        // The painted surround, and whether any grid dot lies outside the paper.
+        let painted = |h: &Harness<'_, PcbApp>| {
+            let t = pcbcraft_chrome::Tokens::get();
             let canvas = h.get_by_label("Schematic canvas").rect();
-            let shapes = crate::schematic_canvas::backdrop(h.state().session.project().unwrap(), &h.state().views.active.camera, canvas, canvas, 100);
-            let egui::Shape::Rect(rect) = &shapes[0] else { panic!("canvas surround first") };
-            rect.fill
+            let [min, max] = h.state().session.project().unwrap().page().unwrap().corners();
+            let camera = &h.state().views.active.camera;
+            let paper = egui::Rect::from_two_pos(camera.screen(min, canvas), camera.screen(max, canvas));
+            let shapes = &h.output().shapes;
+            let surround = shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == canvas && r.fill == t.canvas));
+            let outside = shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.radius == pcbcraft_chrome::theme::SCHEMATIC_GRID_DOT_RADIUS && canvas.contains(c.center) && !paper.expand(1.0).contains(c.center)));
+            (surround, outside)
         };
-        let assert_heading = |h: &Harness<'_, PcbApp>, tokens: pcbcraft_chrome::Tokens| {
+        let assert_heading = |h: &Harness<'_, PcbApp>| {
+            let t = pcbcraft_chrome::Tokens::get();
             let title = h.state().views.active.sheet_path(&h.state().session).unwrap();
-            for (label, ink) in [(title.as_str(), tokens.text), ("1 / 1", tokens.text_dim)] {
+            for (label, ink) in [(title.as_str(), t.text), ("1 / 1", t.text_dim)] {
                 assert!(
                     h.output()
                         .shapes
                         .iter()
                         .any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label && text.fallback_color == ink)),
-                    "heading {label} must match the painted surround"
+                    "heading {label} keeps the theme's ink"
                 );
             }
         };
-        assert_eq!(surround(&h), pcbcraft_chrome::Tokens::chrome().canvas);
-        assert_heading(&h, pcbcraft_chrome::Tokens::chrome());
+        assert_eq!(painted(&h), (true, true));
+        assert_heading(&h);
         let symbols = h.state().session.project().unwrap().symbols().to_vec();
         apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a4","orientation":"landscape"}));
         h.run();
-        assert_eq!(surround(&h), pcbcraft_chrome::Tokens::light().canvas);
-        assert_heading(&h, pcbcraft_chrome::Tokens::light());
+        assert_eq!(painted(&h), (true, true), "drawing outside the paper doesn't change the background");
+        assert_heading(&h);
         assert_eq!(h.state().session.project().unwrap().symbols(), symbols);
         let revision = h.state().session.revision();
         click(&mut h, "Fit schematic");
+        assert_eq!(painted(&h), (true, true), "the grid continues around off-paper drawing");
+        h.state_mut().preferences.schematic_grid_outside_paper = false;
+        h.run();
+        assert_eq!(painted(&h), (true, false), "the grid stays on the paper when the preference is off");
         let project = h.state().session.project().unwrap();
         let canvas = h.get_by_label("Schematic canvas").rect();
         let camera = &h.state().views.active.camera;
         for [low, high] in [project.page().unwrap().corners(), project.drawing_bounds().unwrap()] {
             assert!(canvas.contains_rect(egui::Rect::from_two_pos(camera.screen(low, canvas), camera.screen(high, canvas))));
         }
-        assert_eq!(h.state().session.revision(), revision);
-        apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a3","orientation":"landscape"}));
-        h.run();
-        assert_eq!(surround(&h), pcbcraft_chrome::Tokens::chrome().canvas);
-        assert_heading(&h, pcbcraft_chrome::Tokens::chrome());
+        assert_eq!(h.state().session.revision(), revision, "the grid preference is not a project edit");
     }
 }

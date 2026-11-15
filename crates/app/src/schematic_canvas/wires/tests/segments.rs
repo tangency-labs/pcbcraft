@@ -37,7 +37,7 @@ fn click_and_delete_target_only_the_indicated_segment() {
             select_segment(&mut h, id, grid(8, 3));
             assert_eq!(view(&h, id).schematic.selected_leg.as_ref().unwrap().leg, 1);
             assert!(view(&h, 1 - id).schematic.selection.is_empty());
-            let ink = pcbcraft_chrome::Tokens::light();
+            let ink = pcbcraft_chrome::Tokens::get();
             assert_painted(&h, id, &routes(&h)[0], ink.schematic_wire);
             assert_painted(&h, id, &[grid(8, 0), grid(8, 6)], ink.accent);
             assert_painted(&h, 1 - id, &routes(&h)[0], ink.schematic_highlight);
@@ -76,7 +76,7 @@ fn dragging_a_segment_aligns_adjacent_runs_without_moving_the_whole_wire() {
             let center = view(&h, 1 - id).camera.screen(grid(0, 0), canvas(&h, 1 - id));
             let end = slide_preview(&mut h, id, grid(4, 0), grid(7, -6));
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-            assert_painted(&h, id, &[grid(0, -6), grid(8, -6)], pcbcraft_chrome::Tokens::light().accent);
+            assert_painted(&h, id, &[grid(0, -6), grid(8, -6)], pcbcraft_chrome::Tokens::get().accent);
             h.drop_at(end);
             h.run();
             assert_eq!(h.state().message, None);
@@ -89,7 +89,7 @@ fn dragging_a_segment_aligns_adjacent_runs_without_moving_the_whole_wire() {
             assert_eq!(after.wires()[0].endpoints(), before.wires()[0].endpoints());
             assert_eq!(view(&h, 1 - id).camera.screen(grid(0, 0), canvas(&h, 1 - id)), center);
             for pane in [0, 1] {
-                let ink = pcbcraft_chrome::Tokens::light();
+                let ink = pcbcraft_chrome::Tokens::get();
                 assert_painted(&h, pane, &routes(&h)[0], if pane == id { ink.schematic_wire } else { ink.schematic_highlight });
             }
             assert!(view(&h, id).schematic.selected_leg.is_some(), "The reshaped segment stays selected");
@@ -129,7 +129,7 @@ fn dragging_a_split_step_consumes_the_folded_corner() {
             let before = h.state().session.snapshot().unwrap();
             slide_preview(&mut h, id, grid(0, 8), grid(16, 8));
             let expected = vec![grid(16, 0), grid(16, 10), grid(12, 10), grid(12, 18)];
-            assert_painted(&h, id, &expected, pcbcraft_chrome::Tokens::light().schematic_wire);
+            assert_painted(&h, id, &expected, pcbcraft_chrome::Tokens::get().schematic_wire);
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
             h.key_press(Key::Escape);
             h.run();
@@ -345,7 +345,7 @@ fn corner_and_branched_endpoint_handles_survive_segment_selection_in_both_panes(
                 assert_eq!(view(&h, id).schematic.selection.single_wire(), Some("wire-4"));
                 let after = h.state().session.snapshot().unwrap();
                 for pane in [0, 1] {
-                    assert_painted(&h, pane, &expected[1], pcbcraft_chrome::Tokens::light().schematic_wire);
+                    assert_painted(&h, pane, &expected[1], pcbcraft_chrome::Tokens::get().schematic_wire);
                 }
                 focus_tab(&mut h, 1 - id);
                 click(&mut h, "Undo");

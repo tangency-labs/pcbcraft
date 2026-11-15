@@ -10,45 +10,15 @@ use egui::{Color32, CornerRadius, Stroke};
 
 thread_local! {
     /// Theme state belongs to the UI thread drawing the frame, so tests running side by side can't
-    /// change one another's palette. This is the palette [`Tokens::get`] returns, which a
-    /// [`PaletteScope`] can change for a while.
+    /// change one another's palette.
     static DARK: Cell<bool> = const { Cell::new(true) };
-    /// The theme the person chose, unaffected by any [`PaletteScope`].
-    static CHOSEN_DARK: Cell<bool> = const { Cell::new(true) };
 }
 
-/// Schematic paper is white in both themes, so drawings print as they look.
-pub const SCHEMATIC_PAPER: Color32 = Color32::WHITE;
 /// Width of the plain border drawn inside the paper, in logical points.
 pub const SCHEMATIC_PAPER_BORDER: f32 = 1.0;
 /// Offset and opacity of the soft shadow that lifts the paper off the canvas.
 pub const SCHEMATIC_PAPER_SHADOW: egui::Vec2 = egui::vec2(2.0, 3.0);
 pub const SCHEMATIC_PAPER_SHADOW_ALPHA: u8 = 40;
-
-/// Restores the palette that was current when the scope began, when dropped. Create one with
-/// [`paper_palette`] or [`chrome_palette`]; scopes nest.
-#[must_use = "the palette reverts when the scope is dropped"]
-pub struct PaletteScope {
-    previous: bool,
-}
-
-impl Drop for PaletteScope {
-    fn drop(&mut self) {
-        DARK.set(self.previous);
-    }
-}
-
-/// Paint content that sits on schematic paper: until the scope drops, [`Tokens::get`] returns
-/// the light palette in either theme. Chrome drawn from inside the scope, such as a context
-/// menu, takes a [`chrome_palette`] scope to return to the chosen theme.
-pub fn paper_palette() -> PaletteScope {
-    PaletteScope { previous: DARK.replace(false) }
-}
-
-/// Paint interface chrome in the chosen theme, even inside a [`paper_palette`] scope.
-pub fn chrome_palette() -> PaletteScope {
-    PaletteScope { previous: DARK.replace(CHOSEN_DARK.get()) }
-}
 
 /// Default schematic zoom and drawing weights, in logical points.
 pub const SCHEMATIC_GRID_SPACING: f32 = 10.16;
@@ -108,6 +78,10 @@ pub struct Tokens {
     pub canvas: Color32,
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
+    /// Schematic paper: white in the light theme, a darker drawing surface than [`Self::canvas`]
+    /// in the dark theme. The canvas around the paper keeps [`Self::canvas`] wherever the
+    /// drawing lies, so moving parts across the paper edge never changes the background.
+    pub schematic_paper: Color32,
     pub schematic_wire: Color32,
     /// Intentional no-connect geometry is distinct from electrical wire ink.
     pub schematic_no_connect: Color32,
@@ -250,6 +224,7 @@ impl Tokens {
             canvas: Color32::from_rgb(240, 243, 247),
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(135, 148, 166),
+            schematic_paper: Color32::WHITE,
             schematic_wire: Color32::from_rgb(20, 112, 75),
             schematic_no_connect: Color32::from_rgb(30, 90, 190),
             schematic_highlight: Color32::from_rgb(145, 88, 12),
@@ -363,6 +338,7 @@ impl Tokens {
         t.canvas = Color32::from_rgb(46, 52, 64);
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
+        t.schematic_paper = Color32::from_rgb(32, 36, 45);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
         t.schematic_no_connect = Color32::from_rgb(110, 175, 255);
         t.schematic_highlight = Color32::from_rgb(240, 192, 106);
@@ -417,16 +393,9 @@ impl Tokens {
         self
     }
 
-    /// The current palette on this thread, which is the light palette inside a
-    /// [`paper_palette`] scope.
+    /// The current palette on this thread.
     pub fn get() -> Self {
         if is_dark() { Self::dark() } else { Self::light() }
-    }
-
-    /// The palette of the theme the person chose, ignoring any [`PaletteScope`]: for surfaces
-    /// around the paper.
-    pub fn chrome() -> Self {
-        if CHOSEN_DARK.get() { Self::dark() } else { Self::light() }
     }
 }
 
@@ -477,7 +446,6 @@ fn visuals(t: Tokens, dark: bool) -> egui::Visuals {
 /// changes, not every frame: it asks for a repaint.
 pub fn apply(ctx: &egui::Context, dark: bool) {
     DARK.set(dark);
-    CHOSEN_DARK.set(dark);
     solidcraft_theme::set_dark(dark);
     let t = Tokens::get();
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
@@ -519,6 +487,12 @@ mod tests {
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
             assert!(contrast(t.board_grid, t.board_canvas) >= 3.0);
             assert!(contrast(t.schematic_highlight, t.canvas) >= 4.5);
+            // The same schematic ink reads on the paper and on the canvas around it.
+            for surface in [t.canvas, t.schematic_paper] {
+                assert!(contrast(t.canvas_ink, surface) >= 3.0);
+                assert!(contrast(t.schematic_highlight, surface) >= 4.5);
+            }
+            assert_ne!(t.schematic_paper, t.canvas, "the page boundary stays visible");
             assert!(contrast(t.error, t.panel) >= 4.5);
         }
     }
