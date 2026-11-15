@@ -28,9 +28,9 @@ fn detached_length_drafts_stay_in_their_window_and_revision() {
     );
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let views = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
     let ctx = h.ctx.clone();
     h.state_mut().activate_editor(&ctx, views[1]);

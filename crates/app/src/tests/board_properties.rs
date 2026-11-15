@@ -116,7 +116,7 @@ fn split_views_keep_length_drafts_to_the_view_that_typed_them() {
     h.state_mut().preferences.units = Unit::Mm;
     let id = first_footprint(&h);
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let views = h.state().views.hosts[&h.state().views.main].layout.visible_views();
     assert_eq!(views.len(), 2);
     for view in &views {
