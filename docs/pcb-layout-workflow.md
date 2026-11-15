@@ -114,9 +114,12 @@ clearance between classes takes the larger supported requirement. Assignments
 retain their origins through supported split/merge reconciliation, and conflicting
 limits remain explicit rather than being resolved by name or ordering.
 
-Routing uses effective class preferences when dimensions are omitted and validates
-changed classified copper against its hard limits. Queries and DRC use per-object
-rules with provenance; existing copper is not resized. Editor forms remain under
+Routing uses effective class preferences when dimensions are omitted. Changed
+classified tracks must meet minimum width; changed classified vias must meet
+diameter, drill and annular-ring limits. Routing refuses shorts but does not yet
+enforce class clearance; that enforcement remains future work in section 3.
+Queries and DRC use per-object rules with provenance, including class clearance;
+existing copper is not resized. Editor forms remain under
 [#303](https://github.com/tangency-labs/pcbcraft/issues/303), while advanced
 electrical/manufacturing analyses and the other rule extensions remain under #77.
 
