@@ -343,3 +343,56 @@ fn off_paper_drawing_keeps_the_theme_background_and_grid() {
         assert_eq!(h.state().session.revision(), revision, "the grid preference is not a project edit");
     }
 }
+
+/// A catalog drag paints background-filled artwork against its current surface before drop,
+/// both inside and outside paper, without editing the project.
+#[test]
+fn catalog_drag_background_follows_paper_before_drop() {
+    use pcbcraft_engine::{
+        authoring::{Item, Kind, Primitive},
+        library_graphics::{Fill, Geometry, Graphic},
+        schematic::{GRID_NM, Point},
+    };
+    let mut item = Item::new(Kind::Symbol).unwrap();
+    item.objects.insert(
+        2,
+        Primitive::Graphic {
+            graphic: Graphic {
+                geometry: Geometry::Rectangle {
+                    min: Point { x_nm: -2 * GRID_NM, y_nm: -2 * GRID_NM },
+                    max: Point { x_nm: 2 * GRID_NM, y_nm: 2 * GRID_NM },
+                },
+                stroke_nm: 150_000,
+                fill: Fill::Background,
+            },
+        },
+    );
+    let definition = item.symbol().unwrap();
+    for dark in [true, false] {
+        let mut h = sheet_harness(1400.);
+        h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
+        h.run();
+        click(&mut h, "Fit schematic");
+        let before = h.state().session.snapshot().unwrap();
+        let source = h.state().views.active.input(&h.state().session).unwrap();
+        egui::DragAndDrop::set_payload(&h.ctx, crate::PartDrag { placement: crate::parts_browser::Placement::new(definition.clone()), source });
+        let t = pcbcraft_chrome::Tokens::get();
+        let [_, max] = before.page().unwrap().corners();
+        for (point, expected) in [
+            (Point { x_nm: 40 * GRID_NM, y_nm: 10 * GRID_NM }, t.schematic_paper),
+            (Point { x_nm: max.x_nm + 8 * GRID_NM, y_nm: 10 * GRID_NM }, t.canvas),
+        ] {
+            let canvas = h.get_by_label("Schematic canvas").rect();
+            let screen = h.state().views.active.camera.screen(point, canvas);
+            assert!(canvas.contains(screen));
+            h.hover_at(screen);
+            h.run();
+            assert!(
+                h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path)
+                    if path.closed && path.fill == expected && egui::Rect::from_points(&path.points).contains(screen))),
+                "catalog preview should match its surface before drop: dark={dark}, point={point:?}"
+            );
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}

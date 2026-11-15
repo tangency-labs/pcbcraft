@@ -560,7 +560,9 @@ pub(crate) fn show(
     {
         let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
-            paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
+            let defaults = drag.placement.definition.defaults.clone().unwrap_or_default();
+            let preview = SymbolPlacement::preview(drag.placement.definition.clone(), 0, defaults.field_layout);
+            paint_unit_template(&painter, &preview, &drag.placement.value, screen(point), unit_step, tokens.accent, surface_at(project, point));
             overlap_index.preview(ui, camera, rect, drag.placement.definition.default_unit(), 0, false, point);
         }
     }
@@ -1203,13 +1205,6 @@ fn placement_preview(
     }
     response.on_hover_cursor(egui::CursorIcon::Crosshair);
     pressed.then_some(point)
-}
-
-/// Preview ordinary drawing and instance fields from the same native defaults as placement.
-fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: &str, center: Pos2, step: f32, turns: u8, color: egui::Color32) {
-    let defaults = definition.defaults.clone().unwrap_or_default();
-    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout);
-    paint_unit_template(painter, &symbol, value, center, step, color, Tokens::get().canvas);
 }
 
 /// Preview the selected drawing with the same fields and geometry as its committed placement.
