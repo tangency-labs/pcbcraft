@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "ferrite-bead",
-  "revision": 1,
+  "revision": 2,
   "name": "Ferrite bead",
   "reference_prefix": "FB",
   "default_value": "Ferrite",
@@ -14,7 +14,7 @@
       "id": "main",
       "drawing": [
         {"type": "line", "from_nm": [-3175000, 0], "to_nm": [3175000, 0]},
-        {"type": "polyline", "points_nm": [[-2159000, -1270000], [1270000, -1270000], [2159000, 1270000], [-1270000, 1270000], [-2159000, -1270000]]}
+        {"type": "rect", "min_nm": [-1270000, -952500], "max_nm": [1270000, 952500]}
       ],
       "pins": [
         {"terminal": "1", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 1905000, "style": "line", "show_name": false, "show_number": false, "name_height_nm": 800000, "number_height_nm": 650000}},

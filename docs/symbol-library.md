@@ -62,7 +62,8 @@ values, with `*-v2.json` preserving the former `1k` and `100nF` defaults.
 The latest connector revisions remove the extra small pin-one square: connector
 revision 4, header-4 revision 3 and revision 2 of the other new headers. Inductor
 revision 2 uses four semicircular coil turns; MOSFET revision 2 has straight
-gate, source and drain leads. All earlier revisions remain beside the current
+gate, source and drain leads. Ferrite bead revision 2 uses a compact rectangular
+body around a straight lead. All earlier revisions remain beside the current
 records, including the preceding connector/header geometry and values. Power redraws introduce revision 2 for +3V3, +5V, +12V, GNDA, VDD and
 VSS, with revision 1 retained beside each. Changing a drawing, default or pin
 position always requires a new revision so an older project's pinned drawing
