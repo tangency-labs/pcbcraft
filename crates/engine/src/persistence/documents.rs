@@ -47,6 +47,7 @@ const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
 const CLASS_PROJECT_FORMAT: &str = "pcbcraft-project/20";
 const BINDING_PROJECT_FORMAT: &str = "pcbcraft-project/21";
+const PARAMETER_PROJECT_FORMAT: &str = "pcbcraft-project/22";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
@@ -117,6 +118,8 @@ struct ProjectDocument {
     name: String,
     #[serde(default, deserialize_with = "present")]
     numeric_id_high_water: Option<u64>,
+    #[serde(default, deserialize_with = "present")]
+    parameters: Option<crate::parameters::Parameters>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
 }
@@ -159,9 +162,10 @@ impl ProjectDocument {
                 | NO_CONNECT_PROJECT_FORMAT
                 | CLASS_PROJECT_FORMAT
                 | BINDING_PROJECT_FORMAT
+                | PARAMETER_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20 or 21"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21 or 22"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -233,7 +237,12 @@ pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     if !matches!(
         project.format.as_str(),
-        OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT
+        OCCURRENCE_PROJECT_FORMAT
+            | NET_PROJECT_FORMAT
+            | NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
     ) {
         return Ok(None);
     }
@@ -260,6 +269,8 @@ struct SheetDocument {
     no_connect_ends: Option<Vec<u64>>,
     #[serde(default, deserialize_with = "present")]
     page: Option<crate::sheets::page::Record>,
+    #[serde(default, deserialize_with = "present")]
+    parameters: Option<crate::parameters::Parameters>,
 }
 
 /// Persisted provenance for a leg drawn by a retained named-contact pose. The exact wire
@@ -340,17 +351,34 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
+    // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
+    // net-class catalog, class assignments, net registry and no-connect intent are optional.
+    let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
     let occurrences = matches!(
         project.format.as_str(),
-        OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT
+        OCCURRENCE_PROJECT_FORMAT
+            | NET_PROJECT_FORMAT
+            | NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
     );
     let net_format = project.format == NET_PROJECT_FORMAT;
     let binding_format = project.format == BINDING_PROJECT_FORMAT;
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
-    let no_connect_format = matches!(project.format.as_str(), NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
-    if class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20 or 21, which requires a nonempty catalog.".into());
+    let no_connect_format =
+        matches!(project.format.as_str(), NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT | PARAMETER_PROJECT_FORMAT);
+    if !parameter_format && class_format != project.net_classes.is_some() {
+        return Err("Net-class catalog requires project format 20, 21 or 22, which requires a nonempty catalog.".into());
     }
+    if parameter_format != project.parameters.is_some() {
+        return Err("Project parameters require project format 22, which requires a nonempty list.".into());
+    }
+    let project_parameters = project.parameters.take().unwrap_or_default();
+    if parameter_format && project_parameters.is_empty() {
+        return Err("Empty project parameter lists must be omitted.".into());
+    }
+    crate::parameters::check(&project_parameters).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     let mut net_classes = project.net_classes.take();
     if let Some(catalog) = &mut net_classes {
         catalog.validate()?;
@@ -370,6 +398,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | NO_CONNECT_PROJECT_FORMAT
             | CLASS_PROJECT_FORMAT
             | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
     );
     let foldered = project.layout_root.is_some();
     if !part_format
@@ -409,6 +438,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | NO_CONNECT_PROJECT_FORMAT
             | CLASS_PROJECT_FORMAT
             | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
@@ -442,9 +472,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | NO_CONNECT_PROJECT_FORMAT
             | CLASS_PROJECT_FORMAT
             | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20 or 21"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21 or 22"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -460,7 +491,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let expected = if binding_format {
+                let optional_bindings = parameter_format && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
+                let expected = if binding_format || optional_bindings {
                     BINDING_INSTANCES_FORMAT
                 } else if net_format || (no_connect_format && instance.net_registry.is_some()) {
                     NET_INSTANCES_FORMAT
@@ -483,9 +515,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         None
     };
-    if binding_format
-        != instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings)
-    {
+    let has_bindings =
+        instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings);
+    if (!parameter_format && binding_format != has_bindings) || (parameter_format && has_bindings && net_classes.is_none()) {
         return Err("Net class assignments require project format 21 and instances format 3 when board-owned; the new envelope requires nonempty assignments.".into());
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
@@ -573,6 +605,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         metadata.page = sheet.page.map(crate::sheets::page::Page::try_from).transpose().map_err(|error| format!("{}: {error}", reference.file))?;
+        if let Some(parameters) = sheet.parameters.take() {
+            if sheet.format != PAGE_SHEET_FORMAT || parameters.is_empty() {
+                return Err(format!("{}: sheet parameters require sheet format 9 and a nonempty list", reference.file));
+            }
+            crate::parameters::check(&parameters).map_err(|error| format!("{}: {error}", reference.file))?;
+            metadata.parameters = Arc::new(parameters);
+        }
         let mut named = sheet.net_labels.take().unwrap_or_default();
         named.sort_by_key(|label| label.id);
         metadata.net_labels = Arc::new(named);
@@ -609,6 +648,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         circuit_use: None,
         net_registry: Arc::default(),
         net_classes: Arc::default(),
+        parameters: Arc::default(),
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -990,7 +1030,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             selections.insert(component.id, reader.selection(record, symbol, documents, &mut used)?);
         }
     }
-    if (!class_format && no_connect_format != (marker_count != 0)) || marker_count > crate::no_connect::MAX_MARKERS {
+    if (!class_format && !parameter_format && no_connect_format != (marker_count != 0)) || marker_count > crate::no_connect::MAX_MARKERS {
         return Err("Project format 19 requires nonempty bounded no-connect intent.".into());
     }
     if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
@@ -1053,6 +1093,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 generated_legs: Arc::new(generated_legs),
                 no_connect_ends: Arc::new(ends.into_iter().collect()),
                 page: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.page,
+                parameters: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.parameters.clone(),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1103,6 +1144,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(catalog) = net_classes {
         project_data.net_classes = Arc::new(catalog);
     }
+    project_data.parameters = Arc::new(project_parameters);
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
@@ -1283,7 +1325,13 @@ impl DocumentsEncoder {
                     if has_bindings {
                         p.net_registry.validate(p)?;
                     }
-                    let format = if has_bindings {
+                    let has_parameters = !p.parameters.is_empty();
+                    if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
+                        return Err("Project parameters require adopted storage/occurrence metadata.".into());
+                    }
+                    let format = if has_parameters {
+                        PARAMETER_PROJECT_FORMAT
+                    } else if has_bindings {
                         BINDING_PROJECT_FORMAT
                     } else if has_classes {
                         CLASS_PROJECT_FORMAT
@@ -1340,6 +1388,7 @@ impl DocumentsEncoder {
                         }
                         self.bytes.extend_from_slice(b"    ]\n  },\n");
                     }
+                    write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
                     self.next();
                 }
@@ -1944,6 +1993,21 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 /// whose generated-leg and wire-end arrays are optional. Every sheet with paper is version 9;
 /// only a sheet decoded from an older version and not yet adopted keeps its earlier version.
 /// Versions 4 through 9 retain all three hierarchy/named arrays, including when empty.
+/// Write a nonempty parameter list as a top-level field, one parameter per line so a changed
+/// value changes one line. An empty list writes nothing.
+fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Parameters) -> Result<(), String> {
+    if parameters.is_empty() {
+        return Ok(());
+    }
+    bytes.extend_from_slice(b"  \"parameters\": {\n");
+    for (index, (name, value)) in parameters.iter().enumerate() {
+        let comma = if index + 1 == parameters.len() { "" } else { "," };
+        writeln!(bytes, "    {}: {}{comma}", json(name)?, json(value)?).map_err(|e| e.to_string())?;
+    }
+    bytes.extend_from_slice(b"  },\n");
+    Ok(())
+}
+
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
     let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
@@ -1973,6 +2037,9 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
     if let Some(page) = sheet.page {
         writeln!(bytes, "  \"page\": {},", json(&page.record())?).map_err(|e| e.to_string())?;
+        write_parameters(bytes, &sheet.parameters)?;
+    } else if !sheet.parameters.is_empty() {
+        return Err("sheet parameters require sheet paper (sheet format 9)".into());
     }
     if sheet.page.is_some() || text || fields || mirrored || generated || ends || !sheet.net_labels.is_empty() {
         bytes.extend_from_slice(b"  \"net_labels\": [\n");

@@ -46,6 +46,8 @@ pub struct SchematicSheet {
     /// The sheet's paper. Decoding a format older than sheet/9 leaves it `None` until
     /// [`page::adopt`] places paper around the drawing on open.
     pub(crate) page: Option<page::Page>,
+    /// The sheet's own parameter values, `@sheet.Name`; stored only in sheet/9.
+    pub(crate) parameters: Arc<crate::parameters::Parameters>,
 }
 
 impl SchematicSheet {
@@ -67,6 +69,7 @@ impl SchematicSheet {
             generated_legs: Arc::default(),
             no_connect_ends: Arc::default(),
             page: None,
+            parameters: Arc::default(),
         }
     }
 

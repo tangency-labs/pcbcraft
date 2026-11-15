@@ -18,12 +18,14 @@ pub(super) struct State {
     draft: Option<Edit>,
     pub(super) collapsed: bool,
     pub(super) net_draft: Option<crate::net_labels::Edit>,
+    /// Drafts for the sheet's Parameters table, shown while nothing is selected.
+    parameters: crate::sheet_parameters::Drafts,
     pub(super) rect: Rect,
 }
 
 impl Default for State {
     fn default() -> Self {
-        Self { draft: None, collapsed: false, net_draft: None, rect: Rect::NOTHING }
+        Self { draft: None, collapsed: false, net_draft: None, parameters: Default::default(), rect: Rect::NOTHING }
     }
 }
 
@@ -181,6 +183,14 @@ impl PcbApp {
             let enabled = matches!(self.dialog, Dialog::None);
             let mut net_rules = false;
             let wires = !self.views.active.schematic.selection.wires.is_empty();
+            let sheet = match self.views.active.target() {
+                Some(crate::editor_view::DocumentTarget::Sheet(sheet)) if count == 0 => Some(sheet),
+                _ => None,
+            };
+            let project = self.session.snapshot();
+            let revision = self.session.revision();
+            let drafts = &mut self.views.active.schematic.properties.parameters;
+            let mut parameter_change = None;
             let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
                 ui,
                 egui::Id::unique(("selection_properties", self.views.host)),
@@ -191,6 +201,12 @@ impl PcbApp {
                 width,
                 |ui| {
                     chrome::inspector_body(ui);
+                    if let (Some(sheet), Some(project)) = (sheet, project.as_deref())
+                        && enabled
+                    {
+                        parameter_change = crate::sheet_parameters::show(ui, project, sheet, revision, drafts);
+                        return;
+                    }
                     ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
                     if wires {
                         net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net rules…")).inner.clicked();
@@ -203,6 +219,9 @@ impl PcbApp {
             self.views.active.schematic.properties.rect = rect;
             if net_rules {
                 self.begin_net_rules();
+            }
+            if let (Some(change), Some(sheet)) = (parameter_change, sheet) {
+                self.run(pcbcraft_engine::parameters::SET, &change.params(sheet, revision));
             }
             return rect;
         };

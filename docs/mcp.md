@@ -121,6 +121,11 @@ single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`
 `sheet.set_page` sets a sheet's `paper` (`a4` to `a0`) and `orientation`
 (`landscape` or `portrait`), keeping the paper's top-left corner unless `at` moves
 it; each inspected sheet reports its `page`.
+`parameter.set` sets, renames or removes (`value: null`) a project or sheet
+parameter, with `scope` `project` or `sheet`; `parameter.list` returns a list's own
+values and every parameter it offers with its source; `parameter.resolve`
+replaces the `@project`, `@sheet` and `@instance` references in a `text` as a
+given `sheet` shows it and lists unknown references.
 Inspection includes each sheet's own schematic, while the legacy top-level
 `schematic` is available only for single-sheet projects.
 

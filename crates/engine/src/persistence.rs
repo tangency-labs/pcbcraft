@@ -541,6 +541,9 @@ impl Encoder {
         if project.has_sheet_occurrences() {
             return Err("legacy diagnostic encoding cannot represent sheet occurrence identities; use split documents or a packed archive".into());
         }
+        if !project.parameters.is_empty() {
+            return Err("legacy diagnostic encoding cannot represent project parameters; use split documents or a packed archive".into());
+        }
         if project.sheets.iter().any(|sheet| sheet.page.is_some()) {
             return Err("legacy diagnostic encoding cannot represent sheet paper; use split documents or a packed archive".into());
         }
@@ -1022,6 +1025,7 @@ fn validate_with_hierarchy(
             generated_legs: Arc::default(),
             no_connect_ends: Arc::default(),
             page: None,
+            parameters: Arc::default(),
         }]),
         sheet_index: 0,
         name,
@@ -1036,6 +1040,7 @@ fn validate_with_hierarchy(
         circuit_use: None,
         net_registry: Arc::default(),
         net_classes: Arc::default(),
+        parameters: Arc::default(),
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;
@@ -1077,7 +1082,9 @@ pub(crate) fn diagnostic_snapshot(project: Arc<Project>) -> Arc<Project> {
     for sheet in Arc::make_mut(&mut diagnostic.sheets) {
         sheet.occurrence_id = None;
         sheet.page = None;
+        sheet.parameters = Arc::default();
     }
+    diagnostic.parameters = Arc::default();
     Arc::new(diagnostic)
 }
 

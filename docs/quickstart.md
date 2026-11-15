@@ -656,7 +656,9 @@ For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
 `sheet.set_page` to choose a sheet's paper size and orientation, with the
-current `expected_revision`. Each inspected sheet includes its own schematic;
+current `expected_revision`. `parameter.set` stores values such as a sheet's
+`Title` or the project's `Revision`, and `parameter.resolve` shows what a text
+such as `Rev @sheet.Revision` reads on a sheet. Each inspected sheet includes its own schematic;
 omitting `sheet` is accepted only when one sheet exists. `view.open_sheet` takes
 `view` and `sheet` to navigate a live editor pane without editing the project.
 

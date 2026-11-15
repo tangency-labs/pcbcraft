@@ -15,6 +15,8 @@ Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
+Project/22 adds [project parameters](#parameter-records); only projects with a
+stored project value select it.
 
 ## File encodings and save behavior
 
@@ -394,6 +396,36 @@ only that sheet's document. The diagnostic single-file encoding refuses paper.
 point. Without `at` the paper's top-left corner stays where it is. It is one
 revision-checked project undo step, and setting the current paper changes
 nothing. Inspection reports each sheet's `page` in the same shape.
+
+### Parameter records
+
+Parameters are named text values that texts show as `@project.Name`,
+`@sheet.Name` or `@instance.Name`; see
+[sheet frames and parameters](sheet-frames-and-parameters.md#parameters). Only
+values that differ from the defaults are stored, so a project that sets none
+keeps its earlier bytes.
+
+A sheet/9 document may carry a nonempty `parameters` object directly after
+`page`. Project/22 adds a required nonempty `parameters` object to the entry
+point, directly before `sheets`:
+
+```json
+"parameters": {
+  "Company": "Tangency Labs",
+  "Revision": "B"
+},
+```
+
+Each object holds at most 256 entries sorted by name, one per line, so changing
+one value changes one line. A name is an ASCII letter followed by up to 63
+letters, digits or `_`; a value is a string of at most 1000 bytes and may hold
+references. Empty objects, null, other value types and lists in other versions
+are rejected. Project/22 is a superset of project/21 whose net-class catalog,
+class assignments, net registry and no-connect intent are optional, each with
+its existing rules. Like project/20, it requires adopted storage and occurrence
+metadata; setting the first project value adopts them in the same undo step.
+Removing the last project value returns the entry point to the version its other
+content needs. The diagnostic single-file encoding refuses parameters.
 
 ### Named net records
 

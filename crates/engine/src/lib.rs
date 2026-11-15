@@ -19,6 +19,7 @@ pub mod net_classes;
 pub mod net_labels;
 pub mod nets;
 pub mod no_connect;
+pub mod parameters;
 pub mod part_authoring;
 pub mod part_instances;
 pub mod persistence;
@@ -165,6 +166,14 @@ enum ParamKind {
     Paper,
     /// `landscape` or `portrait`.
     Orientation,
+    /// `project` or `sheet`.
+    ParameterScope,
+    /// A parameter name: an ASCII letter, then letters, digits and `_`.
+    ParameterName,
+    /// A bounded parameter value, or null to remove it.
+    ParameterValue,
+    /// A bounded text whose references are resolved.
+    ParameterText,
 }
 
 impl ParamKind {
@@ -250,6 +259,10 @@ impl ParamKind {
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
             Self::Paper => json!({"type":"string", "enum":sheets::page::Paper::ALL.map(sheets::page::Paper::as_str)}),
             Self::Orientation => json!({"type":"string", "enum":sheets::page::Orientation::ALL.map(sheets::page::Orientation::as_str)}),
+            Self::ParameterScope => json!({"type":"string", "enum":["project","sheet"]}),
+            Self::ParameterName => json!({"type":"string", "pattern":"^[A-Za-z][A-Za-z0-9_]*$", "maxLength":parameters::MAX_NAME_LEN}),
+            Self::ParameterValue => json!({"type":["string","null"], "maxLength":parameters::MAX_VALUE_LEN}),
+            Self::ParameterText => json!({"type":"string", "maxLength":parameters::MAX_TEXT_LEN}),
             Self::BoardSetup => board::setup::BoardSetup::schema(),
             Self::SilkscreenSettings => json!({"type":"object","properties": {
                 "text_height_nm":{"type":"integer","minimum":1,"maximum":10_000_000},
@@ -535,6 +548,10 @@ impl ParamKind {
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::Paper if value.as_str().and_then(sheets::page::Paper::parse).is_some() => Ok(()),
             Self::Orientation if value.as_str().and_then(sheets::page::Orientation::parse).is_some() => Ok(()),
+            Self::ParameterScope if matches!(value.as_str(), Some("project" | "sheet")) => Ok(()),
+            Self::ParameterName if value.as_str().is_some_and(parameters::valid_name) => Ok(()),
+            Self::ParameterValue if value.is_null() || value.as_str().is_some_and(|v| v.len() <= parameters::MAX_VALUE_LEN) => Ok(()),
+            Self::ParameterText if value.as_str().is_some_and(|v| v.len() <= parameters::MAX_TEXT_LEN) => Ok(()),
             Self::BoardId | Self::SheetId | Self::NetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::NetTarget
                 if WireEndpoint::parse(value).is_some_and(|end| !matches!(end, WireEndpoint::Junction(_)))
@@ -597,6 +614,10 @@ impl ParamKind {
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::Paper => Err("must be a4, a3, a2, a1 or a0"),
             Self::Orientation => Err("must be landscape or portrait"),
+            Self::ParameterScope => Err("must be project or sheet"),
+            Self::ParameterName => Err("must be 1 to 64 ASCII letters, digits and _, starting with a letter"),
+            Self::ParameterValue => Err("must be a string of at most 1000 bytes, or null"),
+            Self::ParameterText => Err("must be a string of at most 4096 bytes"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
             Self::NetId => Err("must identify a persistent net by UUID"),
@@ -1136,6 +1157,24 @@ const CATALOG: &[Command] = &[
         title: "Page Setup",
         summary: "Set a sheet's paper size and orientation. The paper's top-left corner stays put unless `at` moves it; nothing on the sheet moves. Undoable.",
         params: &[sheets::SHEET, sheets::page::PAPER, sheets::page::ORIENTATION, sheets::page::AT, EXPECTED_REVISION],
+    },
+    Command {
+        id: parameters::SET,
+        title: "Set Parameter",
+        summary: "Set, rename or remove a project or sheet parameter that texts show as @project.Name or @sheet.Name. Null removes; a removed standard sheet parameter returns to its default. Undoable.",
+        params: &[parameters::SCOPE, parameters::SHEET, parameters::NAME, parameters::VALUE, parameters::RENAME, EXPECTED_REVISION],
+    },
+    Command {
+        id: parameters::LIST,
+        title: "List Parameters",
+        summary: "List a project's or sheet's own parameters, and every parameter it offers with its unresolved value and source (built_in, default or own).",
+        params: &[parameters::SCOPE, parameters::SHEET],
+    },
+    Command {
+        id: parameters::RESOLVE,
+        title: "Resolve Parameters",
+        summary: "Replace the @project, @sheet and @instance references in a text as the given sheet shows it; unknown references stay as typed and are listed.",
+        params: &[parameters::TEXT, parameters::SHEET],
     },
     Command {
         id: sheets::DELETE_SHEET,
@@ -2162,6 +2201,8 @@ pub struct Project {
     net_registry: Arc<nets::Registry>,
     /// Authored dimensional class definitions, independent of net assignments and boards.
     net_classes: Arc<net_classes::Catalog>,
+    /// The project's own parameter values, `@project.Name`; stored only from project/22.
+    parameters: Arc<parameters::Parameters>,
 }
 
 impl Project {
@@ -2542,6 +2583,9 @@ impl Session {
             | hierarchy::DELETE_LABEL
             | sheets::RENAME_SHEET
             | sheets::page::SET_PAGE
+            | parameters::SET
+            | parameters::LIST
+            | parameters::RESOLVE
             | "project.rename"
             | no_connect::SET
             | no_connect::CHECK
@@ -2737,6 +2781,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
         }
+        if matches!(id, parameters::LIST | parameters::RESOLVE) {
+            self.validate_project_command(id, params)?;
+            return self.parameter_query(id, params);
+        }
         self.apply(id, params)?;
         if id == no_connect::CHECK {
             return self.no_connect_report();
@@ -2817,6 +2865,9 @@ impl Session {
                 sheets::CREATE_SHEET
                 | sheets::RENAME_SHEET
                 | sheets::page::SET_PAGE
+                | parameters::SET
+                | parameters::LIST
+                | parameters::RESOLVE
                 | sheets::DELETE_SHEET
                 | "project.rename"
                 | no_connect::SET
@@ -2903,6 +2954,7 @@ impl Session {
                 circuit_use: Some(fresh_id()?),
                 net_registry: Arc::default(),
                 net_classes: Arc::default(),
+                parameters: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -2929,6 +2981,10 @@ impl Session {
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
             sheets::page::SET_PAGE => self.set_page(params)?,
+            parameters::SET => self.set_parameter(params)?,
+            parameters::LIST | parameters::RESOLVE => {
+                self.parameter_query(id, params)?;
+            }
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
