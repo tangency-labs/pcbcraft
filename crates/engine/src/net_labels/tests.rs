@@ -234,6 +234,8 @@ fn label_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
     let mut sheet: Value = serde_json::from_slice(&downgraded[&path]).unwrap();
     assert_eq!(sheet["format"], "pcbcraft-sheet/9");
     sheet["format"] = json!("pcbcraft-sheet/3");
+    // Sheet/3 would also reject sheet/9's paper; remove it so only the label text is tested.
+    sheet.as_object_mut().unwrap().remove("page").unwrap();
     downgraded.insert(path, serde_json::to_vec(&sheet).unwrap());
     assert!(persistence::decode_documents(&downgraded).is_err());
     for invalid in [json!(null), json!({"height_nm":-1}), json!(schematic::fields::Layout { height_nm: -1, ..Default::default() })] {

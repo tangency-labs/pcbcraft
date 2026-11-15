@@ -34,6 +34,10 @@ fn paper_sizes_follow_iso_and_orientation() {
     }
     assert_eq!(Paper::parse("A4"), None);
     assert!(Page::new(Paper::A0, Orientation::Landscape, Point { x_nm: 0, y_nm: 0 }).is_err());
+    for extreme in [i64::MAX, i64::MIN] {
+        assert!(Page::new(Paper::A4, Orientation::Landscape, Point { x_nm: extreme, y_nm: 0 }).is_err(), "far corners are rejected without overflow");
+        assert!(Page::new(Paper::A4, Orientation::Portrait, Point { x_nm: 0, y_nm: extreme }).is_err());
+    }
 }
 
 /// New sheets start on centered A4; set_page keeps the corner, is one undo step and a no-op

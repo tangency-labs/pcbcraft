@@ -1231,7 +1231,8 @@ fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str,
 }
 
 /// The sheet's backdrop over `area` of a canvas whose viewport is `canvas`: the paper with its
-/// border and the grid on it, or the grid everywhere on a sheet without paper.
+/// border and the grid on it, or the grid everywhere on a sheet without paper. When the drawing
+/// extends past the paper, the canvas around it is light so that drawing stays readable.
 pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: Rect, grid_opacity: u8) -> Vec<egui::Shape> {
     let screen = |point| camera.screen(point, canvas);
     let paper = project.page().map(|page| {
@@ -1242,7 +1243,11 @@ pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: R
         }
     });
     let grid = pcbcraft_chrome::paper::Grid { origin: screen(Point { x_nm: 0, y_nm: 0 }), step: camera.snap_step(), opacity: grid_opacity };
-    pcbcraft_chrome::paper::backdrop(area, paper, grid)
+    let off_paper = project.page().zip(project.drawing_bounds()).is_some_and(|(page, [low, high])| {
+        let [min, max] = page.corners();
+        low.x_nm < min.x_nm || low.y_nm < min.y_nm || high.x_nm > max.x_nm || high.y_nm > max.y_nm
+    });
+    pcbcraft_chrome::paper::backdrop(area, paper, grid, off_paper)
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

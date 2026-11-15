@@ -151,8 +151,9 @@ impl Page {
     /// naming the problem. `at` is the paper's top-left corner.
     pub fn new(paper: Paper, orientation: Orientation, at: Point) -> Result<Self, String> {
         let page = Self { paper, orientation, at };
-        let [min, max] = page.corners();
-        if [min.x_nm, min.y_nm].iter().any(|v| *v < -LIMIT_NM) || [max.x_nm, max.y_nm].iter().any(|v| *v > LIMIT_NM) {
+        // Reject a corner beyond the range before adding the paper size, which could overflow.
+        let in_range = |p: Point| [p.x_nm, p.y_nm].iter().all(|v| (-LIMIT_NM..=LIMIT_NM).contains(v));
+        if !in_range(at) || !in_range(page.corners()[1]) {
             return Err(format!("{} {} paper at that corner extends past the schematic's ±1 m range", paper.label(), orientation.as_str()));
         }
         Ok(page)

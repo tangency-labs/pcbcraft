@@ -26,10 +26,13 @@ pub struct Grid {
 }
 
 /// The backdrop shapes over `area`. Without paper, the grid covers the whole area in the current
-/// palette, as on a sheet that predates paper. With paper, the area outside it is plain canvas.
-pub fn backdrop(area: Rect, paper: Option<Paper>, grid: Grid) -> Vec<Shape> {
-    let chrome = Tokens::chrome();
-    let mut shapes = vec![Shape::rect_filled(area, 0, chrome.canvas)];
+/// palette, as on a sheet that predates paper. With paper, the area outside it is plain canvas in
+/// the chosen theme, unless `drawing_off_paper` says part of the drawing lies outside the paper:
+/// that drawing keeps the paper's light palette, so the canvas around the paper turns light too
+/// and the drawing stays readable in the dark theme.
+pub fn backdrop(area: Rect, paper: Option<Paper>, grid: Grid, drawing_off_paper: bool) -> Vec<Shape> {
+    let surround = if paper.is_some() && drawing_off_paper { Tokens::light().canvas } else { Tokens::chrome().canvas };
+    let mut shapes = vec![Shape::rect_filled(area, 0, surround)];
     let Some(paper) = paper else {
         if let Some(color) = grid::color(Tokens::get().canvas_grid, grid.opacity) {
             shapes.extend(grid::shapes(area, grid.origin, grid.step, color, grid::Style::Dots));
@@ -116,14 +119,18 @@ mod tests {
         let grid = Grid { origin: Pos2::ZERO, step: 10.0, opacity: 100 };
         let sheet = Rect::from_min_size(pos2(-50.0, 100.0), vec2(300.0, 400.0));
         let paper = Paper { sheet, border: sheet.shrink(5.0) };
-        let shapes = backdrop(area, Some(paper), grid);
+        let shapes = backdrop(area, Some(paper), grid, false);
+        let Shape::Rect(surround) = &shapes[0] else { panic!("canvas first") };
+        assert_eq!(surround.fill, Tokens::chrome().canvas);
+        let Shape::Rect(spilled) = &backdrop(area, Some(paper), grid, true)[0] else { panic!("canvas first") };
+        assert_eq!(spilled.fill, Tokens::light().canvas, "drawing off the paper keeps a light surround");
         assert!(points(&shapes).iter().all(|p| area.expand(0.01).contains(*p)));
         let dots: Vec<_> = shapes.iter().filter_map(|shape| if let Shape::Circle(dot) = shape { Some(dot.center) } else { None }).collect();
         assert!(!dots.is_empty());
         assert!(dots.iter().all(|dot| sheet.contains(*dot)), "grid dots only on the paper");
-        let bare = backdrop(area, None, grid);
+        let bare = backdrop(area, None, grid, true);
         assert!(bare.iter().filter(|shape| matches!(shape, Shape::Circle(_))).count() > dots.len(), "without paper the grid covers the whole area");
-        let off = backdrop(area, Some(Paper { sheet: sheet.translate(vec2(1000.0, 0.0)), border: sheet }), grid);
+        let off = backdrop(area, Some(Paper { sheet: sheet.translate(vec2(1000.0, 0.0)), border: sheet }), grid, false);
         assert!(points(&off).iter().all(|p| area.expand(0.01).contains(*p)));
     }
 }
