@@ -52,11 +52,24 @@ pub struct Navigation {
     /// Wheel zoom speed in percent, in 10% steps.
     pub zoom_speed_percent: u16,
     pub zoom_around: ZoomAround,
+    /// Dragging with the middle button zooms up and down instead of panning. Off keeps the
+    /// KiCad-style middle-button pan; the wheel, pinch and Fit always stay available.
+    pub middle_drag_zoom: bool,
+    /// Right-button drag pans the canvas instead of starting a selection box. A right-click
+    /// without a drag still opens the canvas menu and cancels an active tool.
+    pub right_drag_pan: bool,
 }
 
 impl Default for Navigation {
     fn default() -> Self {
-        Self { scroll: ScrollAction::Zoom, reverse_zoom: false, zoom_speed_percent: 100, zoom_around: ZoomAround::Pointer }
+        Self {
+            scroll: ScrollAction::Zoom,
+            reverse_zoom: false,
+            zoom_speed_percent: 100,
+            zoom_around: ZoomAround::Pointer,
+            middle_drag_zoom: false,
+            right_drag_pan: false,
+        }
     }
 }
 
@@ -456,10 +469,25 @@ fn navigation(ui: &mut Ui, data: &mut PageData<'_>) {
             settings::segmented(ui, &mut navigation.zoom_around, &[(ZoomAround::Pointer, "Pointer"), (ZoomAround::Center, "Center of view")]);
         });
     });
-    settings::section(ui, "Panning", |ui| {
-        settings::row_with_keywords(ui, "Pan", &["middle", "drag"], |ui| {
-            settings::key_chip(ui, "Middle-button drag");
+    settings::section(ui, "Mouse buttons", |ui| {
+        settings::row_with_keywords(ui, "Middle-button drag", &["middle", "drag", "pan", "zoom"], |ui| {
+            settings::segmented(ui, &mut navigation.middle_drag_zoom, &[(false, "Pan"), (true, "Zoom")]);
         });
+        settings::row_with_keywords(ui, "Right-button drag", &["right", "drag", "pan", "select", "box"], |ui| {
+            settings::segmented(ui, &mut navigation.right_drag_pan, &[(false, "Select"), (true, "Pan view")]);
+        });
+        if navigation.middle_drag_zoom {
+            // The drag follows Zoom direction, so the hint does too.
+            let hint = if navigation.reverse_zoom {
+                "Drag down to zoom in and up to zoom out. The wheel still follows Mouse wheel."
+            } else {
+                "Drag up to zoom in and down to zoom out. The wheel still follows Mouse wheel."
+            };
+            settings::hint(ui, hint);
+        }
+        if navigation.right_drag_pan {
+            settings::hint(ui, "A right drag pans. Right-click menus and tool cancellation are unchanged.");
+        }
     });
 }
 
@@ -546,7 +574,14 @@ mod tests {
         let preferences = Preferences {
             theme: ThemeChoice::Light,
             scale_percent: 110,
-            navigation: Navigation { scroll: ScrollAction::Pan, reverse_zoom: true, zoom_speed_percent: 150, zoom_around: ZoomAround::Center },
+            navigation: Navigation {
+                scroll: ScrollAction::Pan,
+                reverse_zoom: true,
+                zoom_speed_percent: 150,
+                zoom_around: ZoomAround::Center,
+                middle_drag_zoom: true,
+                right_drag_pan: true,
+            },
             grid_opacity_percent: 35,
             schematic_grid_visible: false,
             board_grid_visible: true,

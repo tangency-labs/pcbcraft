@@ -2,6 +2,20 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Mouse drag navigation
+
+The optional middle-button drag zoom and right-button drag pan in
+`crates/app/src/canvas_camera.rs`, their Preferences options and their Shortcuts
+entries adapt the canvas navigation in Coline `crates/ui-egui/src/canvas.rs` at
+revision `bdd89dfb371e622f9ba94f368190c8c086d170d6` (MIT OR Apache-2.0, Rogier
+Colijn). PCBcraft applies the gestures to its own camera, wheel-transition,
+mirrored-view, selection and settings code: dragging up with the middle button
+zooms in about the press point, dragging down zooms out, and an optionally
+enabled right-button drag pans. The existing middle-button pan and right-button
+selection remain the defaults, a right-click still opens menus, and the zoom
+speed and reverse-direction settings also apply. No Coline UI, camera,
+dependency or saved-format code was imported.
+
 ## Layer-aware spatial queries
 
 The #244 implementation uses `geo-index` 0.4.0 (MIT OR Apache-2.0), pinned by

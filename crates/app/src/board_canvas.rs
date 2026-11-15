@@ -334,6 +334,7 @@ pub(super) fn show(
     if cancelled {
         state.draft = None;
     }
+    let box_with_secondary = !navigation.right_drag_pan && response.drag_started_by(PointerButton::Secondary);
     if enabled
         && !lost_focus
         && state.box_drag.is_none()
@@ -343,7 +344,7 @@ pub(super) fn show(
         && !state.tracks.busy()
         && let Some(source) = source
         && let Some(start) = ui.input(|i| i.pointer.press_origin())
-        && (response.drag_started_by(PointerButton::Secondary)
+        && (box_with_secondary
             || (response.drag_started_by(PointerButton::Primary)
                 && hit(start).is_none()
                 && !crate::board_tracks::copper_under(
@@ -366,7 +367,7 @@ pub(super) fn show(
             },
             add: modifiers.shift,
             toggle: modifiers.ctrl || modifiers.command,
-            button: if response.drag_started_by(PointerButton::Secondary) { PointerButton::Secondary } else { PointerButton::Primary },
+            button: if box_with_secondary { PointerButton::Secondary } else { PointerButton::Primary },
         });
     }
     if enabled && !cancelled && !lost_focus && state.box_drag.is_none() {

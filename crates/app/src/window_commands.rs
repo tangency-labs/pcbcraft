@@ -993,6 +993,8 @@ mod live {
                 setting("reverse_zoom", "Reverse the wheel's zoom direction", Kind::Bool),
                 setting("zoom_speed_percent", "Wheel zoom speed", Kind::Integer { min: 50, max: 200, step: 10 }),
                 setting("zoom_around", "The point that stays still while zooming", Kind::Choice(ZOOM_AROUND)),
+                setting("middle_drag_zoom", "Make middle-button drag zoom instead of panning", Kind::Bool),
+                setting("right_drag_pan", "Make right-button drag pan instead of selecting a box", Kind::Bool),
             ],
         },
         WindowCommand {
@@ -1052,6 +1054,8 @@ mod live {
             "reverse_zoom": preferences.navigation.reverse_zoom,
             "zoom_speed_percent": preferences.navigation.zoom_speed_percent,
             "zoom_around": match preferences.navigation.zoom_around { ZoomAround::Pointer => "pointer", ZoomAround::Center => "center" },
+            "middle_drag_zoom": preferences.navigation.middle_drag_zoom,
+            "right_drag_pan": preferences.navigation.right_drag_pan,
         })
     }
 
@@ -1108,6 +1112,12 @@ mod live {
         }
         if let Some(around) = text("zoom_around") {
             preferences.navigation.zoom_around = if around == "center" { ZoomAround::Center } else { ZoomAround::Pointer };
+        }
+        if let Some(zoom) = params.get("middle_drag_zoom").and_then(Value::as_bool) {
+            preferences.navigation.middle_drag_zoom = zoom;
+        }
+        if let Some(pan) = params.get("right_drag_pan").and_then(Value::as_bool) {
+            preferences.navigation.right_drag_pan = pan;
         }
         preferences
     }
@@ -1754,7 +1764,7 @@ mod live {
         fn preferences_round_trip_through_their_command_names() {
             let changed = updated_preferences(
                 Preferences::default(),
-                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "grid_opacity_percent": 40, "board_grid_style": "dots"}),
+                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots"}),
             );
             let inspected = inspect_preferences(&changed);
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);

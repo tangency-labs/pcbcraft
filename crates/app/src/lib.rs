@@ -2240,7 +2240,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             Dialog::LocalMcp { error, copied } => self.local_mcp_dialog(ctx, error, copied),
             Dialog::Preferences(mut window) => {
-                let shortcuts = shortcut_list(ctx);
+                let shortcuts = shortcut_list(ctx, self.preferences.navigation);
                 #[cfg(not(target_arch = "wasm32"))]
                 let outcome = window.show(ctx, &mut self.preferences, &shortcuts, &mut self.assistant);
                 #[cfg(target_arch = "wasm32")]
@@ -2588,8 +2588,10 @@ fn pointer_on_canvas(ui: &Ui, camera: &schematic_canvas::Camera) -> Option<pcbcr
 }
 
 /// The keys the window answers to, as (section, action, keys), for the Shortcuts page.
-/// Browser builds leave out the shortcuts the browser keeps for itself.
-fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String)> {
+/// Browser builds leave out the shortcuts the browser keeps for itself. The View rows follow
+/// `navigation`: a panning wheel is listed under Pan with Ctrl/⌘+wheel under Zoom, and the
+/// Pan row is omitted only when no wheel or drag gesture pans.
+fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static str, &'static str, String)> {
     let key = |shortcut: &KeyboardShortcut| ctx.format_shortcut(shortcut);
     let mut list = Vec::new();
     if !IN_BROWSER {
@@ -2642,8 +2644,29 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB Layout", "Previous layer", "−".to_owned()));
     list.push(("PCB Layout", "Front copper layer", "PgUp".to_owned()));
     list.push(("PCB Layout", "Back copper layer", "PgDn".to_owned()));
-    list.push(("View", "Zoom", "Mouse wheel".to_owned()));
-    list.push(("View", "Pan", "Middle-button drag".to_owned()));
+    // In Pan scroll mode the plain wheel pans and only the command-modified wheel zooms.
+    let wheel_pans = navigation.scroll == ScrollAction::Pan;
+    let mut pan_keys: Vec<&str> = Vec::new();
+    if wheel_pans {
+        pan_keys.push("mouse wheel");
+    }
+    if !navigation.middle_drag_zoom {
+        pan_keys.push("middle-button drag");
+    }
+    if navigation.right_drag_pan {
+        pan_keys.push("right-button drag");
+    }
+    let zoom_wheel = if wheel_pans {
+        let command = if ctx.os() == egui::os::OperatingSystem::Mac { "⌘" } else { "Ctrl" };
+        format!("{command}+mouse wheel")
+    } else {
+        "Mouse wheel".to_owned()
+    };
+    let zoom_keys = if navigation.middle_drag_zoom { format!("{zoom_wheel} or middle-button drag") } else { zoom_wheel };
+    list.push(("View", "Zoom", zoom_keys));
+    if !pan_keys.is_empty() {
+        list.push(("View", "Pan", pan_keys.join(" or ")));
+    }
     list.push(("View", "Finer grid", key(&FINER_GRID)));
     list.push(("View", "Coarser grid", key(&COARSER_GRID)));
     list.push(("View", "Switch units", key(&SWITCH_UNITS)));

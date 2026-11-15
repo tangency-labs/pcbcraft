@@ -18,6 +18,8 @@ const BOARD_FIT_MAX_ZOOM: f32 = 8.0;
 const INITIAL_BOARD_ZOOM: f32 = 4.0;
 /// A wheel notch settles within this interval; live pinch gestures remain immediate.
 const WHEEL_ZOOM_SECONDS: f32 = 0.14;
+/// How much a point of vertical middle-button drag zooms when that drag is set to zoom.
+const MIDDLE_DRAG_ZOOM_PER_POINT: f32 = 0.01;
 
 /// Transient wheel motion belongs to one camera and is never saved in an arrangement.
 #[derive(Clone, Debug)]
@@ -451,8 +453,10 @@ impl Camera {
     }
 
     /// Apply navigation once per native viewport frame. Wheel motion eases while this canvas
-    /// owns input; pinch and pan stay direct. A click, focus loss, blocked input or leaving the
-    /// canvas stops the transition, so motion cannot leak into another pane or an editing click.
+    /// owns input; pinch and pan stay direct. Middle-button drag pans or zooms as configured,
+    /// and right-button drag pans when enabled. A click, focus loss, blocked input or leaving
+    /// the canvas stops the transition, so motion cannot leak into another pane or an editing
+    /// click.
     fn interact(&mut self, response: &Response, rect: Rect, enabled: bool, navigation: Navigation) {
         let frame = (response.ctx.viewport_id(), response.ctx.cumulative_frame_nr());
         if self.navigation_frame == Some(frame) {
@@ -466,9 +470,25 @@ impl Camera {
         if response.ctx.input(|input| input.pointer.any_pressed()) {
             self.cancel_zoom();
         }
-        if response.dragged_by(PointerButton::Middle) {
+        let middle_drag = response.dragged_by(PointerButton::Middle);
+        let right_drag = !middle_drag && navigation.right_drag_pan && response.dragged_by(PointerButton::Secondary);
+        if middle_drag || right_drag {
             self.cancel_zoom();
             self.center_requested = None;
+        }
+        if middle_drag {
+            if navigation.middle_drag_zoom {
+                // Zoom about the point where the drag began, so the target stays under the
+                // pointer while it moves up or down. Up zooms in, following the wheel direction.
+                if let Some(start) = response.ctx.input(|input| input.pointer.press_origin()) {
+                    let direction = if navigation.reverse_zoom { -1.0 } else { 1.0 };
+                    let amount = -response.drag_delta().y * MIDDLE_DRAG_ZOOM_PER_POINT * navigation.zoom_speed() * direction;
+                    self.zoom_at(self.zoom * amount.exp(), start - rect.center());
+                }
+            } else {
+                self.offset += response.drag_delta();
+            }
+        } else if right_drag {
             self.offset += response.drag_delta();
         }
         if response.contains_pointer()

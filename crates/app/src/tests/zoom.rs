@@ -145,3 +145,108 @@ fn wheel(lines: f32) -> egui::Event {
         modifiers: Modifiers::NONE,
     }
 }
+
+/// With middle-button drag set to zoom, dragging up magnifies about the press point and
+/// dragging down shrinks again, in either workspace, without moving that point or editing.
+#[test]
+fn middle_drag_zooms_around_the_press_point_when_enabled() {
+    for workspace in [Workspace::Schematic, Workspace::Board] {
+        let mut app = PcbApp::default();
+        app.start_new_project_in(workspace);
+        app.preferences.navigation.middle_drag_zoom = true;
+        let mut h = Harness::builder()
+            .with_step_dt(1. / 60.)
+            .with_max_steps(20)
+            .with_size(egui::vec2(1400., 900.))
+            .build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let name = if workspace == Workspace::Board { "PCB canvas" } else { "Schematic canvas" };
+        let rect = h.get_by_label(name).rect();
+        let start = rect.center() + egui::vec2(40., 0.);
+        h.hover_at(start);
+        h.run();
+        let model = h.state().views.active.camera.unsnapped(start, rect);
+        let initial = h.state().views.active.camera.zoom();
+        let middle = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+        h.event(middle(start, true));
+        h.run();
+        let up = start - egui::vec2(0., 48.);
+        h.hover_at(up);
+        h.run();
+        let zoomed = h.state().views.active.camera.zoom();
+        assert!(zoomed > initial, "{workspace:?}: {initial} -> {zoomed}");
+        assert!(h.state().views.active.camera.screen(model, rect).distance(start) < 0.01, "{workspace:?}");
+        h.event(middle(up, false));
+        h.run();
+        h.event(middle(start, true));
+        h.run();
+        let down = start + egui::vec2(0., 48.);
+        h.hover_at(down);
+        h.run();
+        assert!(h.state().views.active.camera.zoom() < zoomed, "{workspace:?}");
+        h.event(middle(down, false));
+        h.run();
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// With right-button drag set to pan, dragging moves the view in either workspace without
+/// starting a selection box or editing. A placed symbol stays unselected.
+#[test]
+fn right_drag_pans_without_selecting_when_enabled() {
+    for workspace in [Workspace::Schematic, Workspace::Board] {
+        let mut app = PcbApp::default();
+        app.start_new_project_in(workspace);
+        app.preferences.navigation.right_drag_pan = true;
+        let mut h = Harness::builder()
+            .with_step_dt(1. / 60.)
+            .with_max_steps(20)
+            .with_size(egui::vec2(1400., 900.))
+            .build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        if workspace == Workspace::Schematic {
+            let revision = h.state().session.revision();
+            h.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision})).unwrap();
+            h.run();
+        }
+        let before = h.state().session.snapshot().unwrap();
+        let name = if workspace == Workspace::Board { "PCB canvas" } else { "Schematic canvas" };
+        let rect = h.get_by_label(name).rect();
+        let start = rect.center() + egui::vec2(-80., -60.);
+        let end = start + egui::vec2(140., 90.);
+        h.hover_at(start);
+        h.run();
+        let model = h.state().views.active.camera.unsnapped(start, rect);
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        h.event(secondary(start, true));
+        h.run();
+        h.hover_at(end);
+        h.run();
+        h.event(secondary(end, false));
+        h.run();
+        assert!(h.state().views.active.camera.screen(model, rect).distance(end) < 0.01, "{workspace:?}");
+        if workspace == Workspace::Schematic {
+            assert!(h.state().views.active.schematic.selection.is_empty());
+        }
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// The Shortcuts page lists the wheel under Pan when it pans, and Ctrl+wheel under Zoom, so
+/// the Pan row survives middle-drag zoom without right-drag pan.
+#[test]
+fn shortcut_list_follows_wheel_scroll_mode() {
+    let ctx = egui::Context::default();
+    ctx.set_os(egui::os::OperatingSystem::Nix);
+    let view_row = |navigation: Navigation, action: &str| {
+        crate::shortcut_list(&ctx, navigation).into_iter().find(|(section, row, _)| *section == "View" && *row == action).map(|(_, _, keys)| keys)
+    };
+    let panning = Navigation { scroll: ScrollAction::Pan, middle_drag_zoom: true, ..Navigation::default() };
+    assert_eq!(view_row(panning, "Pan").as_deref(), Some("mouse wheel"));
+    assert_eq!(view_row(panning, "Zoom").as_deref(), Some("Ctrl+mouse wheel or middle-button drag"));
+    let zooming = Navigation { middle_drag_zoom: true, ..Navigation::default() };
+    assert_eq!(view_row(zooming, "Pan"), None);
+    assert_eq!(view_row(zooming, "Zoom").as_deref(), Some("Mouse wheel or middle-button drag"));
+}
