@@ -293,7 +293,6 @@ fn changed_bundled_revisions_reopen_offline_without_upgrading_instances() {
         ("basic-components", "header-8", 1),
         ("basic-components", "header-2x3", 1),
         ("basic-components", "inductor", 1),
-        ("basic-components", "ferrite-bead", 1),
         ("basic-components", "nmos", 1),
         ("basic-components", "pmos", 1),
         ("power", "3v3", 1),

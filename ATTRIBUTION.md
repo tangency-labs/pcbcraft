@@ -1536,7 +1536,8 @@ was incorporated. Existing passive/LED/package notices remain with the pinned
 records. Project documents and archives are generated through shared native
 commands and production codecs; the tests independently state the intended nets.
 
-The ferrite bead revision 2 redraw follows @travle1's further visual feedback,
-using an original compact rectangular core around a straight lead under
-MIT OR Apache-2.0. Revision 1 remains byte-identical beside it, and terminal
-positions are unchanged. No external symbol library or artwork was used.
+The ferrite bead redraw follows @travle1's further visual feedback, using an
+original compact rectangular core around a straight lead under MIT OR Apache-2.0.
+At @travle1's direction, this unpublished first draft is replaced in place rather
+than retaining the discarded drawing as a separate revision. Terminal positions
+are unchanged. No external symbol library or artwork was used.

@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "ferrite-bead",
-  "revision": 2,
+  "revision": 1,
   "name": "Ferrite bead",
   "reference_prefix": "FB",
   "default_value": "Ferrite",
