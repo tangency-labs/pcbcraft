@@ -1119,3 +1119,40 @@ fn catalog_symbol_and_package_previews_zoom_pan_and_fit_independently() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     assert_eq!(h.state().session.revision(), revision);
 }
+
+/// Search results retain editable category selection and typed criteria, rather than hiding them.
+#[test]
+fn library_preferences_search_finds_category_and_parameter_controls() {
+    let mut h = editor(1400.);
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"native-parts","documents":native_documents()})).unwrap();
+    click(&mut h, "Filters…");
+    h.get_by_label("Search settings").click();
+    h.run();
+    h.get_by_label("Search settings").type_text("Category");
+    h.run();
+    assert!(h.query_by_label("Include Basic components").is_none());
+    h.get_by_role_and_label(egui::Role::ComboBox, "Category").click();
+    h.run();
+    click(&mut h, "Resistor · parts-demo/resistor r1");
+    h.get_by_label("Search settings").click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_label("Search settings").type_text("Resistance");
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Parameter").click();
+    h.run();
+    click(&mut h, "Resistance");
+    click(&mut h, "Add parameter");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Resistance").click();
+    h.run();
+    click(&mut h, "At least");
+    h.get_by_label("Resistance value").click();
+    h.run();
+    h.get_by_label("Resistance value").type_text("100 Ohm");
+    h.run();
+    click(&mut h, "OK");
+    assert!(!matches!(h.state().dialog, crate::Dialog::Preferences(_)), "{:?}", h.state().dialog);
+    let parameter = &h.state().library_preferences.filter.parameters[0];
+    assert_eq!(parameter.field, "pcbcraft:resistance");
+    assert!(matches!(parameter.requirement, Some(library::parts::Requirement::AtLeast { .. })));
+}

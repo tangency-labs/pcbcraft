@@ -85,7 +85,6 @@ revision 1 definitions retain their rectangular copper and graphics.
 | `led-0402` | 0.70 × 0.50 | X ±0.450 | [Kingbright APG1005CGC-T](https://www.kingbrightusa.com/images/catalog/spec/apg1005cgc-t.pdf), DSAM9856 V11B, 12-Mar-2025, p. 1 |
 | `header-1x02-254` | 1.70 × 1.70, 1.00 drill | X ±1.270 | Original demo header; square pad 1 and circular pad 2 |
 | `sot23` | 0.60 × 0.70 | 1: (−0.95, 1.00), 2: (0.95, 1.00), 3: (0, −1.00) | Original demo lands; body and 1.9 mm same-side pin pitch from [Nexperia SOT23](https://assets.nexperia.com/documents/outline-drawing/SOT23.pdf), 12-Oct-2022 |
-
 | `resistor-0805` | 0.95 × 1.45 | X ±0.975 | Vishay 20035, 14-Apr-2026, p. 11, 0805 reflow pattern |
 | `resistor-1206` | 1.05 × 1.80 | X ±1.275 | Same Vishay reference, 1206 reflow pattern |
 | `soic8` | 1.55 × 0.60 | X ±2.70, Y at 1.27 pitch | [Microchip ATtiny402 DS40002318A](https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATtiny202-204-402-404-406-DataSheet-DS40002318A.pdf), pp. 496–498; C04-2057-SN Rev F |

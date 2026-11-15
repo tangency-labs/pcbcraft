@@ -53,7 +53,11 @@ impl Draft {
     }
     /// Reuse the same typed controls with a caller-owned label for the absence of a comparison.
     pub(crate) fn show_presence(&mut self, ui: &mut egui::Ui, name: &str, none_label: &str) {
-        let label = ui.label(name);
+        ui.label(name);
+        self.show_presence_controls(ui, name, none_label);
+    }
+    /// Draw comparison controls when the containing form already supplies the field label.
+    pub(crate) fn show_presence_controls(&mut self, ui: &mut egui::Ui, name: &str, none_label: &str) {
         egui::ComboBox::from_id_salt("requirement_operator")
             .selected_text(match self.operator {
                 Operator::Unspecified => none_label,
@@ -76,7 +80,7 @@ impl Draft {
                 }
             })
             .response
-            .labelled_by(label.id);
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, name));
         let count = if self.operator == Operator::Range { 2 } else { 1 };
         while self.values.len() < count {
             self.values.push(String::new());
