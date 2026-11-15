@@ -469,7 +469,7 @@ pub(super) fn show(
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
     let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
-    crate::board_tracks::paint(
+    let mut track_labels = crate::board_tracks::paint(
         ui,
         rect,
         camera,
@@ -552,6 +552,11 @@ pub(super) fn show(
             .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |graphic| graphic.color.unwrap_or_else(|| board::graphic_color(graphic.style)));
         if selected {
             board::reference_owner_link(&p, reference_bounds, center, reference_color);
+        }
+        for pad in &pads {
+            if let Some(corners) = pad.copper {
+                track_labels.cover_rect(Rect::from_points(&corners));
+            }
         }
         board::footprint(
             &p,

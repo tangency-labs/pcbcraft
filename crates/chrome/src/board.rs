@@ -569,6 +569,13 @@ fn copper_label_ink(copper: Color32) -> Color32 {
 /// Paint repeated upright names wholly within a visible track's copper. Clipping the centerline
 /// first bounds text preparation for long off-screen segments; sub-legible widths show no text.
 pub fn track_net_label(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, copper: Color32) {
+    track_net_labels(p, ends, width, name, copper, |shape| {
+        p.add(shape);
+    });
+}
+
+/// Lay out sparse upright labels in the visible span; the caller controls overlap and painting.
+fn track_net_labels(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, copper: Color32, mut emit: impl FnMut(egui::epaint::TextShape)) {
     let size = (width - 4.).min(14.);
     if size < 7. {
         return;
@@ -608,13 +615,16 @@ pub fn track_net_label(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, cop
     if angle < -std::f32::consts::FRAC_PI_2 {
         angle += std::f32::consts::PI;
     }
-    let count = ((hi - lo) / (galley.size().x + 48.).max(140.)).floor().max(1.) as usize;
+    let count = ((hi - lo) / (galley.size().x + 120.).max(400.)).floor().max(1.) as usize;
     for i in 0..count {
         let center = ends[0] + axis * (lo + (hi - lo) * (i as f32 + 0.5) / count as f32);
         let pos = center - galley.rect.center().to_vec2();
-        p.add(egui::epaint::TextShape::new(pos, galley.clone(), ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+        emit(egui::epaint::TextShape::new(pos, galley.clone(), ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
     }
 }
+
+mod track_labels;
+pub use track_labels::TrackLabels;
 
 /// Fit a via name in the top annular band, clear of its drill and outer copper boundary.
 /// Ordinary small vias therefore reveal names only at a sufficiently close zoom.

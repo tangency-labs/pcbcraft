@@ -3,11 +3,15 @@ use egui::pos2;
 
 /// Capture actual text geometry through egui's font/layout path, without mocking fit decisions.
 fn text_shapes(paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
+    text_shapes_in(vec2(800., 600.), paint)
+}
+
+/// Capture a chosen viewport so repetition can be checked independently of off-screen copper.
+fn text_shapes_in(size: egui::Vec2, paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
     let ctx = egui::Context::default();
     crate::install(&ctx);
-    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))), ..Default::default() }, |ui| {
-        paint(ui.painter())
-    });
+    let mut out =
+        ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() }, |ui| paint(ui.painter()));
     out.textures_delta.clear();
     out.shapes
         .into_iter()
@@ -16,6 +20,70 @@ fn text_shapes(paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
             _ => None,
         })
         .collect()
+}
+
+/// A wide viewport needs a few well-separated names, regardless of the zoomed copper width.
+#[test]
+fn track_names_repeat_sparsely_at_readable_zooms() {
+    for width in [24., 32., 55., 120.] {
+        let text = text_shapes_in(vec2(1400., 600.), |p| track_net_label(p, [pos2(40., 300.), pos2(1360., 300.)], width, "+3V3", Color32::RED));
+        assert_eq!(text.len(), 3);
+        for pair in text.windows(2) {
+            assert!(pair[1].pos.x - pair[0].pos.x >= 400.);
+        }
+    }
+}
+
+/// A later T junction, crossing, via or pad removes a covered word in full while leaving the
+/// two other repetitions readable. Shapes follow the same paint order as the board canvas.
+#[test]
+fn later_copper_never_leaves_a_partial_track_name() {
+    for cover in 0..5 {
+        let text = text_shapes_in(vec2(1400., 600.), |p| {
+            let mut labels = TrackLabels::new(p.clone());
+            let ends = [pos2(40., 300.), pos2(1360., 300.)];
+            track(p, ends, 55., Color32::RED, false, false);
+            labels.track(ends, 55., "+3V3", Color32::RED);
+            match cover {
+                0..=2 => {
+                    let ends = match cover {
+                        0 => [pos2(700., 50.), pos2(700., 300.)],
+                        1 => [pos2(700., 50.), pos2(700., 550.)],
+                        _ => [pos2(450., 50.), pos2(950., 550.)],
+                    };
+                    labels.cover_track(ends, 55.);
+                    track(p, ends, 55., Color32::BLUE, false, false);
+                }
+                3 => {
+                    labels.cover_disc(pos2(700., 300.), 40.);
+                    p.circle_filled(pos2(700., 300.), 40., Color32::YELLOW);
+                }
+                _ => {
+                    let bounds = Rect::from_center_size(pos2(700., 300.), vec2(80., 60.));
+                    labels.cover_rect(bounds);
+                    p.rect_filled(bounds, 0., Color32::YELLOW);
+                }
+            }
+        });
+        assert_eq!(text.len(), 2, "cover case {cover}");
+        for label in text {
+            assert_eq!(label.galley.job.text, "+3V3");
+            assert!(!label.visual_bounding_rect().intersects(Rect::from_center_size(pos2(700., 300.), vec2(80., 60.))));
+        }
+    }
+}
+
+/// A diagonal's bounding box must not erase text far from its actual projected copper.
+#[test]
+fn nearby_copper_preserves_uncovered_names() {
+    let text = text_shapes(|p| {
+        let mut labels = TrackLabels::new(p.clone());
+        labels.track([pos2(80., 80.), pos2(700., 80.)], 24., "COL_A", Color32::BLUE);
+        labels.cover_track([pos2(100., 100.), pos2(700., 500.)], 24.);
+        labels.cover_disc(pos2(400., 150.), 15.);
+        labels.cover_rect(Rect::from_min_max(pos2(500., 150.), pos2(600., 200.)));
+    });
+    assert_eq!(text.len(), 1);
 }
 
 /// Labels disappear before they become smaller than readable text or exceed segment copper;
