@@ -1509,3 +1509,29 @@ and checking commands; its modules introduce no alternate project writer or
 routing implementation. No external circuit file, EDA implementation, artwork,
 library record or dependency was consulted or incorporated. Checker and editing
 regressions use the production native codecs and independently stated net sets.
+
+
+## Symbol drawing feedback and sensor-node demo
+
+The connector pin-one marker removal, wider six-pin rows, semicircular inductor
+turns, straight MOSFET leads and capacitor wire clearance follow @travle1's
+feedback. These are original native drawings under MIT OR Apache-2.0; previous
+symbol revisions remain intact. The example-only command/output helpers extract
+PCBcraft's original `indicator_demo` implementation from `557f333` and are reused
+by both generators. No alternate project writer, production router or dependency
+was introduced.
+
+The ATtiny402/TMP102 sensor-node circuit, symbol/footprint records, placement and
+routing plan are original PCBcraft work under MIT OR Apache-2.0. Factual pinouts
+and package dimensions follow Microchip DS40002318A (2021), pp. 13, 17 and
+496–498, including C04-2057-SN Rev F lands:
+https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATtiny202-204-402-404-406-DataSheet-DS40002318A.pdf
+and TI SBOS397I (June 2024), p. 3, address table and DRL0006A package/land drawing
+4223266/F (November 2024), pp. 30–31:
+https://www.ti.com/lit/ds/symlink/tmp102.pdf
+The example library records the exact dimension locators; silk, courtyards and
+reference lettering are original. The PDFs and manufacturer artwork are not
+bundled. No external EDA implementation, symbol/footprint library or firmware
+was incorporated. Existing passive/LED/package notices remain with the pinned
+records. Project documents and archives are generated through shared native
+commands and production codecs; the tests independently state the intended nets.

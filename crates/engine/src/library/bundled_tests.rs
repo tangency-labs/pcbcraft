@@ -258,7 +258,10 @@ fn revised_connectors_keep_their_pinned_connection_points() {
         assert_eq!(definition.pins().len(), count);
         for (index, pin) in definition.pins().iter().enumerate() {
             assert_eq!(pin.number, (index + 1).to_string());
-            assert_eq!(pin.offset, Point { x_nm: -3 * GRID_NM, y_nm: (2 * index as i64 - count as i64 + 1) * GRID_NM });
+            assert_eq!(
+                pin.offset,
+                Point { x_nm: -3 * GRID_NM, y_nm: (2 * index as i64 - count as i64 + 1) * GRID_NM * if count == 6 { 2 } else { 1 } }
+            );
             let appearance = pin.appearance.as_ref().unwrap();
             assert_eq!(appearance.orientation, crate::schematic::PinOrientation::Right);
             assert!(appearance.show_number);
@@ -271,8 +274,8 @@ fn revised_connectors_keep_their_pinned_connection_points() {
     assert_eq!(library.symbol_revision("header-4", 1).unwrap().pins()[0].offset.x_nm, -5 * GRID_NM);
     let dual = library.symbol("header-2x3").unwrap();
     for row in 0..3 {
-        assert_eq!(dual.pins()[2 * row].offset, Point { x_nm: -3 * GRID_NM, y_nm: (2 * row as i64 - 2) * GRID_NM });
-        assert_eq!(dual.pins()[2 * row + 1].offset, Point { x_nm: 3 * GRID_NM, y_nm: (2 * row as i64 - 2) * GRID_NM });
+        assert_eq!(dual.pins()[2 * row].offset, Point { x_nm: -4 * GRID_NM, y_nm: (4 * row as i64 - 4) * GRID_NM });
+        assert_eq!(dual.pins()[2 * row + 1].offset, Point { x_nm: 4 * GRID_NM, y_nm: (4 * row as i64 - 4) * GRID_NM });
     }
 }
 
@@ -283,6 +286,15 @@ fn changed_bundled_revisions_reopen_offline_without_upgrading_instances() {
     for (library, id, revision) in [
         ("basic-components", "connector", 2),
         ("basic-components", "header-4", 1),
+        ("basic-components", "connector", 3),
+        ("basic-components", "header-3", 1),
+        ("basic-components", "header-4", 2),
+        ("basic-components", "header-6", 1),
+        ("basic-components", "header-8", 1),
+        ("basic-components", "header-2x3", 1),
+        ("basic-components", "inductor", 1),
+        ("basic-components", "nmos", 1),
+        ("basic-components", "pmos", 1),
         ("power", "3v3", 1),
         ("power", "5v", 1),
         ("power", "12v", 1),
@@ -294,7 +306,7 @@ fn changed_bundled_revisions_reopen_offline_without_upgrading_instances() {
         session.apply("project.new", &json!({})).unwrap();
         let old = session.libraries().symbol(library, id, revision).unwrap();
         let latest = session.libraries().latest_symbol(library, id).unwrap();
-        assert_eq!(latest.revision(), revision + 1);
+        assert!(latest.revision() > revision);
         assert_ne!(old.default_unit().graphics(), latest.default_unit().graphics());
         for (index, definition) in [old, latest].into_iter().enumerate() {
             session.apply(PLACE_SYMBOL, &json!({"library":library,"definition":id,"definition_revision":definition.revision(),"definition_digest":sources::symbol_digest(&definition).unwrap(),"x_nm":index as i64*20*GRID_NM,"y_nm":0,"expected_revision":session.revision()})).unwrap();
@@ -340,5 +352,42 @@ fn expanded_power_shapes_preserve_explicit_net_semantics() {
         let net = graph.net_index_for(symbol.terminals()[0]).unwrap();
         assert_eq!(graph.net_name(net), name);
         assert!(nets.insert(net));
+    }
+}
+
+/// Connector numbering supplies pin-one identification without an extra body mark. Coil
+/// turns remain editable semicircular arcs; MOSFET attachment leads follow their direct axes.
+#[test]
+fn corrected_native_glyphs_keep_clear_numbering_coils_and_straight_leads() {
+    use crate::library_graphics::Geometry;
+    use crate::schematic::PinOrientation;
+    for id in ["connector", "header-3", "header-4", "header-6", "header-8", "header-2x3"] {
+        let symbol = basic_components().symbol(id).unwrap();
+        assert_eq!(symbol.default_unit().drawing.iter().filter(|shape| matches!(shape, Shape::Rect(..))).count(), 1);
+    }
+    let coil = basic_components().symbol("inductor").unwrap();
+    let turns: Vec<_> = coil
+        .default_unit()
+        .drawing
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Graphic(g) => Some(g),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns.len(), 4);
+    assert!(turns.iter().all(|g| matches!(g.geometry, Geometry::Arc { sweep_degrees: 180, .. })));
+    for pair in turns.windows(2) {
+        assert_eq!(pair[0].paths()[0].last(), pair[1].paths()[0].first());
+    }
+    for id in ["nmos", "pmos"] {
+        let symbol = basic_components().symbol(id).unwrap();
+        let gate = &symbol.pins()[0];
+        let source = &symbol.pins()[1];
+        let drain = &symbol.pins()[2];
+        assert_eq!((gate.offset.y_nm, source.offset.x_nm, drain.offset.x_nm), (0, 0, 0));
+        for (pin, direction) in [(gate, PinOrientation::Right), (source, PinOrientation::Up), (drain, PinOrientation::Down)] {
+            assert_eq!(pin.appearance.as_ref().unwrap().orientation, direction);
+        }
     }
 }

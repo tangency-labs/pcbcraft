@@ -156,3 +156,34 @@ fn complete_demo_has_no_unrouted_or_design_rule_findings() {
     assert_eq!(session.revision(), revision);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// A wire must leave each capacitor along its lead for at least two grid steps before bending.
+#[test]
+fn capacitor_contacts_have_straight_wire_clearance() {
+    use pcbcraft_engine::schematic::WireEndpoint;
+    let project = decode_packed(ARCHIVE).unwrap().project;
+    for symbol in project.symbols().iter().filter(|s| project.reference(s).starts_with('C')) {
+        for terminal in symbol.terminals() {
+            let pin = project.terminal_position(terminal).unwrap();
+            let outward = (pin.x_nm - symbol.position.x_nm, pin.y_nm - symbol.position.y_nm);
+            let wires: Vec<_> = project.wires().iter().filter(|w| w.endpoints().contains(&WireEndpoint::Terminal(terminal))).collect();
+            assert!(!wires.is_empty());
+            for wire in wires {
+                let mut path = project.wire_path(wire);
+                if wire.endpoints()[1] == WireEndpoint::Terminal(terminal) {
+                    path.reverse();
+                }
+                let step = (path[1].x_nm - pin.x_nm, path[1].y_nm - pin.y_nm);
+                assert_eq!(
+                    step.0 * outward.1 - step.1 * outward.0,
+                    0,
+                    "{} pin {} bends at its contact",
+                    project.reference(symbol),
+                    terminal.number()
+                );
+                assert!(step.0 * outward.0 + step.1 * outward.1 > 0);
+                assert!(step.0.abs() + step.1.abs() >= 2 * GRID_NM);
+            }
+        }
+    }
+}

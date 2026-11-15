@@ -1,0 +1,34 @@
+{
+  "format": "pcbcraft-instances/2",
+  "board": "74891c7b-4123-42e3-a32f-b4665ecf0c28",
+  "circuit_uses": [{"id":"af5d64d7-b727-4d77-8727-de6d1037d53e"}],
+  "sheet_occurrences": [
+    {"id":"881cb10f-872b-4124-a7b9-89382d4db863","definition":"103bdb21-6dc9-4252-bb9c-33ccd24d6d33","circuit_use":"af5d64d7-b727-4d77-8727-de6d1037d53e","parent":null,"parent_slot":null}
+  ],
+  "net_registry": {
+    "records": [
+    {"id":"2825e297-c79b-4b43-94b3-8169e89a5ca8","primary":{"kind":"label","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"881cb10f-872b-4124-a7b9-89382d4db863","object":108,"terminal":""},"fallbacks":[{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":7,"terminal":"2"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":9,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"44a6bef1-2cce-459f-bd57-b46b66b1a38f","primary":{"kind":"label","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"881cb10f-872b-4124-a7b9-89382d4db863","object":110,"terminal":""},"fallbacks":[{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":9,"terminal":"2"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":11,"terminal":"3"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":24,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"646622b3-0bee-46de-83d8-e1a405dd4852","primary":{"kind":"label","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"881cb10f-872b-4124-a7b9-89382d4db863","object":113,"terminal":""},"fallbacks":[{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":18,"terminal":"1"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":22,"terminal":"2"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":24,"terminal":"2"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"a323d807-d120-4023-8d25-0613dc46ff16","primary":{"kind":"label","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"881cb10f-872b-4124-a7b9-89382d4db863","object":112,"terminal":""},"fallbacks":[{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":11,"terminal":"1"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":20,"terminal":"2"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":26,"terminal":"2"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"a344138f-e947-49f9-92e1-af921e8ddb14","primary":{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":32,"terminal":"1"},"fallbacks":[],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"ab39829b-9eef-4d88-82e1-449c8f1900a6","primary":{"kind":"label","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"881cb10f-872b-4124-a7b9-89382d4db863","object":111,"terminal":""},"fallbacks":[{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":16,"terminal":"2"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":18,"terminal":"3"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":26,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"ec25aacc-d365-4fe5-a7d2-261bb1024bf9","primary":{"kind":"label","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"881cb10f-872b-4124-a7b9-89382d4db863","object":109,"terminal":""},"fallbacks":[{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":14,"terminal":"2"},{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":16,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"f66a2321-606f-49cf-9703-f19d120ae241","primary":{"kind":"terminal","project":"3c37c077-5403-427f-ab58-419eba2a8499","scope":{"kind":"board","id":"74891c7b-4123-42e3-a32f-b4665ecf0c28"},"occurrence":"00000000-0000-0000-0000-000000000000","object":33,"terminal":"1"},"fallbacks":[],"lineage":[],"state":{"kind":"active"}}
+    ]
+  }
+}

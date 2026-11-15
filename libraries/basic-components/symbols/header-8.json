@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "header-8",
-  "revision": 1,
+  "revision": 2,
   "name": "8-pin header",
   "reference_prefix": "J",
   "default_value": "Conn_01x08",
@@ -27,8 +27,7 @@
         {"type": "line", "from_nm": [-1270000, 1270000], "to_nm": [635000, 1270000]},
         {"type": "line", "from_nm": [-1270000, 3810000], "to_nm": [635000, 3810000]},
         {"type": "line", "from_nm": [-1270000, 6350000], "to_nm": [635000, 6350000]},
-        {"type": "line", "from_nm": [-1270000, 8890000], "to_nm": [635000, 8890000]},
-        {"type": "rect", "min_nm": [-190500, -9080500], "max_nm": [190500, -8699500]}
+        {"type": "line", "from_nm": [-1270000, 8890000], "to_nm": [635000, 8890000]}
       ],
       "pins": [
         {"terminal": "1", "at_nm": [-3810000, -8890000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},

@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-sheet/6",
-  "id": "300578c4-bd6c-4cbb-971e-8d45e6b5567b",
+  "id": "103bdb21-6dc9-4252-bb9c-33ccd24d6d33",
   "net_labels": [
     {"id":108,"name":"LED_A","style":"local","at":{"x_nm":-25400000,"y_nm":-15240000},"rotation":0}
 
@@ -240,10 +240,10 @@
     {"id":105,"from":{"junction":102},"to":{"symbol":18,"pin":"1"},"bends":[]}
 
     ,
-    {"id":106,"from":{"symbol":24,"pin":"2"},"to":{"junction":102},"bends":[{"x_nm":-12700000,"y_nm":17780000},{"x_nm":8890000,"y_nm":17780000}]}
+    {"id":106,"from":{"symbol":24,"pin":"2"},"to":{"junction":102},"bends":[{"x_nm":-10160000,"y_nm":0},{"x_nm":-10160000,"y_nm":17780000},{"x_nm":8890000,"y_nm":17780000}]}
 
     ,
-    {"id":107,"from":{"symbol":26,"pin":"2"},"to":{"junction":100},"bends":[{"x_nm":12700000,"y_nm":22860000},{"x_nm":-8890000,"y_nm":22860000}]}
+    {"id":107,"from":{"symbol":26,"pin":"2"},"to":{"junction":100},"bends":[{"x_nm":10160000,"y_nm":0},{"x_nm":10160000,"y_nm":22860000},{"x_nm":-8890000,"y_nm":22860000}]}
 
     ,
     {"id":115,"from":{"symbol":5,"pin":"1"},"to":{"junction":114},"bends":[]}

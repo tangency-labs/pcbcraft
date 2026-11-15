@@ -75,9 +75,9 @@ cargo run --locked -p pcbcraft
 
 The [quickstart](docs/quickstart.md) covers opening a project, schematic editing
 and saving, with PCB tools described in the [editor guide](docs/editor-guide.md).
-The [Dual LED example](examples/README.md) includes a wired schematic, placed
-footprints and a shareable archive. It is an editing fixture with an unrouted
-board; the polished end-to-end demo remains part of the MVP work.
+The [sensor node example](examples/README.md) includes a small MCU, an I²C sensor,
+status LEDs and a routed board; a transistor flasher is available as a second
+demo. Both have shareable archives.
 
 <details>
 <summary><strong>Run the browser app locally</strong></summary>

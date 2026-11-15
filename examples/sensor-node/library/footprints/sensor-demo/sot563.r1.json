@@ -1,0 +1,157 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "sensor-demo",
+  "id": "sot563",
+  "revision": 1,
+  "name": "SOT-563 (DRL), 6 pins",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "https://www.ti.com/lit/ds/symlink/tmp102.pdf",
+    "locator": "SBOS397I (June 2024), p. 3 and DRL0006A drawing 4223266/F (November 2024), pp. 30–31; 0.50 mm pitch, 1.48 mm row centers, 0.67 x 0.30 mm recommended lands with 0.05 mm radius; original courtyard, silk and reference lettering"
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -740000,
+        "y_nm": -500000
+      },
+      "width_nm": 670000,
+      "height_nm": 300000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": -740000,
+        "y_nm": 0
+      },
+      "width_nm": 670000,
+      "height_nm": 300000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "3",
+      "center": {
+        "x_nm": -740000,
+        "y_nm": 500000
+      },
+      "width_nm": 670000,
+      "height_nm": 300000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "4",
+      "center": {
+        "x_nm": 740000,
+        "y_nm": 500000
+      },
+      "width_nm": 670000,
+      "height_nm": 300000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "5",
+      "center": {
+        "x_nm": 740000,
+        "y_nm": 0
+      },
+      "width_nm": 670000,
+      "height_nm": 300000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    },
+    {
+      "number": "6",
+      "center": {
+        "x_nm": 740000,
+        "y_nm": -500000
+      },
+      "width_nm": 670000,
+      "height_nm": 300000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 50000
+    }
+  ],
+  "graphics": [
+    {
+      "purpose": "fabrication",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 1200000,
+      "height_nm": 1600000,
+      "rotation": 0
+    },
+    {
+      "purpose": "courtyard",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 2650000,
+      "height_nm": 2100000,
+      "rotation": 0
+    }
+  ],
+  "silkscreen": [
+    {
+      "points": [
+        {
+          "x_nm": -350000,
+          "y_nm": -1000000
+        },
+        {
+          "x_nm": 350000,
+          "y_nm": -1000000
+        }
+      ],
+      "closed": false
+    },
+    {
+      "points": [
+        {
+          "x_nm": -350000,
+          "y_nm": 1000000
+        },
+        {
+          "x_nm": 350000,
+          "y_nm": 1000000
+        }
+      ],
+      "closed": false
+    },
+    {
+      "points": [
+        {
+          "x_nm": -350000,
+          "y_nm": -1000000
+        },
+        {
+          "x_nm": -350000,
+          "y_nm": -800000
+        }
+      ],
+      "closed": false
+    }
+  ],
+  "reference": "pcbcraft-technical-1"
+}

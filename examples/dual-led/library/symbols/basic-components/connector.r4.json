@@ -1,4 +1,4 @@
-{"library":"basic-components","format":"pcbcraft-symbol/1","id":"connector","revision":3,"name":"2-pin connector","reference_prefix":"J","default_value":"Conn_01x02","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"connector","revision":4,"name":"2-pin connector","reference_prefix":"J","default_value":"Conn_01x02","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
 ,
   "terminals":[
     {"id":"1","electrical_type":"passive"}
@@ -15,8 +15,6 @@
         {"type":"line","from_nm":[-1270000,-1270000],"to_nm":[635000,-1270000]}
         ,
         {"type":"line","from_nm":[-1270000,1270000],"to_nm":[635000,1270000]}
-        ,
-        {"type":"rect","min_nm":[-190500,-1460500],"max_nm":[190500,-1079500]}
       ]
       ,
       "pins":[

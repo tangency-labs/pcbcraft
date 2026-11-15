@@ -1,0 +1,43 @@
+{
+  "format": "pcbcraft-instances/2",
+  "board": "3aebe5a2-0dea-4e43-b5a9-50270f3009c5",
+  "circuit_uses": [{"id":"17f750d2-b1aa-4e63-92d4-af34cbbc0c4d"}],
+  "sheet_occurrences": [
+    {"id":"a6c39023-9554-4946-a9f5-d64971ff8bfe","definition":"4dc61800-8a88-4e81-9906-385cbed027c7","circuit_use":"17f750d2-b1aa-4e63-92d4-af34cbbc0c4d","parent":null,"parent_slot":null}
+  ],
+  "net_registry": {
+    "records": [
+    {"id":"1f1fed00-0870-4fc5-9ab5-d6d3793db51e","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":56,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":44,"terminal":"2"},{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":46,"terminal":"2"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"209bddce-8b82-49cb-982c-50f49bf042b4","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":74,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"7"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"245eb52b-0e38-4f7c-9a34-5a108c43cbb6","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":65,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"4"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"5e92dd72-dcde-4693-9f8d-9b10013c4a44","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":62,"terminal":""},"fallbacks":[{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":90,"terminal":""},{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"8"},{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":3,"terminal":"2"}],"lineage":[{"snapshot":{"capture_id":"2dd8195e-c043-472d-b1e7-d37be3646dbc","content_digest":"0967c36937aed2b44c5e40019783c897d7e751f52f36b5730d154275d8797af6"},"net":"ef10e264-2c19-4a82-8896-2f25455f20c2","anchor":{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":18,"terminal":"1"}},{"snapshot":{"capture_id":"2dd8195e-c043-472d-b1e7-d37be3646dbc","content_digest":"0967c36937aed2b44c5e40019783c897d7e751f52f36b5730d154275d8797af6"},"net":null,"anchor":{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":3,"terminal":"2"}}],"state":{"kind":"active"}}
+
+    ,
+    {"id":"67d2954b-f5d4-429e-83fc-b8e674cdccb4","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":71,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"6"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"80ffb4f6-5a80-49c8-9aa4-0d776a403a1b","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":55,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":35,"terminal":"2"},{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":37,"terminal":"2"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"8ed49d04-115a-4b23-84b7-6f0e9c5babf7","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":54,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"3"},{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":46,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"bf0b5ecc-8895-4624-8d51-c7b393871b74","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":68,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"5"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"d3042697-4ebc-449c-b50b-d4f05ee09103","primary":{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":17,"terminal":"1"},"fallbacks":[],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"ea85835a-b4c8-4bf9-8be1-3f8d43ff60e0","primary":{"kind":"label","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"a6c39023-9554-4946-a9f5-d64971ff8bfe","object":53,"terminal":""},"fallbacks":[{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"2"},{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":37,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+
+    ,
+    {"id":"ef10e264-2c19-4a82-8896-2f25455f20c2","primary":{"kind":"terminal","project":"914e1d9a-392e-467e-ae23-b058bb25ed7a","scope":{"kind":"board","id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5"},"occurrence":"00000000-0000-0000-0000-000000000000","object":18,"terminal":"1"},"fallbacks":[],"lineage":[],"state":{"kind":"retired","snapshot":{"capture_id":"2dd8195e-c043-472d-b1e7-d37be3646dbc","content_digest":"0967c36937aed2b44c5e40019783c897d7e751f52f36b5730d154275d8797af6"},"reason":"merged","successors":["5e92dd72-dcde-4693-9f8d-9b10013c4a44"]}}
+    ]
+  }
+}

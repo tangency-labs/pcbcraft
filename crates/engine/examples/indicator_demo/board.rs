@@ -1,5 +1,5 @@
 //! Board composition for the original demo; placements and copper use public commands.
-use super::schematic::Demo;
+use super::demo_support::Demo;
 use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT};
 use serde_json::json;
 use std::error::Error;

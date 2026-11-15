@@ -1,0 +1,37 @@
+{"library":"sensor-demo","format":"pcbcraft-symbol/2","id":"tmp102","revision":1,"name":"TMP102","reference_prefix":"U","default_value":"TMP102","provenance":{"library_name":"Sensor demo parts","license":"MIT OR Apache-2.0"},"defaults":{"metadata":{"fields":{},"attributes":{"do_not_populate":false,"exclude_from_bom":false,"exclude_from_board":false,"exclude_from_simulation":false,"exclude_from_position_files":false}},"field_layout":{"reference":{"offset":{"x_nm":1270000,"y_nm":-6350000},"visible":true,"show_name":false,"rotation":0,"align":"middle","height_nm":1000000},"value":{"offset":{"x_nm":0,"y_nm":-2540000},"visible":true,"show_name":false,"rotation":0,"align":"middle","height_nm":1000000}}}
+,
+  "terminals":[
+    {"id":"1","name":"SCL","electrical_type":"input"}
+    ,
+    {"id":"2","name":"GND","electrical_type":"power_in"}
+    ,
+    {"id":"3","name":"ALERT","electrical_type":"open_collector"}
+    ,
+    {"id":"4","name":"ADD0","electrical_type":"input"}
+    ,
+    {"id":"5","name":"V+","electrical_type":"power_in"}
+    ,
+    {"id":"6","name":"SDA","electrical_type":"bidirectional"}
+  ]
+  ,
+  "units":[
+    {"id":"main"
+    ,
+      "drawing":[
+        {"type":"rect","min_nm":[-6350000,-8890000],"max_nm":[6350000,8890000]}
+      ]
+      ,
+      "pins":[
+        {"terminal":"1","at_nm":[-10160000,-5080000],"appearance":{"orientation":"right","length_nm":3810000,"style":"line","show_name":true,"show_number":true,"name_height_nm":750000,"number_height_nm":650000}}
+        ,
+        {"terminal":"2","at_nm":[0,12700000],"appearance":{"orientation":"up","length_nm":3810000,"style":"line","show_name":true,"show_number":true,"name_height_nm":750000,"number_height_nm":650000}}
+        ,
+        {"terminal":"3","at_nm":[-10160000,5080000],"appearance":{"orientation":"right","length_nm":3810000,"style":"line","show_name":true,"show_number":true,"name_height_nm":750000,"number_height_nm":650000}}
+        ,
+        {"terminal":"4","at_nm":[10160000,5080000],"appearance":{"orientation":"left","length_nm":3810000,"style":"line","show_name":true,"show_number":true,"name_height_nm":750000,"number_height_nm":650000}}
+        ,
+        {"terminal":"5","at_nm":[0,-12700000],"appearance":{"orientation":"down","length_nm":3810000,"style":"line","show_name":true,"show_number":true,"name_height_nm":750000,"number_height_nm":650000}}
+        ,
+        {"terminal":"6","at_nm":[-10160000,0],"appearance":{"orientation":"right","length_nm":3810000,"style":"line","show_name":true,"show_number":true,"name_height_nm":750000,"number_height_nm":650000}}
+      ]}
+  ]}

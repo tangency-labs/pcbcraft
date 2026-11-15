@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "header-2x3",
-  "revision": 1,
+  "revision": 2,
   "name": "6-pin header (2x3)",
   "reference_prefix": "J",
   "default_value": "Conn_02x03",
@@ -17,21 +17,21 @@
     {
       "id": "main",
       "drawing": [
-        {"type": "rect", "min_nm": [-1270000, -3810000], "max_nm": [1270000, 3810000]},
-        {"type": "line", "from_nm": [-1270000, -2540000], "to_nm": [-444500, -2540000]},
-        {"type": "line", "from_nm": [1270000, -2540000], "to_nm": [444500, -2540000]},
-        {"type": "line", "from_nm": [-1270000, 0], "to_nm": [-444500, 0]},
-        {"type": "line", "from_nm": [1270000, 0], "to_nm": [444500, 0]},
-        {"type": "line", "from_nm": [-1270000, 2540000], "to_nm": [-444500, 2540000]},
-        {"type": "line", "from_nm": [1270000, 2540000], "to_nm": [444500, 2540000]}
+        {"type": "rect", "min_nm": [-2540000, -6350000], "max_nm": [2540000, 6350000]},
+        {"type": "line", "from_nm": [-2540000, -5080000], "to_nm": [-889000, -5080000]},
+        {"type": "line", "from_nm": [2540000, -5080000], "to_nm": [889000, -5080000]},
+        {"type": "line", "from_nm": [-2540000, 0], "to_nm": [-889000, 0]},
+        {"type": "line", "from_nm": [2540000, 0], "to_nm": [889000, 0]},
+        {"type": "line", "from_nm": [-2540000, 5080000], "to_nm": [-889000, 5080000]},
+        {"type": "line", "from_nm": [2540000, 5080000], "to_nm": [889000, 5080000]}
       ],
       "pins": [
-        {"terminal": "1", "at_nm": [-3810000, -2540000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
-        {"terminal": "2", "at_nm": [3810000, -2540000], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
-        {"terminal": "3", "at_nm": [-3810000, 0], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
-        {"terminal": "4", "at_nm": [3810000, 0], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
-        {"terminal": "5", "at_nm": [-3810000, 2540000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
-        {"terminal": "6", "at_nm": [3810000, 2540000], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}}
+        {"terminal": "1", "at_nm": [-5080000, -5080000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "2", "at_nm": [5080000, -5080000], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "3", "at_nm": [-5080000, 0], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "4", "at_nm": [5080000, 0], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "5", "at_nm": [-5080000, 5080000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},
+        {"terminal": "6", "at_nm": [5080000, 5080000], "appearance": {"orientation": "left", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}}
       ]
     }
   ]

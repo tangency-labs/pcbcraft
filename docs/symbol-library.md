@@ -26,8 +26,9 @@ The default set contains 30 basic symbols and 11 power symbols:
 | Power | GND, GNDA, earth (PE), chassis, +3V3, +5V, +12V, VCC, VCC bar, VDD and VSS |
 
 Single-row connectors have left-side attachment points, top-to-bottom pin
-numbering and 2.54 mm row spacing. The 2×3 header uses odd numbers on the left
-and even numbers on the right, ordered from top to bottom. Generic connector
+numbering and 2.54 mm row spacing, except the six-pin header, which uses
+5.08 mm spacing for more room. The 2×3 header also uses 5.08 mm rows, with
+odd numbers on the left and even numbers on the right, ordered top to bottom. Generic connector
 values describe the contact arrangement rather than assuming an input role.
 
 New diode symbols use terminal 1 for cathode and 2 for anode. The existing LED
@@ -58,9 +59,11 @@ the grid: resistor endpoints are 5.08 mm from center, capacitor endpoints
 6.35 mm endpoints. Resistor and capacitor revision 3 use neutral `R` and `C`
 values, with `*-v2.json` preserving the former `1k` and `100nF` defaults.
 
-The connector redraw introduces connector revision 3 and header-4 revision 2;
-`connector-v2.json` and `header-4-v1.json` preserve their previous geometry and
-values. Power redraws introduce revision 2 for +3V3, +5V, +12V, GNDA, VDD and
+The latest connector revisions remove the extra small pin-one square: connector
+revision 4, header-4 revision 3 and revision 2 of the other new headers. Inductor
+revision 2 uses four semicircular coil turns; MOSFET revision 2 has straight
+gate, source and drain leads. All earlier revisions remain beside the current
+records, including the preceding connector/header geometry and values. Power redraws introduce revision 2 for +3V3, +5V, +12V, GNDA, VDD and
 VSS, with revision 1 retained beside each. Changing a drawing, default or pin
 position always requires a new revision so an older project's pinned drawing
 and connections cannot silently change. All unchanged definitions retain their

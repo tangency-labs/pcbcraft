@@ -1,89 +1,65 @@
-# Dual LED flasher
+# Sensor node
 
-This example is a complete two-transistor astable circuit with 14 physical
-components, eight named nets and a routed 40 × 30 mm, two-layer board. Both
-transistors participate in the cross-coupled timing network. Supply decoupling,
-a power header and a collector probe header give the circuit useful connection
-points, with no deliberately floating terminals.
+The primary demo is a small 3.3 V controller board with an ATtiny402, a TMP102
+I²C temperature sensor, two status LEDs, an expansion header and a UPDI header.
+It has 15 physical components and ten nets on a 45 × 30 mm, two-layer board.
+The [two-transistor LED flasher](flasher.md) remains available as a second demo.
 
-The folder and archive carry their exact symbol definitions, physical footprints,
-terminal mappings and board geometry, so they open offline. The project,
-generator and original library records use MIT OR Apache-2.0.
+Open [`sensor-node/project.json`](sensor-node/project.json) on desktop, or upload
+[`sensor-node.pc`](sensor-node.pc) in the browser. Both forms carry exact native
+symbol and footprint copies, so they open offline. Save a copy before editing.
 
 | References | Role | Package |
 | --- | --- | --- |
-| J1 | 3.3 V input: pin 1 supply, pin 2 ground | 2.54 mm, 1×2 plated header |
-| J2 | Collector probes: pin 1 COL_A, pin 2 COL_B | 2.54 mm, 1×2 plated header |
-| Q1, Q2 | PMBT3904 NPN timing stages | SOT-23; 1 Base, 2 Emitter, 3 Collector |
-| D1, D2 | Green and amber indicators | 0402 LED; physical pad 1 is cathode |
-| R1, R2 | 470 Ω LED resistors | 0603 |
-| R3, R4 | 100 kΩ base-bias resistors | 0603 |
-| C1, C2 | 4.7 µF, non-polar timing capacitors | 0603 |
-| C3, C4 | 100 nF and 10 µF supply decoupling | 0603 |
+| U1 | ATtiny402; PA1/SDA, PA2/SCL, PA6/PA7 LEDs, PA3/ALERT, PA0/UPDI | SOIC-8, 3.9 mm body |
+| U2 | TMP102 temperature sensor; ADD0 grounded for address 0x48 | SOT-563 (DRL), 6 pins |
+| J1 | 3.3 V input: 1 supply, 2 ground | 2.54 mm, 1×2 plated header |
+| J2 | I²C expansion: 1 supply, 2 ground, 3 SDA, 4 SCL | 2.54 mm, 1×4 plated header |
+| J3 | Programming: 1 supply, 2 UPDI, 3 ground | 2.54 mm, 1×3 plated header |
+| D1, D2 | Status and activity LEDs, switched low by U1 | 0402; physical pad 1 cathode |
+| R1, R2 | 1 kΩ LED current limiting | 0603 |
+| R3, R4 | 4.7 kΩ SDA/SCL pullups | 0603 |
+| R5 | 10 kΩ open-drain ALERT pullup | 0603 |
+| C1, C2, C3 | 100 nF MCU/sensor bypass and 4.7 µF bulk capacitance | 0603 |
 
-The board contains 82 track segments and 11 through vias, using front copper for
-local connections and back copper for the timing and probe links. References
-and original package silkscreen remain visible alongside the copper. The current
-board checker reports no clearance, short, unrouted, outline or courtyard findings
-with its default rules. [Footprint sources and dimensions](../docs/footprint-library.md)
-record the package definitions and their qualification scope.
+Supply the board with regulated 3.3 V. The MCU uses its internal oscillator;
+firmware to read the sensor and drive the LEDs is not included. This is an
+editing and layout example, with connectivity and the saved board checked by
+PCBcraft; it has not been built or tested as hardware.
 
-## Open a copy
+The schematic groups power, indicators, controller, sensor, pullups and headers.
+Local labels connect the groups, while capacitor wires have straight runs before
+any corner. **Fit schematic** frames the drawing. Try selecting U1 and its wires,
+using **G** to keep connections while moving, or **M** to disconnect and move,
+then Undo. In **PCB Layout**, inspect pad correspondence, toggle copper layers,
+and run **Analyze → DRC**; removing a track gives the check an edit to report.
 
-On desktop, choose **Open Project → Project file or archive…** and open
-[`dual-led/project.json`](dual-led/project.json). Use **File → Save As… → Project
-folder…** before editing the checkout's copy. In the browser, upload
-[`dual-led.pc`](dual-led.pc), which contains the same project and dependencies.
-Share the complete folder or archive rather than `project.json` alone.
+## Sources and native library
 
-**Fit schematic** frames the circuit. **G** or held dragging moves a symbol with
-its wires attached; **M** disconnects and moves it. R1 and D1 form a simple branch
-for practicing selection, wiring and shared Undo/Redo. The rectangular R3/R4
-symbols and revised connectors also exercise the expanded Basic components
-library, while supply and ground use ordinary Power definitions.
-
-Switch to **PCB Layout**, or open it beside the schematic, to inspect pad
-correspondence and the two copper layers. Select a component or net in either
-view to inspect its counterpart. **Analyze → DRC** checks the routed
-board; moving a footprint or removing a track gives that check a concrete edit
-to report, and Undo restores the original routing.
-
-## Circuit connections
-
-Local labels join J2 to the collectors without stretching probe wires across
-the timing network. Power symbols supply the explicit global names `+3V3` and
-`GND`. Crossings without a junction dot do not join the two base nets.
-
-| Net | Physical terminals |
-| --- | --- |
-| +3V3 | J1.1, R1.1, R2.1, R3.1, R4.1, C3.1, C4.1 |
-| GND | J1.2, Q1.2, Q2.2, C3.2, C4.2 |
-| LED_A | R1.2, D1.1 |
-| LED_B | R2.2, D2.1 |
-| COL_A | D1.2, Q1.3, C1.1, J2.1 |
-| COL_B | D2.2, Q2.3, C2.1, J2.2 |
-| BASE_A | Q1.1, R3.2, C2.2 |
-| BASE_B | Q2.1, R4.2, C1.2 |
-
-Every physical terminal maps to one pad. Power symbols are explicitly excluded
-from the board and do not introduce dummy footprints. For inspection through
-MCP, launch `pcbcraft-cli mcp --project examples/dual-led/project.json`; the
-[AI and MCP guide](../docs/mcp.md) covers both headless and live editor sessions.
+The [example library](sensor-node-library/) contains original MIT OR Apache-2.0
+symbols, recommended land geometry and original silk/courtyard drawings. Pin
+assignments and dimensions were checked against Microchip's
+[ATtiny202/204/402/404/406 datasheet, DS40002318A](https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATtiny202-204-402-404-406-DataSheet-DS40002318A.pdf)
+(2021, pp. 13, 17 and 496–498), and TI's
+[TMP102 datasheet, SBOS397I](https://www.ti.com/lit/ds/symlink/tmp102.pdf)
+(June 2024, p. 3, address table and DRL0006A package/land drawings 4223266/F,
+November 2024). Manufacturer drawings and PDFs are referenced, not bundled.
+The existing passive/LED/header package notices are described in the
+[footprint library](../docs/footprint-library.md).
 
 ## Regenerate and verify
 
-The [generator](../crates/engine/examples/indicator_demo.rs) composes separate
-schematic, placement and routing modules through revision-checked native commands.
-It checks connectivity and the board before encoding either output, and refuses
-an existing destination. From the repository root:
+The [generator](../crates/engine/examples/sensor_demo.rs) composes schematic,
+package assignment, placement and routing through ordinary revision-checked
+commands. Both demos reuse the same command helpers and native folder/archive
+encoder; the generator refuses existing output destinations and requires accepted
+connectivity, complete routing and zero current design-rule findings before writing.
 
 ```sh
-cargo run --locked -p pcbcraft-engine --example indicator_demo -- /tmp/pcbcraft-demo
-cargo test --locked -p pcbcraft-engine --test indicator_demo
+cargo run --locked -p pcbcraft-engine --example sensor_demo -- /tmp/pcbcraft-sensor-demo
+cargo test --locked -p pcbcraft-engine --test sensor_demo
 ```
 
-The generator creates `/tmp/pcbcraft-demo/dual-led/project.json` and
-`/tmp/pcbcraft-demo/dual-led.pc`. A fresh run has new project identities; ordinary
-saves retain those identities. The tests check folder/archive agreement,
-byte-stable reopening, the eight intended nets, every terminal/pad mapping,
-move/Undo/Redo and the saved board's design-rule result.
+Open `/tmp/pcbcraft-sensor-demo/sensor-node/project.json` or its sibling archive.
+The tests compare the distributed folder/archive, independently state all ten
+nets and terminal mappings, and check native reopening, move/Undo/Redo and DRC.

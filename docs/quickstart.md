@@ -431,9 +431,9 @@ made during that move; both the schematic and PCB views share that history.
 Save and reopen the folder/archive to check the stored position and orientation.
 A concurrent edit or a change of focused view cancels unfinished input.
 
-The [Dual LED demo](../examples/README.md) contains a complete two-transistor
-flasher with 14 physical components, eight named nets and a routed two-layer
-board. Its pinned SMD packages include rounded copper pads, body outlines,
+The [sensor node demo](../examples/README.md) contains a small MCU, an I²C
+temperature sensor, two status LEDs and a routed two-layer board. The
+[transistor flasher](../examples/flasher.md) is a second example. Its pinned SMD packages include rounded copper pads, body outlines,
 courtyards and silkscreen. Older generic
 placements retain pad-center markers; opening them does not assign a package.
 Board-wide text height, stroke width and pad clearance are in **Board setup →
