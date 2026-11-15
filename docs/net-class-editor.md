@@ -29,7 +29,10 @@ preview column headings until **Assign classes** succeeds.
 An unresolved preference displays **Unresolved**, rather than picking one class.
 **Contributions and identities** distinguishes **Active**, **Overridden**,
 **Less restrictive** and **Conflicting** sources, retaining original values, class
-UUIDs and definition revisions. Equal hard limits can jointly be active; an explicit
+UUIDs and definition revisions. Equal hard limits are labelled **Matches built-in minimum/maximum**,
+**Matches board minimum/maximum** or **Shared class minimum/maximum**, with the
+individual source names in the tooltip and Details. They define one bound,
+rather than adding their values. An explicit
 class preference replaces the baseline even when their values match.
 **Saved assignment origins** shows the net identities retained through topology
 reconciliation. These are the same

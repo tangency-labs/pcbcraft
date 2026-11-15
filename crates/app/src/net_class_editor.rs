@@ -306,17 +306,42 @@ fn source_name(project: &Project, source: &Source) -> String {
     }
 }
 
-/// Show sources that actually define the result, rather than every numerically matching
-/// candidate. In particular, an overridden baseline is never reported as an active preference.
-fn effective_sources(project: &Project, result: &Resolution, property: Property) -> String {
-    let active = result
+/// Return a concise active-source summary and complete names for its tooltip. Equal hard
+/// limits are a match, not an additive requirement; retain every contributor in the details.
+/// An overridden baseline is never reported as an active preference merely because it matches.
+fn effective_sources(project: &Project, result: &Resolution, property: Property) -> (String, String) {
+    let active: Vec<_> = result
         .contribution_statuses(property)
         .filter(|(_, status)| *status == ContributionStatus::Active)
-        .map(|(contribution, _)| source_name(project, &contribution.source))
+        .map(|(contribution, _)| contribution)
+        .collect();
+    let names = active
+        .iter()
+        .map(|contribution| source_name(project, &contribution.source))
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect::<Vec<_>>();
-    if active.is_empty() { "No active source".into() } else { active.join(", ") }
+        .collect::<Vec<_>>()
+        .join(", ");
+    let summary = if active.is_empty() {
+        "No active source".into()
+    } else if active.len() == 1 {
+        names.clone()
+    } else if property.is_preference() {
+        "Agreed class preferences".into()
+    } else {
+        let bound = if property.is_maximum() { "maximum" } else { "minimum" };
+        let baseline = active.iter().find_map(|contribution| match contribution.source {
+            Source::Builtin => Some("built-in"),
+            Source::Board { .. } => Some("board"),
+            Source::Request => Some("requested"),
+            Source::Class { .. } => None,
+        });
+        match baseline {
+            Some(baseline) => format!("Matches {baseline} {bound}"),
+            None => format!("Shared class {bound}"),
+        }
+    };
+    (summary, names)
 }
 
 /// Detail labels describe participation without presenting inactive values as additional rules.
@@ -365,10 +390,10 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
                         }
                     }
                     form::Cell::Source => {
-                        let text = effective_sources(project, result, *property);
+                        let (text, sources) = effective_sources(project, result, *property);
                         ui.add(egui::Label::new(&text).truncate())
                             .accessible_name(format!("{} {}: {text}", if preview { "Preview source" } else { "Active source" }, label(*property)))
-                            .on_hover_text(text);
+                            .on_hover_text(sources);
                     }
                 },
             );

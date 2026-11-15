@@ -305,3 +305,41 @@ fn effective_sources_and_unsaved_previews_are_distinct() {
     click(&mut h, "Contributions and identities");
     assert!(h.query_by_label_contains("Overridden · Built-in defaults:").is_some());
 }
+
+/// A baseline/class tie is presented as a matching bound, while both exact contributors
+/// remain in Details and assignment retains the same resolved clearance.
+#[test]
+fn equal_clearance_is_labelled_as_matching_the_baseline() {
+    let mut h = harness(1200.);
+    h.state_mut().preferences.units = units::Unit::Mm;
+    let app = h.state_mut();
+    for x in [0, 25400000] {
+        app.run(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
+    }
+    let ids: Vec<_> = app.session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    app.run(
+        pcbcraft_engine::CONNECT_PINS,
+        &json!({"from":{"symbol":ids[0],"terminal":"1"},"to":{"symbol":ids[1],"terminal":"1"},"expected_revision":app.session.revision()}),
+    );
+    app.run(net_classes::CREATE, &json!({"name":"My constraint","rules":{"clearance_nm":200000},"expected_revision":app.session.revision()}));
+    let project = app.session.snapshot().unwrap();
+    let id = project.net_classes().definitions[0].id;
+    let result = project.resolve_net_classes(&[id], None).unwrap();
+    let (summary, names) = effective_sources(&project, &result, Property::ClearanceNm);
+    assert_eq!(summary, "Matches built-in minimum");
+    assert!(names.contains("Built-in defaults") && names.contains("My constraint"));
+    assert_eq!(result.values[&Property::ClearanceNm], Some(200000));
+    assert_eq!(result.contribution_statuses(Property::ClearanceNm).filter(|(_, status)| *status == ContributionStatus::Active).count(), 2);
+    let wire = project.wires()[0].id();
+    app.views.active.schematic.selection.wires.insert(wire);
+    app.begin_net_rules();
+    h.run();
+    h.get_by_role_and_label(egui::Role::CheckBox, "My constraint").click();
+    h.run();
+    assert!(source_shown(&h, "Preview source Copper clearance: Matches built-in minimum"));
+    click(&mut h, "Assign classes");
+    assert!(source_shown(&h, "Active source Copper clearance: Matches built-in minimum"));
+    click(&mut h, "Contributions and identities");
+    assert!(h.query_by_label("Active · Built-in defaults: 0.2 mm").is_some());
+    assert!(h.query_by_label_contains("Active · My constraint").is_some());
+}

@@ -51,3 +51,6 @@ functional validation records.
 The [active-source follow-up](active-source-review/README.md) further separates
 class contributions, effective provenance and unsaved assignment previews. It
 keeps the existing resolution policy and original performance evidence intact.
+
+The [equal-limit follow-up](tie-source-review/README.md) labels matching hard
+bounds explicitly while retaining both contributors in the tooltip and Details.

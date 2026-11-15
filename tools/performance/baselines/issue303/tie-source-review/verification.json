@@ -1,0 +1,75 @@
+{
+  "scope": "Equal hard-limit source summaries; resolver policy, values and contribution identities unchanged",
+  "focused_tests": {
+    "passed": 7,
+    "failed": 0,
+    "command": "cargo test --locked -p pcbcraft-app net_class_editor --lib"
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4841408670181409
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 5.224065235001035
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 1.3820502719609067
+    },
+    {
+      "name": "native-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "pcbcraft"
+      ],
+      "exit": 0,
+      "seconds": 16.258946012007073
+    }
+  ],
+  "visuals": [
+    "tie-dark-wide.png",
+    "tie-light-compact.png"
+  ],
+  "visual_result": "Inspected native GPU readback: 0.2 mm clearance and Matches built-in minimum fit both layouts. Real-control test retains both Active source detail entries after assignment.",
+  "reused_checks": "Broader workspace checks on 0cca4c2 remain historical; only changed app checks repeated for this presentation follow-up.",
+  "limits": [
+    "No new performance timing or endurance qualification",
+    "No new packaged-browser interaction run; wasm check passed",
+    "User native window preserved; save/close/restart required to load new executable"
+  ],
+  "publication": "Local only; no push or PR"
+}
