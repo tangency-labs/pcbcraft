@@ -1,0 +1,14 @@
+{
+  "main": "d564701",
+  "guidance_pr": "https://github.com/tangency-labs/pcbcraft/pull/354",
+  "pre_rebase_head": "971cb077d6a380924db8f7366b361d92de96b4a2",
+  "rebased_parent": "f658c4d12db40842b0d80e2a56a16381dc61b08e",
+  "backup_ref": "refs/backup/issue303-before-pr354",
+  "replays": "All ten topic commits replayed unchanged; author/co-author credits verified.",
+  "files": {
+    "ATTRIBUTION.md": "c11bbb39425fd4cccc061a896eb9ac0c9262dc16ceece562c6cbe554850ccb29",
+    "crates/app/src/board_rules.rs": "0121f2fd4b33fb595b2a2fe8f47c4da585e49cebd28330ae14261055789ceb95",
+    "crates/app/src/net_class_editor.rs": "3591e8289ef245039a2300e6bb5579a1d1265bff0ba51e3c907f8b2f05238dae",
+    "crates/chrome/src/rule_form.rs": "5fd33a698325a2615887346d3d47c9d2430b48d16a3c077ad3e675fb4a166981"
+  }
+}

@@ -784,35 +784,40 @@ impl PcbApp {
         if let Some(host) = self.views.hosts.get(&self.views.host) {
             let top = host.rects.iter().map(|(_, pane)| pane.top()).fold(f32::INFINITY, f32::min);
             for (id, pane) in host.rects.iter().filter(|(_, pane)| (pane.top() - top).abs() < 0.5) {
-                let Some(view) = self.views.view(*id) else { continue };
-                if view.unavailable() {
-                    continue;
-                }
-                if view.library.is_some() {
-                    continue;
-                }
-                let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
-                    let Some(camera) = self.library_editors.view_camera(definition, *id) else { continue };
-                    let fill =
-                        if self.library_kind(definition) == Some(pcbcraft_engine::authoring::Kind::Footprint) { t.board_canvas } else { t.canvas };
-                    (camera, fill, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
-                } else if view.workspace == Workspace::Board {
-                    (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
-                } else {
-                    (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
-                };
                 let area = Rect::from_min_max(egui::pos2(pane.left(), ribbon.area.top()), egui::pos2(pane.right(), ribbon.area.bottom()))
                     .intersect(ribbon.area);
-                shapes.push(egui::Shape::rect_filled(area, 0, fill));
-                if let Some(canvas) = camera.schematic_rect()
-                    && let Some(color) = grid::color(ink, opacity)
-                {
-                    let origin = camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, canvas);
-                    shapes.extend(grid::shapes(area, origin, camera.snap_step(), color, style));
-                }
+                shapes.extend(self.view_background_shapes(*id, area));
             }
         }
         ribbon.paint(shapes);
+    }
+
+    /// Paint exposed chrome margins with the addressed view's canvas palette and settled grid.
+    /// Missing/library views retain a plain canvas background; no input or model state changes.
+    fn view_background_shapes(&self, id: ViewId, area: Rect) -> Vec<egui::Shape> {
+        let t = pcbcraft_chrome::Tokens::get();
+        let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
+        let Some(view) = self.views.view(id) else { return plain() };
+        if view.unavailable() || view.library.is_some() {
+            return plain();
+        }
+        let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
+            let Some(camera) = self.library_editors.view_camera(definition, id) else { return plain() };
+            let fill = if self.library_kind(definition) == Some(pcbcraft_engine::authoring::Kind::Footprint) { t.board_canvas } else { t.canvas };
+            (camera, fill, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
+        } else if view.workspace == Workspace::Board {
+            (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
+        } else {
+            (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
+        };
+        let mut shapes = vec![egui::Shape::rect_filled(area, 0, fill)];
+        if let Some(canvas) = camera.schematic_rect()
+            && let Some(color) = grid::color(ink, opacity)
+        {
+            let origin = camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, canvas);
+            shapes.extend(grid::shapes(area, origin, camera.snap_step(), color, style));
+        }
+        shapes
     }
 
     /// Route explicit selection through the coordinator with the current follow policy.
@@ -991,6 +996,12 @@ impl PcbApp {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
             let pane_id = tab_ids.first().copied().unwrap_or(id);
             let path = self.view_title(id);
+            let header = headers.then(|| {
+                let area = Rect::from_min_max(rect.min, egui::pos2(rect.right(), (rect.top() + editor::header_height()).min(rect.bottom())));
+                let painter = ui.painter_at(area);
+                let slot = painter.add(egui::Shape::Noop);
+                (area, painter, slot)
+            });
             ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", pane_id)).max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
@@ -1146,6 +1157,9 @@ impl PcbApp {
                     }
                 }
             });
+            if let Some((area, painter, slot)) = header {
+                painter.set(slot, egui::Shape::Vec(self.view_background_shapes(id, area)));
+            }
         }
         self.sync_library_focus();
         if !self.views.pending_reveal.is_empty() {

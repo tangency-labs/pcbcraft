@@ -8,7 +8,7 @@ mod tests;
 use crate::{Project, board::track};
 pub(crate) use commands::{parse_set, rules_schema, set_schema};
 pub(crate) use resolve::pair_clearance;
-pub use resolve::{Conflict, Contribution, PairResolution, Resolution, Source};
+pub use resolve::{Conflict, Contribution, ContributionStatus, PairResolution, Resolution, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -209,6 +209,13 @@ pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a disposable class draft with the same name, sparse range and relationship rules
+/// used by native commands and codecs, without allocating identity or applying board defaults.
+pub fn validate_draft(name: &str, rules: &Rules) -> Result<(), String> {
+    validate_name(name)?;
+    validate_rules(rules)
+}
+
 impl Catalog {
     /// Validate the complete bounded catalog before adoption. Duplicate IDs never overwrite records.
     pub fn validate(&self) -> Result<(), String> {
@@ -220,8 +227,7 @@ impl Catalog {
             if class.id.is_nil() || !ids.insert(class.id) || class.revision == 0 {
                 return Err("Class IDs must be unique non-nil UUIDs with positive revisions.".into());
             }
-            validate_name(&class.name)?;
-            validate_rules(&class.rules)?;
+            validate_draft(&class.name, &class.rules)?;
         }
         Ok(())
     }

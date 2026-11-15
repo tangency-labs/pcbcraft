@@ -46,6 +46,7 @@ mod library_workspace;
 mod live_control;
 mod native_part_properties;
 mod native_sources;
+mod net_class_editor;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
@@ -60,6 +61,7 @@ mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
+mod rule_diagram;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
@@ -204,6 +206,7 @@ enum Dialog {
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
+    Rules(Box<net_class_editor::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -587,6 +590,13 @@ impl PcbApp {
             self.ask_name("project.rename");
         }
 
+        if !self.home {
+            let tabs = self.arrangements.tabs();
+            if let Some(intent) = pcbcraft_chrome::arrangements::menu(ui, &tabs, self.arrangements.active()) {
+                self.arrangement_intent(ui.ctx(), intent);
+            }
+        }
+
         // SolidCraft ends File with Preferences and Keyboard Shortcuts, above Quit.
         menu::separator(ui);
         let preferences_shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
@@ -790,9 +800,6 @@ impl PcbApp {
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
     /// Disabling application actions leaves the integrated native window controls available.
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
-        let tabs = if self.home { Vec::new() } else { self.arrangements.tabs() };
-        let active_arrangement = self.arrangements.active();
-        let mut arrangement_action = None;
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
@@ -831,7 +838,7 @@ impl PcbApp {
                     }
                 }
             },
-            |ui| arrangement_action = pcbcraft_chrome::arrangements::tabs(ui, &tabs, active_arrangement),
+            |_| {},
             |ui, width| {
                 if width >= 950.0 {
                     ui.label(dim(format!("v{VERSION}")));
@@ -853,9 +860,6 @@ impl PcbApp {
                 }
             },
         );
-        if let Some(intent) = arrangement_action {
-            self.arrangement_intent(ui.ctx(), intent);
-        }
         #[cfg(not(target_arch = "wasm32"))]
         if assistant_clicked {
             self.toggle_assistant(ui.ctx());
@@ -2187,6 +2191,7 @@ impl PcbApp {
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
+            Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
@@ -2506,7 +2511,10 @@ impl PcbApp {
             self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         }
         let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
-        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog)) && self.arrangement_dialog_host().is_none();
+        let enabled = !self.project_action_pending()
+            && (main || (!self.home && !had_dialog))
+            && self.arrangement_dialog_host().is_none()
+            && self.rule_dialog_host().is_none();
         self.app_bar(ui, enabled);
         ui.add_enabled_ui(enabled, |ui| {
             let workspace = if self.home && main {
@@ -2548,6 +2556,7 @@ impl PcbApp {
         self.integrated_titlebar = integrated;
         let dialog_host = self
             .arrangement_dialog_host()
+            .or_else(|| self.rule_dialog_host())
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
             .or_else(|| self.external_paste_options_host())

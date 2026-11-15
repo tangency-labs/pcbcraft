@@ -1,0 +1,17 @@
+{
+  "browser": "148.0.7778.96",
+  "renderer": "ANGLE SwiftShader",
+  "fixture": "setup/issue303/browser/assigned-reference.pc",
+  "fixture_sha256": "2aa8b32b15781daae71c58ad171dfb8aca8b5e57adaf72bd42f9f59d42bc0f56",
+  "verified_screens": {
+    "browser/05-classes-from-setup.png": "Board Setup \u2192 Net classes opens shared Rules/Class definitions",
+    "browser/12-defaults-from-setup.png": "Board Setup \u2192 Board defaults opens shared Board Rules",
+    "browser/14-setup-compact-menu.png": "Open-form resize to 760x640; shared selector exposes Design rules destinations"
+  },
+  "page_errors": [],
+  "attempt_limits": [
+    "Initial interactive browser was closed by tool-runtime replacement after capturing the class handoff.",
+    "First one-shot used a setup-button coordinate from a differently expanded Browser tree; 08-10 are rejected, not passing evidence.",
+    "Corrected run captures the defaults handoff and compact menu. Its image 13 does not show the class form and is not counted; the earlier image 05 supplies that verified state. No input timing claim is made."
+  ]
+}

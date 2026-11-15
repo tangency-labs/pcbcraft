@@ -1,0 +1,26 @@
+{
+  "base": "51f8a9ff4e4a86fa5f1e79423fe86cf01e31b983",
+  "files": {
+    "ATTRIBUTION.md": "69ef4960af3223dcdfa190c391f3e74d1ca71e9f9c116bacc4af3853b9b020e4",
+    "crates/app/src/board_rules.rs": "648f051668686834c497fede08c30a360e238142bb5224da0471bce561ca6c43",
+    "crates/app/src/lib.rs": "63deb79c5ee38e1347553a02c29b8b7c81c10ab8c554509da8ca2ecbd01cdaab",
+    "crates/app/src/net_class_editor.rs": "ea640195c329e2ddd746db420723e360bcaf387989d1ceb30900953cb3b43b6d",
+    "crates/app/src/net_class_editor/tests.rs": "6ec2d2c856642e83a470e20f066a397a076b514e7820617d3716899273a1e392",
+    "crates/chrome/src/rule_form.rs": "9be21198b31986bbd29d9d91024e30a9073e8dbc05aec31069649428eebb2b21",
+    "docs/capabilities.md": "497203b093a16c8a0e39a62c2711dc07925d95ccbff4ff763f0ffc270543306e",
+    "docs/net-class-editor.md": "edb7e29837115def6d850b873b05c9fe903ee0ddfb6d25844a5481b80e368cc9",
+    "docs/quickstart.md": "61cc522e6f6cfc29d2f636931263e154c48c2cea501f162f89cc1bef2f52cdda",
+    "crates/app/src/rule_diagram.rs": "1c9add77fbfb55ac246f7c1112d60894398fef38f523fea531b441cfefde5473"
+  },
+  "renderer_helper": {
+    "path": "setup/issue303/geometry-review/render-helper.py",
+    "sha256": "3bf5cd9e37ce6eea01e958bd2c0c8af8595b9c58e7d6dd19573d355601fe3760",
+    "boundary": "Existing isolated egui GPU readback source snapshot. Helper/tests and GPU feature remain outside production."
+  },
+  "fixture_sha256": "2aa8b32b15781daae71c58ad171dfb8aca8b5e57adaf72bd42f9f59d42bc0f56",
+  "browser_bundle": {
+    "index.html": "3a6c29826470dca07af5fd1a4118ea7b526c2d6277c6f3d0524ab933f99ed94a",
+    "pcbcraft-web-7afb6b5b0a650a1e.js": "fb358f0090e43218c4819d68d12af9e2f5b0737011fa363db2a3293f89449657",
+    "pcbcraft-web-7afb6b5b0a650a1e_bg.wasm": "bdca93e0bd1bb275e25b77a8f7c2744e9455dc8cfd4c0a8ffcc47d1c46e68afd"
+  }
+}

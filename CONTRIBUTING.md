@@ -9,6 +9,10 @@ identify the first shareable release; the
 [broader workflow index](https://github.com/tangency-labs/pcbcraft/issues/89)
 includes later features that are not MVP gates.
 
+The [documentation map](docs/README.md) provides reading paths for users,
+contributors and agents, with current format references separated from broader
+design plans and verification history.
+
 ## Build and find your way around
 
 Use Rust 1.95 or later with Cargo, rustfmt and Clippy, a platform linker and a
@@ -100,6 +104,11 @@ an existing classification label and relevant area labels, then verify the resul
 With the CLI, pass labels through `gh issue create --label`; inspect the current
 catalog with `gh label list`. Contributors without label permissions can describe
 the affected area in the issue so a maintainer can classify it.
+
+Follow the [composition and module-boundary rules](AGENTS.md#composition-and-module-boundaries):
+assemble features from reusable modules with explicit state ownership and narrow
+interfaces, reuse shared behavior, and keep domain computation separate from
+presentation and I/O. Scope existing-code extractions to the behavior being changed.
 
 Production Rust must not use `unsafe`, `unwrap`, `expect`, `panic!` or placeholder
 branches. Add `///` documentation for public APIs and changed functions with

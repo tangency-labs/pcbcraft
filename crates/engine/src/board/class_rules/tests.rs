@@ -404,6 +404,7 @@ fn equal_names_and_conflicting_islands_preserve_distinct_identity() {
     let short = report.violations.iter().find(|finding| finding.kind == Kind::Short).unwrap();
     assert_eq!(short.nets.len(), 2);
     assert!(short.nets.iter().all(|net| net.name == "LOCAL"));
+    assert!(view(&session).net_class_target_for_copper(&name).is_err(), "conflicting physical contact cannot choose a class target");
     let before = session.snapshot().unwrap();
     assert!(
         session
@@ -565,4 +566,43 @@ fn explicit_via_operand_repairs_only_unambiguous_preferences() {
     let b = class(&mut session, "Diameter B", json!({"preferred_via_diameter_nm":900000}));
     assign(&mut session, 0, "1", &[ring, a, b]);
     assert!(view(&session).route_rules_at(at, None).unwrap().unwrap().via_sizes(None, Some(200000)).is_err());
+}
+
+/// Schematic terminals, pads and newly routed copper address exactly the same current net.
+/// Copper detached from all intended membership is unsupported; unknown object IDs fail.
+#[test]
+fn selection_targets_match_schematic_and_refuse_unknown_or_floating_copper() {
+    let (mut s, _, _) = classified();
+    let project = s.project().unwrap();
+    let component = *project.components.keys().next().unwrap();
+    let terminal = project.component_terminal(component, "1").unwrap();
+    let logical = project.net_class_target_for_endpoint(project.sheet_target(), crate::WireEndpoint::Terminal(terminal)).unwrap();
+    let (address, at) = pad(&s, 0, "1");
+    assert_eq!(view(&s).net_class_target_for_copper(&address).unwrap(), logical);
+    let layer = copper_layers(&s)[0];
+    apply(&mut s, crate::ADD_TRACKS, json!({"layer":layer,"points":[at,Point{x_nm:at.x_nm,y_nm:at.y_nm+2_000_000}]}));
+    let id = view(&s).tracks().last().unwrap().id;
+    assert_eq!(view(&s).net_class_target_for_copper(&id.to_string()).unwrap(), logical);
+    let before = s.snapshot().unwrap();
+    assert!(view(&s).net_class_target_for_copper("missing").is_err());
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    apply(&mut s, crate::ADD_TRACKS, json!({"layer":layer,"points":[Point{x_nm:90_000_000,y_nm:90_000_000},Point{x_nm:95_000_000,y_nm:90_000_000}]}));
+    let id = view(&s).tracks().iter().find(|track| track.start.x_nm == 90_000_000).unwrap().id;
+    assert_eq!(view(&s).net_class_target_for_copper(&id.to_string()).unwrap(), None);
+}
+
+/// Accepted copper cannot silently choose a surviving branch while schematic connectivity
+/// has split into distinct current memberships awaiting Update PCB.
+#[test]
+fn pending_board_split_refuses_selection_assignment() {
+    let (mut s, _, _) = classified();
+    let (name, _) = pad(&s, 0, "1");
+    assert!(view(&s).net_class_target_for_copper(&name).unwrap().is_some());
+    let wires: Vec<_> = s.project().unwrap().wires().iter().map(|wire| wire.id()).collect();
+    for wire in wires {
+        apply(&mut s, crate::DELETE_WIRE, json!({"wire":wire}));
+    }
+    let before = s.snapshot().unwrap();
+    assert!(view(&s).net_class_target_for_copper(&name).is_err());
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }

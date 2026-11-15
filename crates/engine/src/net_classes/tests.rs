@@ -401,3 +401,81 @@ fn full_catalog_resolves_and_rejects_overflow_without_losing_definitions() {
     assert!(snapshot.resolve_class_clearance(&ids, &vec![ids[0]; MAX_CLASSES + 1], None).is_err());
     round_trip(&session);
 }
+
+/// Numeric equality alone cannot establish active provenance: an explicit class preference
+/// replaces an equal baseline, while equal hard constraints jointly define the bound.
+#[test]
+fn contribution_statuses_distinguish_active_overridden_and_weaker_sources() {
+    use ContributionStatus::*;
+    let mut session = schematic();
+    let weak = create(&mut session, "Weak", json!({"clearance_nm":100000,"preferred_track_width_nm":250000}));
+    let equal = create(&mut session, "Equal", json!({"clearance_nm":200000}));
+    let strict = create(&mut session, "Strict", json!({"clearance_nm":500000}));
+    let project = session.snapshot().unwrap();
+    let status = |classes: &[Uuid], property| {
+        project
+            .resolve_net_classes(classes, None)
+            .unwrap()
+            .contribution_statuses(property)
+            .map(|(contribution, status)| (contribution.source.clone(), status))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        status(&[weak], Property::PreferredTrackWidthNm),
+        vec![(Source::Builtin, Overridden), (Source::Class { rule: weak, revision: 1 }, Active)]
+    );
+    assert_eq!(status(&[weak], Property::ClearanceNm), vec![(Source::Builtin, Active), (Source::Class { rule: weak, revision: 1 }, LessRestrictive)]);
+    assert!(status(&[equal], Property::ClearanceNm).iter().all(|(_, status)| *status == Active));
+    assert_eq!(
+        status(&[strict], Property::ClearanceNm),
+        vec![(Source::Builtin, LessRestrictive), (Source::Class { rule: strict, revision: 1 }, Active)]
+    );
+    let result = project.resolve_net_classes(&[weak], None).unwrap();
+    let before = json!(result);
+    for property in Property::ALL {
+        let _ = result.contribution_statuses(property).collect::<Vec<_>>();
+    }
+    assert_eq!(json!(result), before);
+    assert!(Arc::ptr_eq(&project, &session.snapshot().unwrap()));
+}
+
+/// Invalid inherited preferences and ambiguous class preferences have no active winner;
+/// read-only provenance retains the exact original invalid/overridden source values.
+#[test]
+fn unresolved_preferences_never_report_an_active_source() {
+    use ContributionStatus::*;
+    let mut session = schematic();
+    let wide = create(&mut session, "Wide", json!({"min_track_width_nm":1000000}));
+    let a = create(&mut session, "A", json!({"preferred_track_width_nm":400000}));
+    let b = create(&mut session, "B", json!({"preferred_track_width_nm":500000}));
+    let project = session.project().unwrap();
+    let inherited = project.resolve_net_classes(&[wide], None).unwrap();
+    let sources: Vec<_> = inherited.contribution_statuses(Property::PreferredTrackWidthNm).collect();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].0.source, Source::Builtin);
+    assert_eq!(sources[0].0.value_nm, 250000);
+    assert_eq!(sources[0].1, Conflicting);
+    let ambiguous = project.resolve_net_classes(&[a, b], None).unwrap();
+    for (source, status) in ambiguous.contribution_statuses(Property::PreferredTrackWidthNm) {
+        assert_eq!(status, if matches!(source.source, Source::Builtin) { Overridden } else { Conflicting });
+    }
+    assert_eq!(ambiguous.values[&Property::PreferredTrackWidthNm], None);
+}
+
+/// Addressed saved board bounds retain their UUID and can dominate a less restrictive class
+/// maximum, without silently attributing the effective value to built-ins or the class.
+#[test]
+fn active_board_maximum_keeps_its_identity() {
+    use ContributionStatus::*;
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let board = session.project().unwrap().board_target().unwrap();
+    let rules = crate::board::rules::Values { max_via_diameter_nm: 1000000, ..Default::default() };
+    edit(&mut session, crate::SET_RULES, json!({"board":board.board,"rules":rules})).unwrap();
+    let class = create(&mut session, "Loose maximum", json!({"max_via_diameter_nm":2000000}));
+    let project = session.project().unwrap();
+    let id = project.board_view(board).unwrap().authored_rules().unwrap().id;
+    let result = project.resolve_net_classes(&[class], Some(board)).unwrap();
+    let sources: Vec<_> = result.contribution_statuses(Property::MaxViaDiameterNm).map(|(source, status)| (source.source.clone(), status)).collect();
+    assert_eq!(sources, vec![(Source::Board { rule: id }, Active), (Source::Class { rule: class, revision: 1 }, LessRestrictive)]);
+}

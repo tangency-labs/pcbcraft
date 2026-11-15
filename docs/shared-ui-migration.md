@@ -233,8 +233,8 @@ Ribbon command groups use the shared ribbon renderer and its button metrics;
 PCBcraft supplies qualified electronics glyphs, enabled/selected state and menu
 actions. The host retains horizontal scrolling and per-workspace tab contents.
 Inline ribbon fields align with the shared group height. App-bar quick actions
-and arrangement tabs use shared button presentation within PCBcraft's existing
-native title-bar placement.
+use shared button presentation within PCBcraft's existing native title-bar
+placement; saved layout actions use shared menu rows under File.
 
 Ribbon buttons use the toolkit's standard 76-point width, wrapping longer
 labels onto two lines. A group grows evenly when its caption needs more room.
@@ -549,3 +549,19 @@ and returns only a click boolean; it cannot draw the host's electronics glyphs
 or return the response needed by the existing accessible popup. The chrome
 adapter therefore retains its shared card, theme and font composition and
 viewport-scoped popup rather than replacing that interaction.
+
+## Window and pane chrome
+
+Saved project layouts now use File's shared menu surface and aligned rows instead
+of persistent title-bar tabs. The project title uses the available bar width,
+truncating only when the utility controls and drag space need the room. Pane headers retain the pinned Craft tab shape and
+close control, with the host extending each canvas palette/grid behind unused
+header space. Headers consume their exact height without trailing widget spacing,
+so the canvas meets the tab edge without an unpainted band. Tab surfaces and selection ink use the workspace palette so labels
+remain readable over either canvas in both themes. The existing background projection
+serves ribbon margins and pane headers after camera navigation. Title-bar movement
+follows the pinned Craft helper's drag threshold, keeping ordinary clicks in the
+app for double-click maximization. PCBcraft retains
+separate foreground hit regions for its title/brand/gap placement and native controls
+above modals; its existing native-grab recovery still covers consumed drag releases.
+No toolkit version or dependency changes are required.

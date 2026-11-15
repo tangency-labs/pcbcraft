@@ -27,6 +27,20 @@ pub struct Contribution {
     pub value_nm: i64,
 }
 
+/// Read-only participation in one published dimensional result. This does not change policy,
+/// the serialized contribution contract or whether cross-property conflicts make routing valid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContributionStatus {
+    /// Defines the resolved bound, or supplies a valid highest-precedence preference.
+    Active,
+    /// A class preference replaces this baseline, even when both numbers are identical.
+    Overridden,
+    /// Still applicable, but a stricter hard limit determines the effective bound.
+    LessRestrictive,
+    /// Participates in a preference that cannot currently resolve to a valid value.
+    Conflicting,
+}
+
 /// A contradiction names the implicated dimensions and the exact contributing records.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Conflict {
@@ -106,6 +120,31 @@ pub(super) fn relationships(values: &Rules) -> Vec<(Vec<Property>, &'static str)
 }
 
 impl Resolution {
+    /// Explain original contributions without resolving again or altering any values. Hard
+    /// ties jointly define their bound; explicit class preferences override the baseline even
+    /// at equal numbers. Null preferences have conflicting candidates and no active winner.
+    /// Independent conflicts between hard bounds remain in `conflicts`; Active alone is not
+    /// a claim that the complete configuration is usable. Order and source IDs are retained.
+    pub fn contribution_statuses(&self, property: Property) -> impl Iterator<Item = (&Contribution, ContributionStatus)> + '_ {
+        let candidates = self.contributions.get(&property).map(Vec::as_slice).unwrap_or_default();
+        let value = self.values.get(&property).copied().flatten();
+        let class_preference = property.is_preference() && candidates.iter().any(|candidate| matches!(candidate.source, Source::Class { .. }));
+        candidates.iter().map(move |candidate| {
+            let status = if class_preference && !matches!(candidate.source, Source::Class { .. }) {
+                ContributionStatus::Overridden
+            } else if value.is_none() {
+                ContributionStatus::Conflicting
+            } else if value == Some(candidate.value_nm) {
+                ContributionStatus::Active
+            } else if property.is_preference() {
+                ContributionStatus::Overridden
+            } else {
+                ContributionStatus::LessRestrictive
+            };
+            (candidate, status)
+        })
+    }
+
     /// Recover a single preferred operand before relationship validation, for a consumer that
     /// explicitly replaces its counterpart. Equal-precedence ambiguity still has no winner;
     /// callers must validate the completed pair against every hard limit.

@@ -389,11 +389,17 @@ impl PcbApp {
     }
 
     /// Draw project dialogs once in their owner window (normally the main host). A fields,
-    /// marker or package dialog temporarily binds its originating editor for revision validation. Sheet forms can change
+    /// marker, package or setup/rules dialog temporarily binds its originating editor for revision validation. Sheet forms can change
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
+        if self.rule_dialog_host().is_some_and(|host| host != self.views.host) {
+            return;
+        }
         let previous = self.views.active.id();
         let sheet_form = matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_));
+        if let Some(source) = self.rule_dialog_source() {
+            self.views.bind(source.view());
+        }
         match &self.dialog {
             Dialog::NativePart(edit) => {
                 self.views.bind(edit.source.view());
@@ -541,12 +547,13 @@ impl PcbApp {
             self.begin_project_close(ctx);
             return;
         }
+        let close_rules = self.rule_dialog_host() == Some(host);
         let next = if host == self.views.main { self.views.hosts.keys().copied().find(|id| *id != host) } else { Some(self.views.main) };
         if let Some(next) = next {
             self.bind_editor_host(next);
         }
         self.views.close_host(host);
-        if self.arrangement_dialog_host() == Some(host) {
+        if close_rules || self.arrangement_dialog_host() == Some(host) {
             self.dialog = Dialog::None;
         }
         self.windows.panels.remove(&host);

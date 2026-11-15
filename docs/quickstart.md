@@ -1,11 +1,11 @@
 # Try PCBCraft
 
-This guide exercises the schematic editor available today. The
-[capability table](capabilities.md) distinguishes working features from the
-[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB inspection and
-component cross-highlighting are available, while board editing is still being built. The two-resistor
-example below is an original development fixture, not the polished MVP demo or
-a validated circuit design.
+This guide starts with schematic editing and continues through the supported
+PCB tools and shared MCP commands. The [capability table](capabilities.md)
+records current limits, while the [documentation map](README.md) links focused
+guides and format references. The two-resistor example below is an original
+development fixture; the polished MVP demo and its end-to-end acceptance remain
+separate work.
 
 ## Build and open an example
 
@@ -269,18 +269,18 @@ window; double-click those areas to maximize or restore it. Drag an edge or
 corner to resize. These controls also work while a project dialog is open,
 without enabling the editing controls behind it.
 
-The project name stays separate from the top **Views** arrangement tab. Its tooltip
-explains the arrangement and its right-click actions. Use the
-**+** beside it to name a setup, starting with the current views and windows or a
-single view. Right-click any arrangement tab for **Rename…**, **Duplicate…** or
-**Delete…**. Renaming or deleting an inactive tab leaves the current setup in
+Saved view setups are available under **File → Layouts**, leaving the top bar for
+the project title and window controls. Use **New arrangement** to name a setup,
+starting with the current views and windows or a single view. Each layout's submenu offers
+**Activate**, **Rename…**, **Duplicate…** and **Delete…**. Renaming or deleting an inactive layout leaves the current setup in
 place. Naming opens a dialog in the window you are using;
 **Cancel** or **Esc** discards the draft. Each arrangement remembers
 its panes, document navigation, cameras, panels and desktop windows locally; reopening
 the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
-strip; split panes each show one document header whose **×** closes the pane.
+strip; split panes each show one document header whose **×** closes the pane,
+with the canvas background continuing through the space beside the tab.
 The engine supports up to 64 sheets and zero or one physical board. Right-click
 **Sheets** in the Browser and choose **New Sheet…**, or use
 **Sheets → New sheet**; sheet rows also offer
@@ -511,15 +511,29 @@ track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.
 Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
 
-Use **Analyze → Rules** to save board limits and preferred routing dimensions.
-Clear **Use built-in defaults** to author values, then Apply; checking it restores
-the built-in values. New routes use those preferences, while existing copper
-keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
-The separate [net-class catalog](net-classes.md) and
-[persistent assignments](net-class-assignments.md) can be authored and inspected
-through MCP. Naming a net does not classify it. Assigned classes now supply
-routing defaults, query spacing and DRC limits through the same resolver; editor
-controls remain under #303. Starting a route on classified copper adopts that
+Use **Analyze → Rules** in either editor to create or edit net classes. **New class**
+opens a sparse definition: check a dimension to give the class an opinion, or leave
+it unchecked to inherit defaults. Save class commits one undoable edit. Classes
+can be authored in a schematic-only project; they do not create a board.
+
+Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
+Properties, or use the **Effective net rules** page in Rules to search for a current net.
+Check the classes to assign and choose **Assign classes**. The page shows effective
+hard limits, routing preferences, conflicts, rule IDs/revisions and assignment
+origins. Naming a net does not classify it. See the [editor workflow](net-class-editor.md)
+for supported targets and the shared MCP commands.
+
+**Board Setup → Design rules** embeds **Board defaults** and **Net classes** as
+pages using the same editors as **Analyze → Rules**. Navigation retains pending
+fields; each page's Save/Apply action saves that page and keeps other drafts.
+Cancel discards fields that have not been saved. The dialog stays in its originating
+window.
+
+**Board defaults…** in Rules opens the board form with the same bounded fields and
+dimension drawings as the class editor. Clear **Use built-in
+defaults** to author values, then Apply; checking it restores built-in values.
+New routes use those preferences while existing copper keeps its dimensions.
+See [board rules](board-rules.md) for overrides and sources. Starting a route on classified copper adopts that
 net's preferred width unless you selected an explicit ribbon width, and uses its
 clearance halo. Explicit changed widths/vias must meet
 applicable hard limits, and unresolved defaults report an error without creating

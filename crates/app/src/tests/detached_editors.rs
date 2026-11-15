@@ -64,6 +64,7 @@ fn ui_automation_lookup_keeps_detached_hosts_separate() {
 struct Peer {
     origin: Option<Pos2>,
     focused: bool,
+    maximized: bool,
     close: bool,
     events: Vec<Event>,
     root: Option<egui::accesskit::NodeId>,
@@ -126,7 +127,12 @@ fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
             peer.title = viewport.builder.title.clone();
             input.focused = peer.focused;
             input.events = std::mem::take(&mut peer.events);
-            let mut info = egui::ViewportInfo { parent: Some(ViewportId::ROOT), focused: Some(peer.focused), ..Default::default() };
+            let mut info = egui::ViewportInfo {
+                parent: Some(ViewportId::ROOT),
+                focused: Some(peer.focused),
+                maximized: Some(peer.maximized),
+                ..Default::default()
+            };
             info.inner_rect = peer.origin.map(|origin| Rect::from_min_size(origin, vec2(1100.0, 760.0)));
             if std::mem::take(&mut peer.close) {
                 info.events.push(egui::ViewportEvent::Close);
@@ -382,10 +388,10 @@ fn window_click(h: &mut Harness<'_, PcbApp>, peer: Option<&Rc<RefCell<Peer>>>, p
     }
 }
 
-/// Native move/resize must be requested on the initial press, while the OS still owns its
-/// pointer serial. Both hosts use the same chrome, including when project controls are blocked.
+/// Edge resizing starts on press; title-bar movement waits for real drag motion so ordinary
+/// clicks remain available for double-click maximization, including above project dialogs.
 #[test]
-fn native_window_gestures_start_on_press_in_each_host() {
+fn native_window_gestures_preserve_clicks_in_each_host() {
     for workspace in [None, Some("library"), Some("symbol_editor")] {
         native_window_gestures_for_workspace(workspace);
     }
@@ -412,13 +418,6 @@ fn native_window_gestures_for_workspace(workspace: Option<&str>) {
             let width = if child { 1100.0 } else { 1400.0 };
             let height = if child { 760.0 } else { 900.0 };
             let preferences = if child { child_rect(&peer, "Preferences") } else { h.get_by_label("Preferences").rect() };
-            let create = if auxiliary {
-                preferences
-            } else if child {
-                child_rect(&peer, "New arrangement")
-            } else {
-                h.get_by_label("New arrangement").rect()
-            };
             let t = pcbcraft_chrome::Tokens::get();
             let brand = pos2(t.space_8 + (t.space_16 + t.space_4) / 2.0, preferences.center().y);
             let title = if child || auxiliary {
@@ -426,7 +425,7 @@ fn native_window_gestures_for_workspace(workspace: Option<&str>) {
             } else {
                 Some(h.query_all_by_label("Untitled").find(|node| node.rect().bottom() <= preferences.bottom()).unwrap().rect())
             };
-            let drag = pos2(if auxiliary { width / 2.0 } else { (create.right() + preferences.left()) / 2.0 }, preferences.center().y);
+            let drag = pos2((width / 2.0 + preferences.left()) / 2.0, preferences.center().y);
             if modal {
                 h.state_mut().dialog = Dialog::About;
             }
@@ -461,6 +460,16 @@ fn native_window_gestures_for_workspace(workspace: Option<&str>) {
                     }
                     h.step();
                 }
+                if command == ViewportCommand::StartDrag {
+                    assert!(!h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command));
+                    let event = Event::PointerMoved(pos + vec2(20., 8.));
+                    if let Some(peer) = target {
+                        peer.borrow_mut().events.push(event);
+                    } else {
+                        h.event(event);
+                    }
+                    h.step();
+                }
                 assert!(
                     h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command),
                     "{host:?}, modal={modal}: {command:?} at {pos:?}"
@@ -482,6 +491,64 @@ fn native_window_gestures_for_workspace(workspace: Option<&str>) {
                 assert_eq!(h.state().session.inspect(), before);
                 assert_eq!(matches!(h.state().dialog, Dialog::About), modal);
             }
+        }
+    }
+}
+
+/// Title-bar clicks must not start native grabs. A real double click maximizes/restores only
+/// its addressed host, including above a blocking dialog, without changing the document.
+#[test]
+fn titlebar_double_click_preserves_clicks_and_targets_its_host() {
+    for child in [false, true] {
+        for modal in [false, true] {
+            let (mut h, peer) = multi_window();
+            h.state_mut().integrated_titlebar = true;
+            detach(&mut h);
+            h.input_mut().focused = !child;
+            peer.borrow_mut().focused = child;
+            if modal {
+                h.state_mut().dialog = Dialog::About;
+            }
+            h.run_steps(3);
+            let before = h.state().session.inspect();
+            let host = if child { HostId(1) } else { HostId::ROOT };
+            let other = if child { HostId::ROOT } else { HostId(1) };
+            let pos = pos2(18., 24.);
+            let send = |h: &mut Harness<'_, PcbApp>, event| {
+                if child {
+                    peer.borrow_mut().events.push(event);
+                } else {
+                    h.event(event);
+                }
+                h.input_mut().time = Some(h.ctx.input(|i| i.time) + 1. / 60.);
+                h.step();
+            };
+            for maximized in [false, true] {
+                // Explicit timestamps remain fixed across idle harness steps.
+                h.input_mut().time = Some(h.ctx.input(|i| i.time) + 1.);
+                h.run_steps(3);
+                if child {
+                    peer.borrow_mut().maximized = maximized;
+                } else {
+                    h.input_mut().viewports.get_mut(&ViewportId::ROOT).unwrap().maximized = Some(maximized);
+                }
+                send(&mut h, Event::PointerMoved(pos));
+                send(&mut h, Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                assert!(!h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&ViewportCommand::StartDrag));
+                send(&mut h, Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                send(&mut h, Event::PointerMoved(pos));
+                send(&mut h, Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                send(&mut h, Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                let command = ViewportCommand::Maximized(!maximized);
+                let commands = &h.output().viewport_output[&editor_windows::viewport(host)].commands;
+                assert!(commands.contains(&command), "child={child} modal={modal}: {commands:?}");
+                assert!(!commands.contains(&ViewportCommand::StartDrag));
+                assert!(!h.output().viewport_output[&editor_windows::viewport(other)].commands.contains(&command));
+                send(&mut h, Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                assert!(!h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command));
+            }
+            assert_eq!(h.state().session.inspect(), before);
+            assert_eq!(matches!(h.state().dialog, Dialog::About), modal);
         }
     }
 }
@@ -512,6 +579,9 @@ fn native_resize_recovers_after_the_compositor_consumes_release() {
             let start = if start_move { pos2(18.0, 24.0) } else { pos2(width - 2.0, height - 2.0) };
             send(&mut h, Event::PointerMoved(start));
             send(&mut h, Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            if start_move {
+                send(&mut h, Event::PointerMoved(start + vec2(20., 8.)));
+            }
             let command = if start_move { ViewportCommand::StartDrag } else { ViewportCommand::BeginResize(egui::ResizeDirection::SouthEast) };
             assert!(h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command));
             // The compositor owns this gesture and consumes its release outside the client.
@@ -1648,6 +1718,12 @@ fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
     assert_eq!(h.state().views.hosts.keys().copied().collect::<Vec<_>>(), hosts);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), snapshot);
 
+    let file = child_rect(&peer, "File").center();
+    window_click(&mut h, Some(&peer), file);
+    h.run();
+    let layouts = child_rect(&peer, "Layouts").center();
+    window_click(&mut h, Some(&peer), layouts);
+    h.run_steps(3);
     let at = child_rect(&peer, "New arrangement").center();
     window_click(&mut h, Some(&peer), at);
     h.run();
@@ -1659,17 +1735,19 @@ fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
     assert_eq!(h.state().views.hosts.len(), 1);
 }
 
-/// Open a tab's context menu with native secondary-button events in the addressed child.
+/// Open a saved layout's submenu through native pointer events in the addressed child.
 fn child_tab_menu(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, label: &str) {
     focus(h, peer, true);
-    let pos = child_rect(peer, label).center();
-    peer.borrow_mut().events.push(Event::PointerMoved(pos));
+    let file = child_rect(peer, "File").center();
+    window_click(h, Some(peer), file);
     h.run();
-    for pressed in [true, false] {
-        peer.borrow_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
-        h.step();
-    }
-    h.run();
+    let layouts = child_rect(peer, "Layouts").center();
+    window_click(h, Some(peer), layouts);
+    h.run_steps(3);
+    let name = label.strip_prefix("Arrangement ").unwrap_or(label);
+    let pos = child_rect(peer, name).center();
+    window_click(h, Some(peer), pos);
+    h.run_steps(3);
 }
 
 /// File adoption rebinds a detached PCB view and the main schematic together, while retaining
@@ -2056,4 +2134,130 @@ fn main_window_title_names_its_document_like_a_detached_window() {
     let titles = root_titles_over(&mut h, 4);
     assert!(h.state().views.hosts.contains_key(&HostId::ROOT), "the arrangement recreates the main window");
     assert_eq!(titles, [titled.as_str()]);
+}
+
+/// Closing the originating detached editor expires its shared Rules draft without authoring
+/// or retargeting it to the still-open root editor.
+#[test]
+fn closing_detached_editor_expires_net_class_rules() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let root = h.state().views.active.id();
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    h.state_mut().views.bind(child);
+    h.state_mut().begin_rules();
+    h.state_mut().views.bind(root);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Rules(_)));
+    let before = h.state().session.inspect();
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Embedded setup pages remain in their captured native host across page/focus changes.
+/// Closing that host discards only the draft; another window cannot edit behind the modal.
+#[test]
+fn embedded_rule_pages_stay_in_their_detached_setup_host() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout in new window");
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().begin_board_setup(child);
+    h.run_steps(5);
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let at = child_rect(&peer, "Net classes").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    let at = child_rect(&peer, "New class").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    child_rect(&peer, "Class name");
+    assert!(h.query_by_label("Class name").is_none(), "rule content must not appear in the main window");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    focus(&mut h, &peer, false);
+    h.run_steps(3);
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let at = {
+        let peer = peer.borrow();
+        let bounds = peer
+            .nodes
+            .values()
+            .find(|node| node.role() == egui::accesskit::Role::TextInput && node.label() == Some("Class name"))
+            .unwrap()
+            .bounds()
+            .unwrap();
+        pos2((bounds.x0 + bounds.x1) as f32 / 2., (bounds.y0 + bounds.y1) as f32 / 2.)
+    };
+    child_click_at(&mut h, &peer, at);
+    peer.borrow_mut().events.push(Event::Text("Child class".into()));
+    h.run_steps(3);
+    let at = child_rect(&peer, "Save class").center();
+    child_click_at(&mut h, &peer, at);
+    assert_eq!(h.state().session.project().unwrap().net_classes().definitions[0].name, "Child class");
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let at = child_rect(&peer, "Board defaults").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    child_rect(&peer, "Use built-in defaults");
+    child_rect(&peer, "Apply board defaults");
+    assert!(h.query_by_label("Use built-in defaults").is_none());
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Standalone Analyze/Rules content follows the same source-host placement contract.
+#[test]
+fn standalone_rule_modal_stays_in_its_detached_source_host() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout in new window");
+    let root = h.state().views.hosts[&HostId::ROOT].focused;
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().views.bind(child);
+    h.state_mut().begin_rules();
+    h.state_mut().views.bind(root);
+    h.run_steps(5);
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    child_rect(&peer, "New class");
+    assert!(h.query_by_label("New class").is_none());
+    let at = child_rect(&peer, "Cancel").center();
+    child_click_at(&mut h, &peer, at);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Auxiliary main workspaces cannot claim a setup dialog owned by a detached project view.
+#[test]
+fn library_main_does_not_claim_detached_rule_pages() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout in new window");
+    let root = h.state().views.hosts[&HostId::ROOT].focused;
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":root.0,"workspace":"library","placement":"here"})).unwrap();
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().begin_board_setup(child);
+    h.run_steps(5);
+    let at = child_rect(&peer, "Board defaults").center();
+    child_click_at(&mut h, &peer, at);
+    h.run_steps(3);
+    child_rect(&peer, "Use built-in defaults");
+    assert!(h.query_by_label("Use built-in defaults").is_none());
+    assert_eq!(h.state().rule_dialog_host(), Some(HostId(1)));
+    let at = child_rect(&peer, "Cancel").center();
+    child_click_at(&mut h, &peer, at);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

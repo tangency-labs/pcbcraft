@@ -1,0 +1,289 @@
+{
+  "issue": 303,
+  "implementation": "23f58ac7f4e49becb4ef7ce0122e59e098d52229",
+  "layout_fix": "64831ae1bf022f1fc3290f26ead9df79348ed3ea",
+  "worktree": "/home/travisl/projects/PCBcraft/work/net-class-editor",
+  "branch": "travle1/net-class-editor",
+  "base": "6be9dec08076ad7e6b60c7d3079e5a31a02a90f2",
+  "checks": {
+    "initial": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 1.4015764879295602
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 13.249544454971328
+      },
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace"
+        ],
+        "exit": 0,
+        "seconds": 78.46023391699418
+      },
+      {
+        "name": "wasm",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "pcbcraft-web",
+          "--target",
+          "wasm32-unknown-unknown"
+        ],
+        "exit": 0,
+        "seconds": 7.704065300989896
+      },
+      {
+        "name": "deny",
+        "command": [
+          "cargo",
+          "deny",
+          "--locked",
+          "check",
+          "licenses",
+          "sources",
+          "bans"
+        ],
+        "exit": 0,
+        "seconds": 0.6805712360655889
+      },
+      {
+        "name": "harness-clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "pcbcraft-app",
+          "--features",
+          "performance-harness",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 8.435660723014735
+      },
+      {
+        "name": "harness-tests",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "pcbcraft-app",
+          "--features",
+          "performance-harness",
+          "performance::"
+        ],
+        "exit": 0,
+        "seconds": 34.813184158992954
+      },
+      {
+        "name": "python",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test*performance*.py"
+        ],
+        "exit": 0,
+        "seconds": 0.45983506296761334
+      },
+      {
+        "name": "node",
+        "command": [
+          "node",
+          "--no-warnings",
+          "--experimental-vm-modules",
+          "--test",
+          "scripts/test-performance-page.cjs",
+          "scripts/test-rendered-performance-page.cjs"
+        ],
+        "exit": 0,
+        "seconds": 0.22443069505970925
+      },
+      {
+        "name": "wasm-harness",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "pcbcraft-app",
+          "--features",
+          "performance-harness",
+          "--example",
+          "board_perf_web",
+          "--target",
+          "wasm32-unknown-unknown"
+        ],
+        "exit": 0,
+        "seconds": 7.553357946919277
+      },
+      {
+        "name": "web-package",
+        "command": [
+          "trunk",
+          "build",
+          "--release"
+        ],
+        "exit": 0,
+        "seconds": 32.402995832962915
+      }
+    ],
+    "affected": [
+      {
+        "name": "resize-fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 1.4121007819194347
+      },
+      {
+        "name": "resize-clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 3.744259597035125
+      },
+      {
+        "name": "resize-app-chrome",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "pcbcraft-app",
+          "-p",
+          "pcbcraft-chrome"
+        ],
+        "exit": 0,
+        "seconds": 53.06560993299354
+      },
+      {
+        "name": "resize-web-package",
+        "command": [
+          "trunk",
+          "build",
+          "--release"
+        ],
+        "exit": 0,
+        "seconds": 26.646090283058584
+      },
+      {
+        "name": "resize-harness-clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "pcbcraft-app",
+          "--features",
+          "performance-harness",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "seconds": 2.9371965940808877
+      },
+      {
+        "name": "final-release",
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--release",
+          "-p",
+          "pcbcraft-app",
+          "--features",
+          "performance-harness",
+          "--example",
+          "board_perf"
+        ],
+        "exit": 0,
+        "seconds": 21.52259388298262
+      }
+    ]
+  },
+  "tests": {
+    "initial_workspace": {
+      "passed": 1857,
+      "ignored": 11
+    },
+    "after_resize_app_chrome": "965 app and 32 chrome tests passed; nine app tests ignored",
+    "harness": 15,
+    "focused": "Schematic/junction/copper identity, conflicting island and pending accepted split, class real controls, live MCP refusal, original-view invalidation, detached close, Update PCB/split/native reopen, shared modal settling"
+  },
+  "performance": {
+    "reference_iterations": 20,
+    "assigned_iterations": 10,
+    "correctness": "Both runs passed; official comparisons accepted",
+    "reference_max_ui_p95_ms": {
+      "before": 1.088554,
+      "after": 1.069679
+    },
+    "assigned_max_ui_p95_ms": {
+      "before": 1.09206,
+      "after": 1.22393
+    },
+    "notes": "Assigned UI boundaries include absolute p95 increases up to 0.207342 ms. Retained without repeating broad runs or attributing this unisolated shared-host replay to the new modal. The form did not exist in base. No presentation, tail, endurance or large-selection/class-catalog latency qualification."
+  },
+  "native_build": "main/target/debug/pcbcraft and pcbcraft-cli built; no desktop window launched and no duplicate executable copy",
+  "browser": "Headless Chrome148 WebGL2/ANGLE SwiftShader; no page errors; real class creation before last layout fix, final binding clear/restore, dark/light and input-free resize checked",
+  "publication": "Local only; no push, PR, review request or merge",
+  "limits": [
+    "No physical native-window/compositor latency or Wayland endurance certification",
+    "Repeated-instance/board-transfer qualification and advanced electrical/pour/relationship intent remain separate",
+    "Large class/net/selection authoring latency not qualified"
+  ],
+  "executables": {
+    "pcbcraft": "ff95c3b170ec80402faceb0b943c7a1fe71adeba31084b27f8ed244c45984f75",
+    "pcbcraft-cli": "5caf3196021fbdfda6e0ba267cc6aa9c658da30abe2208ed5d20f052ead74635"
+  }
+}

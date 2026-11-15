@@ -5,7 +5,8 @@ project-wide catalog and a resolver for explicitly supplied class sets. Classes
 can be authored in a schematic-only project without creating a board or a
 stackup. [Persistent assignments](net-class-assignments.md) now bind those IDs to
 meaningful nets through shared commands. [Routing, clearance queries and DRC](net-class-consumers.md)
-consume those assignments; editor controls remain under #303.
+consume those assignments; the [shared editor workflow](net-class-editor.md) authors
+and inspects them from schematic and PCB views.
 
 ## Authored definitions
 
@@ -80,6 +81,13 @@ visible in the result with conflicts. Such a result must not be consumed as a
 valid rule configuration or treated as a successful design check. Resolution
 does not change copper, connectivity, assignments, history or saved bytes.
 
+The read-only native `Resolution::contribution_statuses(property)` helper labels
+those same contributions Active, Overridden, LessRestrictive or Conflicting without
+changing the values, serialized contract or source order. Equal class/baseline
+preferences still follow class precedence; equal hard limits jointly define their
+bound. Unresolved preferences have no active source. An active hard-bound source
+alone does not mean cross-property conflicts permit using the whole configuration.
+
 `Project::resolve_class_clearance(left, right, board)` returns a `PairResolution`
 with the larger of the two independently resolved clearances, canonical
 clearance contributions, and two object reports sorted by class set. Swapping
@@ -139,8 +147,8 @@ by the remaining data. Canonical folder and `.pc` archive reopen/save preserve
 IDs, revisions and bytes.
 
 #301's [assignment contract](net-class-assignments.md) defines removal protection,
-origins and topology reconciliation. #302 should reuse this resolver for
-routing/query/checking consumers, including
-snapshot validity and explicit conflicts. #303 owns the shared editor workflow.
-No consumer should infer bindings from class names or treat the present catalog
-as though it already changes DRC or routing behavior.
+origins and topology reconciliation. #302's [routing, query and DRC consumers](net-class-consumers.md)
+use this resolver with snapshot validity and explicit conflicts; #303 adds the
+[shared editor workflow](net-class-editor.md). Definitions alone do not assign
+classes to nets: consumers use persistent assignments rather than inferring
+bindings from class names.

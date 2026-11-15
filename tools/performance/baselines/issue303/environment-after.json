@@ -1,0 +1,10 @@
+{
+  "revision": "64831ae1bf022f1fc3290f26ead9df79348ed3ea",
+  "hardware": "AMD Ryzen 9 7950X 16-Core Processor",
+  "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "runtime": "native CPU replay",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "profile": "release",
+  "power": "Shared development host; CPU exclusivity, power and thermal state not controlled.",
+  "notes": "Issue303 bounded ordinary-editor integration comparison: 20 reference and 10 assigned-reference iterations. New class forms do not exist in the base, so their functional/native/browser verification is separate. No latency-tail, allocation, presentation or endurance qualification."
+}

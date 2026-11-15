@@ -160,6 +160,33 @@ impl Context {
 }
 
 impl BoardView<'_> {
+    /// Resolve an exact selected pad/track/via address to current class-assignment authority.
+    /// Unknown objects fail, unknown membership returns None, and conflicting physical islands
+    /// or pending splits refuse assignment. No class/net name or arbitrary first member is used.
+    pub fn net_class_target_for_copper(self, object: &str) -> Result<Option<crate::nets::ClassTarget>, CommandError> {
+        let geometry = BoardGeometry::new(self);
+        let index = geometry
+            .items
+            .iter()
+            .position(|item| item.name == object)
+            .ok_or_else(|| CommandError::InvalidParams("Unknown selected copper object.".into()))?;
+        let memberships: Vec<_> = geometry
+            .members
+            .iter()
+            .filter(|nodes| nodes.contains(&index))
+            .flatten()
+            .flat_map(|node| geometry.items[*node].intended_nets.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        match memberships.as_slice() {
+            [] => Ok(None),
+            [membership] => self.project().net_class_target_for_board_membership(*membership),
+            _ => Err(CommandError::Unavailable(
+                "Selected copper joins distinct intended nets. Resolve its connectivity before assigning classes.".into(),
+            )),
+        }
+    }
     /// Resolve classes of copper actually touching a point on an addressed copper layer. No
     /// assignments means no geometry preparation. Unknown free space has board defaults only;
     /// through-via queries omit the layer and combine contacts across all copper layers.

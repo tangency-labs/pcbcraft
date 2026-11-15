@@ -12,7 +12,7 @@ pub fn layer_actions_height() -> f32 {
     Tokens::get().control_height * 2.
 }
 
-/// Pages carry presentation labels only; their model and staged changes stay in the app.
+/// Setup pages carry labels only; drafts, authority and command actions stay in the app.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
     #[default]
@@ -21,9 +21,14 @@ pub enum Page {
     Materials,
     Silkscreen,
     Profiles,
+    BoardDefaults,
+    NetClasses,
 }
 impl Page {
-    /// Keep the familiar board-editor/physical-stackup distinction explicit in navigation.
+    /// Preserve existing page identities while listing the shared rule pages last.
+    const ALL: [Self; 7] = [Self::Layers, Self::Stackup, Self::Materials, Self::Silkscreen, Self::Profiles, Self::BoardDefaults, Self::NetClasses];
+
+    /// Name physical setup and rule pages consistently across wide and compact navigation.
     pub fn title(self) -> &'static str {
         match self {
             Self::Layers => "Board editor layers",
@@ -31,11 +36,13 @@ impl Page {
             Self::Materials => "Materials",
             Self::Silkscreen => "Silkscreen",
             Self::Profiles => "Profiles",
+            Self::BoardDefaults => "Board defaults",
+            Self::NetClasses => "Net classes",
         }
     }
 }
 
-/// Wide editors have a stable navigation rail; compact windows keep full labels in a selector.
+/// Wide editors have an independently scrolling navigation rail; compact windows use a selector.
 /// Validation stays below the scrolling page so it remains visible beside the fixed form actions.
 pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce(&mut Ui, Page)) {
     let previous = *page;
@@ -53,21 +60,28 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
         ui.painter().rect_filled(rail, 0, t.dialog_footer);
         ui.painter().vline(rail.right(), rail.y_range(), Stroke::new(1., t.dialog_rule));
         let mut nav = ui.new_child(UiBuilder::new().max_rect(rail.shrink(t.space_12)).layout(Layout::top_down(Align::Min)));
-        heading(&mut nav, "Board setup");
-        for value in [Page::Layers, Page::Stackup, Page::Materials, Page::Silkscreen, Page::Profiles] {
-            if nav
-                .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
-                    solidcraft_ui_kit::button(
-                        ui,
-                        value.title(),
-                        if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
-                    )
-                })
-                .clicked()
-            {
-                *page = value;
+        nav.set_clip_rect(ui.clip_rect().intersect(rail));
+        egui::ScrollArea::vertical().id_salt("setup_navigation").auto_shrink([false, false]).show(&mut nav, |nav| {
+            crate::workspace::describe_scroll_viewport(nav);
+            heading(nav, "Board setup");
+            for value in Page::ALL {
+                if value == Page::BoardDefaults {
+                    heading(nav, "Design rules");
+                }
+                if nav
+                    .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
+                        solidcraft_ui_kit::button(
+                            ui,
+                            value.title(),
+                            if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
+                        )
+                    })
+                    .clicked()
+                {
+                    *page = value;
+                }
             }
-        }
+        });
         body.min.x = rail.right();
     } else {
         let bar = Rect::from_min_size(body.min, vec2(body.width(), t.form_header_height));
@@ -76,7 +90,11 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
             .selected_text(page.title())
             .width(nav.available_width())
             .show_ui(&mut nav, |ui| {
-                for value in [Page::Layers, Page::Stackup, Page::Materials, Page::Silkscreen, Page::Profiles] {
+                for value in Page::ALL {
+                    if value == Page::BoardDefaults {
+                        ui.separator();
+                        ui.label(crate::shell::dim("Design rules"));
+                    }
                     ui.selectable_value(page, value, value.title());
                 }
             })
@@ -92,11 +110,13 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
     content.set_clip_rect(ui.clip_rect().intersect(inner));
     content.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
     content.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1., t.border);
-    egui::ScrollArea::vertical()
-        .id_salt(("setup_page", *page as u8))
-        .auto_shrink([false, false])
-        .max_height(inner.height())
-        .show(&mut content, |ui| add(ui, *page));
+    egui::ScrollArea::vertical().id_salt(("setup_page", *page as u8)).auto_shrink([false, false]).max_height(inner.height()).show(
+        &mut content,
+        |ui| {
+            crate::workspace::describe_scroll_viewport(ui);
+            add(ui, *page);
+        },
+    );
 }
 
 /// Page headings use the interface face and weight shared with Preferences and the catalog.
