@@ -719,7 +719,8 @@ fn view_settings_support_cancel_apply_defaults_and_search() {
     h.get_by_label("Follow selection mode");
     h.key_press(Key::Enter);
     h.run();
-    assert!(h.query_all_by_label("Views").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
+    assert_eq!(h.state().arrangements.tabs().len(), 1);
+    assert!(h.query_by_label("Arrangement Views").is_none());
 }
 
 /// Browser picks reveal complete wire paths in a stacked layout, inside the region left clear

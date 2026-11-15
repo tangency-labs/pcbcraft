@@ -115,6 +115,20 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
 /// ribbon's left edge, is first scrolled into view as a person would; fully visible controls are
 /// clicked at once, so no extra frame can change the UI.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    let layout = label.strip_prefix("Arrangement ").filter(|name| *name != "name");
+    if (layout.is_some() || label == "New arrangement") && harness.query_by_label(label).is_none() {
+        harness.get_by_label("File").click();
+        harness.run();
+        harness.get_by_label("Layouts").hover();
+        harness.run();
+    }
+    let label = if let Some(name) = layout {
+        harness.get_by_role_and_label(egui::Role::RadioButton, name).hover();
+        harness.run();
+        "Activate"
+    } else {
+        label
+    };
     if !fully_visible(harness, label) {
         harness.get_by_label(label).scroll_to_me();
         harness.run();

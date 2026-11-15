@@ -97,15 +97,27 @@ fn action(h: &mut Harness<'_, PcbApp>, action: Action) {
     h.run();
 }
 
-/// Right-click the selected arrangement through its real tab, without changing the active layout.
+/// Open a saved layout's context actions without activating its views.
+fn layout_menu(h: &mut Harness<'_, PcbApp>, name: &str) {
+    click(h, "File");
+    h.get_by_label("Layouts").hover();
+    h.run();
+    h.get_by_role_and_label(egui::Role::RadioButton, name).hover();
+    h.run();
+}
+
+/// Open the current layout's actions through File, independent of title-bar presentation.
 #[allow(clippy::unwrap_used)]
 fn active_tab_menu(h: &mut Harness<'_, PcbApp>) {
     let active = h.state().arrangements.active();
     let name = h.state().arrangements.tabs().into_iter().find(|(id, _)| *id == active).unwrap().1;
-    h.get_by_label(&format!("Arrangement {name}")).scroll_to_me();
-    h.run();
-    h.get_by_label(&format!("Arrangement {name}")).click_secondary();
-    h.run();
+    layout_menu(h, &name);
+}
+
+/// Verify a retained layout without requiring persistent title-bar chrome.
+fn has_layout(h: &Harness<'_, PcbApp>, name: &str) {
+    assert!(h.state().arrangements.tabs().iter().any(|(_, candidate)| candidate == name));
+    assert!(h.query_by_label(&format!("Arrangement {name}")).is_none());
 }
 
 /// Save to a temporary project using the production writer with only the file picker bypassed.
@@ -116,11 +128,11 @@ fn save(h: &mut Harness<'_, PcbApp>, path: &std::path::Path, save_as: bool) {
     h.run();
 }
 
-/// Top tabs own arrangements; each activation restores mixed panes with fresh input identities.
+/// Layout menu activation restores mixed panes with fresh input identities.
 #[test]
 fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     let mut h = harness();
-    h.get_by_label("Arrangement Views");
+    assert!(h.query_by_label("Arrangement Views").is_none());
     click(&mut h, "Choose workspace");
     click(&mut h, "Open PCB Layout beside current view");
     click(&mut h, "Choose workspace");
@@ -138,7 +150,7 @@ fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     assert_eq!(h.state().arrangement_snapshot().unwrap(), original);
     assert!(h.state().views.view(stale.view()).is_some());
     action(&mut h, Action::Rename { id: 2, name: "Routing".into() });
-    h.get_by_label("Arrangement Routing");
+    has_layout(&h, "Routing");
     h.state_mut().views.active.camera.center_on(Point { x_nm: -30_000_000, y_nm: 0 });
     h.run();
     let routing = h.state().arrangement_snapshot().unwrap();
@@ -454,7 +466,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
     h.key_press(Key::Enter);
     h.run();
     assert_eq!(h.state().arrangements.tabs().len(), 2);
-    h.get_by_label("Arrangement Routing");
+    has_layout(&h, "Routing");
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
 
@@ -471,7 +483,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
     h.step();
     assert!(!h.output().viewport_output.values().any(|output| output.commands.contains(&egui::ViewportCommand::Close)));
     h.run();
-    h.get_by_label("Arrangement Review");
+    has_layout(&h, "Review");
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
@@ -482,7 +494,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
     h.run();
     h.key_press(Key::Escape);
     h.run();
-    h.get_by_label("Arrangement Review");
+    has_layout(&h, "Review");
     assert!(matches!(h.state().dialog, Dialog::None));
 }
 
@@ -507,7 +519,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     active_tab_menu(&mut h);
     click(&mut h, "Duplicate…");
     click(&mut h, "Create");
-    h.get_by_label("Arrangement Views copy");
+    has_layout(&h, "Views copy");
     let before = h.state().arrangement_snapshot().unwrap();
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
@@ -517,7 +529,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
-    h.get_by_label("Arrangement Views");
+    assert!(h.query_by_label("Arrangement Views").is_none());
     assert_eq!(h.state().arrangements.tabs().len(), 1);
 }
 
@@ -546,9 +558,7 @@ fn compact_arrangement_controls_stay_reachable() {
         h.set_size(egui::vec2(width, 600.0));
         h.run();
         assert!(h.query_by_label("Arrangement options").is_none());
-        let new = h.get_by_label("New arrangement").rect();
-        let utilities = h.get_by_label("Preferences").rect();
-        assert!(new.right() < utilities.left());
+        assert!(h.query_by_label("New arrangement").is_none());
         assert!(h.get_by_label("Close window").rect().right() <= width);
         active_tab_menu(&mut h);
         click(&mut h, "Rename…");
@@ -559,7 +569,7 @@ fn compact_arrangement_controls_stay_reachable() {
     }
 }
 
-/// Context actions address the clicked tab without activating it; duplication uses its own setup.
+/// Layout submenus address inactive layouts without activating them; duplication uses their own setup.
 #[test]
 fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     let mut h = harness();
@@ -572,29 +582,26 @@ fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     let view = h.state().views.active.id();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
 
-    h.get_by_label("Arrangement Views").click_secondary();
-    h.run();
+    layout_menu(&mut h, "Views");
     assert_eq!(h.state().arrangements.active(), active);
     click(&mut h, "Rename…");
     h.get_by_label("Arrangement name").type_text("Capture");
     h.run();
     click(&mut h, "Rename");
-    h.get_by_label("Arrangement Capture");
+    has_layout(&h, "Capture");
     assert_eq!(h.state().arrangements.active(), active);
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
 
-    h.get_by_label("Arrangement Capture").click_secondary();
-    h.run();
+    layout_menu(&mut h, "Capture");
     click(&mut h, "Duplicate…");
     click(&mut h, "Create");
-    h.get_by_label("Arrangement Capture copy");
+    has_layout(&h, "Capture copy");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), design);
     click(&mut h, "Arrangement Review");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
     let view = h.state().views.active.id();
-    h.get_by_label("Arrangement Capture").click_secondary();
-    h.run();
+    layout_menu(&mut h, "Capture");
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
     assert!(h.query_by_label("Arrangement Capture").is_none());
@@ -753,4 +760,26 @@ fn project_open_with_library_panes_does_not_defer_layout_restoration() {
     h.run();
     assert_eq!(h.state().views.active.id(), view);
     assert!(h.state().views.active.input(&h.state().session).is_some());
+}
+
+/// A user-supplied layout name may match a menu action without sharing its widget identity.
+#[test]
+fn layout_names_do_not_collide_with_menu_actions() {
+    let mut h = harness();
+    let before = h.state().session.inspect();
+    action(&mut h, Action::Create { name: "New arrangement".into(), start: Start::Current });
+    click(&mut h, "File");
+    h.get_by_label("Layouts").hover();
+    h.run();
+    let layout = h.get_by_role_and_label(egui::Role::RadioButton, "New arrangement");
+    let create = h.get_by_role_and_label(egui::Role::Button, "New arrangement");
+    assert_ne!(layout.rect(), create.rect());
+    layout.hover();
+    h.run();
+    click(&mut h, "Rename…");
+    h.get_by_label("Arrangement name").type_text("Named layout");
+    h.run();
+    click(&mut h, "Rename");
+    has_layout(&h, "Named layout");
+    assert_eq!(h.state().session.inspect(), before);
 }

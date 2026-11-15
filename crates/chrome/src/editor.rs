@@ -71,7 +71,8 @@ pub enum PaneAction {
 }
 
 /// Show the current document path in a split or detached pane's header. Focus changes its
-/// underline, leaving the workspace stationary. Inset tabs retain rounded Craft corners.
+/// underline, leaving the workspace stationary. Inset tabs retain rounded Craft corners;
+/// the host paints the canvas backdrop through the unused header space.
 /// Long paths elide from the left to retain the sheet name;
 /// accessibility and hover text always contain the complete path. Return a focus click and
 /// an optional view action; the close button dismisses only this pane, and native placement
@@ -117,10 +118,15 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
             egui::CursorIcon::Grab
         });
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, focused, path));
-    ui.painter().rect_filled(strip, 0, t.panel);
-    ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
     let painter = ui.painter_at(tab);
-    solidcraft_ui_kit::app_bar::tab_shape(&painter, &solidcraft_theme::Tokens::get(), tab, focused, response.hovered());
+    // Keep the tab legible over either canvas, including the always-dark PCB in light mode.
+    // Reuse the shared shape for its resting surface and workspace selection/hover palette.
+    let mut palette = solidcraft_theme::Tokens::get();
+    palette.app_bar_tab_active = t.panel;
+    solidcraft_ui_kit::app_bar::tab_shape(&painter, &palette, tab, true, false);
+    palette.app_bar_tab_active = t.selected_bg;
+    palette.app_bar_hover = t.hover;
+    solidcraft_ui_kit::app_bar::tab_shape(&painter, &palette, tab, focused, response.hovered());
     painter.galley(pos2(dock_rect.right() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
     painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if focused { t.accent } else { t.border }));
     let close = solidcraft_ui_kit::icon_button_at(ui, close_rect, "close", &format!("Close view {path}"));

@@ -549,3 +549,17 @@ and returns only a click boolean; it cannot draw the host's electronics glyphs
 or return the response needed by the existing accessible popup. The chrome
 adapter therefore retains its shared card, theme and font composition and
 viewport-scoped popup rather than replacing that interaction.
+
+## Window and pane chrome
+
+Saved project layouts now use File's shared menu surface and aligned rows instead
+of persistent title-bar tabs. Pane headers retain the pinned Craft tab shape and
+close control, with the host extending each canvas palette/grid behind unused
+header space. Tab surfaces and selection ink use the workspace palette so labels
+remain readable over either canvas in both themes. The existing background projection
+serves ribbon margins and pane headers after camera navigation. Title-bar movement
+follows the pinned Craft helper's drag threshold, keeping ordinary clicks in the
+app for double-click maximization. PCBcraft retains
+separate foreground hit regions for its title/brand/gap placement and native controls
+above modals; its existing native-grab recovery still covers consumed drag releases.
+No toolkit version or dependency changes are required.

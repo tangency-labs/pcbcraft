@@ -14,7 +14,7 @@ pub use crate::titlebar::resize_window_edges;
 /// Call [`resize_window_edges`] after dialogs to keep native interactions above their backdrop.
 /// The utility callback gets the full bar width to decide which controls fit.
 /// The title shrinks before taking space from the controls and keeps the unsaved marker if it fits.
-/// `tabs` fills remaining title-bar space with project arrangements, independently of the project label.
+/// `tabs` supplies optional inline controls before the free native drag area.
 #[allow(clippy::too_many_arguments)]
 pub fn app_bar(
     ui: &mut Ui,
