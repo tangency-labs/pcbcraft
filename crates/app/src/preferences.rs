@@ -477,7 +477,13 @@ fn navigation(ui: &mut Ui, data: &mut PageData<'_>) {
             settings::segmented(ui, &mut navigation.right_drag_pan, &[(false, "Select"), (true, "Pan view")]);
         });
         if navigation.middle_drag_zoom {
-            settings::hint(ui, "Drag up to zoom in and down to zoom out. The wheel still follows Mouse wheel.");
+            // The drag follows Zoom direction, so the hint does too.
+            let hint = if navigation.reverse_zoom {
+                "Drag down to zoom in and up to zoom out. The wheel still follows Mouse wheel."
+            } else {
+                "Drag up to zoom in and down to zoom out. The wheel still follows Mouse wheel."
+            };
+            settings::hint(ui, hint);
         }
         if navigation.right_drag_pan {
             settings::hint(ui, "A right drag pans. Right-click menus and tool cancellation are unchanged.");

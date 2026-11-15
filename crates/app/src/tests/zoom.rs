@@ -233,3 +233,20 @@ fn right_drag_pans_without_selecting_when_enabled() {
         assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     }
 }
+
+/// The Shortcuts page lists the wheel under Pan when it pans, and Ctrl+wheel under Zoom, so
+/// the Pan row survives middle-drag zoom without right-drag pan.
+#[test]
+fn shortcut_list_follows_wheel_scroll_mode() {
+    let ctx = egui::Context::default();
+    ctx.set_os(egui::os::OperatingSystem::Nix);
+    let view_row = |navigation: Navigation, action: &str| {
+        crate::shortcut_list(&ctx, navigation).into_iter().find(|(section, row, _)| *section == "View" && *row == action).map(|(_, _, keys)| keys)
+    };
+    let panning = Navigation { scroll: ScrollAction::Pan, middle_drag_zoom: true, ..Navigation::default() };
+    assert_eq!(view_row(panning, "Pan").as_deref(), Some("mouse wheel"));
+    assert_eq!(view_row(panning, "Zoom").as_deref(), Some("Ctrl+mouse wheel or middle-button drag"));
+    let zooming = Navigation { middle_drag_zoom: true, ..Navigation::default() };
+    assert_eq!(view_row(zooming, "Pan"), None);
+    assert_eq!(view_row(zooming, "Zoom").as_deref(), Some("Mouse wheel or middle-button drag"));
+}
