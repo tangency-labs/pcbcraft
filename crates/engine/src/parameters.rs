@@ -51,8 +51,7 @@ const MAX_RESOLVED_LEN: usize = 64 * 1024;
 /// The standard project parameters. They exist on every project and are empty until set.
 pub const PROJECT_STANDARD: [&str; 4] = ["Revision", "Date", "Company", "DrawnBy"];
 
-/// The standard sheet parameters and the value each has until the sheet sets its own.
-/// The standard sheet parameter names, as [`check`] takes them.
+/// The standard sheet parameter names, in [`SHEET_DEFAULTS`] order.
 pub const SHEET_STANDARD: [&str; 5] = {
     let mut names = [""; 5];
     let mut i = 0;
@@ -63,6 +62,7 @@ pub const SHEET_STANDARD: [&str; 5] = {
     names
 };
 
+/// The standard sheet parameters and the value each has until the sheet sets its own.
 pub const SHEET_DEFAULTS: [(&str, &str); 5] = [
     ("Title", "@sheet.Name"),
     ("Revision", "@project.Revision"),
@@ -88,7 +88,7 @@ pub(crate) const NAME: Param = Param {
 pub(crate) const VALUE: Param = Param {
     required: false,
     name: "value",
-    summary: "The new value, which may hold @scope.Name references; null removes the parameter. Omit only when renaming",
+    summary: "The new value, which may hold @scope.Name references; null removes the parameter (not with rename). Omit only when renaming",
     kind: ParamKind::ParameterValue,
 };
 pub(crate) const RENAME: Param =
@@ -107,6 +107,8 @@ pub enum ParameterError {
     Value(String),
     /// A name differs from a standard or another stored name only in case.
     Spelling(String),
+    /// A name matches one of the scope's read-only built-ins, ignoring case.
+    Builtin(String),
 }
 
 impl std::fmt::Display for ParameterError {
@@ -116,6 +118,7 @@ impl std::fmt::Display for ParameterError {
             Self::Name(name) => write!(f, "parameter name `{name}`: use 1 to {MAX_NAME_LEN} letters, digits and `_`, starting with a letter"),
             Self::Value(name) => write!(f, "parameter `{name}`: the value is longer than {MAX_VALUE_LEN} bytes"),
             Self::Spelling(name) => write!(f, "parameter name `{name}` differs from another parameter only in case"),
+            Self::Builtin(name) => write!(f, "parameter name `{name}` is built in and read only"),
         }
     }
 }
@@ -127,11 +130,17 @@ pub fn valid_name(name: &str) -> bool {
     name.len() <= MAX_NAME_LEN && chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Check every name and value of a stored list, and its length. `standard` names the list's
-/// standard parameters. Editing ignores case, so a name that matches a standard name or another
-/// stored name only ignoring case is refused: an edit could never reach it. Decoding refuses a
-/// list that fails, so stored lists always pass.
-pub fn check(parameters: &Parameters, standard: &[&str]) -> Result<(), ParameterError> {
+/// Check every name and value of a stored list for `scope` (project or sheet), and its length.
+/// Editing ignores case and never reaches a built-in, so a name matching one of the scope's
+/// built-ins ignoring case, or matching a standard or another stored name only ignoring case, is
+/// refused: an edit could never reach it. Decoding refuses a list that fails, so stored lists
+/// always pass.
+pub fn check(parameters: &Parameters, scope: Scope) -> Result<(), ParameterError> {
+    let standard: &[&str] = match scope {
+        Scope::Project => &PROJECT_STANDARD,
+        Scope::Sheet => &SHEET_STANDARD,
+        Scope::Instance => &[],
+    };
     if parameters.len() > MAX_PARAMETERS {
         return Err(ParameterError::TooMany);
     }
@@ -139,6 +148,9 @@ pub fn check(parameters: &Parameters, standard: &[&str]) -> Result<(), Parameter
     for (name, value) in parameters {
         if !valid_name(name) {
             return Err(ParameterError::Name(name.clone()));
+        }
+        if scope.is_builtin(name) {
+            return Err(ParameterError::Builtin(name.clone()));
         }
         let twin = standard.iter().any(|standard| *standard != name && standard.eq_ignore_ascii_case(name));
         if twin || !seen.insert(name.to_ascii_lowercase()) {
@@ -604,7 +616,13 @@ impl Session {
             None if rename.is_none() => {
                 return Err(CommandError::InvalidParams("give a value, null to remove the parameter, or a new name".into()));
             }
-            None | Some(Value::Null) => None,
+            None => None,
+            Some(Value::Null) if rename.is_some() => {
+                return Err(CommandError::InvalidParams(
+                    "null removes a parameter and can't be combined with a new name; omit value to keep it".into(),
+                ));
+            }
+            Some(Value::Null) => None,
             Some(value) => Some(value.as_str().ok_or_else(|| CommandError::InvalidParams("value must be a string or null".into()))?.to_owned()),
         };
         if value.as_ref().is_some_and(|value| value.len() > MAX_VALUE_LEN) {

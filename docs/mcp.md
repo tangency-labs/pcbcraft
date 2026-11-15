@@ -122,7 +122,8 @@ single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`
 (`landscape` or `portrait`), keeping the paper's top-left corner unless `at` moves
 it; each inspected sheet reports its `page`.
 `parameter.set` sets, renames or removes (`value: null`) a project or sheet
-parameter, with `scope` `project` or `sheet`; `parameter.list` returns a list's own
+parameter, with `scope` `project` or `sheet`; a `rename` keeps the value unless
+`value` gives a new one, and refuses `value: null`; `parameter.list` returns a list's own
 values and every parameter it offers with its source; `parameter.resolve`
 replaces the `@project`, `@sheet` and `@instance` references in a `text` as a
 given `sheet` shows it and lists unknown references.

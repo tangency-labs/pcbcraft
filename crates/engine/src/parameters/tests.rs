@@ -35,22 +35,29 @@ fn names_are_words_that_start_with_a_letter() {
     }
     let mut list = Parameters::new();
     list.insert("Revision".into(), "B".into());
-    assert_eq!(check(&list, &PROJECT_STANDARD), Ok(()));
+    assert_eq!(check(&list, Scope::Project), Ok(()));
     list.insert("bad name".into(), String::new());
-    assert!(matches!(check(&list, &PROJECT_STANDARD), Err(ParameterError::Name(_))));
+    assert!(matches!(check(&list, Scope::Project), Err(ParameterError::Name(_))));
     list.clear();
     list.insert("Long".into(), "x".repeat(MAX_VALUE_LEN + 1));
-    assert!(matches!(check(&list, &PROJECT_STANDARD), Err(ParameterError::Value(_))));
+    assert!(matches!(check(&list, Scope::Project), Err(ParameterError::Value(_))));
     let many: Parameters = (0..=MAX_PARAMETERS).map(|i| (format!("P{i}"), String::new())).collect();
-    assert_eq!(check(&many, &PROJECT_STANDARD), Err(ParameterError::TooMany));
+    assert_eq!(check(&many, Scope::Project), Err(ParameterError::TooMany));
     // Editing ignores case, so a twin spelling of a standard or stored name could never be edited.
     for twins in [vec!["revision"], vec!["Gain", "gain"]] {
         let list: Parameters = twins.into_iter().map(|name| (name.to_owned(), "x".to_owned())).collect();
-        assert!(matches!(check(&list, &PROJECT_STANDARD), Err(ParameterError::Spelling(_))));
+        assert!(matches!(check(&list, Scope::Project), Err(ParameterError::Spelling(_))));
     }
     let list: Parameters = [("title".to_owned(), "x".to_owned())].into();
-    assert!(matches!(check(&list, &SHEET_STANDARD), Err(ParameterError::Spelling(_))));
-    assert_eq!(check(&list, &PROJECT_STANDARD), Ok(()), "only the list's own standard names count");
+    assert!(matches!(check(&list, Scope::Sheet), Err(ParameterError::Spelling(_))));
+    assert_eq!(check(&list, Scope::Project), Ok(()), "only the list's own standard names count");
+    // A built-in is read only, so a stored twin of it could never be edited.
+    for scope in [Scope::Project, Scope::Sheet] {
+        for name in ["Name", "name"] {
+            let list: Parameters = [(name.to_owned(), "x".to_owned())].into();
+            assert_eq!(check(&list, scope), Err(ParameterError::Builtin(name.to_owned())), "{scope:?} {name}");
+        }
+    }
 }
 
 #[test]
@@ -120,6 +127,8 @@ fn edits_are_undoable_and_invalid_ones_change_nothing() {
         json!({"scope":"sheet","sheet":sheet,"name":"2nd","value":"x"}),
         json!({"scope":"sheet","sheet":sheet,"name":"Gain"}),
         json!({"scope":"sheet","sheet":sheet,"name":"Missing","rename":"Other"}),
+        // null removes, so it can't also keep the value under a new name.
+        json!({"scope":"sheet","sheet":sheet,"name":"Gain_dB","rename":"Other","value":null}),
         json!({"scope":"sheet","sheet":uuid::Uuid::nil(),"name":"X","value":"x"}),
         json!({"scope":"board","name":"X","value":"x"}),
         json!({"scope":"sheet","sheet":sheet,"name":"X","value":"x".repeat(MAX_VALUE_LEN + 1)}),
@@ -222,6 +231,10 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title": 3})).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({"Revision":"B","revision":"C"})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"title":"x"})).is_err());
+    for name in ["Name", "name"] {
+        assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({name:"stored"})).is_err(), "project {name}");
+        assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({name:"stored"})).is_err(), "sheet {name}");
+    }
     assert!(mutate(&sheet_file, &|_| {}).is_ok());
 }
 

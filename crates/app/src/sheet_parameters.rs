@@ -12,13 +12,21 @@ use pcbcraft_engine::{
     parameters::{Row, Scope, Source},
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Text drafts for one sheet at one revision. A new sheet or revision replaces them.
+/// A field: its scope and parameter name.
+type Field = (Scope, String);
+
+/// Text drafts for one sheet. A new revision updates only the fields whose values changed; a new
+/// sheet replaces them all.
 #[derive(Debug, Default)]
 pub(crate) struct Drafts {
     key: Option<(SheetTarget, u64)>,
-    values: BTreeMap<(Scope, String), String>,
+    values: BTreeMap<Field, String>,
+    /// Each own value as last loaded, so a field being typed in can be told from a stale one.
+    stored: BTreeMap<Field, String>,
+    /// The value set elsewhere while a field held unsaved text, until that field is left.
+    conflicts: BTreeMap<Field, String>,
     new_name: BTreeMap<Scope, String>,
     /// Why the New name of a scope was not added, until it is changed and left again.
     new_error: BTreeMap<Scope, String>,
@@ -48,9 +56,14 @@ impl Change {
 }
 
 impl Drafts {
-    /// Reload every draft from the project when the sheet or revision differs from the last
-    /// frame; otherwise keep what is being typed. Another sheet also clears the New fields and
-    /// their errors, so an unfinished name is never added to a sheet it wasn't typed for.
+    /// Bring the drafts up to date when the sheet or revision differs from the last frame.
+    ///
+    /// Another sheet reloads every field and clears the New fields and their errors, so an
+    /// unfinished name is never added to a sheet it wasn't typed for. A new revision of the same
+    /// sheet reloads only fields without unsaved text, so an edit made elsewhere (such as over
+    /// MCP) never discards what is being typed in another field. When the value under unsaved
+    /// text changes, the text stays and the new value is kept in `conflicts` to be shown. A field
+    /// whose parameter no longer exists is dropped with its text.
     fn sync(&mut self, project: &Project, sheet: SheetTarget, revision: u64) {
         if self.key == Some((sheet, revision)) {
             return;
@@ -58,14 +71,38 @@ impl Drafts {
         if self.key.is_none_or(|(previous, _)| previous != sheet) {
             self.new_name.clear();
             self.new_error.clear();
+            self.values.clear();
+            self.stored.clear();
+            self.conflicts.clear();
         }
         self.key = Some((sheet, revision));
-        self.values.clear();
+        let mut stored = BTreeMap::new();
+        let mut present = BTreeSet::new();
         for scope in [Scope::Sheet, Scope::Project] {
-            for row in project.parameter_rows(scope, Some(sheet)).into_iter().filter(|row| row.source == Source::Own) {
-                self.values.insert((scope, row.name), row.value);
+            for row in project.parameter_rows(scope, Some(sheet)).into_iter().filter(|row| row.source != Source::BuiltIn) {
+                if row.source == Source::Own {
+                    stored.insert((scope, row.name.clone()), row.value);
+                }
+                present.insert((scope, row.name));
             }
         }
+        let fields: BTreeSet<Field> = self.values.keys().chain(stored.keys()).cloned().collect();
+        for field in fields {
+            let old = self.stored.get(&field).map_or("", String::as_str);
+            let new = stored.get(&field).map_or("", String::as_str);
+            let draft = self.values.get(&field).map_or("", String::as_str);
+            if !present.contains(&field) {
+                self.values.remove(&field);
+                self.conflicts.remove(&field);
+            } else if draft == old || draft == new {
+                // Unedited, or already saved: show the current value.
+                self.conflicts.remove(&field);
+                self.values.insert(field, new.to_owned());
+            } else if old != new {
+                self.conflicts.insert(field, new.to_owned());
+            }
+        }
+        self.stored = stored;
     }
 }
 
@@ -77,6 +114,15 @@ fn hint(project: &Project, sheet: SheetTarget, row: &Row) -> String {
     }
     let resolved = project.resolve_text(Some(sheet), &row.value).text;
     if resolved.is_empty() { row.value.clone() } else { resolved }
+}
+
+/// The note under a field whose value `external` was set elsewhere while it held unsaved text.
+fn conflict_note(external: &str) -> String {
+    if external.is_empty() {
+        "Removed elsewhere. Leaving this field saves your text instead.".into()
+    } else {
+        format!("Changed elsewhere to “{external}”. Leaving this field saves your text instead.")
+    }
 }
 
 /// The edit a field implies when it loses focus: clearing a nonempty own value removes it, and a
@@ -108,7 +154,8 @@ fn scope_rows(ui: &mut Ui, project: &Project, sheet: SheetTarget, scope: Scope, 
     let mut change = None;
     let rows = project.parameter_rows(scope, Some(sheet));
     for row in rows.iter().filter(|row| row.source != Source::BuiltIn) {
-        let draft = drafts.values.entry((scope, row.name.clone())).or_default();
+        let field = (scope, row.name.clone());
+        let draft = drafts.values.entry(field.clone()).or_default();
         // A stable ID per scope and name keeps focus with its parameter when rows are added
         // or removed; positional IDs would hand a leaving field's focus to its neighbour.
         let response = ui.push_id((scope, &row.name), |ui| chrome::text_hint(ui, &row.name, draft, &hint(project, sheet, row))).inner;
@@ -118,7 +165,10 @@ fn scope_rows(ui: &mut Ui, project: &Project, sheet: SheetTarget, scope: Scope, 
             response
         };
         if response.lost_focus() {
+            drafts.conflicts.remove(&field);
             change = change.or_else(|| commit(scope, row, draft));
+        } else if let Some(external) = drafts.conflicts.get(&field) {
+            ui.label(pcbcraft_chrome::shell::error(conflict_note(external)));
         }
     }
     let name = drafts.new_name.entry(scope).or_default();
@@ -195,6 +245,41 @@ mod tests {
         assert_eq!(drafts.new_name.get(&Scope::Sheet).map(String::as_str), Some("Gai"));
         drafts.sync(&project, other, 2);
         assert!(drafts.new_name.is_empty() && drafts.new_error.is_empty());
+    }
+
+    /// A new revision keeps unsaved text in fields whose values did not change, reloads the
+    /// others, and keeps the text with a conflict when the value under it changed elsewhere.
+    #[test]
+    fn unsaved_text_survives_unrelated_edits() {
+        let mut session = pcbcraft_engine::Session::default();
+        session.apply("project.new", &serde_json::json!({})).unwrap();
+        let set = |session: &mut pcbcraft_engine::Session, name: &str, value: &str| {
+            let params = serde_json::json!({"scope":"project","name":name,"value":value,"expected_revision":session.revision()});
+            session.apply(pcbcraft_engine::parameters::SET, &params).unwrap();
+        };
+        set(&mut session, "Company", "Acme");
+        set(&mut session, "Revision", "A");
+        let sheet = session.snapshot().unwrap().sheet_target();
+        let field = |name: &str| (Scope::Project, name.to_owned());
+        let mut drafts = Drafts::default();
+        drafts.sync(&session.snapshot().unwrap(), sheet, session.revision());
+        drafts.values.insert(field("Revision"), "B".into());
+        // Company changes elsewhere: Revision keeps its unsaved text, Company reloads.
+        set(&mut session, "Company", "Other");
+        drafts.sync(&session.snapshot().unwrap(), sheet, session.revision());
+        assert_eq!(drafts.values[&field("Revision")], "B");
+        assert_eq!(drafts.values[&field("Company")], "Other");
+        assert!(drafts.conflicts.is_empty());
+        // Revision itself changes elsewhere: the text stays and the new value is reported.
+        set(&mut session, "Revision", "C");
+        drafts.sync(&session.snapshot().unwrap(), sheet, session.revision());
+        assert_eq!(drafts.values[&field("Revision")], "B");
+        assert_eq!(drafts.conflicts.get(&field("Revision")).map(String::as_str), Some("C"));
+        // Saving the text clears the conflict.
+        set(&mut session, "Revision", "B");
+        drafts.sync(&session.snapshot().unwrap(), sheet, session.revision());
+        assert!(drafts.conflicts.is_empty());
+        assert_eq!(drafts.values[&field("Revision")], "B");
     }
 
     /// New refuses any existing name ignoring case, built-ins included, and adds an empty
