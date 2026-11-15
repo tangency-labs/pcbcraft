@@ -664,27 +664,39 @@ impl PcbApp {
         }
     }
 
-    /// Present the empty PCB workspace without creating a physical owner. Explicit creation
-    /// uses the shared revision-checked command and binds the resulting board after success.
+    /// Explain the board workflow without creating a physical owner. The schematic shortcut
+    /// queues ordinary pane navigation; Create board opens a disposable setup draft. Applying
+    /// that draft creates the board atomically, while Cancel leaves the project untouched.
+    /// Inactive panes cannot dispatch either action.
     fn empty_board_pane(&mut self, ui: &mut Ui, id: ViewId, enabled: bool) {
-        let revision = self.session.revision();
         let Some(widget_id) = self.views.view(id).map(|view| view.widget_id()) else { return };
-        let create = ui
+        let action = ui
             .push_id(widget_id, |ui| {
                 shell::canvas(ui, |ui| {
-                    ui.add_space((ui.available_height() * 0.5 - 16.0).max(0.0));
-                    ui.vertical_centered(|ui| ui.add_enabled(enabled, pcbcraft_chrome::catalog::button("Create board", true)).clicked()).inner
+                    pcbcraft_chrome::empty_state::show(
+                        ui,
+                        "Start your PCB layout",
+                        "This project doesn’t have a board yet. Create one to open Board setup, then add footprints and route your circuit.",
+                        ["Create board", "Open schematic"],
+                        &[
+                            "Set up layers and design rules in Board setup",
+                            "Use Update PCB to review and add schematic footprints",
+                            "Draw the board outline and route connections",
+                        ],
+                        enabled,
+                    )
                 })
             })
             .inner;
-        if create && self.session.available("pcb.create_board") {
-            self.run("pcb.create_board", &serde_json::json!({"expected_revision":revision}));
-            if self.message.is_none()
-                && let Some(target) = self.session.project().and_then(|project| project.board_target())
-                && let Some(view) = self.views.view_mut(id)
-            {
-                view.open_document(DocumentTarget::Board(target), &self.session);
-            }
+        if action == pcbcraft_chrome::empty_state::Action::Secondary && enabled {
+            self.queue_view_action(
+                ui.ctx(),
+                id,
+                crate::editor_windows::ViewAction::Workspace { workspace: Workspace::Schematic, placement: Placement::Here },
+            );
+        }
+        if action == pcbcraft_chrome::empty_state::Action::Primary && enabled && self.session.available("pcb.create_board") {
+            self.begin_board_setup(id);
             self.repaint_editors(ui.ctx());
         }
     }

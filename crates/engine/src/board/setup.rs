@@ -235,6 +235,12 @@ impl TryFrom<SetupRecords> for BoardSetup {
 }
 
 impl BoardSetup {
+    /// Build a disposable setup for a board that does not exist yet. This allocates layer and
+    /// stackup identities only; adoption through `pcb.create_board` is explicit and atomic.
+    pub fn new_board_draft(copper_layers: u64) -> Result<Self, CommandError> {
+        Self::preset(copper_layers)
+    }
+
     /// Build a validated candidate with one fresh technical/documentation layer. Copper must
     /// be changed with its physical stackup, so this builder refuses copper. The source setup
     /// is unchanged; callers adopt the candidate through revision-checked `pcb.set_board_setup`.

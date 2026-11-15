@@ -16,6 +16,17 @@ selection remain the defaults, a right-click still opens menus, and the zoom
 speed and reverse-direction settings also apply. No Coline UI, camera,
 dependency or saved-format code was imported.
 
+## PCB layout empty state
+
+The boardless workspace introduction is original PCBcraft composition requested
+by @travle1. It reuses the qualified pinned Craft feature surface, typography,
+buttons and theme tokens through `crates/chrome`. The pinned toolkit has no
+workspace onboarding component, so chrome composes those primitives into a
+bounded, scrollable introduction. First-board setup stages physical settings until
+Apply; the original shared creation command adopts validated settings and board
+ownership in one edit. Its setup navigation reuses the existing shared disabled
+controls before board-local rules are available. No dependency, artwork or native format changed.
+
 ## Layer-aware spatial queries
 
 The #244 implementation uses `geo-index` 0.4.0 (MIT OR Apache-2.0), pinned by

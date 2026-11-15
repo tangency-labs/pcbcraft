@@ -2,6 +2,45 @@ use super::*;
 use crate::{Session, persistence};
 use serde_json::json;
 
+/// Setup and ownership publish together, including through native codecs and Undo/Redo.
+/// Invalid drafts and stale requests preserve the snapshot, revision and existing redo history.
+#[test]
+fn creation_adopts_validated_settings_atomically() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    session.apply("edit.undo", &json!({})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let setup = super::super::setup::BoardSetup::new_board_draft(4).unwrap();
+    let silk = super::super::silkscreen::Settings { text_height_nm: 2_000_000, ..Default::default() };
+    for params in [
+        json!({"setup":{"invalid":true},"expected_revision":revision}),
+        json!({"setup":setup,"silkscreen":{"text_height_nm":0},"expected_revision":revision}),
+        json!({"setup":setup,"expected_revision":revision-1}),
+    ] {
+        assert!(session.apply(CREATE_BOARD, &params).is_err());
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(session.revision(), revision);
+        assert!(session.available("edit.redo"));
+    }
+    session.apply(CREATE_BOARD, &json!({"setup":setup,"silkscreen":silk,"expected_revision":revision})).unwrap();
+    let target = session.project().unwrap().board_target().unwrap();
+    assert_eq!(session.revision(), revision + 1);
+    assert_eq!(session.project().unwrap().board_setup(), Some(&setup));
+    assert_eq!(session.project().unwrap().board_view(target).unwrap().silkscreen(), silk);
+    let documents = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+    let reopened = persistence::decode_documents(&documents).unwrap();
+    assert_eq!(reopened.board_target(), Some(target));
+    assert_eq!(reopened.board_setup(), Some(&setup));
+    assert_eq!(reopened.board_view(target).unwrap().silkscreen(), silk);
+    session.apply("edit.undo", &json!({})).unwrap();
+    assert!(session.project().unwrap().board_target().is_none());
+    session.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(session.project().unwrap().board_target(), Some(target));
+    assert_eq!(session.project().unwrap().board_setup(), Some(&setup));
+}
+
 #[test]
 fn new_schematic_has_no_board_or_physical_file() {
     let mut session = Session::default();

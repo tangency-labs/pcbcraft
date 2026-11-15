@@ -176,7 +176,7 @@ impl Candidate {
 #[derive(Debug)]
 pub(super) struct Edit {
     source: ViewInput,
-    board: BoardTarget,
+    board: Option<BoardTarget>,
     unit: units::Unit,
     populated: bool,
     original_copper: u64,
@@ -242,16 +242,24 @@ impl PcbApp {
     pub(super) fn rule_dialog_host(&self) -> Option<crate::editor_layout::HostId> {
         self.rule_dialog_source().and_then(|source| self.views.owner(source.view()))
     }
-    /// Open an explicitly addressed board's disposable draft, with the same revision used by MCP.
+    /// Open an addressed board's disposable draft, or stage the first board from its project
+    /// workspace. Neither path edits the session until Apply; a missing real target is refused.
     pub(super) fn begin_board_setup(&mut self, view: ViewId) {
         if !matches!(self.dialog, Dialog::None) || self.files.busy() || self.project_action_pending() {
             return;
         }
         let Some(editor) = self.views.view(view).filter(|v| v.workspace == Workspace::Board && v.definition.is_none()) else { return };
         let Some(source) = editor.input(&self.session) else { return };
-        let Some(board) = self.session.project().and_then(|p| editor.board.target.and_then(|t| p.board_view(t))) else { return };
-        let setup = match board.setup_draft(2).and_then(|setup| {
-            if board.setup().is_none() { setup.with_starting_stackup(pcbcraft_engine::board::setup::StackupPreset::Fr4OneOz) } else { Ok(setup) }
+        let Some(project) = self.session.project() else { return };
+        let board = editor.board.target.and_then(|target| project.board_view(target));
+        if board.is_none()
+            && (project.board_target().is_some() || editor.target() != Some(crate::editor_view::DocumentTarget::BoardWorkspace(project.id())))
+        {
+            return;
+        }
+        let initializing = board.is_none_or(|board| board.setup().is_none());
+        let setup = match board.map_or_else(|| BoardSetup::new_board_draft(2), |board| board.setup_draft(2)).and_then(|setup| {
+            if initializing { setup.with_starting_stackup(pcbcraft_engine::board::setup::StackupPreset::Fr4OneOz) } else { Ok(setup) }
         }) {
             Ok(setup) => setup,
             Err(error) => {
@@ -259,18 +267,19 @@ impl PcbApp {
                 return;
             }
         };
+        let silkscreen = board.map_or_else(pcbcraft_engine::board::silkscreen::Settings::default, |board| board.silkscreen());
         self.dialog = Dialog::BoardSetup(Box::new(Edit {
             source,
-            board: board.target,
+            board: board.map(|board| board.target),
             unit: self.preferences.units,
-            populated: board.footprints().next().is_some(),
+            populated: board.is_some_and(|board| board.footprints().next().is_some()),
             original_copper: setup.stackup().strata.len().div_ceil(2) as u64,
             rules: None,
             classes: None,
             candidate: Candidate::new(setup, self.preferences.units),
-            silkscreen: [board.silkscreen().text_height_nm, board.silkscreen().stroke_width_nm, board.silkscreen().pad_clearance_nm]
+            silkscreen: [silkscreen.text_height_nm, silkscreen.stroke_width_nm, silkscreen.pad_clearance_nm]
                 .map(|n| Length::new(Some(n), self.preferences.units)),
-            initializing: board.setup().is_none(),
+            initializing,
             page: Page::Layers,
             locked: BTreeSet::new(),
             target_thickness: String::new(),
@@ -319,7 +328,8 @@ impl PcbApp {
 
     /// Host physical setup and shared rule pages in one window with independent drafts.
     /// Each Save/Apply uses its existing command and retains other pending pages; external
-    /// revisions expire the host. Cancel drops unsaved fields, not earlier explicit saves.
+    /// revisions expire the host. First-board setup publishes ownership and settings together;
+    /// Cancel discards its draft without an edit. Existing boards retain independent rule saves.
     /// Only this form's pending profile job blocks publication; abandoned jobs retain their slot.
     pub(super) fn board_setup_dialog(&mut self, ctx: &Context, mut edit: Box<Edit>) {
         if self.views.view(edit.source.view()).is_none() {
@@ -355,7 +365,7 @@ impl PcbApp {
         let error = edit.error.clone();
         let mut page = edit.page;
         let action = pcbcraft_chrome::catalog::settings_form(ctx, "Board setup", apply_label, can_apply, |ui| {
-            form::pages(ui, &mut page, error.as_deref(), |ui, page| {
+            form::pages(ui, &mut page, error.as_deref(), edit.board.is_some(), |ui, page| {
                 if edit.initializing && edit.populated && !matches!(page, Page::BoardDefaults | Page::NetClasses) {
                     ui.label("Applying setup resolves existing surface-mount pads to front copper and through-hole pads across the stack. Placements and package assignments are retained.");
                 }
@@ -368,7 +378,9 @@ impl PcbApp {
                     Page::BoardDefaults => {
                         if edit.rules.is_none() && valid {
                             edit.rules = self.session.snapshot().and_then(|project| {
-                                project.board_view(edit.board).map(|board| Box::new(crate::board_rules::Edit::capture(edit.source, board, edit.unit)))
+                                edit.board
+                                    .and_then(|target| project.board_view(target))
+                                    .map(|board| Box::new(crate::board_rules::Edit::capture(edit.source, board, edit.unit)))
                             });
                         }
                         if let Some(rules) = &mut edit.rules {
@@ -376,7 +388,7 @@ impl PcbApp {
                         }
                     }
                     Page::NetClasses => {
-                        if edit.classes.is_none() && valid {
+                        if edit.classes.is_none() && valid && edit.board.is_some() {
                             match self.capture_class_rules(edit.source, edit.unit) {
                                 Ok(classes) => edit.classes = Some(Box::new(classes)),
                                 Err(error) => edit.error = Some(error),
@@ -411,15 +423,19 @@ impl PcbApp {
             return;
         }
         if page == Page::BoardDefaults {
+            let Some(board) = edit.board else {
+                self.dialog = Dialog::BoardSetup(edit);
+                return;
+            };
             if action.primary && can_apply && page == previous_page {
                 let rules = edit.rules.as_ref().ok_or_else(|| "Board defaults are unavailable.".to_owned()).and_then(|rules| rules.rules());
                 match rules {
                     Ok(rules) => {
-                        if let Err(error) = self.apply_board_rule_values(edit.source, edit.board, rules) {
+                        if let Err(error) = self.apply_board_rule_values(edit.source, board, rules) {
                             edit.error = Some(error);
                         } else if self.refresh_setup_rule_context(&mut edit) {
                             edit.rules = self.session.snapshot().and_then(|project| {
-                                project.board_view(edit.board).map(|board| Box::new(crate::board_rules::Edit::capture(edit.source, board, edit.unit)))
+                                project.board_view(board).map(|board| Box::new(crate::board_rules::Edit::capture(edit.source, board, edit.unit)))
                             });
                             self.repaint_editors(ctx);
                         }
@@ -440,7 +456,13 @@ impl PcbApp {
                 self.dialog = Dialog::BoardSetup(edit);
                 return;
             }
-            let command = if edit.initializing { pcbcraft_engine::INITIALIZE_BOARD_SETUP } else { pcbcraft_engine::SET_BOARD_SETUP };
+            let command = if edit.board.is_none() {
+                pcbcraft_engine::board::identity::CREATE_BOARD
+            } else if edit.initializing {
+                pcbcraft_engine::INITIALIZE_BOARD_SETUP
+            } else {
+                pcbcraft_engine::SET_BOARD_SETUP
+            };
             let result = edit.candidate.value(edit.unit).and_then(|setup| {
                 let silkscreen = edit.silk_style()?;
                 let setup = serde_json::to_value(setup).map_err(|e| e.to_string())?;
@@ -448,23 +470,34 @@ impl PcbApp {
             });
             match result {
                 Ok(mut params) => {
-                    params["board"] = json!(edit.board.board);
                     params["expected_revision"] = json!(edit.source.revision);
-                    params["resolve_existing_footprints"] = json!(edit.populated);
-                    if edit.initializing {
-                        params["copper_layers"] = json!(edit.candidate.setup.stackup().strata.len().div_ceil(2));
+                    if let Some(board) = edit.board {
+                        params["board"] = json!(board.board);
+                        params["resolve_existing_footprints"] = json!(edit.populated);
+                        if edit.initializing {
+                            params["copper_layers"] = json!(edit.candidate.setup.stackup().strata.len().div_ceil(2));
+                        }
                     }
                     self.run(command, &params);
                     if let Some(error) = self.message.take() {
                         edit.error = Some(error);
                     } else {
+                        if edit.board.is_none() {
+                            if let Some(target) = self.session.project().and_then(|project| project.board_target())
+                                && let Some(view) = self.views.view_mut(edit.source.view())
+                            {
+                                view.open_document(crate::editor_view::DocumentTarget::Board(target), &self.session);
+                            }
+                            self.repaint_editors(ctx);
+                            return;
+                        }
                         self.repaint_editors(ctx);
                         if !edit.pending_rule_pages() {
                             return;
                         }
                         if self.refresh_setup_rule_context(&mut edit) {
                             // Keep the containing host open over remaining unsaved rule content.
-                            if let Some(board) = self.session.project().and_then(|project| project.board_view(edit.board))
+                            if let Some(board) = self.session.project().and_then(|project| edit.board.and_then(|target| project.board_view(target)))
                                 && let Some(setup) = board.setup()
                             {
                                 edit.candidate = Candidate::new(setup.clone(), edit.unit);

@@ -96,12 +96,23 @@ impl Session {
     /// Register the first board and adopt schematic package choices atomically, without
     /// creating placements. Undo restores the choices' project scope; a second creation is refused.
     /// Current net anchors move to board scope with the same UUIDs; historical captures retain theirs.
+    /// Optional setup and silkscreen drafts are validated before any board or history is published.
     pub(crate) fn create_board(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
         if project.board_target().is_some() {
             return Err(CommandError::Unavailable("this project already has its supported physical board".into()));
         }
+        let setup = params
+            .get("setup")
+            .map(|value| serde_json::from_value::<super::setup::BoardSetup>(value.clone()))
+            .transpose()
+            .map_err(|error| CommandError::InvalidParams(error.to_string()))?;
+        let silkscreen = params
+            .get("silkscreen")
+            .map(|value| serde_json::from_value::<super::silkscreen::Settings>(value.clone()))
+            .transpose()
+            .map_err(|error| CommandError::InvalidParams(error.to_string()))?;
         let name = if params.get("name").is_some() { crate::name_param(params)? } else { "Board".into() };
         let registration = Registration::new(name)?;
         registration.validate(&project).map_err(CommandError::InvalidParams)?;
@@ -109,6 +120,8 @@ impl Session {
         Arc::make_mut(&mut project.board).assignments = packages.assignments;
         Arc::make_mut(&mut project.board).definitions = packages.definitions;
         Arc::make_mut(&mut project.board).ownership = Ownership::Explicit(Some(registration));
+        Arc::make_mut(&mut project.board).setup = setup;
+        Arc::make_mut(&mut project.board).silkscreen = silkscreen.filter(|settings| *settings != super::silkscreen::Settings::default());
         self.change(project)?;
         Ok(())
     }

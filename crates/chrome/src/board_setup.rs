@@ -44,7 +44,8 @@ impl Page {
 
 /// Wide editors have an independently scrolling navigation rail; compact windows use a selector.
 /// Validation stays below the scrolling page so it remains visible beside the fixed form actions.
-pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce(&mut Ui, Page)) {
+/// A first-board draft keeps rule editors disabled until ownership exists; physical pages remain available.
+pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, rules_available: bool, add: impl FnOnce(&mut Ui, Page)) {
     let previous = *page;
     let t = Tokens::get();
     let mut body = ui.available_rect_before_wrap();
@@ -69,13 +70,17 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
                     heading(nav, "Design rules");
                 }
                 if nav
-                    .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
-                        solidcraft_ui_kit::button(
-                            ui,
-                            value.title(),
-                            if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
-                        )
+                    .add_enabled_ui(rules_available || !matches!(value, Page::BoardDefaults | Page::NetClasses), |nav| {
+                        nav.add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
+                            solidcraft_ui_kit::button(
+                                ui,
+                                value.title(),
+                                if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
+                            )
+                        })
                     })
+                    .inner
+                    .on_disabled_hover_text("Create the board before editing design rules.")
                     .clicked()
                 {
                     *page = value;
@@ -95,7 +100,11 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
                         ui.separator();
                         ui.label(crate::shell::dim("Design rules"));
                     }
-                    ui.selectable_value(page, value, value.title());
+                    ui.add_enabled_ui(rules_available || !matches!(value, Page::BoardDefaults | Page::NetClasses), |ui| {
+                        ui.selectable_value(page, value, value.title());
+                    })
+                    .response
+                    .on_disabled_hover_text("Create the board before editing design rules.");
                 }
             })
             .response
