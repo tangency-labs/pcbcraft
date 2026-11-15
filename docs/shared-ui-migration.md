@@ -538,6 +538,46 @@ height resizing and full-host expansion remain composed in PCBcraft's existing
 shared Panel adapter using the toolkit's accessible sashes, surfaces and menus.
 This update does not import SolidCraft's application or modelling session.
 
+## Panel style
+
+Preferences → Appearance → **Panel style** adapts SolidCraft's Floating and
+Compact panel presentation to PCBcraft's existing card placement. The choice is
+saved with the person's other settings and shared with live commands through
+`panel_style` on `app.set_preferences`.
+
+The chrome adapter publishes the choice each frame as the toolkit's own
+`LayoutMode` (`Floating` or `Docked`), so every shared container built with
+`Container::new` sees it, including `panel_host_frame(ctx, false)` and the
+adaptive `Chrome` surface. Floating keeps the rounded cards, shadows and gaps
+PCBcraft already used: 8/6 points around the ribbon and 12 points around
+edge-anchored cards. Compact matches SolidCraft's joined shell. The ribbon and
+workspace tile drop their margin and the gap between them, and the Browser, Net
+Inspector, DRC, Properties, Layers, Selection filters and docked Parts Catalog
+meet their canvas edge and each other in the toolkit's square, unshadowed
+compact container with a tighter content inset. The Parts Library's Browser,
+Items and Preview columns likewise drop their window margin and column gaps.
+Cards docked in the same column
+stack directly beneath the card drawn above them instead of taking a fixed share
+of the column. A card a person dragged over the canvas keeps the floating frame
+in either style.
+
+The toolkit's compact container outlines every side and relies on a negative
+outer margin to merge neighbouring outlines, which `panel_host_frame` resets.
+Adjoining cards would therefore show doubled lines against each other and the
+window edge. The chrome adapter keeps the compact container's fill, corners and
+shadow but drops its stroke, and paints one theme-border divider only where a
+surface meets the canvas or a neighbour: the ribbon's bottom, the workspace
+tile's right edge, each docked card's canvas-facing side and bottom, and the
+Parts Library Browser's edge beside Items. The choice changes presentation only: each view retains
+its own dock side, floating coordinates and size, while project data and
+history are untouched.
+
+The toolkit has no host-side preference boundary of its own, so PCBcraft owns
+the saved `floating`/`compact` names, the preference UI and the per-frame
+publish. This composes `panel_host.rs`, `container.rs` and the `LayoutMode`
+handoff from the pinned 0.41.0 toolkit; it does not adopt SolidCraft's
+application panel runtime, its `Cards` geometry or its saved layouts.
+
 ## Compact workspace card
 
 The workspace card uses SolidCraft 0.41.0's 88-point width and shared ribbon

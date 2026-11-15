@@ -776,7 +776,10 @@ impl PcbApp {
                 self.library_editors.notice = Some(error);
             }
         }
+        // The ribbon's scope must not leave an item gap above the canvas: nothing paints that band.
+        let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.y);
         let ribbon = ui.add_enabled_ui(enabled, |ui| self.library_ribbon(ui, can_save)).inner;
+        ui.spacing_mut().item_spacing.y = spacing;
         if let Some(notice) = self.message.as_ref().or(self.library_editors.notice.as_ref()) {
             ui.label(notice);
         }

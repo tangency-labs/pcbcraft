@@ -1,5 +1,5 @@
 //! Movable contextual cards share the workspace frame and Parts' edge-docking gestures.
-use super::{FLOATING_GAP, FLOATING_HEADER, FLOATING_RADIUS, floating_card_min_height, floating_frame};
+use super::{FLOATING_GAP, FLOATING_HEADER, FLOATING_RADIUS};
 use crate::{MenuItem, Tokens, menu};
 use egui::{Align2, Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
@@ -300,7 +300,8 @@ impl Panel {
     }
 
     /// Preserve contextual-card spacing while allowing filled workspace columns to align
-    /// exactly with their neighbors. The same drag state and controls serve both layouts.
+    /// exactly with their neighbors. The selected frame's header height bounds the vertical
+    /// clamp; the same drag state and controls serve both layouts.
     #[allow(clippy::too_many_arguments)]
     fn show_card(
         &mut self,
@@ -324,8 +325,9 @@ impl Panel {
         let floating = self.state.position == Position::Floating;
         let area = if floating { canvas } else { dock };
         let fill_slot = slot && !floating;
-        let gap = if fill_slot { 0.0 } else { FLOATING_GAP };
-        if area.height() < floating_card_min_height() || !area.is_positive() {
+        let compact = !floating && super::PanelStyle::compact(ui.ctx());
+        let gap = if fill_slot || compact { 0.0 } else { FLOATING_GAP };
+        if area.height() < super::panel_min_height(compact) || !area.is_positive() {
             self.cancel_drag();
             return (Rect::NOTHING, false);
         }
@@ -339,22 +341,27 @@ impl Panel {
         } else {
             area.height() - 2.0 * gap
         };
-        let body_height = (height - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
+        let frame = super::panel_frame(ui.ctx(), floating);
+        let margins = frame.total_margin().sum();
+        let body_height = (height - margins.y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
         let bounds = canvas.shrink(gap);
         let desired = if floating {
             self.state.at.map(|[x, y]| canvas.min + vec2(x, y)).unwrap_or(bounds.min + vec2(32.0, 32.0))
         } else {
             pos2(if self.state.position == Position::Left { area.left() + gap } else { area.right() - width - gap }, area.top() + gap)
         };
+        let visible_height = if slot && floating {
+            height
+        } else if compact {
+            margins.y + FLOATING_HEADER
+        } else {
+            super::card_header_height()
+        };
         let at = pos2(
             desired.x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())),
-            desired.y.clamp(
-                bounds.top(),
-                (bounds.bottom() - if slot && floating { height } else { floating_card_min_height() - 2.0 * FLOATING_GAP }).max(bounds.top()),
-            ),
+            desired.y.clamp(bounds.top(), (bounds.bottom() - visible_height).max(bounds.top())),
         );
-        let body_height = body_height
-            .min((bounds.bottom() - at.y - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
+        let body_height = body_height.min((bounds.bottom() - at.y - margins.y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
         let t = Tokens::get();
         let shown = egui::Area::new(id)
             .enabled(ui.is_enabled())
@@ -365,15 +372,15 @@ impl Panel {
             .fade_in(false)
             .show(ui.ctx(), |ui| {
                 ui.set_max_height(height);
-                let frame = floating_frame(ui.ctx()).show(ui, |ui| {
-                    ui.set_width(width - floating_frame(ui.ctx()).total_margin().sum().x);
+                let frame = frame.show(ui, |ui| {
+                    ui.set_width(width - margins.x);
                     if slot && !collapsed {
-                        ui.set_min_height((height - floating_frame(ui.ctx()).total_margin().sum().y).max(0.0));
+                        ui.set_min_height((height - margins.y).max(0.0));
                     }
                     ui.spacing_mut().item_spacing.y = t.space_2;
                     let mut collapse = false;
                     ui.horizontal(|ui| {
-                        let header_width = (width - floating_frame(ui.ctx()).total_margin().sum().x).min(ui.available_width());
+                        let header_width = (width - margins.x).min(ui.available_width());
                         let remaining = (header_width - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
                         let (id, header) = ui.allocate_space(vec2(remaining, FLOATING_HEADER));
                         let response = super::panel_header_control(ui, id, header, title, true);
@@ -439,6 +446,10 @@ impl Panel {
                 if slot && floating && !collapsed {
                     self.resize_edges(ui, id, title, frame.response.rect, canvas);
                 }
+                if compact {
+                    let right = self.state.position == Position::Right;
+                    super::paint_dividers(ui.painter(), frame.response.rect, super::Dividers::edge_card(frame.response.rect, area, right));
+                }
                 frame.inner
             });
         if self.drag.is_some()
@@ -446,6 +457,9 @@ impl Panel {
         {
             let side = Self::snap(canvas, pointer);
             if side != Position::Floating {
+                // Preview the docked gap the release will produce, not the dragged card's own.
+                let docked_gap = if slot || super::PanelStyle::compact(ui.ctx()) { 0.0 } else { FLOATING_GAP };
+                let bounds = canvas.shrink(docked_gap);
                 let target = Rect::from_min_size(
                     pos2(if side == Position::Left { bounds.left() } else { bounds.right() - width }, bounds.top()),
                     vec2(width, bounds.height()),
@@ -456,5 +470,39 @@ impl Panel {
             }
         }
         (shown.response.rect, shown.inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::PanelStyle;
+
+    /// The contextual renderer must not lift a bottom-aligned Compact header above its short dock.
+    #[test]
+    fn compact_contextual_card_stays_inside_a_short_bottom_dock() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        let canvas = Rect::from_min_max(pos2(0., 0.), pos2(600., 1000.));
+        let dock = Rect::from_min_max(pos2(0., 960.), pos2(600., 1000.));
+        for slot in [false, true] {
+            let mut panel = Panel::new(Position::Right);
+            let before = panel.saved_state();
+            let mut rect = Rect::NOTHING;
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    PanelStyle::Compact.publish(ui.ctx());
+                    rect = if slot {
+                        panel.show_in_slot(ui, Id::unique("short contextual slot"), "Card", canvas, dock, false, |_| {}).0
+                    } else {
+                        panel.show(ui, Id::unique("short contextual card"), "Card", canvas, dock, false, 240., |_| {}).0
+                    };
+                });
+                output.textures_delta.clear();
+            }
+            assert!(rect.is_positive(), "{rect:?}");
+            assert!(rect.top() >= dock.top() - 0.5 && rect.bottom() <= dock.bottom() + 0.5, "{rect:?} must stay in {dock:?}");
+            assert_eq!(panel.saved_state(), before);
+        }
     }
 }

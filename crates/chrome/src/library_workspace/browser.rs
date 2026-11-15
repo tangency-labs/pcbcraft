@@ -22,11 +22,12 @@ impl Browser {
     pub(super) fn cancel_resize(&mut self) {
         self.column.cancel_resize();
     }
-    /// The quiet shared sash owns only the gap at the Browser's right edge.
-    pub(super) fn resize(&mut self, ui: &mut Ui, area: Rect, max: f32) -> f32 {
+    /// The quiet shared sash sits centred in the `gap` at the Browser's right edge; a compact
+    /// layout has no gap, so the sash straddles the joined column boundary.
+    pub(super) fn resize(&mut self, ui: &mut Ui, area: Rect, gap: f32, max: f32) -> f32 {
         let max = max.clamp(180.0, 640.0);
         let t = Tokens::get();
-        let x = area.left() + self.width().clamp(180.0, max) + t.space_12 / 2.0;
+        let x = area.left() + self.width().clamp(180.0, max) + gap / 2.0;
         let bounds = Rect::from_min_max(pos2(x - t.space_6 / 2.0, area.top()), pos2(x + t.space_6 / 2.0, area.bottom()));
         self.column.resize(
             ui,

@@ -4,6 +4,7 @@ use crate::{
     editor_view::Workspace,
     workspace_panels::{FILTERS, LAYERS, PROPERTIES},
 };
+use pcbcraft_chrome::workspace::PanelStyle;
 use pcbcraft_chrome::workspace::panels::{Panel, Position};
 use pcbcraft_engine::{persistence::encode_documents, selection::Selection};
 
@@ -134,6 +135,98 @@ fn contextual_card_menus_and_live_docking_preserve_document_state() {
     for pair in headers.windows(2) {
         assert!(pair[0].bottom() < pair[1].top());
     }
+    assert_eq!(document(&h), before);
+}
+
+/// In Compact, a card docked into a column sits directly beneath the card above it rather than
+/// at the column's bottom share, in both the schematic and PCB columns and on either side.
+/// Floating keeps the established split, with Selection filters at the column's bottom.
+#[test]
+fn compact_columns_stack_selection_filters_under_the_card_above() {
+    for (board, above, side) in
+        [(false, "Move Properties", Position::Right), (true, "Move Properties", Position::Right), (true, "Move Layers", Position::Left)]
+    {
+        let mut h = fixture(board);
+        h.state_mut().views.active.panels[FILTERS].set_position(side, None);
+        h.run();
+        let floating = card_rect(&h, "Move Selection filters");
+        assert!(floating.top() > card_rect(&h, above).bottom() + 8.0, "{above}: floating keeps its column split");
+
+        h.state_mut().preferences.panel_style = PanelStyle::Compact;
+        h.run();
+        let (card, filters) = (card_rect(&h, above), card_rect(&h, "Move Selection filters"));
+        assert!((card.left() - filters.left()).abs() < 1.0, "{above}: filters joined the same column: {card:?} {filters:?}");
+        assert!((filters.top() - card.bottom()).abs() < 1.0, "{above}: filters start right under the card above: {card:?} {filters:?}");
+        assert_eq!(h.state().views.active.panels[FILTERS].position(), side);
+    }
+}
+
+/// With DRC and a right-docked Selection filters card both open in Compact, the DRC card starts
+/// below the filters stacked under Properties instead of covering them.
+#[test]
+fn compact_drc_card_stacks_below_right_docked_selection_filters() {
+    let mut h = fixture(true);
+    h.state_mut().views.active.board.drc.open = true;
+    h.state_mut().preferences.panel_style = PanelStyle::Compact;
+    h.run();
+    let (properties, filters, drc) = (card_rect(&h, "Move Properties"), card_rect(&h, "Move Selection filters"), card_rect(&h, "Collapse DRC"));
+    assert!((filters.top() - properties.bottom()).abs() < 1.0, "filters stay under Properties: {properties:?} {filters:?}");
+    assert!(!drc.intersects(filters.shrink(0.5)), "DRC must not cover Selection filters: {filters:?} {drc:?}");
+    assert!((drc.top() - filters.bottom()).abs() < 1.0, "DRC starts right under the filters: {filters:?} {drc:?}");
+}
+
+/// The whole card around the header control labelled `label`: the smallest visible area holding it.
+fn card_rect(h: &Harness<'_, PcbApp>, label: &str) -> egui::Rect {
+    let header = h.get_by_label(label).rect();
+    h.ctx.memory(|memory| {
+        memory
+            .areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter_map(|layer| memory.area_rect(layer.id))
+            .filter(|rect| rect.contains_rect(header))
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap_or_else(|| panic!("no card area for {label}"))
+    })
+}
+
+/// The Panel style choice switches the whole shell between SolidCraft's floating and compact
+/// layouts: the workspace tile, Browser and docked cards meet their edges in Compact and return
+/// to their inset positions in Floating, without changing stored dock sides or the document.
+#[test]
+fn panel_style_switches_the_shell_between_floating_and_compact() {
+    let mut h = fixture(false);
+    let before = document(&h);
+    assert_eq!(h.state().preferences.panel_style, PanelStyle::Floating);
+    let rects = |h: &Harness<'_, PcbApp>| {
+        ["Schematic canvas", "Move Properties", "Collapse Browser", "Choose workspace"].map(|label| h.get_by_label(label).rect())
+    };
+    let [canvas, properties, browser, tile] = rects(&h);
+    assert!(canvas.contains_rect(properties));
+    assert!(properties.right() <= canvas.right() - 8.0, "a floating docked card keeps its edge gap");
+    assert!(browser.left() >= canvas.left() + 8.0, "the floating Browser keeps its edge gap");
+    assert!(tile.left() >= 8.0, "the floating workspace tile keeps its window margin");
+
+    click(&mut h, "Preferences");
+    click(&mut h, "Compact");
+    click(&mut h, "OK");
+    assert_eq!(h.state().preferences.panel_style, PanelStyle::Compact);
+    assert_eq!(h.state().views.active.panels[PROPERTIES].position(), Position::Right);
+    let [compact_canvas, compact_properties, compact_browser, compact_tile] = rects(&h);
+    assert!(compact_canvas.top() < canvas.top(), "the joined ribbon leaves the canvas more room: {canvas:?} {compact_canvas:?}");
+    assert!(compact_properties.right() > properties.right() + 8.0, "a compact card meets its dock edge: {properties:?} {compact_properties:?}");
+    assert!(compact_properties.top() < properties.top() - 8.0, "a compact card meets the host's top edge");
+    assert!(compact_browser.left() < browser.left() - 8.0, "the compact Browser meets the canvas edge: {browser:?} {compact_browser:?}");
+    assert!(compact_tile.left() < tile.left() - 4.0, "the compact workspace tile meets the window edge: {tile:?} {compact_tile:?}");
+    assert_eq!(document(&h), before);
+    assert_eq!(crate::window_commands::inspect_editor(h.state())["preferences"]["panel_style"], "compact");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "app.set_preferences", &json!({"panel_style": "floating"})).unwrap();
+    h.run();
+    assert_eq!(h.state().preferences.panel_style, PanelStyle::Floating);
+    assert_eq!(rects(&h), [canvas, properties, browser, tile]);
+    assert_eq!(h.state().views.active.panels[PROPERTIES].position(), Position::Right);
     assert_eq!(document(&h), before);
 }
 
@@ -312,4 +405,29 @@ fn net_inspector_reserves_space_above_filters_without_moving_properties() {
         assert_eq!(h.state().views.active.panels[PROPERTIES].position(), position);
         assert_eq!(document(&h), before);
     }
+}
+
+/// Exhausting a short Compact column hides DRC without changing its open state or dock intent.
+#[test]
+fn compact_short_column_does_not_overlay_filters_and_drc() {
+    let mut h = fixture(true);
+    h.state_mut().preferences.panel_style = PanelStyle::Compact;
+    h.state_mut().views.active.board.drc.open = true;
+    let before = document(&h);
+    let placement = h.state().views.active.panels[FILTERS].saved_state();
+    for height in [500., 400., 320.] {
+        h.set_size(egui::vec2(1400., height));
+        h.run();
+        let drc = h.state().views.active.board.drc.rect;
+        if h.query_by_label("Move Selection filters").is_some() {
+            let filters = card_rect(&h, "Move Selection filters");
+            assert!(!drc.is_positive() || drc.top() >= filters.bottom() - 0.5, "height {height}: DRC {drc:?} must follow filters {filters:?}");
+        }
+        assert!(h.state().views.active.board.drc.open);
+        assert_eq!(h.state().views.active.panels[FILTERS].saved_state(), placement);
+        assert_eq!(document(&h), before);
+    }
+    h.set_size(egui::vec2(1400., 900.));
+    h.run();
+    assert!(h.state().views.active.board.drc.rect.is_positive(), "restoring room reveals the still-open DRC card");
 }

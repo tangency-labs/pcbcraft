@@ -66,7 +66,7 @@ marks fade near density changes while the coarser marks remain visible.
 
 The app bar shows the project name and an unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale, PCB grid, grid opacity, units), Navigation (whether the wheel
+pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
@@ -342,7 +342,10 @@ edge to float the card, or release near either edge to dock it; **Esc** restores
 the position from before the drag. Cards docked on the same edge stack beneath
 one another, with Browser above left-docked cards. Positions belong to the view,
 survive split and detached layouts, and are kept in local project arrangements.
-The Symbol and Footprint editors use the same docking controls for Properties.
+**Preferences → Appearance → Panel style** chooses whether the ribbon, Browser
+and docked cards float as separate rounded cards or join the window edge and
+each other; cards dragged over the canvas stay floating. The Symbol and Footprint editors use the same docking
+controls and panel style for Properties.
 
 The schematic **Properties** card shows the focused selection's reference,
 value, orientation, X/Y position and footprint. Coordinates accept mm, mil or

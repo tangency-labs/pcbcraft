@@ -3,7 +3,7 @@
 
 use egui::{Align, Align2, FontId, Layout, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
-use super::{FLOATING_GAP, TreeIcon, floating_frame, paint_tree_icon};
+use super::{FLOATING_GAP, PanelStyle, TreeIcon, paint_tree_icon, panel_frame};
 use crate::{MenuItem, Tokens, fonts, menu};
 
 const WIDTH: f32 = 260.0;
@@ -108,14 +108,16 @@ impl Panel {
     }
 
     /// Calculate the card inside the current canvas. Edge anchors follow window resizing;
-    /// a floating position is clamped to keep its header and controls reachable.
-    fn rect(&self, canvas: Rect, browser: Rect, position: Position) -> Rect {
-        let bounds = canvas.shrink(FLOATING_GAP);
+    /// a floating position is clamped to keep its header and controls reachable. A compact
+    /// docked card meets the canvas edge instead of keeping the floating gap.
+    fn rect(&self, canvas: Rect, browser: Rect, position: Position, compact: bool) -> Rect {
+        let gap = if compact { 0.0 } else { FLOATING_GAP };
+        let bounds = canvas.shrink(gap);
         let width = WIDTH.min(bounds.width().max(1.0));
         let bottom = bounds.bottom();
         let top = if position == Position::Left && browser.is_positive() {
             let minimum = if self.collapsed { Self::collapsed_height() } else { 120.0 };
-            (browser.bottom() + FLOATING_GAP).min((bottom - minimum).max(bounds.top()))
+            (browser.bottom() + gap).min((bottom - minimum).max(bounds.top()))
         } else {
             bounds.top()
         };
@@ -183,7 +185,11 @@ impl Panel {
     /// compact list is needed. Inherits the host's enabled state so a project dialog can also
     /// disable cards in another window. Returns its actual rectangle and header actions.
     pub fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, add: impl FnOnce(&mut Ui, bool)) -> (Rect, PanelAction) {
-        let rect = self.rect(canvas, browser, self.position);
+        let floating = self.position == Position::Floating;
+        let compact = !floating && PanelStyle::compact(ui.ctx());
+        let rect = self.rect(canvas, browser, self.position, compact);
+        let frame = panel_frame(ui.ctx(), floating);
+        let margins = frame.total_margin().sum();
         let t = Tokens::get();
         let shown = egui::Area::new(egui::Id::unique("parts_browser"))
             .enabled(ui.is_enabled())
@@ -194,78 +200,80 @@ impl Panel {
             .fade_in(false)
             .show(ui.ctx(), |ui| {
                 ui.set_max_size(rect.size());
-                floating_frame(ui.ctx())
-                    .show(ui, |ui| {
-                        // Allocate the whole host once, so scrolling never changes the card bounds.
-                        let size = (rect.size() - floating_frame(ui.ctx()).total_margin().sum()).max(Vec2::ZERO);
-                        let (body, _) = ui.allocate_exact_size(size, Sense::hover());
-                        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
-                        ui.set_clip_rect(ui.clip_rect().intersect(body));
-                        ui.spacing_mut().item_spacing.y = t.space_6;
-                        ui.spacing_mut().interact_size.y = 24.0;
-                        ui.style_mut().text_styles.insert(egui::TextStyle::Small, FontId::proportional(t.font_small));
-                        let widgets = &mut ui.visuals_mut().widgets;
-                        for widget in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
-                            widget.corner_radius = t.radius_md.into();
-                        }
-                        let mut action = PanelAction::default();
-                        ui.horizontal(|ui| {
-                            let controls_width = 4.0 * (24.0 + ui.spacing().item_spacing.x);
-                            let (header, response) =
-                                ui.allocate_exact_size(vec2((ui.available_width() - controls_width).max(1.0), HEADER_HEIGHT), Sense::drag());
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Move Parts Catalog"));
-                            super::drag_grip(ui, header);
-                            ui.painter().text(
-                                header.left_center() + vec2(18.0, 0.0),
-                                Align2::LEFT_CENTER,
-                                "Parts Catalog",
-                                fonts::interface_heading(ui, t.font_body),
-                                t.text,
-                            );
-                            self.drag(&response, rect, canvas);
-                            response
-                                .on_hover_cursor(egui::CursorIcon::Grab)
-                                .on_hover_text("Drag to float. Release at the left or right edge to dock.");
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                action.close = icon_button(ui, "Close Parts Catalog", HeaderIcon::Close).clicked();
-                                action.expand = icon_button(ui, "Expand Parts Catalog", HeaderIcon::Full).clicked();
-                                let label = if self.collapsed { "Expand catalog panel" } else { "Collapse catalog panel" };
-                                if icon_button(ui, label, HeaderIcon::Collapse(self.collapsed)).clicked() {
-                                    self.collapsed = !self.collapsed;
-                                    ui.ctx().request_repaint();
-                                }
-                                let more = icon_button(ui, "Parts Catalog position", HeaderIcon::More);
-                                egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
-                                    ui.set_width(180.0);
-                                    ui.label(crate::shell::dim("PANEL POSITION"));
-                                    for (position, label) in
-                                        [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
-                                    {
-                                        if MenuItem::new(label).choice(self.position == position).show(ui) {
-                                            self.position = position;
-                                            self.at = None;
-                                            self.dragging = None;
-                                            ui.close();
-                                            ui.ctx().request_repaint();
-                                        }
+                let card = frame.show(ui, |ui| {
+                    // Allocate the whole host once, so scrolling never changes the card bounds.
+                    let size = (rect.size() - margins).max(Vec2::ZERO);
+                    let (body, _) = ui.allocate_exact_size(size, Sense::hover());
+                    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
+                    ui.set_clip_rect(ui.clip_rect().intersect(body));
+                    ui.spacing_mut().item_spacing.y = t.space_6;
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.style_mut().text_styles.insert(egui::TextStyle::Small, FontId::proportional(t.font_small));
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    for widget in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
+                        widget.corner_radius = t.radius_md.into();
+                    }
+                    let mut action = PanelAction::default();
+                    ui.horizontal(|ui| {
+                        let controls_width = 4.0 * (24.0 + ui.spacing().item_spacing.x);
+                        let (header, response) =
+                            ui.allocate_exact_size(vec2((ui.available_width() - controls_width).max(1.0), HEADER_HEIGHT), Sense::drag());
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Move Parts Catalog"));
+                        super::drag_grip(ui, header);
+                        ui.painter().text(
+                            header.left_center() + vec2(18.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            "Parts Catalog",
+                            fonts::interface_heading(ui, t.font_body),
+                            t.text,
+                        );
+                        self.drag(&response, rect, canvas);
+                        response.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text("Drag to float. Release at the left or right edge to dock.");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            action.close = icon_button(ui, "Close Parts Catalog", HeaderIcon::Close).clicked();
+                            action.expand = icon_button(ui, "Expand Parts Catalog", HeaderIcon::Full).clicked();
+                            let label = if self.collapsed { "Expand catalog panel" } else { "Collapse catalog panel" };
+                            if icon_button(ui, label, HeaderIcon::Collapse(self.collapsed)).clicked() {
+                                self.collapsed = !self.collapsed;
+                                ui.ctx().request_repaint();
+                            }
+                            let more = icon_button(ui, "Parts Catalog position", HeaderIcon::More);
+                            egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
+                                ui.set_width(180.0);
+                                ui.label(crate::shell::dim("PANEL POSITION"));
+                                for (position, label) in
+                                    [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
+                                {
+                                    if MenuItem::new(label).choice(self.position == position).show(ui) {
+                                        self.position = position;
+                                        self.at = None;
+                                        self.dragging = None;
+                                        ui.close();
+                                        ui.ctx().request_repaint();
                                     }
-                                });
+                                }
                             });
                         });
-                        if !self.collapsed {
-                            ui.separator();
-                            add(&mut ui, rect.height() < COMPACT_HEIGHT);
-                        }
-                        action
-                    })
-                    .inner
+                    });
+                    if !self.collapsed {
+                        ui.separator();
+                        add(&mut ui, rect.height() < COMPACT_HEIGHT);
+                    }
+                    action
+                });
+                if compact {
+                    let right = self.position == Position::Right;
+                    super::paint_dividers(ui.painter(), card.response.rect, super::Dividers::edge_card(card.response.rect, canvas, right));
+                }
+                card.inner
             });
         if self.dragging.is_some()
             && let Some(pointer) = ui.ctx().input(|i| i.pointer.interact_pos())
         {
             let position = Self::snap(canvas, pointer);
             if position != Position::Floating {
-                let target = self.rect(canvas, browser, position);
+                // Preview the docked frame the release will produce, not the dragged card's own.
+                let target = self.rect(canvas, browser, position, PanelStyle::compact(ui.ctx()));
                 let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("parts_snap_preview")));
                 painter.rect_filled(target, super::FLOATING_RADIUS, t.accent_soft.gamma_multiply(0.7));
                 painter.rect_stroke(target, super::FLOATING_RADIUS, Stroke::new(2.0, t.accent), StrokeKind::Inside);

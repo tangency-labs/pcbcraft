@@ -8,6 +8,7 @@ use pcbcraft_chrome::{
     menu::MenuIcon,
     settings::{self, Footer, Page, WindowState},
     units::Unit,
+    workspace::PanelStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -124,6 +125,11 @@ pub struct Preferences {
     /// The unit lengths and coordinates are shown in, and that numbers typed without a unit are
     /// read in. It changes only what is shown, never stored geometry or the project.
     pub units: Unit,
+    /// How the workspace shell is framed: Floating keeps the ribbon, workspace tile and
+    /// edge-anchored cards as separate cards with gaps and shadows, while Compact joins them to
+    /// the window edge and each other. Cards placed over the canvas always float, and each view
+    /// retains its own dock side and floating positions.
+    pub panel_style: PanelStyle,
 }
 
 impl Default for Preferences {
@@ -141,6 +147,7 @@ impl Default for Preferences {
             auto_heal_wires: true,
             selection_follow: SelectionFollow::default(),
             units: Unit::default(),
+            panel_style: PanelStyle::default(),
         }
     }
 }
@@ -359,6 +366,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.board_grid_visible = defaults.board_grid_visible;
             preferences.board_grid_style = defaults.board_grid_style;
             preferences.units = defaults.units;
+            preferences.panel_style = defaults.panel_style;
         }
         NAVIGATION => preferences.navigation = defaults.navigation,
         VIEWS => preferences.selection_follow = defaults.selection_follow,
@@ -408,6 +416,15 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
                 }
             }
         });
+    });
+    settings::section(ui, "Panels", |ui| {
+        settings::row_with_keywords(ui, "Panel style", &["floating", "compact", "docked", "cards", "panels"], |ui| {
+            settings::segmented(ui, &mut preferences.panel_style, &[(PanelStyle::Floating, "Floating"), (PanelStyle::Compact, "Compact")]);
+        });
+        settings::hint(
+            ui,
+            "Floating separates the ribbon and panels into cards. Compact joins them to the window edge and each other. Cards over the canvas stay floating.",
+        );
     });
     settings::section(ui, "Canvas", |ui| {
         settings::row_with_keywords(ui, "PCB grid", &["board", "layout", "grid", "dots", "lines", "hide"], |ui| {
@@ -591,6 +608,7 @@ mod tests {
             auto_heal_wires: false,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
             units: Unit::Mm,
+            panel_style: PanelStyle::Compact,
         };
         for style in [grid::Style::Off, grid::Style::Dots, grid::Style::Lines] {
             let preferences = Preferences { board_grid_style: style, ..preferences };
@@ -618,6 +636,7 @@ mod tests {
         assert_eq!(older.board_grid_style, grid::Style::Off);
         let future = Preferences::parse(r#"{"theme":"Light","board_grid_style":"FutureStyle"}"#);
         assert_eq!((future.theme, future.board_grid_style), (ThemeChoice::Light, grid::Style::Off));
+        assert_eq!(Preferences::parse(r#"{"panel_style":"Compact"}"#), Preferences::default());
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":101}").grid_opacity_percent, grid::OPACITY_DEFAULT);
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
         assert_eq!(older.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM);
@@ -666,6 +685,7 @@ mod tests {
             auto_heal_wires: false,
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,
+            panel_style: PanelStyle::Compact,
         };
         restore_page_defaults(&mut preferences, NAVIGATION);
         // Grid spacing is chosen in the views, not on a page, so no page reset touches it.
@@ -673,6 +693,7 @@ mod tests {
         assert_eq!(preferences.navigation, Navigation::default());
         assert_eq!((preferences.theme, preferences.scale_percent, preferences.grid_opacity_percent), (ThemeChoice::Light, 150, 20));
         assert_eq!((preferences.selection_follow, preferences.units), (SelectionFollow::Both, Unit::Mm));
+        assert_eq!(preferences.panel_style, PanelStyle::Compact, "another page's reset leaves the panel style alone");
         restore_page_defaults(&mut preferences, VIEWS);
         assert_eq!(preferences.selection_follow, SelectionFollow::Off);
         assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));

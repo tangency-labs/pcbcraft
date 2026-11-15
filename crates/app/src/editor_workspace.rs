@@ -967,20 +967,39 @@ impl PcbApp {
             |(panels, _)| panels.to_vec(),
         );
         covered.push(assistant);
+        let compact = self.preferences.panel_style == pcbcraft_chrome::workspace::PanelStyle::Compact;
+        let mut properties_rect = Rect::NOTHING;
         if project_focus && !board {
             let inspector_area = properties_area;
             self.net_inspector.show(ui, self.views.active.snapshot(&self.session), inspector_area);
-            if self.net_inspector.open {
-                covered.push(self.net_inspector.rect);
-            } else {
-                covered.push(self.selection_properties(ui, area, properties_area));
-            }
+            properties_rect = if self.net_inspector.open { self.net_inspector.rect } else { self.selection_properties(ui, area, properties_area) };
+            covered.push(properties_rect);
         }
+        // Compact columns close up beneath the Properties or Net Inspector card drawn above.
+        let filters_area = if board {
+            filters_area
+        } else {
+            use crate::workspace_panels::{FILTERS, PROPERTIES, follow, on_side};
+            follow(filters_area, [on_side(&slot_panels, PROPERTIES, slot_panels[FILTERS].position(), properties_rect)], compact)
+        };
+        // Filters are drawn before DRC so a Compact DRC card can start below a right-docked
+        // Selection filters card, which stacks directly under Properties.
+        let filters_rect = if project_focus && self.views.active.filters_open {
+            let rect = self.selection_filters(ui, area, filters_area);
+            covered.push(rect);
+            rect
+        } else {
+            Rect::NOTHING
+        };
         if board && let Some((panels, _)) = board_panel {
+            use crate::workspace_panels::{FILTERS, follow, on_side};
+            use pcbcraft_chrome::workspace::panels::Position;
             // The DRC card floats on the right below Properties, leaving Layers and Properties clear.
             let mut drc_area = area;
             // `board_panels` returns the Browser, Layers and Properties cards in that order.
-            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + 8.);
+            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + if compact { 0. } else { 8. });
+            // In Compact it also follows a right-docked Selection filters card instead of overlapping it.
+            let drc_area = follow(drc_area, [on_side(&self.views.active.panels, FILTERS, Position::Right, filters_rect)], compact);
             let revision = self.session.revision();
             match self.views.active.board.drc.show(ui, drc_area, revision, self.preferences.units) {
                 crate::board_drc::Action::Focus(at) => self.views.active.camera.center_on(at),
@@ -988,9 +1007,6 @@ impl PcbApp {
                 crate::board_drc::Action::None => {}
             }
             covered.push(self.views.active.board.drc.rect);
-        }
-        if project_focus && self.views.active.filters_open {
-            covered.push(self.selection_filters(ui, area, filters_area));
         }
         for (id, rect) in panes {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();

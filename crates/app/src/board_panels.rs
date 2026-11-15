@@ -44,6 +44,7 @@ impl PcbApp {
             state.browser_collapsed = !state.browser_collapsed;
         }
         let slots = crate::workspace_panels::areas(area, browser, &self.views.active.panels, [true, true, self.views.active.filters_open], false);
+        let compact = self.preferences.panel_style == workspace::PanelStyle::Compact;
         let can_isolate = state.active_layer.is_some();
         let mut ratsnest_visible = !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY);
         let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show_with_toolbar(
@@ -88,7 +89,11 @@ impl PcbApp {
             host.with("properties"),
             "Properties",
             area,
-            slots[crate::workspace_panels::PROPERTIES],
+            {
+                use crate::workspace_panels::{LAYERS, PROPERTIES, follow, on_side};
+                let side = self.views.active.panels[PROPERTIES].position();
+                follow(slots[PROPERTIES], [on_side(&self.views.active.panels, LAYERS, side, layers)], compact)
+            },
             state.properties_collapsed,
             workspace::panels::card_width(area, false),
             |ui| {
@@ -195,7 +200,12 @@ impl PcbApp {
         if setup_open {
             self.begin_board_setup(view_id);
         }
-        ([browser, layers, properties], slots[crate::workspace_panels::FILTERS])
+        let filters = {
+            use crate::workspace_panels::{FILTERS, LAYERS, PROPERTIES, follow, on_side};
+            let (panels, side) = (&self.views.active.panels, self.views.active.panels[FILTERS].position());
+            follow(slots[FILTERS], [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties)], compact)
+        };
+        ([browser, layers, properties], filters)
     }
 }
 

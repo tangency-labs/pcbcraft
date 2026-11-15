@@ -216,6 +216,21 @@ flat-bar treatment; no external source, artwork or dependency was added.
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
 
+The Floating and Compact **Panel style** in `crates/chrome/src/workspace.rs`,
+`crates/chrome/src/workspace/panels.rs` and
+`crates/chrome/src/workspace/catalog.rs` adapts SolidCraft's Panel style
+preference in `crates/ui-egui/src/prefs/interface.rs` and the shared
+floating/compact container selection in `crates/ui-kit/src/panel_host.rs` and
+`crates/ui-kit/src/container.rs` at revision
+`73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0, copyright (c)
+2026 SolidCraft contributors). Kept the Floating/Compact labels, the Floating
+default and the shared container choice. PCBcraft owns the persisted setting,
+publishes it as the toolkit's `LayoutMode`, retains its own panel placement,
+drag, resize and collapse behavior, and applies the style to the ribbon,
+workspace tile and edge-anchored cards; SolidCraft's application panel runtime
+and saved workspace layouts are not imported. The toolkit revision was already a dependency, so this adds no
+package or third-party content.
+
 `crates/craft-agents/` recreates SolidCraft's agent chat core from
 `crates/ui-egui/src/agent_chat/` at `c553365a2197a689e749389a6fbf707a38df9b61`
 (MIT OR Apache-2.0, copyright (c) 2026 SolidCraft contributors) until SolidCraft
