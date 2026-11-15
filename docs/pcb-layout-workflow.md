@@ -1,6 +1,7 @@
 # PCB layout editing workflow
 
-Status and plan recorded November 9, 2026. Related work:
+Workflow and plan first recorded November 9, 2026; board-rule and net-class
+status updated November 14, 2026. Related work:
 [#54](https://github.com/tangency-labs/pcbcraft/issues/54) (board workspace), [#56](https://github.com/tangency-labs/pcbcraft/issues/56) (tracks, vias and interactive routing),
 [#57](https://github.com/tangency-labs/pcbcraft/issues/57) (copper zones), [#58](https://github.com/tangency-labs/pcbcraft/issues/58) (DRC), [#59](https://github.com/tangency-labs/pcbcraft/issues/59) (fabrication outputs),
 [#77](https://github.com/tangency-labs/pcbcraft/issues/77) (net classes and rules) and [#95](https://github.com/tangency-labs/pcbcraft/issues/95) (two-layer track and via editing).
@@ -103,12 +104,24 @@ record restores built-in resolution and the format required by the remaining
 board data. A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
 
-The class portion remains planned under #77 after the net registry. Classes bind
-to persistent net IDs rather than names, and extend the same effective-rule
+[Class definitions and dimensional resolution](net-classes.md),
+[persistent assignments](net-class-assignments.md), and
+[class-aware routing, clearance queries and DRC](net-class-consumers.md) are
+implemented through shared commands and live/headless MCP (#300–#302). Classes
+bind to persistent net IDs rather than names and extend the same effective-rule
 resolver. Preferred values remain distinct from minimum/maximum constraints;
-clearance between classes takes the larger supported requirement. Class-specific
-inheritance and conflicts follow the net-identity contract and are not implemented
-by the board-default slice.
+clearance between classes takes the larger supported requirement. Assignments
+retain their origins through supported split/merge reconciliation, and conflicting
+limits remain explicit rather than being resolved by name or ordering.
+
+Routing uses effective class preferences when dimensions are omitted. Changed
+classified tracks must meet minimum width; changed classified vias must meet
+diameter, drill and annular-ring limits. Routing refuses shorts but does not yet
+enforce class clearance; that enforcement remains future work in section 3.
+Queries and DRC use per-object rules with provenance, including class clearance;
+existing copper is not resized. Editor forms remain under
+[#303](https://github.com/tangency-labs/pcbcraft/issues/303), while advanced
+electrical/manufacturing analyses and the other rule extensions remain under #77.
 
 ### 3. Clearance while routing
 
@@ -264,11 +277,11 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 
 ## Format changes at a glance
 
-| Slice | Board format | Stored |
+| Slice | Stored formats | Stored |
 | --- | --- | --- |
 | 1. Footprint moves carry copper | none | — |
-| 2. Board rules | next | Board-scoped rule records |
-| 2. Net classes | with the net registry | Class records bound to net IDs |
+| 2. Board rules (implemented) | board/19 | Board-scoped rule records |
+| 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
 | 4. Zones | next after rules | Zone records; fills are not stored |
 | 5. Push-and-shove | none | — |

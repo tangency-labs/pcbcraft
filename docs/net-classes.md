@@ -139,8 +139,8 @@ by the remaining data. Canonical folder and `.pc` archive reopen/save preserve
 IDs, revisions and bytes.
 
 #301's [assignment contract](net-class-assignments.md) defines removal protection,
-origins and topology reconciliation. #302 should reuse this resolver for
-routing/query/checking consumers, including
-snapshot validity and explicit conflicts. #303 owns the shared editor workflow.
-No consumer should infer bindings from class names or treat the present catalog
-as though it already changes DRC or routing behavior.
+origins and topology reconciliation. #302's [routing, query and DRC consumers](net-class-consumers.md)
+use this resolver with snapshot validity and explicit conflicts; #303 owns the
+remaining shared editor workflow. Definitions alone do not assign classes to nets:
+consumers use persistent assignments rather than inferring bindings from class
+names.

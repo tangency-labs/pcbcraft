@@ -9,6 +9,10 @@ identify the first shareable release; the
 [broader workflow index](https://github.com/tangency-labs/pcbcraft/issues/89)
 includes later features that are not MVP gates.
 
+The [documentation map](docs/README.md) provides reading paths for users,
+contributors and agents, with current format references separated from broader
+design plans and verification history.
+
 ## Build and find your way around
 
 Use Rust 1.95 or later with Cargo, rustfmt and Clippy, a platform linker and a

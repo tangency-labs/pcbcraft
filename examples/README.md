@@ -84,8 +84,10 @@ view's grid even when the grid is hidden. A completed move and its preview
 rotations share one undo step, available from either editor.
 
 Save your copy and reopen it to check the stored position and orientation.
-Footprint identities and pin mappings stay unchanged. Slots, board outlines, routing and general footprint assignment UI remain
-separate work. Existing saved copies keep their original definitions; reopen the
+Footprint identities and pin mappings stay unchanged. The distributed board is
+unrouted and has no outline; the [PCB workflow guide](../docs/pcb-layout-workflow.md)
+covers adding supported outlines and tracks and assigning other footprints.
+Existing saved copies keep their original definitions; reopen the
 updated distributed folder or archive to try these packages.
 
 ## Inspect the mappings through MCP
