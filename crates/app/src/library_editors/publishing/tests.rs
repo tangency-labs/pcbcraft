@@ -8,9 +8,9 @@ fn fixture() -> (PcbApp, tempfile::TempDir) {
     let root = temp.path().join("workshop");
     let manifest = engine::new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap();
     pcbcraft_storage::library::publishing::create(&root, &manifest).unwrap();
-    // Keep publication ordinals independent of later bundled redraws, with catalog provenance.
+    // Publish the current drawing with its catalog provenance; workshop revisions are independent.
     let catalog = pcbcraft_engine::Session::default();
-    let original = catalog.libraries().symbol("basic-components", "connector", 2).unwrap();
+    let original = catalog.libraries().latest_symbol("basic-components", "connector").unwrap();
     let symbol = Item::edit_symbol(&original).unwrap();
     let footprint: pcbcraft_engine::board::definition::FootprintDefinition =
         serde_json::from_slice(include_bytes!("../../../../../libraries/basic-components/footprints/header-1x02-254.json")).unwrap();
@@ -68,7 +68,8 @@ fn older_catalog_edit_requires_consent_and_copy_is_explicit() {
     app.library_editors.edit(id, 0, Action::Delete { objects: vec![3] }).unwrap();
     let path = app.library_sources.registered[0].path.clone();
     let manifest = pcbcraft_storage::library::publishing::read_manifest(std::path::Path::new(&path)).unwrap();
-    let prepared = engine::prepare(app.library_editors.documents[&id].session.snapshot(), &manifest, 2, Some(2), false).unwrap();
+    let base = app.library_editors.documents[&id].session.published().unwrap().revision;
+    let prepared = engine::prepare(app.library_editors.documents[&id].session.snapshot(), &manifest, base, Some(base), false).unwrap();
     pcbcraft_storage::library::publishing::publish(std::path::Path::new(&path), &prepared).unwrap();
     app.session.install_library_source("workshop-source", Arc::new(pcbcraft_storage::library::load(std::path::Path::new(&path)).unwrap())).unwrap();
     let before = app.library_editors.documents[&id].session.snapshot();
@@ -76,7 +77,7 @@ fn older_catalog_edit_requires_consent_and_copy_is_explicit() {
     assert!(Arc::ptr_eq(&before, &app.library_editors.documents[&id].session.snapshot()));
     app.publish_library_item(&ctx, id, 1, "workshop-source", true).unwrap();
     finish(&mut app, &ctx);
-    assert_eq!(app.library_editors.documents[&id].session.published().unwrap().revision, 4);
+    assert_eq!(app.library_editors.documents[&id].session.published().unwrap().revision, base + 2);
     app.copy_library_document(&ctx, id).unwrap();
     let copy = app.library_editors.active.unwrap();
     assert_ne!(copy, id);
@@ -137,7 +138,7 @@ fn live_edit_during_publication_retains_later_draft_and_excludes_source_writes()
 /// original library, then keeps the editor on its new address for subsequent ordinary saves.
 #[test]
 fn publish_to_different_library_and_new_item_in_same_library_are_explicit_copies() {
-    for (kind, item_id, original_revision) in [(1, "connector", 2), (2, "header-1x02-254", 3)] {
+    for (kind, item_id, original_revision) in [(1, "connector", 4), (2, "header-1x02-254", 3)] {
         let (mut app, temp) = fixture();
         let ctx = Context::default();
         let view = app.views.active.id();
@@ -293,7 +294,7 @@ fn failed_publication_keeps_draft_and_stale_requests_cannot_publish() {
     assert!(Arc::ptr_eq(&before, &session.snapshot()));
     assert!(session.dirty());
     assert!(session.can_undo());
-    assert_eq!(session.published().unwrap().revision, 2);
+    assert_eq!(session.published().unwrap().revision, 4);
     assert_eq!(pcbcraft_storage::library::load(&temp.path().join("moved")).unwrap().items().len(), 2);
 }
 

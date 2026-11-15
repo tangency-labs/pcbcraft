@@ -248,8 +248,8 @@ fn native_power_roundtrips_with_schematic_only_package_choices() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
 
-/// Connector revisions face left and number contacts from top to bottom; their old pins
-/// remain addressable so existing project wires never follow a new drawing implicitly.
+/// Connector pins face left and number contacts from top to bottom without changing their
+/// attachment positions. The two-row header preserves its alternating numbering.
 #[test]
 fn revised_connectors_keep_their_pinned_connection_points() {
     let library = basic_components();
@@ -267,11 +267,6 @@ fn revised_connectors_keep_their_pinned_connection_points() {
             assert!(appearance.show_number);
         }
     }
-    let old = library.symbol_revision("connector", 2).unwrap();
-    assert_eq!(old.default_value(), "Input");
-    assert_eq!(old.pins()[0].offset, Point { x_nm: -3 * GRID_NM, y_nm: 0 });
-    assert_eq!(old.pins()[1].offset, Point { x_nm: 3 * GRID_NM, y_nm: 0 });
-    assert_eq!(library.symbol_revision("header-4", 1).unwrap().pins()[0].offset.x_nm, -5 * GRID_NM);
     let dual = library.symbol("header-2x3").unwrap();
     for row in 0..3 {
         assert_eq!(dual.pins()[2 * row].offset, Point { x_nm: -4 * GRID_NM, y_nm: (4 * row as i64 - 4) * GRID_NM });
@@ -284,14 +279,6 @@ fn revised_connectors_keep_their_pinned_connection_points() {
 #[test]
 fn changed_bundled_revisions_reopen_offline_without_upgrading_instances() {
     for (library, id, revision) in [
-        ("basic-components", "connector", 2),
-        ("basic-components", "header-4", 1),
-        ("basic-components", "connector", 3),
-        ("basic-components", "header-3", 1),
-        ("basic-components", "header-4", 2),
-        ("basic-components", "header-6", 1),
-        ("basic-components", "header-8", 1),
-        ("basic-components", "header-2x3", 1),
         ("basic-components", "inductor", 1),
         ("basic-components", "nmos", 1),
         ("basic-components", "pmos", 1),
@@ -355,7 +342,7 @@ fn expanded_power_shapes_preserve_explicit_net_semantics() {
     }
 }
 
-/// Connector numbering supplies pin-one identification without an extra body mark. Coil
+/// Connector bodies contain only their outline; numbered integrated leads stop at its edge. Coil
 /// turns remain editable semicircular arcs; MOSFET attachment leads follow their direct axes.
 #[test]
 fn corrected_native_glyphs_keep_clear_numbering_coils_and_straight_leads() {
@@ -363,7 +350,18 @@ fn corrected_native_glyphs_keep_clear_numbering_coils_and_straight_leads() {
     use crate::schematic::PinOrientation;
     for id in ["connector", "header-3", "header-4", "header-6", "header-8", "header-2x3"] {
         let symbol = basic_components().symbol(id).unwrap();
-        assert_eq!(symbol.default_unit().drawing.iter().filter(|shape| matches!(shape, Shape::Rect(..))).count(), 1);
+        assert_eq!(symbol.default_unit().drawing.len(), 1, "{id} contains extra body strokes");
+        let Shape::Rect(min, max) = symbol.default_unit().drawing[0] else { panic!("{id} body is not a rectangle") };
+        for pin in symbol.pins() {
+            let appearance = pin.appearance.as_ref().unwrap();
+            let body_x = match appearance.orientation {
+                PinOrientation::Right => pin.offset.x_nm + appearance.length_nm,
+                PinOrientation::Left => pin.offset.x_nm - appearance.length_nm,
+                _ => panic!("{id} lead is not horizontal"),
+            };
+            assert!(body_x == min.x_nm || body_x == max.x_nm, "{id} lead must stop at body edge");
+            assert!(pin.offset.y_nm > min.y_nm && pin.offset.y_nm < max.y_nm);
+        }
     }
     let coil = basic_components().symbol("inductor").unwrap();
     let turns: Vec<_> = coil

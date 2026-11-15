@@ -15,6 +15,16 @@ const ARCHIVE: &[u8] = include_bytes!("../../../examples/dual-led.pc");
 #[test]
 fn demo_folder_and_archive_migrate_to_the_same_documents() {
     let project = decode_packed(ARCHIVE).unwrap().project;
+    let catalog = Session::default();
+    let mut connectors = 0;
+    for symbol in project.symbols().iter().filter(|symbol| project.reference(symbol).starts_with('J')) {
+        let current = catalog.libraries().latest_symbol("basic-components", &symbol.definition.id).unwrap();
+        assert_eq!(symbol.definition.default_unit().graphics(), current.default_unit().graphics());
+        assert_eq!(symbol.definition.default_unit().drawing.len(), 1, "demo connector contains internal strokes");
+        assert_eq!(symbol.definition.pins(), current.pins());
+        connectors += 1;
+    }
+    assert_eq!(connectors, 2);
     let documents = encode_documents(project.clone()).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led");
     let saved = documents.keys().map(|path| (path.clone(), fs::read(root.join(path)).unwrap())).collect();

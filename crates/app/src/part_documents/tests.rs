@@ -21,8 +21,12 @@ pub(super) fn fixture() -> (PcbApp, tempfile::TempDir, u64) {
         name: "Workshop".into(),
         writable: true,
     });
+    let symbol = app.session.libraries().latest_symbol("basic-components", "connector").unwrap();
     let id = app
-        .new_part_document(&egui::Context::default(), Some(Reference { library: "basic-components".into(), id: "connector".into(), revision: 1 }))
+        .new_part_document(
+            &egui::Context::default(),
+            Some(Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision() }),
+        )
         .unwrap();
     let mut record = app.library_editors.parts[&id].session.record().clone();
     let Record::Part(p) = &mut record else { panic!() };
@@ -207,8 +211,9 @@ fn drawing_publication_opens_reviewed_part_reference_update() {
     let ctx = egui::Context::default();
     let path = temp.path().join("workshop");
     let manifest = pcbcraft_storage::library::publishing::read_manifest(&path).unwrap();
-    let symbol = app.session.libraries().symbol("basic-components", "connector", 1).unwrap();
-    let mut item = Item::edit_symbol(&symbol).unwrap();
+    let symbol = app.session.libraries().latest_symbol("basic-components", "connector").unwrap();
+    let mut item = Item::from_symbol(&symbol).unwrap();
+    item.id = symbol.id.clone();
     item.library = "workshop".into();
     let first = publisher::prepare(Arc::new(item), &manifest, 0, None, false).unwrap();
     pcbcraft_storage::library::publishing::publish(&path, &first).unwrap();

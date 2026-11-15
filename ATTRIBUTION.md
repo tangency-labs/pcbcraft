@@ -1567,3 +1567,10 @@ sash, along with the Library Manager's symbol/footprint navigation. The standalo
 Craft footer does not expose its leading content slot publicly, so the adapter
 retains its surface and action buttons while composing the shared library button
 and Repeat placement checkbox into its unused leading band.
+
+The connector/header follow-up removes internal decorative strokes and superseded
+bundled connector/header revisions at @travle1's request. Numbered integrated pins
+and attachment positions remain unchanged. Both distributed demos are regenerated
+through their original command builders and native codecs with the corrected
+definitions. This is original drawing data; no external artwork, source or
+dependency was introduced.

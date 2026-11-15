@@ -17,13 +17,7 @@
     {
       "id": "main",
       "drawing": [
-        {"type": "rect", "min_nm": [-1270000, -13970000], "max_nm": [1270000, 13970000]},
-        {"type": "line", "from_nm": [-1270000, -12700000], "to_nm": [635000, -12700000]},
-        {"type": "line", "from_nm": [-1270000, -7620000], "to_nm": [635000, -7620000]},
-        {"type": "line", "from_nm": [-1270000, -2540000], "to_nm": [635000, -2540000]},
-        {"type": "line", "from_nm": [-1270000, 2540000], "to_nm": [635000, 2540000]},
-        {"type": "line", "from_nm": [-1270000, 7620000], "to_nm": [635000, 7620000]},
-        {"type": "line", "from_nm": [-1270000, 12700000], "to_nm": [635000, 12700000]}
+        {"type": "rect", "min_nm": [-1270000, -13970000], "max_nm": [1270000, 13970000]}
       ],
       "pins": [
         {"terminal": "1", "at_nm": [-3810000, -12700000], "appearance": {"orientation": "right", "length_nm": 2540000, "style": "line", "show_name": false, "show_number": true, "name_height_nm": 800000, "number_height_nm": 1000000}},

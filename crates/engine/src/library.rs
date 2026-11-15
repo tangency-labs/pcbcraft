@@ -741,18 +741,8 @@ mod tests {
     /// New placements use the latest revision; older pinned revisions retain their original pins and values.
     #[test]
     fn compact_revisions_preserve_old_projects_and_choose_newest_in_any_order() {
-        for symbol in basic_components().symbols().iter().filter(|symbol| ["capacitor", "connector", "led", "resistor"].contains(&symbol.id.as_str()))
-        {
-            assert_eq!(
-                symbol.revision(),
-                if symbol.id == "connector" {
-                    4
-                } else if ["resistor", "capacitor"].contains(&symbol.id.as_str()) {
-                    3
-                } else {
-                    2
-                }
-            );
+        for symbol in basic_components().symbols().iter().filter(|symbol| ["capacitor", "led", "resistor"].contains(&symbol.id.as_str())) {
+            assert_eq!(symbol.revision(), if ["resistor", "capacitor"].contains(&symbol.id.as_str()) { 3 } else { 2 });
             let old = basic_components().symbol_revision(&symbol.id, 1).unwrap();
             for (new, old) in symbol.pins().iter().zip(old.pins()) {
                 assert_eq!(old.offset.x_nm.abs(), PIN_OFFSET_NM);

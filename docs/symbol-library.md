@@ -59,14 +59,14 @@ the grid: resistor endpoints are 5.08 mm from center, capacitor endpoints
 6.35 mm endpoints. Resistor and capacitor revision 3 use neutral `R` and `C`
 values, with `*-v2.json` preserving the former `1k` and `100nF` defaults.
 
-The latest connector revisions remove the extra small pin-one square: connector
-revision 4, header-4 revision 3 and revision 2 of the other new headers. Inductor
+Connector and header bodies use a plain rectangle with numbered leads ending at
+the body edge. Their unpublished definitions were corrected in place, and
+superseded connector/header records were removed from the bundle. Inductor
 revision 2 uses four semicircular coil turns; MOSFET revision 2 has straight
 gate, source and drain leads. The new ferrite bead uses a tilted rectangular
 outline with straight leads ending at its edges and no conductor stroke inside
 the body; its unpublished draft was corrected in place.
-Earlier records for the other symbols remain alongside them, including the
-preceding connector/header geometry and values. Power redraws introduce revision
+Earlier records for the other symbols remain alongside them. Power redraws introduce revision
 2 for +3V3, +5V, +12V, GNDA, VDD and
 VSS, with revision 1 retained beside each. Changes to shipped drawings, defaults
 or pin positions require a new revision so an older project's pinned drawing

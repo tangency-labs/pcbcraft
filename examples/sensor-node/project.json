@@ -1,11 +1,11 @@
 {
   "format": "pcbcraft-project/17",
-  "id": "914e1d9a-392e-467e-ae23-b058bb25ed7a",
+  "id": "49d1dd8d-efe9-4fe4-b7bf-d28c66cff6d6",
   "name": "Sensor node · MCU and I²C",
   "numeric_id_high_water": 171,
   "layout_root": ".",
-  "boards": [{"id":"3aebe5a2-0dea-4e43-b5a9-50270f3009c5","name":"Board","folder":"board-3aebe5a20dea"}],
-  "sheets": [{"id":"4dc61800-8a88-4e81-9906-385cbed027c7","name":"Main","file":"sheets/4dc61800-8a88-4e81-9906-385cbed027c7.json"}],
+  "boards": [{"id":"870bbdf6-a063-4bbb-8bba-76b1c182de8c","name":"Board","folder":"board-870bbdf6a063"}],
+  "sheets": [{"id":"774efbd7-cba3-4b0a-bb8c-da307088f546","name":"Main","file":"sheets/774efbd7-cba3-4b0a-bb8c-da307088f546.json"}],
   "components": [
     {"id":2,"library":"sensor-demo","definition":"attiny402","definition_revision":1,"reference_number":1,"reference":"U1","value":"ATtiny402"}
 

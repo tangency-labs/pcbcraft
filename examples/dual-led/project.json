@@ -1,11 +1,11 @@
 {
   "format": "pcbcraft-project/17",
-  "id": "3c37c077-5403-427f-ab58-419eba2a8499",
+  "id": "19c9b4d6-180f-4c57-bcd1-1b9fd1ababd3",
   "name": "Dual LED · transistor flasher",
   "numeric_id_high_water": 142,
   "layout_root": ".",
-  "boards": [{"id":"74891c7b-4123-42e3-a32f-b4665ecf0c28","name":"Board","folder":"board-74891c7b4123"}],
-  "sheets": [{"id":"103bdb21-6dc9-4252-bb9c-33ccd24d6d33","name":"Main","file":"sheets/103bdb21-6dc9-4252-bb9c-33ccd24d6d33.json"}],
+  "boards": [{"id":"8debb428-8ca1-4d03-8435-8eec9ed98c8f","name":"Board","folder":"board-8debb4288ca1"}],
+  "sheets": [{"id":"842dd612-7afb-4fcd-b503-3c5547e885f0","name":"Main","file":"sheets/842dd612-7afb-4fcd-b503-3c5547e885f0.json"}],
   "components": [
     {"id":2,"library":"basic-components","definition":"connector","definition_revision":4,"reference_number":1,"reference":"J1","value":"3.3 V input"}
 
