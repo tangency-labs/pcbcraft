@@ -62,9 +62,10 @@ lineage and explicit ambiguity resolution through shared headless/live MCP
 commands. It survives undo, save/reopen and first-board creation without storing
 a second connectivity graph. [Net-class assignments](net-class-assignments.md)
 can be authored through shared commands, with retained origins, split inheritance,
-merge conflicts and protected class removal. Dimensional bindings explicitly block
-consumers awaiting #302; editor controls remain under #303. Zones, repeated
-instances and system registries remain separate work.
+merge conflicts and protected class removal. [Class-aware routing, clearance
+queries and DRC](net-class-consumers.md) consume those bindings with effective
+dimensions and per-object provenance; editor controls remain under #303. Zones,
+repeated instances and system registries remain separate work.
 
 The engine [single-board update workflow](single-board-update.md) previews and
 atomically accepts footprint/package and connectivity changes through shared
