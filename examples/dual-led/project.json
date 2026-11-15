@@ -1,27 +1,57 @@
 {
-  "format": "pcbcraft-project/6",
-  "id": "ed5fcf30-6942-4ed9-af3d-f73b7ac73ab0",
-  "name": "Dual LED · editing demo",
-  "sheets": [{"id":"2e84006a-89e6-478f-a66b-df5c1d3907dc","name":"Main","file":"sheets/2e84006a-89e6-478f-a66b-df5c1d3907dc.json"}],
+  "format": "pcbcraft-project/17",
+  "id": "8d3facfa-9396-4200-af4c-b76b0acd6ae9",
+  "name": "Dual LED · transistor flasher",
+  "numeric_id_high_water": 142,
+  "layout_root": ".",
+  "boards": [{"id":"a1a5ca07-46a0-4116-9b26-d4f5b95a870d","name":"Board","folder":"board-a1a5ca0746a0"}],
+  "sheets": [{"id":"300578c4-bd6c-4cbb-971e-8d45e6b5567b","name":"Main","file":"sheets/300578c4-bd6c-4cbb-971e-8d45e6b5567b.json"}],
   "components": [
-    {"id":2,"library":"starter","definition":"connector","definition_revision":2,"reference_number":1,"reference":"J1","value":"Input"}
+    {"id":2,"library":"basic-components","definition":"connector","definition_revision":3,"reference_number":1,"reference":"J1","value":"3.3 V input"}
 
     ,
-    {"id":3,"library":"starter","definition":"resistor","definition_revision":2,"reference_number":1,"reference":"R1","value":"1k"}
+    {"id":5,"library":"basic-components","definition":"connector","definition_revision":3,"reference_number":2,"reference":"J2","value":"Collector probes"}
 
     ,
-    {"id":4,"library":"starter","definition":"led","definition_revision":2,"reference_number":1,"reference":"D1","value":"Green"}
+    {"id":7,"library":"basic-components","definition":"resistor","definition_revision":3,"reference_number":1,"reference":"R1","value":"470"}
 
     ,
-    {"id":6,"library":"starter","definition":"resistor","definition_revision":2,"reference_number":2,"reference":"R2","value":"1k"}
+    {"id":9,"library":"basic-components","definition":"led","definition_revision":2,"reference_number":1,"reference":"D1","value":"Green"}
 
     ,
-    {"id":7,"library":"starter","definition":"led","definition_revision":2,"reference_number":2,"reference":"D2","value":"Amber"}
+    {"id":11,"library":"basic-components","definition":"npn","definition_revision":1,"reference_number":1,"reference":"Q1","value":"PMBT3904"}
 
     ,
-    {"id":9,"library":"starter","definition":"capacitor","definition_revision":2,"reference_number":1,"reference":"C1","value":"100nF"}
+    {"id":14,"library":"basic-components","definition":"resistor","definition_revision":3,"reference_number":2,"reference":"R2","value":"470"}
 
     ,
-    {"id":26,"library":"starter","definition":"npn","definition_revision":1,"reference_number":1,"reference":"Q1","value":"PMBT3904"}
+    {"id":16,"library":"basic-components","definition":"led","definition_revision":2,"reference_number":2,"reference":"D2","value":"Amber"}
+
+    ,
+    {"id":18,"library":"basic-components","definition":"npn","definition_revision":1,"reference_number":2,"reference":"Q2","value":"PMBT3904"}
+
+    ,
+    {"id":20,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":3,"reference":"R3","value":"100k"}
+
+    ,
+    {"id":22,"library":"basic-components","definition":"resistor-iec","definition_revision":1,"reference_number":4,"reference":"R4","value":"100k"}
+
+    ,
+    {"id":24,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":1,"reference":"C1","value":"4.7uF"}
+
+    ,
+    {"id":26,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":2,"reference":"C2","value":"4.7uF"}
+
+    ,
+    {"id":28,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":3,"reference":"C3","value":"100nF"}
+
+    ,
+    {"id":30,"library":"basic-components","definition":"capacitor","definition_revision":3,"reference_number":4,"reference":"C4","value":"10uF"}
+
+    ,
+    {"id":32,"library":"power","definition":"3v3","definition_revision":2,"reference_number":1,"reference":"PWR1","value":"+3V3","metadata":{"fields":{},"attributes":{"do_not_populate":false,"exclude_from_bom":true,"exclude_from_board":true,"exclude_from_simulation":false,"exclude_from_position_files":true}}}
+
+    ,
+    {"id":33,"library":"power","definition":"gnd","definition_revision":1,"reference_number":2,"reference":"PWR2","value":"GND","metadata":{"fields":{},"attributes":{"do_not_populate":false,"exclude_from_bom":true,"exclude_from_board":true,"exclude_from_simulation":false,"exclude_from_position_files":true}}}
   ]
 }

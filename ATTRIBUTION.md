@@ -1495,3 +1495,17 @@ No external symbol library, manufacturer package pinout, EDA implementation,
 artwork or dependency was consulted or incorporated. The existing native source
 loader and schematic painter render the definitions in both builds; this change
 adds no interface controls or toolkit presentation.
+
+
+## Complete dual LED flasher demo
+
+The replacement Dual LED schematic, symmetric board placement, two-layer routing
+plan and command-generated folder/archive are original PCBcraft work under
+MIT OR Apache-2.0, requested by @travle1. They reuse the original bundled NPN,
+LED, passive, header and Power records, including the refreshed connector and
+rectangular resistor. Existing package source notices remain pinned with the
+example. The generator composes public schematic, footprint, reference, copper
+and checking commands; its modules introduce no alternate project writer or
+routing implementation. No external circuit file, EDA implementation, artwork,
+library record or dependency was consulted or incorporated. Checker and editing
+regressions use the production native codecs and independently stated net sets.

@@ -1008,7 +1008,7 @@ fn opening_another_project_from_pcb_layout_binds_its_board() {
         let revision = h.state().session.revision();
         h.state_mut().files.open_path_for_test(&path, revision);
         h.run();
-        assert_eq!(h.state().session.project().unwrap().name, "Dual LED · editing demo");
+        assert_eq!(h.state().session.project().unwrap().name, "Dual LED · transistor flasher");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         assert!(!h.state().views.active.unavailable());
         assert!(h.query_by_label("This document is unavailable. Choose a workspace to replace this view.").is_none());
@@ -1117,9 +1117,9 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB Layout");
     let mut camera = serde_json::to_value(h.state().views.active.camera.saved_state()).unwrap();
-    camera["zoom"] = json!(6.);
+    camera["zoom"] = json!(4.);
     h.state_mut().views.active.camera = crate::canvas_camera::Camera::from_state(&serde_json::from_value(camera).unwrap());
-    h.state_mut().views.active.camera.center_on(Point { x_nm: 0, y_nm: 2_000_000 });
+    h.state_mut().views.active.camera.center_on(Point { x_nm: 0, y_nm: 0 });
     h.run();
     let canvas = h.get_by_label("PCB canvas").rect();
     let copper_bounds = |h: &Harness<'_, PcbApp>, color| -> Vec<egui::Rect> {
@@ -1138,7 +1138,7 @@ fn physical_demo_labels_drills_and_detail_visibility() {
             .collect()
     };
     let lands = copper_bounds(&h, Tokens::get().board_front);
-    assert_eq!(lands.len(), 15, "surface and plated lands use their front copper layer color");
+    assert_eq!(lands.len(), 30, "surface and plated lands use their front copper layer color");
     let labels: Vec<_> = h
         .output()
         .shapes
@@ -1154,8 +1154,10 @@ fn physical_demo_labels_drills_and_detail_visibility() {
             }
         })
         .collect();
-    assert_eq!(labels.len(), 15);
-    assert_eq!(labels.iter().filter(|text| text.galley.job.text.contains("Net ")).count(), 12);
+    assert_eq!(labels.len(), 30);
+    let names = ["+3V3", "GND", "COL_A", "COL_B", "LED_A", "LED_B", "BASE_A", "BASE_B"];
+    assert!(labels.iter().any(|text| text.galley.job.text.lines().nth(1).is_some()));
+    assert!(labels.iter().all(|text| text.galley.job.text.lines().nth(1).is_none_or(|name| names.contains(&name))));
     for label in labels {
         assert!(
             lands.iter().any(|land| land.expand(1.).contains_rect(label.visual_bounding_rect())),
@@ -1166,7 +1168,7 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     }
     assert_eq!(
         h.output().shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Circle(c) if c.fill == Tokens::get().board_canvas)).count(),
-        2
+        15
     );
     let target = h.state().session.project().unwrap().board_target().unwrap();
     let setup = h.state().session.project().unwrap().board_view(target).unwrap().setup().unwrap();
@@ -1183,7 +1185,7 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     h.state_mut().views.active.board.hidden_layers.insert(top.clone());
     h.run();
     assert!(copper_bounds(&h, Tokens::get().board_front).is_empty());
-    assert_eq!(copper_bounds(&h, Tokens::get().board_back).len(), 2);
+    assert_eq!(copper_bounds(&h, Tokens::get().board_back).len(), 4);
     h.state_mut().views.active.board.hidden_layers.insert(bottom);
     h.run();
     assert!(copper_bounds(&h, Tokens::get().board_back).is_empty());

@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-footprint/1",
-  "library": "starter",
+  "library": "basic-components",
   "id": "capacitor-0603",
   "revision": 4,
   "name": "Capacitor 0603 (1608 metric)",

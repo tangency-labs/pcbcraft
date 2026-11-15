@@ -1,4 +1,4 @@
-{"library":"starter","format":"pcbcraft-symbol/1","id":"led","revision":2,"name":"LED","reference_prefix":"D","default_value":"LED"
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"led","revision":2,"name":"LED","reference_prefix":"D","default_value":"LED","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
 ,
   "terminals":[
     {"id":"1","name":"Anode","electrical_type":"passive"}

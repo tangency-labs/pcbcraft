@@ -1,145 +1,89 @@
-# Dual LED editing demo
+# Dual LED flasher
 
-This original example contains the wired input connector, two resistor/LED
-branches and a capacitor, plus an unconnected NPN transistor for trying a
-three-pad package. Symbol and footprint definitions travel with the project,
-so it opens without a library service. The example, generator and original
-starter definitions use the repository's MIT OR Apache-2.0 license.
+This example is a complete two-transistor astable circuit with 14 physical
+components, eight named nets and a routed 40 × 30 mm, two-layer board. Both
+transistors participate in the cross-coupled timing network. Supply decoupling,
+a power header and a collector probe header give the circuit useful connection
+points, with no deliberately floating terminals.
 
-| Reference | Footprint |
-|---|---|
-| R1 | 0402 resistor |
-| R2 | 0603 resistor |
-| C1 | 0603 capacitor |
-| D1, D2 | 0402 LED, with a cathode mark |
-| Q1 | SOT-23 NPN, pins 1 Base / 2 Emitter / 3 Collector |
-| J1 | 2.54 mm two-pin header with plated drills |
+The folder and archive carry their exact symbol definitions, physical footprints,
+terminal mappings and board geometry, so they open offline. The project,
+generator and original library records use MIT OR Apache-2.0.
 
-The PCB view draws physical rounded rectangular copper pads, body outlines, courtyards
-and silkscreen for the SMD packages. Front copper is red and J1 has gold
-plated-hole lands with square pad 1. Fabrication and courtyard graphics start
-hidden in new views and can be shown in Layers. Reference labels and silk lines
-use physical dimensions. **Properties → Silkscreen** edits their text height,
-stroke width and pad clearance; Q1 uses an external triangular pad-1 mark. See [footprint sources and dimensions](../docs/footprint-library.md).
-Q1's three terminals are deliberately unwired; the original four connected groups
-remain below. This editing example has no board outline or routing.
-The full schematic/board walkthrough and preview release remain part of
-[#91](https://github.com/tangency-labs/pcbcraft/issues/91).
+| References | Role | Package |
+| --- | --- | --- |
+| J1 | 3.3 V input: pin 1 supply, pin 2 ground | 2.54 mm, 1×2 plated header |
+| J2 | Collector probes: pin 1 COL_A, pin 2 COL_B | 2.54 mm, 1×2 plated header |
+| Q1, Q2 | PMBT3904 NPN timing stages | SOT-23; 1 Base, 2 Emitter, 3 Collector |
+| D1, D2 | Green and amber indicators | 0402 LED; physical pad 1 is cathode |
+| R1, R2 | 470 Ω LED resistors | 0603 |
+| R3, R4 | 100 kΩ base-bias resistors | 0603 |
+| C1, C2 | 4.7 µF, non-polar timing capacitors | 0603 |
+| C3, C4 | 100 nF and 10 µF supply decoupling | 0603 |
 
-## Open your own copy
+The board contains 82 track segments and 11 through vias, using front copper for
+local connections and back copper for the timing and probe links. References
+and original package silkscreen remain visible alongside the copper. The current
+board checker reports no clearance, short, unrouted, outline or courtyard findings
+with its default rules. [Footprint sources and dimensions](../docs/footprint-library.md)
+record the package definitions and their qualification scope.
 
-Start the desktop app with `cargo run --locked -p pcbcraft` from the repository
-root. On Home, choose **Open Project → Project file or archive…**, then select
-[`dual-led/project.json`](dual-led/project.json). Before editing, use
-**File → Save As… → Project folder…** to save into a new or empty folder outside
-the checkout. **View → Fit** brings the circuit into view; collapse Parts if you
-want more space. Reopening the distributed example resets the exercise without
-changing your saved copy.
+## Open a copy
 
-In the [browser build](../README.md#get-started), upload
-[`dual-led.pc`](dual-led.pc) instead. It contains the same project as the
-folder, including its symbols. **Download** produces an edited archive; reopen
-that download to check it. Uploading again from the original archive resets the
-exercise. The browser keeps its unsaved marker after requesting a download,
-because it cannot confirm that you kept the file.
+On desktop, choose **Open Project → Project file or archive…** and open
+[`dual-led/project.json`](dual-led/project.json). Use **File → Save As… → Project
+folder…** before editing the checkout's copy. In the browser, upload
+[`dual-led.pc`](dual-led.pc), which contains the same project and dependencies.
+Share the complete folder or archive rather than `project.json` alone.
 
-## Try the schematic
+**Fit schematic** frames the circuit. **G** or held dragging moves a symbol with
+its wires attached; **M** disconnects and moves it. R1 and D1 form a simple branch
+for practicing selection, wiring and shared Undo/Redo. The rectangular R3/R4
+symbols and revised connectors also exercise the expanded Basic components
+library, while supply and ground use ordinary Power definitions.
 
-1. Expand **Browser → Sheets → Main → Symbols** and select **R1**. Move it a
-   little on the canvas: its attached wires follow. Use **Undo**, then **Redo**.
-   Press **E** with R1 selected and change its value to `2.2k`, then undo that edit.
-2. Clear selection with **Esc**, then drag an empty area from left to right
-   around R2 and D2, including their connecting wire. Move the selected branch
-   and undo it. A right-to-left box also selects objects it touches; either
-   mouse button can draw the box.
-3. Click the wire between R1 and D1, press **Delete**, then undo. To try drawing,
-   delete it again, press **W**, and connect R1's right pin to D1's left pin.
-   Press **Esc** when finished. Existing shared rail junctions are explicit
-   connections; crossing a wire elsewhere does not join it.
-4. Choose **Capture → Nets**. The unchanged example has four connected groups
-   and Q1's three unconnected pins, as listed below. Save your copy and reopen it to
-   verify the result. Share the complete folder or archive, not `project.json`
-   alone.
+Switch to **PCB Layout**, or open it beside the schematic, to inspect pad
+correspondence and the two copper layers. Select a component or net in either
+view to inspect its counterpart. **Analyze → DRC** checks the routed
+board; moving a footprint or removing a track gives that check a concrete edit
+to report, and Undo restores the original routing.
 
-| Connection | Pins in the unchanged demo |
-|---|---|
-| Input rail | J1.1, R1.1, R2.1, C1.1 |
-| Return rail | J1.2, D1.2, D2.2, C1.2 |
-| First indicator branch | R1.2, D1.1 |
-| Second indicator branch | R2.2, D2.1 |
+## Circuit connections
 
-The connector's left pin is the input rail and its right pin the return rail.
-The rail names in this table describe the circuit; they are not net labels in
-the saved project. LED values distinguish the two branches without changing
-their generic symbol drawing.
+Local labels join J2 to the collectors without stretching probe wires across
+the timing network. Power symbols supply the explicit global names `+3V3` and
+`GND`. Crossings without a junction dot do not join the two base nets.
 
-## Try PCB transforms
+| Net | Physical terminals |
+| --- | --- |
+| +3V3 | J1.1, R1.1, R2.1, R3.1, R4.1, C3.1, C4.1 |
+| GND | J1.2, Q1.2, Q2.2, C3.2, C4.2 |
+| LED_A | R1.2, D1.1 |
+| LED_B | R2.2, D2.1 |
+| COL_A | D1.2, Q1.3, C1.1, J2.1 |
+| COL_B | D2.2, Q2.3, C2.1, J2.2 |
+| BASE_A | Q1.1, R3.2, C2.2 |
+| BASE_B | Q2.1, R4.2, C1.2 |
 
-Choose **PCB layout** in the workspace picker, or its split icon to keep the
-schematic visible. Select a footprint in Browser and use **Fit** if needed.
-Drag a footprint, or press **M** and click its new position. **R**
-rotates 90° counterclockwise and **Shift+R** clockwise, including while moving;
-**Esc** or a right-click cancels an unfinished move. The origin snaps to the
-view's grid even when the grid is hidden. A completed move and its preview
-rotations share one undo step, available from either editor.
+Every physical terminal maps to one pad. Power symbols are explicitly excluded
+from the board and do not introduce dummy footprints. For inspection through
+MCP, launch `pcbcraft-cli mcp --project examples/dual-led/project.json`; the
+[AI and MCP guide](../docs/mcp.md) covers both headless and live editor sessions.
 
-Save your copy and reopen it to check the stored position and orientation.
-Footprint identities and pin mappings stay unchanged. The distributed board is
-unrouted and has no outline; the [PCB workflow guide](../docs/pcb-layout-workflow.md)
-covers adding supported outlines and tracks and assigning other footprints.
-Existing saved copies keep their original definitions; reopen the
-updated distributed folder or archive to try these packages.
+## Regenerate and verify
 
-## Inspect the mappings through MCP
-
-Build `pcbcraft-cli` with `cargo build --locked -p pcbcraft-cli`. Configure an
-MCP client to launch `target/debug/pcbcraft-cli` with arguments
-`mcp --project examples/dual-led/project.json` and the repository root as its
-working directory. Add `.exe` on Windows. This opens a separate in-memory
-session; headless edits do not change the GUI or write back to the example.
-
-Call `inspect_project` and find R1 in `project.schematic.symbols`. Call
-`cross_probe` with the terminal object below, replacing the placeholder with
-R1's inspected ID:
-
-```json
-{"terminal":{"symbol":"<R1 symbol ID>","terminal":"1"}}
-```
-
-Pass the returned `pad` object back as `{"pad": ...}` to find the same terminal.
-Every terminal of every component has a mapping, including all three on Q1. This checks correspondence in the
-engine; selecting a symbol or footprint in the GUI also highlights its
-counterpart in the other workspace.
-
-For a live edit in the desktop window, follow the
-[live MCP setup](../docs/mcp.md#live-mcp-in-the-desktop-editor) with your demo copy
-open. Inspect R1 and the current revision, then execute
-`schematic.move_symbol` with its ID, its current `x_nm`, `y_nm` reduced by
-`2540000`, and the inspected numeric `expected_revision`. The wire follows in
-the editor. GUI Undo and Redo share that history; inspect again after each step.
-The same live connection can move and rotate footprints through
-`pcb.set_footprint_transform`, using the inspected footprint and board IDs,
-`x_nm`, `y_nm`, whole-degree `rotation` and `expected_revision`.
-
-## Generate another copy
-
-The checked-in folder and archive were produced by
-[`indicator_demo.rs`](../crates/engine/examples/indicator_demo.rs), using shared
-engine commands and the production serializer. To build a fresh copy, supply
-a destination whose parent exists and which does not already exist:
+The [generator](../crates/engine/examples/indicator_demo.rs) composes separate
+schematic, placement and routing modules through revision-checked native commands.
+It checks connectivity and the board before encoding either output, and refuses
+an existing destination. From the repository root:
 
 ```sh
 cargo run --locked -p pcbcraft-engine --example indicator_demo -- /tmp/pcbcraft-demo
+cargo test --locked -p pcbcraft-engine --test indicator_demo
 ```
 
-That creates `/tmp/pcbcraft-demo/dual-led/project.json` and
-`/tmp/pcbcraft-demo/dual-led.pc`. Choose another path on Windows. Every run
-creates a new project and sheet identity; ordinary saves of an existing copy
-preserve its IDs and ordering. Use Save As or copy the entire existing folder
-to retain those identities. The generator refuses an existing destination and
-finishes encoding before writing. If writing fails, its error identifies the
-partial output; choose a new destination for the retry.
-
-`cargo test --locked -p pcbcraft-engine --test indicator_demo` checks the
-distributed folder/archive agreement, byte-stable saves, all four nets, both
-directions of every pin/pad mapping, and move/undo/redo on the demo itself.
+The generator creates `/tmp/pcbcraft-demo/dual-led/project.json` and
+`/tmp/pcbcraft-demo/dual-led.pc`. A fresh run has new project identities; ordinary
+saves retain those identities. The tests check folder/archive agreement,
+byte-stable reopening, the eight intended nets, every terminal/pad mapping,
+move/Undo/Redo and the saved board's design-rule result.

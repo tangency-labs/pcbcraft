@@ -1,4 +1,4 @@
-{"library":"starter","format":"pcbcraft-symbol/1","id":"capacitor","revision":2,"name":"Capacitor","reference_prefix":"C","default_value":"100nF"
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"capacitor","revision":3,"name":"Capacitor","reference_prefix":"C","default_value":"C","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
 ,
   "terminals":[
     {"id":"1","electrical_type":"passive"}

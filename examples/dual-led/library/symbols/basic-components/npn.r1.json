@@ -1,4 +1,4 @@
-{"library":"starter","format":"pcbcraft-symbol/1","id":"npn","revision":1,"name":"NPN transistor","reference_prefix":"Q","default_value":"NPN"
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"npn","revision":1,"name":"NPN transistor","reference_prefix":"Q","default_value":"NPN","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
 ,
   "terminals":[
     {"id":"1","name":"Base","electrical_type":"passive"}

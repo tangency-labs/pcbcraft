@@ -1,4 +1,4 @@
-{"library":"starter","format":"pcbcraft-symbol/1","id":"resistor","revision":2,"name":"Resistor","reference_prefix":"R","default_value":"1k"
+{"library":"basic-components","format":"pcbcraft-symbol/1","id":"resistor","revision":3,"name":"Resistor","reference_prefix":"R","default_value":"R","provenance":{"library_name":"Basic components","license":"MIT OR Apache-2.0"}
 ,
   "terminals":[
     {"id":"1","electrical_type":"passive"}

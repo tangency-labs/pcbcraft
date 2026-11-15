@@ -1,0 +1,254 @@
+{
+  "format": "pcbcraft-sheet/6",
+  "id": "300578c4-bd6c-4cbb-971e-8d45e6b5567b",
+  "net_labels": [
+    {"id":108,"name":"LED_A","style":"local","at":{"x_nm":-25400000,"y_nm":-15240000},"rotation":0}
+
+    ,
+    {"id":109,"name":"LED_B","style":"local","at":{"x_nm":25400000,"y_nm":-15240000},"rotation":0}
+
+    ,
+    {"id":110,"name":"COL_A","style":"local","at":{"x_nm":-25400000,"y_nm":0},"rotation":0}
+
+    ,
+    {"id":111,"name":"COL_B","style":"local","at":{"x_nm":25400000,"y_nm":0},"rotation":0}
+
+    ,
+    {"id":112,"name":"BASE_A","style":"local","at":{"x_nm":-8890000,"y_nm":7620000},"rotation":0}
+
+    ,
+    {"id":113,"name":"BASE_B","style":"local","at":{"x_nm":8890000,"y_nm":7620000},"rotation":0}
+
+    ,
+    {"id":118,"name":"COL_A","style":"local","at":{"x_nm":38100000,"y_nm":-20320000},"rotation":0}
+
+    ,
+    {"id":119,"name":"COL_B","style":"local","at":{"x_nm":38100000,"y_nm":-17780000},"rotation":0}
+  ],
+  "labels": [
+  ],
+  "subsheets": [
+  ],
+  "symbols": [
+    {"id":2,"component":2,"unit":"main","x_nm":-60960000,"y_nm":-19050000,"rotation":0,"mirrored":true}
+
+    ,
+    {"id":5,"component":5,"unit":"main","x_nm":48260000,"y_nm":-19050000,"rotation":0}
+
+    ,
+    {"id":7,"component":7,"unit":"main","x_nm":-25400000,"y_nm":-21590000,"rotation":270}
+
+    ,
+    {"id":9,"component":9,"unit":"main","x_nm":-25400000,"y_nm":-8890000,"rotation":270}
+
+    ,
+    {"id":11,"component":11,"unit":"main","x_nm":-20320000,"y_nm":7620000,"rotation":0,"mirrored":true}
+
+    ,
+    {"id":14,"component":14,"unit":"main","x_nm":25400000,"y_nm":-21590000,"rotation":270}
+
+    ,
+    {"id":16,"component":16,"unit":"main","x_nm":25400000,"y_nm":-8890000,"rotation":270}
+
+    ,
+    {"id":18,"component":18,"unit":"main","x_nm":20320000,"y_nm":7620000,"rotation":0}
+
+    ,
+    {"id":20,"component":20,"unit":"main","x_nm":-8890000,"y_nm":-11430000,"rotation":270}
+
+    ,
+    {"id":22,"component":22,"unit":"main","x_nm":8890000,"y_nm":-11430000,"rotation":270}
+
+    ,
+    {"id":24,"component":24,"unit":"main","x_nm":-15240000,"y_nm":0,"rotation":0}
+
+    ,
+    {"id":26,"component":26,"unit":"main","x_nm":15240000,"y_nm":0,"rotation":180}
+
+    ,
+    {"id":28,"component":28,"unit":"main","x_nm":-50800000,"y_nm":1270000,"rotation":270}
+
+    ,
+    {"id":30,"component":30,"unit":"main","x_nm":-40640000,"y_nm":1270000,"rotation":270}
+
+    ,
+    {"id":32,"component":32,"unit":"main","x_nm":0,"y_nm":-31750000,"rotation":0,"field_layout":{"reference":{"offset":null,"visible":false,"show_name":false,"rotation":0,"align":"middle","height_nm":1270000},"value":{"offset":{"x_nm":0,"y_nm":-3810000},"visible":true,"show_name":false,"rotation":0,"align":"middle","height_nm":1270000}}}
+
+    ,
+    {"id":33,"component":33,"unit":"main","x_nm":0,"y_nm":31750000,"rotation":0,"field_layout":{"reference":{"offset":null,"visible":false,"show_name":false,"rotation":0,"align":"middle","height_nm":1270000},"value":{"offset":{"x_nm":0,"y_nm":4064000},"visible":true,"show_name":false,"rotation":0,"align":"middle","height_nm":1270000}}}
+  ],
+  "junctions": [
+    {"id":42,"x_nm":-57150000,"y_nm":-31750000}
+
+    ,
+    {"id":46,"x_nm":25400000,"y_nm":-31750000}
+
+    ,
+    {"id":49,"x_nm":-25400000,"y_nm":-31750000}
+
+    ,
+    {"id":53,"x_nm":-8890000,"y_nm":-31750000}
+
+    ,
+    {"id":56,"x_nm":8890000,"y_nm":-31750000}
+
+    ,
+    {"id":59,"x_nm":-50800000,"y_nm":-31750000}
+
+    ,
+    {"id":62,"x_nm":-40640000,"y_nm":-31750000}
+
+    ,
+    {"id":67,"x_nm":25400000,"y_nm":31750000}
+
+    ,
+    {"id":73,"x_nm":-54610000,"y_nm":31750000}
+
+    ,
+    {"id":76,"x_nm":-50800000,"y_nm":31750000}
+
+    ,
+    {"id":79,"x_nm":-40640000,"y_nm":31750000}
+
+    ,
+    {"id":82,"x_nm":-25400000,"y_nm":31750000}
+
+    ,
+    {"id":90,"x_nm":-25400000,"y_nm":0}
+
+    ,
+    {"id":97,"x_nm":25400000,"y_nm":0}
+
+    ,
+    {"id":100,"x_nm":-8890000,"y_nm":7620000}
+
+    ,
+    {"id":102,"x_nm":8890000,"y_nm":7620000}
+
+    ,
+    {"id":114,"x_nm":38100000,"y_nm":-20320000}
+
+    ,
+    {"id":116,"x_nm":38100000,"y_nm":-17780000}
+  ],
+  "wires": [
+    {"id":35,"from":{"symbol":32,"pin":"1"},"to":{"junction":53},"bends":[]}
+
+    ,
+    {"id":45,"from":{"symbol":32,"pin":"1"},"to":{"junction":56},"bends":[]}
+
+    ,
+    {"id":48,"from":{"symbol":2,"pin":"1"},"to":{"junction":42},"bends":[]}
+
+    ,
+    {"id":50,"from":{"junction":49},"to":{"junction":62},"bends":[]}
+
+    ,
+    {"id":51,"from":{"junction":49},"to":{"symbol":7,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":52,"from":{"junction":46},"to":{"symbol":14,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":54,"from":{"junction":53},"to":{"junction":49},"bends":[]}
+
+    ,
+    {"id":55,"from":{"junction":53},"to":{"symbol":20,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":57,"from":{"junction":56},"to":{"junction":46},"bends":[]}
+
+    ,
+    {"id":58,"from":{"junction":56},"to":{"symbol":22,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":60,"from":{"junction":59},"to":{"junction":42},"bends":[]}
+
+    ,
+    {"id":61,"from":{"junction":59},"to":{"symbol":28,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":63,"from":{"junction":62},"to":{"junction":59},"bends":[]}
+
+    ,
+    {"id":64,"from":{"junction":62},"to":{"symbol":30,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":66,"from":{"symbol":33,"pin":"1"},"to":{"junction":82},"bends":[]}
+
+    ,
+    {"id":68,"from":{"symbol":33,"pin":"1"},"to":{"junction":67},"bends":[]}
+
+    ,
+    {"id":75,"from":{"symbol":2,"pin":"2"},"to":{"junction":73},"bends":[{"x_nm":-54610000,"y_nm":-17780000}]}
+
+    ,
+    {"id":77,"from":{"junction":76},"to":{"junction":73},"bends":[]}
+
+    ,
+    {"id":78,"from":{"symbol":28,"pin":"2"},"to":{"junction":76},"bends":[]}
+
+    ,
+    {"id":80,"from":{"junction":79},"to":{"junction":76},"bends":[]}
+
+    ,
+    {"id":81,"from":{"symbol":30,"pin":"2"},"to":{"junction":79},"bends":[]}
+
+    ,
+    {"id":83,"from":{"junction":82},"to":{"junction":79},"bends":[]}
+
+    ,
+    {"id":84,"from":{"symbol":11,"pin":"2"},"to":{"junction":82},"bends":[]}
+
+    ,
+    {"id":85,"from":{"symbol":18,"pin":"2"},"to":{"junction":67},"bends":[]}
+
+    ,
+    {"id":86,"from":{"symbol":7,"pin":"2"},"to":{"symbol":9,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":88,"from":{"symbol":9,"pin":"2"},"to":{"junction":90},"bends":[]}
+
+    ,
+    {"id":91,"from":{"junction":90},"to":{"symbol":11,"pin":"3"},"bends":[]}
+
+    ,
+    {"id":92,"from":{"junction":90},"to":{"symbol":24,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":93,"from":{"symbol":14,"pin":"2"},"to":{"symbol":16,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":95,"from":{"symbol":16,"pin":"2"},"to":{"junction":97},"bends":[]}
+
+    ,
+    {"id":98,"from":{"junction":97},"to":{"symbol":18,"pin":"3"},"bends":[]}
+
+    ,
+    {"id":99,"from":{"junction":97},"to":{"symbol":26,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":101,"from":{"symbol":20,"pin":"2"},"to":{"junction":100},"bends":[]}
+
+    ,
+    {"id":103,"from":{"symbol":22,"pin":"2"},"to":{"junction":102},"bends":[]}
+
+    ,
+    {"id":104,"from":{"junction":100},"to":{"symbol":11,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":105,"from":{"junction":102},"to":{"symbol":18,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":106,"from":{"symbol":24,"pin":"2"},"to":{"junction":102},"bends":[{"x_nm":-12700000,"y_nm":17780000},{"x_nm":8890000,"y_nm":17780000}]}
+
+    ,
+    {"id":107,"from":{"symbol":26,"pin":"2"},"to":{"junction":100},"bends":[{"x_nm":12700000,"y_nm":22860000},{"x_nm":-8890000,"y_nm":22860000}]}
+
+    ,
+    {"id":115,"from":{"symbol":5,"pin":"1"},"to":{"junction":114},"bends":[]}
+
+    ,
+    {"id":117,"from":{"symbol":5,"pin":"2"},"to":{"junction":116},"bends":[]}
+  ]
+}

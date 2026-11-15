@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-footprint/1",
-  "library": "starter",
+  "library": "basic-components",
   "id": "sot23",
   "revision": 4,
   "name": "SOT-23 (TO-236AB)",

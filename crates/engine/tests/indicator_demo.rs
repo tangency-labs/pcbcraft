@@ -11,7 +11,7 @@ use serde_json::json;
 
 const ARCHIVE: &[u8] = include_bytes!("../../../examples/dual-led.pc");
 
-/// The distributed version-5 folder and archive migrate to the same canonical documents.
+/// The distributed folder and archive contain the same self-contained, byte-stable documents.
 #[test]
 fn demo_folder_and_archive_migrate_to_the_same_documents() {
     let project = decode_packed(ARCHIVE).unwrap().project;
@@ -28,27 +28,35 @@ fn demo_folder_and_archive_migrate_to_the_same_documents() {
 #[test]
 fn demo_connectivity_and_mappings_survive_an_undoable_edit() {
     let project = decode_packed(ARCHIVE).unwrap().project;
-    assert_eq!(project.symbols().len(), 7);
-    assert_eq!(project.wires().len(), 12);
-    assert_eq!(project.junctions().count(), 4);
-    assert_eq!(project.connectivity().unconnected.len(), 3);
-    let q = project.symbols().iter().find(|symbol| project.reference(symbol) == "Q1").unwrap();
-    assert!(q.terminals().iter().all(|pin| project.connectivity().unconnected.contains(pin)));
-    let expected: BTreeSet<Vec<String>> =
-        [vec!["C1.1", "J1.1", "R1.1", "R2.1"], vec!["C1.2", "D1.2", "D2.2", "J1.2"], vec!["D1.1", "R1.2"], vec!["D2.1", "R2.2"]]
-            .into_iter()
-            .map(|net| net.into_iter().map(str::to_owned).collect())
-            .collect();
+    assert_eq!(project.symbols().len(), 16);
+    assert!(project.wires().len() >= 30);
+    assert!(project.electrical_connectivity().unconnected.is_empty());
+    let expected: BTreeSet<Vec<String>> = [
+        vec!["C3.1", "C4.1", "J1.1", "PWR1.1", "R1.1", "R2.1", "R3.1", "R4.1"],
+        vec!["C3.2", "C4.2", "J1.2", "PWR2.1", "Q1.2", "Q2.2"],
+        vec!["C1.1", "D1.2", "J2.1", "Q1.3"],
+        vec!["C2.1", "D2.2", "J2.2", "Q2.3"],
+        vec!["D1.1", "R1.2"],
+        vec!["D2.1", "R2.2"],
+        vec!["C2.2", "Q1.1", "R3.2"],
+        vec!["C1.2", "Q2.1", "R4.2"],
+    ]
+    .into_iter()
+    .map(|net| net.into_iter().map(str::to_owned).collect())
+    .collect();
     assert_eq!(named_nets(&project).unwrap(), expected);
     let mut pads = BTreeSet::new();
     for symbol in project.symbols() {
+        if project.component(symbol).unwrap().metadata.attributes.exclude_from_board {
+            continue;
+        }
         for terminal in symbol.terminals() {
             let pad = project.pad_for_terminal(terminal).unwrap();
             assert_eq!(project.terminal_for_pad(pad), Some(terminal));
             assert!(pads.insert(pad.inspect().to_string()));
         }
     }
-    assert_eq!(pads.len(), 15);
+    assert_eq!(pads.len(), 30);
 
     let r1 = project.symbols().iter().find(|symbol| project.reference(symbol) == "R1").unwrap();
     let mut session = Session::default();
@@ -72,7 +80,7 @@ fn demo_connectivity_and_mappings_survive_an_undoable_edit() {
 /// Name nets independently of IDs and traversal order, rejecting unresolved terminals.
 fn named_nets(project: &Project) -> Option<BTreeSet<Vec<String>>> {
     project
-        .connectivity()
+        .electrical_connectivity()
         .nets
         .iter()
         .map(|net| {
@@ -94,12 +102,19 @@ fn demo_packages_have_pinned_geometry_and_correct_polarity_mapping() {
     let board = project.board_view(project.board_target().unwrap()).unwrap();
     let expected = [
         ("J1", "header-1x02-254", 2),
-        ("R1", "resistor-0402", 2),
+        ("R1", "resistor-0603", 2),
         ("R2", "resistor-0603", 2),
+        ("R3", "resistor-0603", 2),
+        ("R4", "resistor-0603", 2),
         ("C1", "capacitor-0603", 2),
+        ("C2", "capacitor-0603", 2),
+        ("C3", "capacitor-0603", 2),
+        ("C4", "capacitor-0603", 2),
+        ("J2", "header-1x02-254", 2),
         ("D1", "led-0402", 2),
         ("D2", "led-0402", 2),
         ("Q1", "sot23", 3),
+        ("Q2", "sot23", 3),
     ];
     for (reference, definition, count) in expected {
         let footprint = board.footprints().find(|f| f.reference == reference).unwrap();
@@ -116,4 +131,28 @@ fn demo_packages_have_pinned_geometry_and_correct_polarity_mapping() {
     let pads = board.footprints().find(|f| f.reference == "Q1").unwrap().pads;
     assert_eq!(pads[0].center.y_nm, pads[1].center.y_nm);
     assert!(pads[2].center.y_nm < pads[0].center.y_nm);
+}
+
+/// The demo is fully routed on both copper layers with valid via fanouts and a closed outline.
+/// Checking the saved example must report zero findings without changing bytes or undo state.
+#[test]
+fn complete_demo_has_no_unrouted_or_design_rule_findings() {
+    let project = decode_packed(ARCHIVE).unwrap().project;
+    let target = project.board_target().unwrap();
+    let board = project.boards().find(|board| board.target == target).unwrap();
+    assert!(board.tracks().len() > 50);
+    assert!(board.vias().len() > 4);
+    assert_eq!(board.tracks().iter().map(|track| track.layer).collect::<BTreeSet<_>>().len(), 2);
+    let ratsnest = project.board_view(target).unwrap().ratsnest().unwrap();
+    assert_eq!(ratsnest.terminal_count, 30);
+    assert!(ratsnest.missing.is_empty());
+    assert!(ratsnest.lines.is_empty());
+    let before = encode_documents(project.clone()).unwrap();
+    let mut session = Session::default();
+    session.open_snapshot(project);
+    let revision = session.revision();
+    let report = session.check_design(&json!({"board":target.board})).unwrap();
+    assert_eq!(report["total"], 0, "{report}");
+    assert_eq!(session.revision(), revision);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
