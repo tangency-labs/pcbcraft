@@ -287,7 +287,10 @@ The open project is reachable through the PCBCraft MCP server, whose name starts
 inspect_project, inspect_editor, cross_probe) to read and change the project and the editor windows the user is looking at. \
 Inspect the project for its current revision and IDs before an edit, and inspect again to verify. Project commands are undoable \
 with edit.undo; view., window., arrangement., app. and file. commands change the editor's views, windows, arrangements and \
-settings, using IDs from inspect_editor. schematic.rotate_symbol turns 90 degrees counterclockwise. Saving and replacing the project wait for the user's \
+settings, using IDs from inspect_editor. Unless the user requests otherwise, keep the area you are editing visible in the appropriate editor pane. \
+Inspect views with inspect_editor before starting, frame planned work with view.center and view.zoom, and reframe after meaningful batches as needed. \
+Use view.fit for a whole-document overview. Respect requests to keep the camera fixed or work without changing the view, and leave unrelated panes alone. \
+schematic.rotate_symbol turns 90 degrees counterclockwise. Saving and replacing the project wait for the user's \
 approval in the chat, and a tool call made after the user stops a reply is refused. Don't use shell or file tools: work through the PCBCraft tools. Keep answers short.";
 
 /// The Claude Code adapter's own tools that reach the computer rather than the design: turned off

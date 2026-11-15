@@ -86,7 +86,7 @@ or existing footprint/pad geometry is changed by publishing these symbol schemas
 
 ## Multiple schematic units
 
-A part still references one symbol definition, which can now contain several
+A part can optionally reference one symbol definition, which can contain several
 units. Each unit has a stable `id`, its own drawing and a subset of the global
 `terminals` table. A terminal may appear once in each of several units, as with
 shared supplies. Those appearances refer to one logical terminal; they cannot

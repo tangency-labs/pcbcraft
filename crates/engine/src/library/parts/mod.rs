@@ -20,7 +20,9 @@ pub use quantity::{Quantity, decimal, display_quantity};
 pub use reference::Reference;
 pub use value::Value;
 /// Published reusable part record format.
-pub const PART_FORMAT: &str = "pcbcraft-part/1";
+pub const PART_FORMAT: &str = "pcbcraft-part/2";
+/// Retained electrical-only records preserve their original encoding.
+pub const LEGACY_PART_FORMAT: &str = "pcbcraft-part/1";
 /// Published typed category record format.
 pub const CATEGORY_FORMAT: &str = "pcbcraft-category/1";
 #[cfg(test)]

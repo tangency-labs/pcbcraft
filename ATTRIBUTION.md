@@ -283,13 +283,13 @@ PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apach
 | PCBCraft file | PCBcraft Next source | What changed |
 |---|---|---|
 | `crates/engine/src/wire.rs`, `crates/engine/src/schematic/wiring.rs`, `crates/app/src/schematic_canvas/wires.rs`, `crates/app/src/lib.rs` | `docs/wire-editing.md`, `docs/desktop-guide.md` (behavior only) | Followed free-space route starts, orthogonal corners, elbow flipping, cancellation and placement/hover rotation. The explicit endpoint graph, format 3 codec and shared commands are new implementation; no prototype implementation was copied for this change. |
-| `libraries/starter/symbols/led.json`, `crates/engine/src/schematic.rs` | `src/document.rs`, `src/definitions.rs`, `src/desktop/canvas.rs` | Adapted the original generic LED definition and drawing to the shared placement command. Preserved numbered terminals and identified their polarity in inspection. The drawing now lives in the starter library as nanometer strokes. |
-| `libraries/starter/symbols/capacitor.json`, `libraries/starter/symbols/connector.json` | `src/document.rs`, `src/desktop/canvas.rs` | Added the original generic capacitor and two-pin connector with their names, reference prefixes and default values. Converted their point drawings to nanometer strokes in the starter library. |
+| `libraries/basic-components/symbols/led.json`, `crates/engine/src/schematic.rs` | `src/document.rs`, `src/definitions.rs`, `src/desktop/canvas.rs` | Adapted the original generic LED definition and drawing to the shared placement command. Preserved numbered terminals and identified their polarity in inspection. The drawing now lives in the starter library as nanometer strokes. |
+| `libraries/basic-components/symbols/capacitor.json`, `libraries/basic-components/symbols/connector.json` | `src/document.rs`, `src/desktop/canvas.rs` | Added the original generic capacitor and two-pin connector with their names, reference prefixes and default values. Converted their point drawings to nanometer strokes in the starter library. |
 | `crates/engine/src/lib.rs`, `crates/app/src/schematic_canvas.rs`, `crates/app/src/lib.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's select, rotate, delete and reference/value editing behavior with new engine commands, a format 2 schema and canvas code. No prototype implementation was copied. |
 | `crates/app/src/project_browser.rs`, `crates/chrome/src/workspace.rs`, `crates/app/src/lib.rs` | `docs/sheet-workflows.md`, `docs/desktop-guide.md`, `docs/ui-audit.md` (behavior only) | Followed the prototype's Browser tree (Project › Sheets › sheet › Symbols / Nets), with fold arrows separate from row clicks, sheet-local item lists that select without opening a drawer, and Capture/View ribbon tabs where tab changes never edit the project. The tree, tab strip, row glyphs and pick-to-center are new code; no prototype implementation was copied. Sheet creation and hierarchy now have independent upstream implementations. |
 | `crates/app/src/parts_browser.rs`, `crates/chrome/src/workspace.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's searchable parts browser with Small/Medium/Large/List views, click-to-place and drag-to-sheet placement. The card, thumbnails and drag handling are new code over the existing canvas painter; floating and snapping the panel are not ported. |
 | `crates/engine/src/schematic/wiring.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/netlist.rs` | Adapted explicit terminal references and net traversal to the existing command session. This slice supports direct pin links on one schematic. |
-| `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs`, `libraries/starter/symbols/resistor.json` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. The resistor drawing now lives in the starter library. |
+| `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs`, `libraries/basic-components/symbols/resistor.json` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. The resistor drawing now lives in the starter library. |
 | `crates/app/src/schematic_canvas.rs` | `src/desktop/canvas.rs` | Adapted the schematic grid and resistor zigzag for the shared desktop and browser canvas. Pin endpoints come from the engine and drawing metrics live in `crates/chrome`. |
 | `crates/app/src/schematic_canvas/camera.rs`, `crates/app/src/schematic_canvas.rs` | `src/desktop/canvas.rs`, `src/desktop/page.rs` | Adapted the viewport transform, pointer-anchored zoom, middle-button pan, and fit behavior to Tangency’s canvas and chrome. |
 | `crates/app/src/schematic_canvas/wires.rs`, `crates/app/src/lib.rs` | `src/desktop/canvas.rs`, `src/desktop/mod.rs`, `src/desktop/wire_geometry.rs` | Adapted pin hit testing, the Wire tool shortcut, the cancelable preview, and a symmetric subset of the orthogonal display routes. Completed routes now dispatch through the shared `schematic.draw_wire` command. |
@@ -592,7 +592,7 @@ implementation source or artwork was used.
 
 ## Original starter SMD footprints and NPN symbol
 
-`libraries/starter/footprints/*.json`, `libraries/starter/symbols/npn.json`,
+`libraries/basic-components/footprints/*.json`, `libraries/basic-components/symbols/npn.json`,
 their engine definition/validation/persistence code and physical pad rendering
 are original upstream work under MIT OR Apache-2.0. The regenerated Dual LED
 example pins these definitions through shared engine commands.
@@ -878,7 +878,7 @@ or implementation source are included; unavailable synchronization options are
 not represented as operational controls.
 
 The editable footprint-mapping defaults are original PCBcraft code and library
-data. `libraries/starter/footprint-mapping-defaults.json` records the exact
+data. `libraries/basic-components/footprint-mapping-defaults.json` records the exact
 starter LED symbol revisions 1/2 and footprint revision 4 pairing, using their
 already qualified terminal and pad polarity contracts documented in
 `docs/footprint-library.md`. Generic number matching uses stable terminal/pad IDs;
@@ -982,7 +982,7 @@ dependency or native saved-format change was introduced.
 ## Shared Craft UI migration
 
 `solidcraft-ui-kit`, `solidcraft-look` and `solidcraft-theme` are pinned to
-SolidCraft revision `f56114219b2d7f6d16de8dd58700479646948f8a`, copyright
+SolidCraft revision `73bdb6cdd39efc3899fb54e7217289a630a89efe`, copyright
 2026 the SolidCraft maintainers, under the SolidCraft Brand and Interface
 Licence. They retain that licence independently of PCBcraft's MIT OR Apache-2.0
 code. The retained text is
@@ -1222,3 +1222,232 @@ reuses the pinned Craft toolkit through `crates/chrome`, under its existing reta
 licence and notices. Checker diagnostics extend the original #240 fixtures and
 runner; no new dependency, external implementation, artwork, library data or saved
 project format was introduced.
+
+## Library workspace
+
+The per-pane library browser, nested/flat record views, host source lifecycle and
+regressions are original MIT OR Apache-2.0 PCBcraft work for #315. The composition
+follows @travle1's original rendered mockups; interface presentation reuses the
+already qualified pinned Craft tree, tables, surfaces, controls and icon set,
+including its `library` books master. Electronics previews reuse existing original
+PCBcraft painters. No new dependency, third-party EDA source, artwork, library data
+or native project/library format was introduced.
+
+Library workspace follow-up chrome composes the same qualified panel host and
+menu rows for reserved Preview columns and acquisition choices. Native edge
+gestures and pane headers remain PCBcraft's existing shared host framework;
+these corrections add no assets or dependencies.
+
+Library Preview navigation reuses PCBcraft's original footprint-picker camera and
+native geometry painters for symbol and footprint inspection. Floating-card size
+controls compose the already qualified pinned Craft panel sashes, surfaces and
+menu rows through the shared chrome adapter. It uses the existing shared dependency
+family without external model data, artwork or EDA implementation; local arrangement dimensions do not
+change native project or library formats.
+
+
+On November 13, 2026, @travle1 explicitly authorized pinning the latest shared
+UI and fixing compatibility. The coupled UI kit, look, theme, registry and text
+crates now use SolidCraft 0.41.0 at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, replacing the initial migration's
+`f56114219b2d7f6d16de8dd58700479646948f8a` pin. The egui-wgpu and winit patches
+use the same revision; their source directories are unchanged between these pins.
+The Brand and Interface licence bytes and retained SHA-256 are unchanged, and
+`deny.toml` keeps its exceptions limited to the three covered 0.41.0 packages.
+The existing upstream written-record request remains separate from this local
+official-project authorization; no release or publication is part of this work.
+
+`solidcraft-ui-text` and `solidcraft-ui-registry` retain MIT OR Apache-2.0.
+`crates/chrome/assets/shared-ui/en.json` retains the English entries referenced
+as literals by the shared kit/look/theme from that revision's
+`assets/locales/en.json`. PCBcraft installs this host catalog before shared
+controls render, including text-edit context menus. Application/electronics copy
+remains host-owned. The extracted shared UI English data follows the same retained
+Brand and Interface notice; no new fonts or unrelated application assets were copied.
+
+## UI automation adapter
+
+The native UI automation adapter uses the existing pinned
+`solidcraft-ui-registry` target-publication API, originally qualified at SolidCraft
+revision `f56114219b2d7f6d16de8dd58700479646948f8a` and now using main's
+0.41.0 pin recorded above. It adds PCBcraft-owned enabled,
+clipping, window and input-lifecycle metadata around shared toolkit responses;
+it does not introduce a toolkit dependency upgrade. SolidCraft's public
+`examples/demo/record_ui.sh` and `enclosure_ui_mcp.py` were read as workflow
+references on November 13, 2026. Their source was not copied into this adapter.
+The existing shared toolkit licence and authorization records above continue
+to apply. The pinned registry does not track per-host enabled/covered state or
+queue native input; those concrete host responsibilities remain in PCBcraft.
+
+## Compact workspace switcher
+
+The workspace card dimensions follow the already qualified SolidCraft 0.41.0
+`crates/ui-egui/src/toolbar.rs` at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, using the existing shared ribbon
+metrics. PCBcraft retains its original electronics glyphs and accessible picker
+response, with wrapped titles composed inside the existing Craft card. The
+shared toolkit's retained Brand and Interface notice continues to apply; no
+source implementation, asset or dependency was added.
+
+## Native library publication
+
+The filesystem-free draft preparation, published-session binding, reserved external
+library identities and immutable native-folder publication are original PCBcraft
+work for #308 under MIT OR Apache-2.0. They reuse existing native record formats,
+original connector/header fixtures, bounded source validation and verified directory
+handles. New library and Publish forms compose the pinned Craft property-form,
+fields, choices and fixed action footer through `crates/chrome`; authoring actions
+reuse the app's menus, ribbon and workspace host. The existing value-only selector has no creation action, so chrome composes the
+shared dropdown and aligned menu rows for collection selection and New library.
+Save As copies and destination/status presentation follow @travle1's explicit
+workflow clarification. No dependency, external EDA implementation, artwork or
+library asset was introduced.
+
+The former bundled Default collection is now Basic components, with the native
+identity and folder `basic-components`. Its original licensed records and revision
+history are retained. Original compatibility code supplies historical `starter`
+addresses without rewriting project-pinned copies or adding duplicate browsing
+entries; no external library data or dependency was introduced.
+
+## Reusable part documents
+
+The generic/orderable part sessions, exact dependency validation and immutable
+publication extension for #309 are original MIT OR Apache-2.0 PCBcraft work over
+the existing native schemas and #308 publisher. The workspace form composes the
+already qualified Craft fields, choices, table, menus and buttons through
+`crates/chrome`; native symbol/pad correspondence highlights use PCBcraft's
+original painters. Tests assemble original bundled connector/header definitions
+and explicitly synthetic manufacturer metadata. No external EDA implementation,
+library data, artwork, new dependency or native format was introduced.
+
+The part-reference chooser follow-up composes the same pinned Craft search field,
+selectable table with row reveal, property form, choices and fixed footer. Its
+query cache, exact reference transactions and large-catalog tests are original
+PCBcraft work over the existing native catalog. The generated scale fixture uses
+original authoring primitives, without third-party records or new dependencies.
+
+The optional drawing associations in `pcbcraft-part/2`, retained format-1 codec,
+stage-specific schematic-placement validation and original regression records are
+PCBcraft work following @travle1's November 14 clarification. Compact part forms
+compose the already qualified Craft controls, fields, tables, disclosures and
+scroll regions through chrome. The pinned kit has no part-document composition;
+the bounded content rail and package/association ownership remain host code.
+No dependency, external EDA implementation or library asset was added.
+
+The part-document footer and tabs reuse the pinned Craft `CatalogLayout`, action
+footer and `app_bar::tabs` components through chrome. The shared document strip
+has no non-closeable navigation tab and does not attach accessible names to its
+painted document rows, so the host composes Browse beside it and adds response
+metadata without replacing its painting, overflow, menu or drag behavior. Draft
+identity, ordering and close protection remain PCBcraft-owned runtime state.
+No dependency, external asset or saved native format changed in this follow-up.
+The tab adapter binds the kit's scoped panel palette to the workspace text,
+selection and hover tokens, since the title-bar palette has different light-mode
+contrast. The override is local to painting these tabs and their existing menus.
+
+Per-part removal planning, directory-bound review tokens, reversible native-record
+staging and failure regressions are original PCBcraft work. The implementation
+reuses the existing publisher lock, handle-bound storage primitives and platform
+trash adapters without new dependencies or native formats. Delete part uses the
+already qualified Craft ribbon action and confirmation form through chrome;
+Preview resizing reuses the existing shared sash and panel surface. No external
+EDA sources, records, icons or artwork were consulted or added.
+
+## Project net-class catalog and dimensional resolution
+
+The versioned class catalog, explicit-set dimensional resolver, shared commands,
+project/20 storage extension and regression cases are original MIT OR Apache-2.0
+PCBcraft work for #300, following the repository's rule and net-identity contracts.
+They reuse the delivered board-default vocabulary and existing serialization,
+UUID and history infrastructure. Fixtures are authored with native commands and
+production folder/archive codecs. No external EDA implementation, library data,
+artwork, dependency or toolkit change was introduced.
+
+## Persistent net-class assignments
+
+The #301 assignment vocabulary, reconciliation, scoped shared commands, protected
+definition removal, project/21 and instances/3 extensions, consumer refusal and
+regressions are original MIT OR Apache-2.0 PCBcraft work. They reuse the existing
+sparse registry, class resolver and native publication infrastructure. Test and
+CPU fixtures were generated through native commands and production codecs; no
+external EDA implementation, asset, library data or dependency was introduced.
+
+## Net-class routing, query and DRC consumers
+
+The #302 contact-policy projection, class-aware copper validation, query/overlay
+spacing and DRC provenance are original MIT OR Apache-2.0 PCBcraft work. They
+reuse the existing class resolver, sparse net registry, accepted connectivity,
+bounded jobs and represented contours. The GUI reuses the qualified Craft
+routing halo, ribbon dimensions and existing message surface through chrome;
+no new generic control or toolkit gap was required. Command-built tests use
+original PCBcraft parts and production codecs. No external EDA implementation,
+asset, dependency or toolkit revision was introduced.
+
+## Shared net-class editor
+
+The #303 Rules workflow, current-selection projection and regressions are original
+MIT OR Apache-2.0 PCBcraft work. The form composes the pinned Craft settings modal,
+segmented tabs, choices, search, checkboxes, fields and footer through existing
+`crates/chrome` adapters. Hard/preference grouping, sparse opinions and provenance
+remain host domain composition; the toolkit does not provide an electronics rule
+editor. No custom generic control, dependency upgrade, external EDA implementation,
+library asset or native format change was introduced.
+
+The pinned modal host does not schedule a settling paint after viewport bounds
+change. The existing chrome settings-form adapter records those bounds and requests
+one extra frame, retaining the shared surface, positioning and input behavior.
+Class/net choices use the adapter's existing bounded-width option so browsing can
+show useful names and target details. No toolkit dependency was changed.
+
+The Rules layout follow-up composes the same settings section treatment, bounded
+fields, checkboxes and semantic warning band through `chrome::rule_form`. The
+pinned selectable table always owns a horizontal scroll region and adds row focus
+targets; nested in the vertical form, it prevented accessibility reveal from
+reaching lower controls. The adapter therefore reserves aligned cells around
+shared controls while the form retains one vertical scroll owner. It adds no
+custom control painting, model policy, dependency or toolkit revision. Source
+names and net references are presentation only; exact identities remain retained
+in the expanded details and native commands.
+
+The active-source follow-up adds an original read-only classification over the
+existing resolver result, without changing resolution, commands or saved data.
+The same qualified form rows distinguish class contributions, saved effective
+rules and unsaved assignment previews; technical details identify active,
+overridden, less restrictive and conflicting contributions. No dependency,
+external source, custom drawing or shared toolkit revision was introduced.
+
+The dimensional illustrations and boundary descriptions in Rules are original
+PCBcraft work: copper spacing, board edge spacing, track width, via outer/drill
+diameters and radial annular ring. They use existing theme colors and vector
+geometry; no KiCad/JLCPCB artwork, external source, asset or dependency was used.
+The pinned toolkit has no PCB constraint illustration component. Electronics
+geometry stays in the app, while the chrome form adapter reserves its column and
+continues to compose shared fields, checkboxes, modal surfaces and scrolling.
+
+Board Setup's Design rules destinations reuse its existing Craft navigation rail
+and compact selector to open the same revision-bound board/class editors. Draft
+retention and source-view checks remain host behavior; no new generic control,
+asset, dependency or toolkit revision was introduced.
+
+The composition follow-up keeps source-view/snapshot collection at the application
+orchestration boundary. Draft and selected-net helpers receive explicit immutable
+model/selection inputs, and board/class dimensional inputs share one chrome
+adapter over the same qualified Craft field. Commands, resolution, source
+authority and saved data remain unchanged; no new dependency or toolkit gap.
+
+The embedded Rules follow-up extracts content-only board/class editors and typed
+navigation intents for composition inside either Board Setup or the standalone
+Rules modal. The shell owns revision-checked commands, retained drafts and native
+source-window placement. It reuses the existing Craft page rail/selector, fields,
+scroll host and footer; no nested modal, new generic control, dependency or artwork
+was introduced.
+
+## Window and pane chrome simplification
+
+The File → Layouts presentation reuses the qualified pinned Craft menu surface,
+rows and submenu behavior through chrome; saved view setup identities and storage
+remain PCBcraft-owned. Pane tabs retain the same shared tab shape and close
+control. Canvas margins reuse PCBcraft's original ribbon grid projection, while
+title-bar drag recognition follows the pinned Craft helper's existing threshold
+behavior, retaining PCBcraft's foreground hit regions and native-grab recovery.
+No dependency, external artwork, EDA implementation or native format was added.

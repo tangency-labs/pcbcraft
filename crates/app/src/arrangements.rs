@@ -151,13 +151,9 @@ impl PcbApp {
             .hosts
             .values()
             .any(|host| {
-                host.layout
-                    .views()
-                    .into_iter()
-                    .chain(host.parked.iter().copied())
-                    .any(|id| self.views.view(id).is_some_and(|v| v.definition.is_some()))
+                host.layout.views().into_iter().chain(host.parked.iter().copied()).any(|id| self.views.view(id).is_some_and(|v| v.auxiliary()))
             })
-            .then_some("Return library editor panes to project workspaces before changing arrangements.")
+            .then_some("Return library editor panes and Library panes to project workspaces before changing arrangements.")
     }
 
     /// Keep the current arrangement's latest navigation without changing electrical revision.

@@ -278,9 +278,7 @@ fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32)
     }
     let [r, g, b, _] = copper.to_normalized_gamma_f32();
     let label_ink = if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65 { Tokens::get().board_canvas } else { Color32::WHITE };
-    let mut job = egui::text::LayoutJob::simple(text, FontId::monospace(size), label_ink, f32::INFINITY);
-    job.halign = egui::Align::Center;
-    let galley = p.layout_job(job);
+    let galley = crate::canvas_text::layout(p, text, FontId::monospace(size), label_ink, egui::Align::Center);
     let pos = pad.center - galley.rect.center().to_vec2();
     p.add(egui::epaint::TextShape::new(pos, galley, label_ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
 }

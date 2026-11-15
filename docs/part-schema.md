@@ -1,9 +1,12 @@
 # Native part and category schemas
 
-A **part definition** is reusable library data for a resistor, IC, connector or
-another electrical part. It references one symbol and zero or more package
-variants. That symbol may contain several schematic units, all belonging to
-the same physical part and complete terminal-to-pad mapping. A **part instance** is one use in a project, such as R1 or U1, with its
+A **part definition** is reusable library data for an electrical or physical item.
+Its schematic symbol and physical package variants are independently optional.
+A footprint-only definition can describe mounting hardware or another board-only
+item without a dummy symbol; a symbol-only definition supports schematic work,
+and a definition with neither drawing can retain library metadata until drawings
+are available. A symbol may contain several schematic units belonging to one
+physical part. A **part instance** is one use in a project, such as R1 or U1, with its
 own stable identity, reference, value and requirements. A **manufacturer part**
 identifies a particular manufacturer's MPN and its specifications for one part
 definition and package variant. Several instances or manufacturer parts can
@@ -24,7 +27,8 @@ while **Edit copy** authors a separate library definition.
 
 | Record | Format | Machine-readable schema |
 | --- | --- | --- |
-| Part definition | `pcbcraft-part/1` | [part-v1.schema.json](schemas/part-v1.schema.json) |
+| Part definition | `pcbcraft-part/2` | [part-v2.schema.json](schemas/part-v2.schema.json) |
+| Retained electrical part definition | `pcbcraft-part/1` | [part-v1.schema.json](schemas/part-v1.schema.json) |
 | Manufacturer part | `pcbcraft-manufacturer-part/1` | [manufacturer-part-v1.schema.json](schemas/manufacturer-part-v1.schema.json) |
 | Project part selection | Project format 15 | [part-selection-v15.schema.json](schemas/part-selection-v15.schema.json) |
 | Category definition | `pcbcraft-category/1` | [category-v1.schema.json](schemas/category-v1.schema.json) |
@@ -45,11 +49,42 @@ available for libraries without central part definitions. The native assignment
 chooser also lists external native footprints.
 
 This slice does not include KiCad import, vendor HTTP connectors, supplier stock
-or prices, parametric catalog filtering, library authoring tools or the complete
-manager. Manufacturer records use the same library ingestion and provenance
+or prices, parametric catalog filtering or the complete manager. Native part authoring
+uses session documents in Parts Library, as described in the
+[source guide](native-library-sources.md#generic-and-orderable-part-documents). Manufacturer records use the same library ingestion and provenance
 contracts that a later vendor adapter can produce. No provider is required to
 open or edit a saved project. Footprint geometry and general pad stacks retain
 their existing contracts.
+
+## Optional drawings and compatibility
+
+Format 2 makes drawings independent of the existence of a reusable definition.
+Publication resolves every association that is present, without requiring one
+that is absent. A declared symbol or footprint must still identify an available,
+unambiguous exact revision; absence never means “use the newest” or “invent a
+default”. Category requirements and manufacturer records work independently of a
+symbol. A manufacturer record still selects an explicitly declared package.
+
+A package without a symbol has an empty `mapping` and no `unconnected_pads`.
+It carries physical geometry without asserting electrical terminal ownership.
+When both symbol and footprint are present, the existing complete mapping rules
+apply: every symbol terminal is mapped and every footprint pad is accounted for.
+Adding a symbol to a footprint-only part therefore requires explicit mapping
+before publication. Removing a symbol in the editor clears its dependent maps
+in the same undoable edit; Undo restores the symbol and maps together.
+
+Schematic placement requires a declared symbol and rejects a footprint-only or
+metadata-only part atomically. These definitions remain searchable and editable
+in Parts Library. Direct placement of a symbol-less part on a physical board
+requires a board-owned instance path; the current schematic-owned placement
+command does not provide that path. Library validity does not imply availability
+in every placement surface.
+
+Existing format-1 records remain readable and retain their symbol requirement,
+format marker, stable ordering and encoding. New authoring starts with format 2;
+removing a symbol from a retained format-1 definition upgrades the new authored
+revision to format 2. Existing published revisions and project-pinned copies are
+not rewritten. Project selection and manufacturer formats remain unchanged.
 
 ## Exact references
 
@@ -73,10 +108,10 @@ Adding/removing/refreshing a source invalidates dependency-resolution caches.
 | --- | --- |
 | Common identity fields | `format`, `library`, `id`, `revision`, `name`, `license` |
 | `source` | Required provenance `kind`, `reference`, `locator`; descriptive metadata, never fetched on load |
-| `symbol` | Exact symbol reference |
+| `symbol` | Optional exact symbol reference in format 2; required in format 1. Omit when absent; null and placeholder references are invalid. |
 | `category` | Optional exact category `definition` and optional `primary_value` field binding |
 | `fixed_parameters` | Optional nonempty map of namespaced field IDs to known typed fixed values; requires `category` |
-| `packages` | Required map of stable variant IDs to package records; an empty map is valid during schematic work |
+| `packages` | Required map of stable variant IDs to package records; an empty map is valid for library and schematic work |
 
 No manufacturer, MPN, stock, price, drawing, terminal geometry or pad geometry
 belongs in this record. The part links the independently versioned definitions.
@@ -87,10 +122,11 @@ or unsupported manufacturer specifications are not represented as fixed values,
 zero or guessed defaults.
 
 A package has `name`, an exact `footprint`, a `mapping` and optional
-`unconnected_pads`. The mapping's keys are symbol terminal IDs; each value is
-one or more footprint pad identifiers. Every terminal must be mapped, and every
-pad must occur exactly once either in one mapping entry or as explicitly
-unconnected. Multiple lands can belong to one terminal, but one pad cannot
+`unconnected_pads`. When a symbol is present, the mapping's keys are its terminal
+IDs and each value is one or more footprint pad identifiers. Every terminal must
+be mapped, and every pad must occur exactly once either in one mapping entry or
+as explicitly unconnected. Without a symbol, `mapping` is empty and
+`unconnected_pads` is omitted. Multiple lands can belong to one terminal, but one pad cannot
 belong to two terminals. Identifier spelling is preserved, including `01`, `EP`
 and alphanumeric names. Names, positions and package size codes never establish
 a map. Parts support at most 64 packages; this first native contract retains

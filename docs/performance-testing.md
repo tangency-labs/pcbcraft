@@ -91,6 +91,16 @@ painting code. They do not create an eframe window or submit pixels to a GPU.
 | `replay.<step>.tessellate` | CPU tessellation of those shapes; no renderer submission |
 | `replay.shared-edit.command` | Shared engine edit while a real route draft is pending; excludes MCP transport |
 
+Assigned-class artifacts additionally report `class.route_rules.contact`,
+`class.route.request_capture`, per-stage `class.route.batch_max.*`,
+`class.route.engine_total` and `class.route.atomic_publish`. Each batch metric is
+the maximum 256-unit service call in that iteration; the total includes all calls.
+The runner verifies committed width against the contacted policy and checks pair-
+specific probe spacing with an exhaustive oracle. Use exact saved command-generated
+assigned artifacts for these measurements; unassigned fixtures omit these boundaries.
+A pre-class-consumer revision refuses assigned operations, so their absolute costs
+must not be presented as a matched before/after speedup.
+
 Cold engine samples decode a fresh project each time; the executable/WASM module
 stays loaded, so this means cold model caches rather than cold process startup.
 Replay creates a fresh app
@@ -105,6 +115,32 @@ and expose service costs; label its scope and avoid tail-latency conclusions tha
 its sample count cannot support. One-sample runs are correctness/build smoke tests.
 
 ## Generate and retain fixtures
+
+To diagnose navigation in an existing native project without modifying it, use
+the opt-in `project_perf` example with the same environment metadata described
+below:
+
+```sh
+cargo build --locked --release -p pcbcraft-app --features performance-harness --example project_perf
+target/release/examples/project_perf /path/to/project.json /tmp/environment.json /tmp/navigation-report.json
+```
+
+This runner uses the read-only project loader and replays eight warmup frames,
+then ten idle, zoom and click frames in each of the schematic and PCB editors.
+It checks that zoom reaches the canvas, click events are observed and authored
+archive bytes remain unchanged. Reports contain raw UI/tessellation CPU samples
+and a project hash; they do not measure GPU presentation or OS input latency.
+Keep the same project bytes and build profile for a before/after comparison,
+and qualify small sample sets as targeted service-cost checks. User projects
+and their libraries remain local unless redistribution is separately authorized.
+
+For zoom-specific reports on the populated sheets and PCB editor, append
+`--zoom-all`. This separate trace uses a 2560 × 1600 viewport, eight warmup
+frames, ten stationary frames and thirty continuously changing zoom-in and
+zoom-out frames per document. Its `texture_upload_bytes` arrays record actual
+texture deltas separately from CPU timing metrics. Repeatedly alternating between
+two zoom sizes can hide cold font work, so this trace deliberately requests new
+intermediate scales and verifies that camera zoom changes on every zoom frame.
 
 Run from the repository root using the pinned toolchain/dependencies. The actual
 shipping profile is `[profile.release]` in `Cargo.toml`, currently size optimized;

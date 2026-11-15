@@ -118,7 +118,7 @@ fn browser_ribbon_toggle_can_restore_visibility_from_either_workspace() {
         click(&mut h, "Toggle Browser");
         assert!(!h.state().browser.open);
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         assert!(h.query_by_label("Main").is_none());
         click(&mut h, "Toggle Browser");
@@ -198,7 +198,7 @@ fn stale_browser_actions_leave_navigation_and_selection_alone() {
 fn browser_navigation_stays_in_the_focused_split_pane() {
     let mut h = project_harness(1400.0);
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     click(&mut h, "PCB canvas 3");
     let first = ViewId(0);
     let other = h.state().views.active.id();

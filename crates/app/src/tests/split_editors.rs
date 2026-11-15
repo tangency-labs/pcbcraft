@@ -15,6 +15,27 @@ fn split_harness<'a>() -> Harness<'a, PcbApp> {
     h
 }
 
+/// The canvas starts at its header's bottom, with no unpainted layout spacing between them.
+#[test]
+fn pane_headers_meet_their_canvases_in_both_split_orientations() {
+    for theme in [crate::ThemeChoice::Dark, crate::ThemeChoice::Light] {
+        for width in [1400., 760.] {
+            let mut h = split_harness();
+            h.state_mut().preferences.theme = theme;
+            h.set_size(egui::vec2(width, 1000.));
+            h.run();
+            let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+            let mut headers: Vec<_> = h.get_all_by_label(&path).map(|node| node.rect()).collect();
+            headers.sort_by(|a, b| a.top().total_cmp(&b.top()).then(a.left().total_cmp(&b.left())));
+            assert_eq!(headers.len(), 2);
+            for (id, header) in headers.into_iter().enumerate() {
+                let canvas = canvas(&h, id as u64);
+                assert!((canvas.top() - header.bottom()).abs() < 0.5, "header {header:?}, canvas {canvas:?}");
+            }
+        }
+    }
+}
+
 /// Resolve a view by identity rather than by the slot currently holding keyboard focus.
 fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a EditorView {
     let views = &h.state().views;
@@ -719,7 +740,8 @@ fn view_settings_support_cancel_apply_defaults_and_search() {
     h.get_by_label("Follow selection mode");
     h.key_press(Key::Enter);
     h.run();
-    assert!(h.query_all_by_label("Views").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
+    assert_eq!(h.state().arrangements.tabs().len(), 1);
+    assert!(h.query_by_label("Arrangement Views").is_none());
 }
 
 /// Browser picks reveal complete wire paths in a stacked layout, inside the region left clear

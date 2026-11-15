@@ -1,0 +1,133 @@
+CPU comparison: 6be9dec08076ad7e6b60c7d3079e5a31a02a90f2 → 64831ae1bf022f1fc3290f26ead9df79348ed3ea
+native-cpu; 10 samples per boundary; artifact 4b9924555d87b0144bc81aa3ad3d4774388b659d839e17fe7362aa36e4a7a353
+
+| Boundary | Before p95 ms | After p95 ms | Change | After p99 ms | Max ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| class.route.atomic_publish | 0.004790 | 0.008566 | +78.8% | 0.008566 | 0.008566 |
+| class.route.batch_max.Checking copper contacts | 0.011692 | 0.011732 | +0.3% | 0.011732 | 0.011732 |
+| class.route.batch_max.Preparing copper edit | 0.173758 | 0.161515 | -7.0% | 0.161515 | 0.161515 |
+| class.route.batch_max.Preparing pad contacts | 0.030908 | 0.033203 | +7.4% | 0.033203 | 0.033203 |
+| class.route.batch_max.Validating route | 0.060554 | 0.060424 | -0.2% | 0.060424 | 0.060424 |
+| class.route.engine_total | 0.317028 | 0.308041 | -2.8% | 0.308041 | 0.308041 |
+| class.route.request_capture | 0.007945 | 0.007474 | -5.9% | 0.007474 | 0.007474 |
+| class.route_rules.contact | 0.144412 | 0.124695 | -13.7% | 0.124695 | 0.124695 |
+| clearance.candidates.channel | 0.000251 | 0.000240 | -4.4% | 0.000240 | 0.000240 |
+| clearance.candidates.crowded | 0.000942 | 0.000922 | -2.1% | 0.000922 | 0.000922 |
+| clearance.candidates.empty | 0.001553 | 0.002094 | +34.8% | 0.002094 | 0.002094 |
+| clearance.pairs | 0.085502 | 0.083899 | -1.9% | 0.083899 | 0.083899 |
+| clearance.prepare | 0.249921 | 0.242648 | -2.9% | 0.242648 | 0.242648 |
+| clearance.probe.channel | 0.000431 | 0.000421 | -2.3% | 0.000421 | 0.000421 |
+| clearance.probe.crowded | 0.007535 | 0.007243 | -3.9% | 0.007243 | 0.007243 |
+| clearance.probe.empty | 0.001222 | 0.000932 | -23.7% | 0.000932 | 0.000932 |
+| command.move_tracks | 0.154331 | 0.149412 | -3.2% | 0.149412 | 0.149412 |
+| connectivity.cached | 0.000050 | 0.000060 | +20.0% | 0.000060 | 0.000060 |
+| connectivity.cold | 0.005570 | 0.004950 | -11.1% | 0.004950 | 0.004950 |
+| decode.cold | 0.424160 | 0.377182 | -11.1% | 0.377182 | 0.377182 |
+| drc.synchronous | 0.253668 | 0.255031 | +0.5% | 0.255031 | 0.255031 |
+| electrical_connectivity.first | 0.007514 | 0.004449 | -40.8% | 0.004449 | 0.004449 |
+| electrical_connectivity.repeat | 0.003597 | 0.002985 | -17.0% | 0.002985 | 0.002985 |
+| replay.arm.down.tessellate | 0.303573 | 0.260281 | -14.3% | 0.260281 | 0.260281 |
+| replay.arm.down.ui | 0.600353 | 0.566419 | -5.7% | 0.566419 | 0.566419 |
+| replay.arm.up.tessellate | 0.302831 | 0.256474 | -15.3% | 0.256474 | 0.256474 |
+| replay.arm.up.ui | 0.614409 | 0.566920 | -7.7% | 0.566920 | 0.566920 |
+| replay.cancel.down.tessellate | 0.315906 | 0.330594 | +4.6% | 0.330594 | 0.330594 |
+| replay.cancel.down.ui | 0.666187 | 0.688439 | +3.3% | 0.688439 | 0.688439 |
+| replay.cancel.up.tessellate | 0.309454 | 0.265611 | -14.2% | 0.265611 | 0.265611 |
+| replay.cancel.up.ui | 0.683890 | 0.630801 | -7.8% | 0.630801 | 0.630801 |
+| replay.exit.down.tessellate | 0.305958 | 0.259089 | -15.3% | 0.259089 | 0.259089 |
+| replay.exit.down.ui | 0.650417 | 0.635218 | -2.3% | 0.635218 | 0.635218 |
+| replay.exit.up.tessellate | 0.299785 | 0.257826 | -14.0% | 0.257826 | 0.257826 |
+| replay.exit.up.ui | 0.609490 | 0.581467 | -4.6% | 0.581467 | 0.581467 |
+| replay.idle.0.tessellate | 0.307841 | 0.259880 | -15.6% | 0.259880 | 0.259880 |
+| replay.idle.0.ui | 0.652651 | 0.630650 | -3.4% | 0.630650 | 0.630650 |
+| replay.idle.1.tessellate | 0.301700 | 0.261583 | -13.3% | 0.261583 | 0.261583 |
+| replay.idle.1.ui | 0.683410 | 0.653624 | -4.4% | 0.653624 | 0.653624 |
+| replay.idle.10.tessellate | 0.306138 | 0.257857 | -15.8% | 0.257857 | 0.257857 |
+| replay.idle.10.ui | 0.622234 | 0.604060 | -2.9% | 0.604060 | 0.604060 |
+| replay.idle.11.tessellate | 0.308562 | 0.258368 | -16.3% | 0.258368 | 0.258368 |
+| replay.idle.11.ui | 0.621703 | 0.601445 | -3.3% | 0.601445 | 0.601445 |
+| replay.idle.12.tessellate | 0.307530 | 0.258177 | -16.0% | 0.258177 | 0.258177 |
+| replay.idle.12.ui | 0.618888 | 0.596305 | -3.6% | 0.596305 | 0.596305 |
+| replay.idle.13.tessellate | 0.302922 | 0.257926 | -14.9% | 0.257926 | 0.257926 |
+| replay.idle.13.ui | 0.619158 | 0.593590 | -4.1% | 0.593590 | 0.593590 |
+| replay.idle.14.tessellate | 0.302240 | 0.257316 | -14.9% | 0.257316 | 0.257316 |
+| replay.idle.14.ui | 0.627024 | 0.600213 | -4.3% | 0.600213 | 0.600213 |
+| replay.idle.15.tessellate | 0.302090 | 0.321858 | +6.5% | 0.321858 | 0.321858 |
+| replay.idle.15.ui | 0.631832 | 0.704630 | +11.5% | 0.704630 | 0.704630 |
+| replay.idle.16.tessellate | 0.306739 | 0.259810 | -15.3% | 0.259810 | 0.259810 |
+| replay.idle.16.ui | 0.627695 | 0.741229 | +18.1% | 0.741229 | 0.741229 |
+| replay.idle.17.tessellate | 0.301438 | 0.281631 | -6.6% | 0.281631 | 0.281631 |
+| replay.idle.17.ui | 0.644135 | 0.604350 | -6.2% | 0.604350 | 0.604350 |
+| replay.idle.18.tessellate | 0.299665 | 0.259801 | -13.3% | 0.259801 | 0.259801 |
+| replay.idle.18.ui | 0.737712 | 0.600383 | -18.6% | 0.600383 | 0.600383 |
+| replay.idle.19.tessellate | 0.301169 | 0.266002 | -11.7% | 0.266002 | 0.266002 |
+| replay.idle.19.ui | 0.634948 | 0.613117 | -3.4% | 0.613117 | 0.613117 |
+| replay.idle.2.tessellate | 0.305016 | 0.258688 | -15.2% | 0.258688 | 0.258688 |
+| replay.idle.2.ui | 0.741509 | 0.605392 | -18.4% | 0.605392 | 0.605392 |
+| replay.idle.20.tessellate | 0.310425 | 0.258037 | -16.9% | 0.258037 | 0.258037 |
+| replay.idle.20.ui | 0.700562 | 0.605623 | -13.6% | 0.605623 | 0.605623 |
+| replay.idle.21.tessellate | 0.306228 | 0.254711 | -16.8% | 0.254711 | 0.254711 |
+| replay.idle.21.ui | 0.771525 | 0.593761 | -23.0% | 0.593761 | 0.593761 |
+| replay.idle.22.tessellate | 0.303412 | 0.258578 | -14.8% | 0.258578 | 0.258578 |
+| replay.idle.22.ui | 0.828844 | 0.597417 | -27.9% | 0.597417 | 0.597417 |
+| replay.idle.23.tessellate | 0.304995 | 0.258708 | -15.2% | 0.258708 | 0.258708 |
+| replay.idle.23.ui | 0.822942 | 0.595564 | -27.6% | 0.595564 | 0.595564 |
+| replay.idle.24.tessellate | 0.317158 | 0.257867 | -18.7% | 0.257867 | 0.257867 |
+| replay.idle.24.ui | 0.822792 | 0.596395 | -27.5% | 0.596395 | 0.596395 |
+| replay.idle.25.tessellate | 0.312270 | 0.265451 | -15.0% | 0.265451 | 0.265451 |
+| replay.idle.25.ui | 0.842429 | 0.602838 | -28.4% | 0.602838 | 0.602838 |
+| replay.idle.26.tessellate | 0.299626 | 0.258488 | -13.7% | 0.258488 | 0.258488 |
+| replay.idle.26.ui | 0.818645 | 0.592758 | -27.6% | 0.592758 | 0.592758 |
+| replay.idle.27.tessellate | 0.302260 | 0.256694 | -15.1% | 0.256694 | 0.256694 |
+| replay.idle.27.ui | 0.624869 | 0.595013 | -4.8% | 0.595013 | 0.595013 |
+| replay.idle.28.tessellate | 0.302150 | 0.260792 | -13.7% | 0.260792 | 0.260792 |
+| replay.idle.28.ui | 0.632504 | 0.595184 | -5.9% | 0.595184 | 0.595184 |
+| replay.idle.29.tessellate | 0.303493 | 0.260231 | -14.3% | 0.260231 | 0.260231 |
+| replay.idle.29.ui | 0.625249 | 0.597146 | -4.5% | 0.597146 | 0.597146 |
+| replay.idle.3.tessellate | 0.300988 | 0.260973 | -13.3% | 0.260973 | 0.260973 |
+| replay.idle.3.ui | 0.635369 | 0.602156 | -5.2% | 0.602156 | 0.602156 |
+| replay.idle.4.tessellate | 0.299966 | 0.259660 | -13.4% | 0.259660 | 0.259660 |
+| replay.idle.4.ui | 0.631461 | 0.598670 | -5.2% | 0.598670 | 0.598670 |
+| replay.idle.5.tessellate | 0.301589 | 0.259850 | -13.8% | 0.259850 | 0.259850 |
+| replay.idle.5.ui | 0.638525 | 0.602697 | -5.6% | 0.602697 | 0.602697 |
+| replay.idle.6.tessellate | 0.306428 | 0.266432 | -13.1% | 0.266432 | 0.266432 |
+| replay.idle.6.ui | 0.631341 | 0.599562 | -5.0% | 0.599562 | 0.599562 |
+| replay.idle.7.tessellate | 0.309864 | 0.273216 | -11.8% | 0.273216 | 0.273216 |
+| replay.idle.7.ui | 0.627655 | 0.647702 | +3.2% | 0.647702 | 0.647702 |
+| replay.idle.8.tessellate | 0.390597 | 0.262195 | -32.9% | 0.262195 | 0.262195 |
+| replay.idle.8.ui | 0.665957 | 0.616454 | -7.4% | 0.616454 | 0.616454 |
+| replay.idle.9.tessellate | 0.306559 | 0.262846 | -14.3% | 0.262846 | 0.262846 |
+| replay.idle.9.ui | 0.626692 | 0.595263 | -5.0% | 0.595263 | 0.595263 |
+| replay.layer.down.tessellate | 0.360811 | 0.374506 | +3.8% | 0.374506 | 0.374506 |
+| replay.layer.down.ui | 0.743673 | 0.951015 | +27.9% | 0.951015 | 0.951015 |
+| replay.layer.up.tessellate | 0.318862 | 0.263327 | -17.4% | 0.263327 | 0.263327 |
+| replay.layer.up.ui | 1.092060 | 1.223930 | +12.1% | 1.223930 | 1.223930 |
+| replay.pending.tessellate | 0.339441 | 0.293214 | -13.6% | 0.293214 | 0.293214 |
+| replay.pending.ui | 0.702936 | 0.646350 | -8.0% | 0.646350 | 0.646350 |
+| replay.restart.down.tessellate | 0.308402 | 0.264319 | -14.3% | 0.264319 | 0.264319 |
+| replay.restart.down.ui | 0.631602 | 0.601766 | -4.7% | 0.601766 | 0.601766 |
+| replay.restart.up.tessellate | 0.304574 | 0.262646 | -13.8% | 0.262646 | 0.262646 |
+| replay.restart.up.ui | 0.830447 | 0.769011 | -7.4% | 0.769011 | 0.769011 |
+| replay.reverse.0.tessellate | 0.334682 | 0.301620 | -9.9% | 0.301620 | 0.301620 |
+| replay.reverse.0.ui | 0.712854 | 0.658363 | -7.6% | 0.658363 | 0.658363 |
+| replay.reverse.1.tessellate | 0.350381 | 0.350161 | -0.1% | 0.350161 | 0.350161 |
+| replay.reverse.1.ui | 0.990018 | 0.964320 | -2.6% | 0.964320 | 0.964320 |
+| replay.reverse.2.tessellate | 0.339310 | 0.304395 | -10.3% | 0.304395 | 0.304395 |
+| replay.reverse.2.ui | 0.764973 | 0.747551 | -2.3% | 0.747551 | 0.747551 |
+| replay.reverse.3.tessellate | 0.335883 | 0.312149 | -7.1% | 0.312149 | 0.312149 |
+| replay.reverse.3.ui | 0.766686 | 0.728124 | -5.0% | 0.728124 | 0.728124 |
+| replay.reverse.4.tessellate | 0.347376 | 0.369788 | +6.5% | 0.369788 | 0.369788 |
+| replay.reverse.4.ui | 0.948870 | 0.689691 | -27.3% | 0.689691 | 0.689691 |
+| replay.reverse.5.tessellate | 0.353617 | 0.355951 | +0.7% | 0.355951 | 0.355951 |
+| replay.reverse.5.ui | 0.709359 | 0.903655 | +27.4% | 0.903655 | 0.903655 |
+| replay.shared-edit.command | 0.226257 | 0.180230 | -20.3% | 0.180230 | 0.180230 |
+| replay.shared-edit.tessellate | 0.318951 | 0.276442 | -13.3% | 0.276442 | 0.276442 |
+| replay.shared-edit.ui | 0.977685 | 0.917892 | -6.1% | 0.917892 | 0.917892 |
+| replay.start.down.tessellate | 0.304414 | 0.268006 | -12.0% | 0.268006 | 0.268006 |
+| replay.start.down.ui | 0.652622 | 0.618146 | -5.3% | 0.618146 | 0.618146 |
+| replay.start.up.tessellate | 0.307630 | 0.273355 | -11.1% | 0.273355 | 0.273355 |
+| replay.start.up.ui | 1.080037 | 1.022139 | -5.4% | 1.022139 | 1.022139 |
+
+#237 budget assessment: CPU replay is a proxy, so this report cannot certify input-to-visible or native event-loop budgets.
+CPU frame p95 ≥ 4 ms: none in these samples
+Unmeasured: input-to-visible / GPU presentation; native event-loop scheduling and Wayland endurance; per-operation allocator/index memory (whole-process collection is separate); background queues / cancellation / progress (not implemented); spatial index updates (not implemented); ERC / walkaround / shove (not implemented)

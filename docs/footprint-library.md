@@ -1,6 +1,6 @@
 # Starter physical footprints
 
-`libraries/starter/footprints` contains six original SMD definitions and a plated header under
+`libraries/basic-components/footprints` contains six original SMD definitions and a plated header under
 MIT OR Apache-2.0. The engine embeds these definitions for shared command use;
 the Parts card browses symbols while the package chooser offers footprints in both editors. `pcb.place_footprint` pins the
 selected definition into the project and validates its terminal-to-pad mapping.

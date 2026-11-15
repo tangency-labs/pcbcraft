@@ -24,7 +24,7 @@ impl PcbApp {
     /// the Parts Catalog focuses search, like Capture › Symbol; an open chooser is left alone.
     /// Selection filters require a project view; definition-view requests fail without changing state.
     pub(super) fn set_panel(&mut self, ctx: &Context, panel: Panel, open: bool) -> Result<(), String> {
-        if panel == Panel::Filters && self.views.active.definition.is_some() {
+        if panel == Panel::Filters && self.views.active.auxiliary() {
             return Err("Selection filters require a project view".into());
         }
         match panel {
@@ -59,7 +59,7 @@ impl PcbApp {
             Panel::Parts => self.parts.open,
             Panel::Nets => self.net_inspector.open,
             Panel::Properties => self.properties_open,
-            Panel::Filters => self.views.active.definition.is_none() && self.views.active.filters_open,
+            Panel::Filters => !self.views.active.auxiliary() && self.views.active.filters_open,
         }
     }
 
@@ -117,7 +117,7 @@ mod live {
     use crate::{
         Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
-        canvas_camera::MAX_BOARD_ZOOM,
+        canvas_camera::MAX_ZOOM,
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -131,6 +131,9 @@ mod live {
         View,
         /// A typed engine authoring transaction.
         LibraryAction,
+        PartRecord,
+        PartReference,
+        PartReferenceField,
         /// A runtime document ID from inspect_editor.library_editors.
         LibraryDocument,
         /// A library document revision from inspect_editor.library_editors.
@@ -145,6 +148,8 @@ mod live {
         Arrangement,
         /// An arrangement name: 1 to 80 characters on one line.
         Name,
+        /// Library search text may be empty to clear a filter.
+        Query,
         Bool,
         /// Opaque sRGB #RRGGBB, or null to restore a physical-role default.
         Color,
@@ -171,6 +176,15 @@ mod live {
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
                 Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
+                Self::PartReferenceField => {
+                    json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"enum":["footprint","new_package"]},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
+                }
+                Self::PartReference => {
+                    json!({"type":"object","properties":{"library":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX}},"required":["library","id","revision"],"additionalProperties":false})
+                }
+                Self::PartRecord => {
+                    json!({"type":"object","description":"A bounded native pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
+                }
                 Self::LibraryAction => {
                     json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
                 }
@@ -178,6 +192,7 @@ mod live {
                     json!({"type": "integer", "minimum": 0})
                 }
                 Self::Object => json!({"type":"string","format":"uuid"}),
+                Self::Query => json!({"type":"string","maxLength":512}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
                 Self::Color => json!({"oneOf":[{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},{"type":"null"}]}),
@@ -203,6 +218,17 @@ mod live {
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
                         && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
                 }),
+                Self::PartReferenceField => {
+                    serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 256)
+                        && serde_json::from_value::<pcbcraft_engine::part_authoring::ReferenceField>(value.clone()).is_ok()
+                }
+                Self::PartReference => {
+                    serde_json::from_value::<pcbcraft_engine::library::parts::Reference>(value.clone()).is_ok_and(|r| r.validate().is_ok())
+                }
+                Self::PartRecord => {
+                    serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::library::sources::MAX_FILE_BYTES)
+                        && serde_json::from_value::<pcbcraft_engine::part_authoring::Record>(value.clone()).is_ok()
+                }
                 Self::LibraryAction => {
                     serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::authoring::MAX_BYTES)
                         && serde_json::from_value::<pcbcraft_engine::authoring::Action>(value.clone()).is_ok()
@@ -210,6 +236,7 @@ mod live {
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
                     value.as_u64().is_some()
                 }
+                Self::Query => value.as_str().is_some_and(|s| s.len() <= 512),
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
                 Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
@@ -225,6 +252,9 @@ mod live {
             }
             Err(match self {
                 Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
+                Self::PartReferenceField => "must identify symbol, category, part or a footprint's stable package".into(),
+                Self::PartReference => "must contain an exact native library reference".into(),
+                Self::PartRecord => "must contain a bounded native part or manufacturer record".into(),
                 Self::LibraryAction => "must be a bounded native authoring Action".into(),
                 Self::LibraryDocument => "must be a library document ID from inspect_editor.library_editors".into(),
                 Self::LibraryRevision => "must be the library document revision from inspect_editor.library_editors".into(),
@@ -233,6 +263,7 @@ mod live {
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
+                Self::Query => "must be library search text of at most 512 bytes".into(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
                 Self::Color => "must be #RRGGBB or null to restore the default".to_owned(),
@@ -359,17 +390,211 @@ mod live {
                     name: "workspace",
                     summary: "Workspace to enter",
                     required: true,
-                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor"]),
+                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor", "library"]),
                 },
                 Param { name: "view", summary: "Source pane; defaults to focused main pane", required: false, kind: Kind::View },
                 Param { name: "placement", summary: "Where to open it", required: false, kind: Kind::Choice(PLACEMENTS) },
             ],
         },
         WindowCommand {
+            id: "app.library_source",
+            title: "Manage Library Source",
+            summary: "Run Library workspace source management. Add/relocate use native pickers; Delete requires the same folder/count confirmation as the GUI. No project edits.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "action",
+                    summary: "Source operation",
+                    required: true,
+                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete"]),
+                },
+                Param { name: "source", summary: "Registration ID, defaults to selected source", required: false, kind: Kind::Name },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_delete_part",
+            title: "Delete Library Part",
+            summary: "Prepare deletion of all revisions of a selected generic/orderable part in a writable folder. Inspect the token, then explicitly confirm; project pins and drawing dependencies are retained.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "phase",
+                    summary: "Prepare, confirm the reviewed token, or cancel without deleting",
+                    required: false,
+                    kind: Kind::Choice(&["prepare", "confirm", "cancel"]),
+                },
+                Param {
+                    name: "token",
+                    summary: "Exact confirmation token from inspect_editor.library_item_deletion",
+                    required: false,
+                    kind: Kind::Query,
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_browse",
+            title: "Browse Library",
+            summary: "Browse registered sources or exact project pins without changing project revision/history. Inspect its selection through inspect_editor.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "scope",
+                    summary: "Browse sources or the current project's pinned definitions",
+                    required: false,
+                    kind: Kind::Choice(&["sources", "project"]),
+                },
+                Param {
+                    name: "library",
+                    summary: "Project collection ID, project-only, or empty for all; requires project scope",
+                    required: false,
+                    kind: Kind::Query,
+                },
+                Param { name: "source", summary: "Registration ID", required: false, kind: Kind::Name },
+                Param {
+                    name: "tree_action",
+                    summary: "Expand or collapse all Browser branches without changing selection",
+                    required: false,
+                    kind: Kind::Choice(&["expand_all", "collapse_all"]),
+                },
+                Param {
+                    name: "browser_width",
+                    summary: "Requested Browser width in logical points; compact hosts retain it for wider layouts",
+                    required: false,
+                    kind: Kind::Integer { min: 180, max: 640, step: 1 },
+                },
+                Param { name: "query", summary: "Search text; empty clears it", required: false, kind: Kind::Query },
+                Param {
+                    name: "preview_width",
+                    summary: "Preferred docked Preview column width in logical points",
+                    required: false,
+                    kind: Kind::Integer { min: 240, max: 65535, step: 1 },
+                },
+                Param {
+                    name: "type",
+                    summary: "0 all, 1 symbols, 2 footprints, 3 generic parts, 4 orderable parts",
+                    required: false,
+                    kind: Kind::Integer { min: 0, max: 4, step: 1 },
+                },
+                Param { name: "item", summary: "Item ID within selected source and Type", required: false, kind: Kind::Name },
+                Param {
+                    name: "definition_revision",
+                    summary: "Exact published revision; requires item, defaults to latest",
+                    required: false,
+                    kind: Kind::Integer { min: 1, max: u32::MAX as i64, step: 1 },
+                },
+                Param {
+                    name: "preview",
+                    summary: "Independent read-only geometry camera",
+                    required: false,
+                    kind: Kind::Choice(&["symbol", "footprint"]),
+                },
+                setting("fit", "Reset the selected preview camera", Kind::Bool),
+                setting("zoom_percent", "Preview zoom relative to Fit", Kind::Integer { min: 25, max: 1600, step: 1 }),
+                setting("pan_x", "Preview horizontal offset in logical points; requires pan_y", Kind::Integer { min: -100000, max: 100000, step: 1 }),
+                setting("pan_y", "Preview vertical offset in logical points; requires pan_x", Kind::Integer { min: -100000, max: 100000, step: 1 }),
+            ],
+        },
+        WindowCommand {
+            id: "app.part_new",
+            title: "New Generic Part",
+            summary: "Open a session-only generic part document inside Parts Library, optionally from an exact published symbol.",
+            params: &[Param { name: "symbol", summary: "Exact symbol reference", required: false, kind: Kind::PartReference }],
+        },
+        WindowCommand {
+            id: "app.part_orderable",
+            title: "Add Orderable Part",
+            summary: "Create an orderable draft for an exact resolved published generic part with a package.",
+            params: &[Param { name: "part", summary: "Exact published generic part", required: true, kind: Kind::PartReference }],
+        },
+        WindowCommand {
+            id: "app.part_edit",
+            title: "Edit Part Document",
+            summary: "Replace a captured native part draft through the shared revision-checked engine session; publication validates complete mappings.",
+            params: &[
+                Param { name: "document", summary: "Part document ID from inspection", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current part document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "record", summary: "Native part or manufacturer draft", required: true, kind: Kind::PartRecord },
+            ],
+        },
+        WindowCommand {
+            id: "app.part_reference",
+            title: "Choose Part Reference",
+            summary: "Choose an exact loaded definition for a captured part association, clearing only values owned by the changed field.",
+            params: &[
+                Param { name: "document", summary: "Part document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Captured document revision", required: true, kind: Kind::LibraryRevision },
+                Param {
+                    name: "field",
+                    summary: "Native association field, including a stable package ID for footprints",
+                    required: true,
+                    kind: Kind::PartReferenceField,
+                },
+                Param {
+                    name: "reference",
+                    summary: "Exact native reference; omit to clear a symbol or category",
+                    required: false,
+                    kind: Kind::PartReference,
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.part_history",
+            title: "Part Document History",
+            summary: "Undo or redo a captured part document edit independently of the project.",
+            params: &[
+                Param { name: "document", summary: "Part document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "redo", summary: "Redo instead of Undo", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.part_focus",
+            title: "Focus Part Document",
+            summary: "Resume a retained part document in the existing Parts Library workspace.",
+            params: &[Param { name: "document", summary: "Part document ID", required: true, kind: Kind::LibraryDocument }],
+        },
+        WindowCommand {
             id: "app.library_new",
             title: "New Library Item",
             summary: "Create an independent symbol or footprint definition workspace without editing project instances.",
             params: &[Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_catalog_edit",
+            title: "Open Published Library Item",
+            summary: "Edit the exact selected symbol or footprint in a Parts Library pane; copy explicitly creates a derivative identity.",
+            params: &[
+                VIEW,
+                Param { name: "copy", summary: "Create a copy instead of retaining the published address", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_publish",
+            title: "Publish Library Item",
+            summary: "Publish a captured editor draft to a registered writable native source. No arbitrary filesystem paths; host confirmation binds its identity.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "expected_revision", summary: "Current authoring document revision", required: true, kind: Kind::LibraryRevision },
+                Param { name: "source", summary: "Registered writable destination source ID", required: true, kind: Kind::Name },
+                Param {
+                    name: "allow_older",
+                    summary: "Confirm publishing an older edit may omit intervening changes",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+                Param {
+                    name: "copy",
+                    summary: "Publish under a new item identity; a different library always creates a copy",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_copy",
+            title: "Copy Library Draft",
+            summary: "Create a derivative draft under a fresh item identity using the same editor Edit copy action.",
+            params: &[Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument }],
         },
         WindowCommand {
             id: "app.library_fork_selected",
@@ -422,7 +647,12 @@ mod live {
                 Param { name: "ribbon_tab", summary: "Authoring ribbon tab", required: false, kind: Kind::Choice(&["draw", "library", "view"]) },
                 Param { name: "browser", summary: "Whether the definition Browser is visible", required: false, kind: Kind::Bool },
                 Param { name: "properties", summary: "Whether compact Properties is visible", required: false, kind: Kind::Bool },
-                Param { name: "zoom_percent", summary: "Camera zoom percentage", required: false, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param {
+                    name: "zoom_percent",
+                    summary: "Definition detail zoom percentage",
+                    required: false,
+                    kind: Kind::Integer { min: 1, max: (MAX_ZOOM * 100.) as i64, step: 1 },
+                },
                 Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
                 Param {
                     name: "grid_spacing_nm",
@@ -526,14 +756,14 @@ mod live {
         WindowCommand {
             id: "view.zoom",
             title: "Zoom",
-            summary: "Zoom about the view center. The limit is 6400% in PCB layout and 800% in the schematic.",
+            summary: "Zoom about the view center within the shared editor range.",
             params: &[
                 VIEW,
                 Param {
                     name: "zoom_percent",
                     summary: "The zoom in percent",
                     required: true,
-                    kind: Kind::Integer { min: 1, max: (MAX_BOARD_ZOOM * 100.0) as i64, step: 1 },
+                    kind: Kind::Integer { min: 1, max: (MAX_ZOOM * 100.0) as i64, step: 1 },
                 },
             ],
         },
@@ -622,11 +852,13 @@ mod live {
                     name: "panel",
                     summary: "Which contextual card",
                     required: true,
-                    kind: Kind::Choice(&["layers", "properties", "selection_filters"]),
+                    kind: Kind::Choice(&["layers", "properties", "selection_filters", "preview"]),
                 },
                 Param { name: "position", summary: "Edge anchor or floating", required: true, kind: Kind::Choice(&["left", "right", "floating"]) },
                 setting("x", "Floating offset from the canvas left, in logical points", Kind::Integer { min: -100000, max: 100000, step: 1 }),
                 setting("y", "Floating offset from the canvas top, in logical points", Kind::Integer { min: -100000, max: 100000, step: 1 }),
+                setting("width", "Floating Library Preview width; requires height", Kind::Integer { min: 1, max: 100000, step: 1 }),
+                setting("height", "Floating Library Preview height; requires width", Kind::Integer { min: 1, max: 100000, step: 1 }),
             ],
         },
         WindowCommand {
@@ -914,7 +1146,7 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties,
-                        "selection_filters": app.views.view(host.focused).is_some_and(|view| view.definition.is_none() && view.filters_open)},
+                        "selection_filters": app.views.view(host.focused).is_some_and(|view| !view.auxiliary() && view.filters_open)},
                     "catalog_mode": panels.catalog_mode,
                     "repeat_placement": panels.repeat_placement,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
@@ -937,15 +1169,16 @@ mod live {
                     "window": window.0,
                     "focused": focused,
                     "primary": id == app.views.primary(),
-                    "workspace": view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"}),
+                    "workspace": if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
                     "definition":view.definition,
                     "library_view":app.inspect_library_view(id),
+                    "library_workspace":view.library.as_ref().map(|state|app.inspect_library_workspace(state)),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
                     "selection_filters": view.filters.inspect(view.workspace),
                     "selection_filters_collapsed": view.filters_collapsed,
-                    "selection_filters_open": view.definition.is_none() && view.filters_open,
+                    "selection_filters_open": !view.auxiliary() && view.filters_open,
                     "panel_positions": crate::workspace_panels::inspect(&view.panels),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
@@ -982,6 +1215,9 @@ mod live {
             "message": app.message,
             "windows": windows,
             "library_editors":app.library_editors.inspect(),
+            "library_destinations":app.inspect_library_destinations(),
+            "library_item_deletion":app.inspect_library_item_deletion(),
+            "part_dependency_updates":app.part_updates,
             "views": views,
             "arrangements": {
                 "active": app.arrangements.active(),
@@ -1075,6 +1311,12 @@ mod live {
                 self.bind_editor_host(self.views.main);
                 return result;
             }
+            if matches!(id, "app.library_source" | "app.library_browse" | "app.library_catalog_edit" | "app.library_delete_part") {
+                return self.library_workspace_command(ctx, id, params);
+            }
+            if id.starts_with("app.part_") {
+                return self.part_document_command(ctx, id, params);
+            }
             if id.starts_with("app.library_") {
                 return self.library_command(ctx, id, params);
             }
@@ -1113,11 +1355,10 @@ mod live {
                 None => None,
             };
             if let Some((view, _)) = view {
-                let definition = self.views.view(view).and_then(|view| view.definition);
-                if definition.is_none() && self.session.project().is_none() {
+                if !self.views.view(view).is_some_and(|v| v.auxiliary()) && self.session.project().is_none() {
                     return Err("No project is open.".into());
                 }
-                if definition.is_some()
+                if self.views.view(view).is_some_and(|v| v.auxiliary())
                     && !matches!(
                         id,
                         "view.focus"
@@ -1198,12 +1439,7 @@ mod live {
                 ("view.zoom", Some((view, _)), _) => {
                     let percent = params["zoom_percent"].as_u64().unwrap_or(100);
                     if let Some(view) = self.views.view_mut(view) {
-                        let max_zoom = view.workspace.max_zoom();
-                        let max_percent = (max_zoom * 100.0) as u64;
-                        if percent > max_percent {
-                            return Err(format!("`zoom_percent` must be at most {max_percent} for this workspace."));
-                        }
-                        view.camera.set_zoom_with_limit(percent as f32 / 100.0, max_zoom);
+                        view.camera.set_zoom(percent as f32 / 100.0);
                     }
                 }
                 ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,
@@ -1293,8 +1529,7 @@ mod live {
                         .zip(self.session.project())
                         .and_then(|(target, project)| project.board_view(target))
                         .into_iter()
-                        .flat_map(|board| board.footprints())
-                        .map(|footprint| footprint.id)
+                        .flat_map(|board| board.footprint_ids())
                         .collect();
                     if !wanted.is_subset(&placed) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());

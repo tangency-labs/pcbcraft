@@ -1,0 +1,18 @@
+{
+  "changes": "Doc comments only after measurement: describe contact defaults, per-object queries and uncertified unchanged copper. No production tokens or tests changed.",
+  "files": {
+    "crates/engine/src/board/clearance.rs": {
+      "measured": "9ce56177ff102345f6801680b1c587c5267d88d5fa370fd2196337c6a80e82eb",
+      "final": "f105fd724da719c2b3671d0e78e53f3c2fdfa17cd3ac312f6adf433425134537"
+    },
+    "crates/engine/src/board/track.rs": {
+      "measured": "29aa90f33391d13334faa821a1a912f493321ca5796a83ef8127565d38a62ba5",
+      "final": "911cab4707d91f476cc267d886840ff1d575dfcc168826a6949c3cc4b44c103c"
+    },
+    "crates/engine/src/board/track/preparation.rs": {
+      "measured": "09d65162b6911ec489fbfc942116170320b05df05db53d078d90b0899cff498b",
+      "final": "f7f703bb4cbb0b7aa303da031aa6b95ef982c70330c1c174c2d1ea8ddac40750"
+    }
+  },
+  "executable_after_sha256": "b8795471c2d4163741706d2e26756c0522a49e0569dc37feba5e50acc40c3bd0"
+}

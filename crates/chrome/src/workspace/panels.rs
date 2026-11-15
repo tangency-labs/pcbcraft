@@ -31,12 +31,16 @@ pub struct PanelState {
     pub position: Position,
     /// Floating offset from the canvas origin, in logical points.
     pub at: Option<[f32; 2]>,
+    /// Optional floating dimensions; omitted by older local layout records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<[f32; 2]>,
 }
 
 impl PanelState {
-    /// Reject non-finite or unbounded saved coordinates before restoring a layout.
+    /// Reject non-finite or unbounded coordinates and nonpositive dimensions before restoring a layout.
     pub fn valid(&self) -> bool {
         self.at.is_none_or(|at| at.iter().all(|value| value.is_finite() && value.abs() <= 100_000.0))
+            && self.size.is_none_or(|size| size.iter().all(|value| value.is_finite() && *value > 0.0 && *value <= 100_000.0))
     }
 }
 
@@ -47,11 +51,21 @@ struct Drag {
     before: PanelState,
 }
 
+#[derive(Debug)]
+struct Resize {
+    pointer: Pos2,
+    size: egui::Vec2,
+    before: PanelState,
+    horizontal: bool,
+    leading: bool,
+}
+
 /// Runtime card placement; cloning preserves layout but never transfers an active pointer drag.
 #[derive(Debug, Default)]
 pub struct Panel {
     state: PanelState,
     drag: Option<Drag>,
+    resize: Option<Resize>,
 }
 
 impl Clone for Panel {
@@ -64,12 +78,12 @@ impl Clone for Panel {
 impl Panel {
     /// Start at an edge without a machine-specific absolute window position.
     pub fn new(position: Position) -> Self {
-        Self::from_state(PanelState { position, at: None })
+        Self::from_state(PanelState { position, at: None, size: None })
     }
 
     /// Restore placement after the caller validates its local arrangement record.
     pub fn from_state(state: PanelState) -> Self {
-        Self { state, drag: None }
+        Self { state, drag: None, resize: None }
     }
 
     /// Save only presentation data, with no pending drag authority.
@@ -84,22 +98,109 @@ impl Panel {
 
     /// Apply the same validated position change for a menu action or live-editor request.
     pub fn set_position(&mut self, position: Position, at: Option<[f32; 2]>) -> bool {
-        let next = PanelState { position, at: if position == Position::Floating { at } else { None } };
+        let next = PanelState { position, at: if position == Position::Floating { at } else { None }, size: self.state.size };
         if !next.valid() {
             return false;
         }
         self.state = next;
         self.drag = None;
+        self.resize = None;
         true
     }
 
-    /// Escape or focus loss restores the exact placement from before the header drag.
+    /// Escape or focus loss restores placement and dimensions from before a header or edge drag.
     pub fn cancel_drag(&mut self) -> bool {
-        if let Some(drag) = self.drag.take() {
+        if let Some(resize) = self.resize.take() {
+            self.state = resize.before;
+            true
+        } else if let Some(drag) = self.drag.take() {
             self.state = drag.before;
             true
         } else {
             false
+        }
+    }
+
+    /// Floating workspace cards reuse the toolkit's accessible edge sashes. Changes
+    /// are bounded to this host and cancel through the same lifecycle as header dragging.
+    fn resize_edges(&mut self, ui: &mut Ui, id: Id, title: &str, rect: Rect, canvas: Rect) {
+        let t = Tokens::get();
+        let bounds = canvas.shrink(FLOATING_GAP);
+        let min = vec2(240.0, 180.0).min(bounds.size());
+        let max = bounds.size();
+        for (horizontal, leading) in [(false, true), (false, false), (true, false)] {
+            let bounds = if horizontal {
+                Rect::from_min_max(rect.left_bottom() - vec2(0.0, t.space_6), rect.right_bottom())
+            } else if leading {
+                Rect::from_min_max(
+                    pos2(rect.left(), rect.top() + FLOATING_HEADER + t.space_24),
+                    pos2(rect.left() + t.space_6, rect.bottom() - t.space_6),
+                )
+            } else {
+                Rect::from_min_max(
+                    pos2(rect.right() - t.space_6, rect.top() + FLOATING_HEADER + t.space_24),
+                    rect.right_bottom() - vec2(0.0, t.space_6),
+                )
+            };
+            let label = format!(
+                "Resize {title} {}",
+                if horizontal {
+                    "height"
+                } else if leading {
+                    "width from left"
+                } else {
+                    "width"
+                }
+            );
+            let response = solidcraft_ui_kit::panel_host_sash(
+                ui,
+                id.with(("resize", horizontal, leading)),
+                bounds,
+                &label,
+                horizontal,
+                if horizontal { rect.height() } else { rect.width() },
+            );
+            if response.clicked() || response.drag_started() {
+                response.request_focus();
+            }
+            if response.drag_started()
+                && let Some(pointer) = ui.input(|i| i.pointer.press_origin())
+            {
+                self.resize = Some(Resize { pointer, size: rect.size(), before: self.state, horizontal, leading });
+            }
+            let mut next = None;
+            if response.dragged()
+                && let Some(resize) = &self.resize
+                && resize.horizontal == horizontal
+                && resize.leading == leading
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let delta = pointer - resize.pointer;
+                next = Some(resize.size + if horizontal { vec2(0.0, delta.y) } else { vec2(delta.x * if leading { -1.0 } else { 1.0 }, 0.0) });
+            }
+            if response.has_focus() {
+                let delta = ui.input_mut(|i| {
+                    let (less, more) =
+                        if horizontal { (egui::Key::ArrowUp, egui::Key::ArrowDown) } else { (egui::Key::ArrowLeft, egui::Key::ArrowRight) };
+                    (i.consume_key(egui::Modifiers::NONE, more) as i8 - i.consume_key(egui::Modifiers::NONE, less) as i8) as f32 * t.space_16
+                });
+                if delta != 0.0 {
+                    next = Some(rect.size() + if horizontal { vec2(0.0, delta) } else { vec2(delta * if leading { -1.0 } else { 1.0 }, 0.0) });
+                }
+            }
+            if let Some(size) = next {
+                let size = size.clamp(min, max);
+                if self.state.size != Some([size.x, size.y]) {
+                    self.state.size = Some([size.x, size.y]);
+                    if leading {
+                        self.state.at = Some([rect.right() - size.x - canvas.left(), rect.top() - canvas.top()]);
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
+            if response.drag_stopped() {
+                self.resize = None;
+            }
         }
     }
 
@@ -178,29 +279,79 @@ impl Panel {
         toolbar: impl FnOnce(&mut Ui),
         add: impl FnOnce(&mut Ui),
     ) -> (Rect, bool) {
-        if !ui.is_enabled() || ui.ctx().input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
+        self.show_card(ui, id, title, canvas, dock, collapsed, width, toolbar_min_height, false, toolbar, add)
+    }
+
+    /// Use an exact, reserved dock slot for a workspace column. Floating remains opt-in
+    /// through the same header drag and position menu as contextual canvas cards.
+    /// Floating slots offer shared resize sashes, full-host expansion and default-size reset.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_in_slot(
+        &mut self,
+        ui: &Ui,
+        id: Id,
+        title: &str,
+        canvas: Rect,
+        dock: Rect,
+        collapsed: bool,
+        add: impl FnOnce(&mut Ui),
+    ) -> (Rect, bool) {
+        self.show_card(ui, id, title, canvas, dock, collapsed, dock.width(), 0.0, true, |_| {}, add)
+    }
+
+    /// Preserve contextual-card spacing while allowing filled workspace columns to align
+    /// exactly with their neighbors. The same drag state and controls serve both layouts.
+    #[allow(clippy::too_many_arguments)]
+    fn show_card(
+        &mut self,
+        ui: &Ui,
+        id: Id,
+        title: &str,
+        canvas: Rect,
+        dock: Rect,
+        collapsed: bool,
+        width: f32,
+        toolbar_min_height: f32,
+        slot: bool,
+        toolbar: impl FnOnce(&mut Ui),
+        add: impl FnOnce(&mut Ui),
+    ) -> (Rect, bool) {
+        if !ui.is_enabled()
+            || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape) || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))))
+        {
             self.cancel_drag();
         }
         let floating = self.state.position == Position::Floating;
         let area = if floating { canvas } else { dock };
+        let fill_slot = slot && !floating;
+        let gap = if fill_slot { 0.0 } else { FLOATING_GAP };
         if area.height() < floating_card_min_height() || !area.is_positive() {
+            self.cancel_drag();
             return (Rect::NOTHING, false);
         }
-        let width = width.min((canvas.width() - 2.0 * FLOATING_GAP).max(1.0));
-        let height = if floating { 440.0_f32.min(area.height() - 2.0 * FLOATING_GAP) } else { area.height() - 2.0 * FLOATING_GAP };
+        let requested = if slot && floating { self.state.size.unwrap_or([width, 440.0]) } else { [width, 440.0] };
+        let room = (canvas.size() - vec2(2.0 * gap, 2.0 * gap)).max(vec2(1.0, 1.0));
+        let width = if slot && floating { requested[0].clamp(240.0_f32.min(room.x), room.x) } else { requested[0].min(room.x) };
+        let height = if slot && floating {
+            requested[1].clamp(180.0_f32.min(room.y), room.y)
+        } else if floating {
+            requested[1].min(room.y)
+        } else {
+            area.height() - 2.0 * gap
+        };
         let body_height = (height - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
-        let bounds = canvas.shrink(FLOATING_GAP);
+        let bounds = canvas.shrink(gap);
         let desired = if floating {
             self.state.at.map(|[x, y]| canvas.min + vec2(x, y)).unwrap_or(bounds.min + vec2(32.0, 32.0))
         } else {
-            pos2(
-                if self.state.position == Position::Left { area.left() + FLOATING_GAP } else { area.right() - width - FLOATING_GAP },
-                area.top() + FLOATING_GAP,
-            )
+            pos2(if self.state.position == Position::Left { area.left() + gap } else { area.right() - width - gap }, area.top() + gap)
         };
         let at = pos2(
             desired.x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())),
-            desired.y.clamp(bounds.top(), (bounds.bottom() - floating_card_min_height() + 2.0 * FLOATING_GAP).max(bounds.top())),
+            desired.y.clamp(
+                bounds.top(),
+                (bounds.bottom() - if slot && floating { height } else { floating_card_min_height() - 2.0 * FLOATING_GAP }).max(bounds.top()),
+            ),
         );
         let body_height = body_height
             .min((bounds.bottom() - at.y - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
@@ -214,66 +365,81 @@ impl Panel {
             .fade_in(false)
             .show(ui.ctx(), |ui| {
                 ui.set_max_height(height);
-                floating_frame(ui.ctx())
-                    .show(ui, |ui| {
-                        ui.set_width(width - floating_frame(ui.ctx()).total_margin().sum().x);
-                        ui.spacing_mut().item_spacing.y = t.space_2;
-                        let mut collapse = false;
-                        ui.horizontal(|ui| {
-                            let header_width = (width - floating_frame(ui.ctx()).total_margin().sum().x).min(ui.available_width());
-                            let remaining = (header_width - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
-                            let (id, header) = ui.allocate_space(vec2(remaining, FLOATING_HEADER));
-                            let response = super::panel_header_control(ui, id, header, title, true);
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Move {title}")));
-                            self.drag_header(&response, Rect::from_min_size(at, vec2(width, height)), canvas);
-                            response.on_hover_cursor(egui::CursorIcon::Grab);
-                            let (more_rect, more) = ui.allocate_exact_size(vec2(22.0, FLOATING_HEADER), Sense::click());
-                            if more.hovered() || more.has_focus() {
-                                ui.painter().rect_filled(more_rect, t.radius_sm, t.hover);
-                            }
-                            ui.painter().text(more_rect.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(t.font_button), t.text_dim);
-                            more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{title} position")));
-                            egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
-                                for (position, label) in
-                                    [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
-                                {
-                                    if MenuItem::new(label).choice(self.state.position == position).show(ui) {
-                                        let offset = at - canvas.min;
-                                        self.set_position(position, Some([offset.x, offset.y]));
-                                        ui.close();
-                                        ui.ctx().request_repaint();
-                                    }
-                                }
-                            });
-                            let (id, rect) = ui.allocate_space(vec2(22.0, FLOATING_HEADER));
-                            let label = format!("{} {title}", if collapsed { "Expand" } else { "Collapse" });
-                            let response = solidcraft_ui_kit::panel_host_disclosure(ui, id, rect, &label, ui.is_enabled(), collapsed, true);
-                            collapse = response.clicked();
-                        });
-                        if !collapsed && body_height > 0.0 {
-                            ui.separator();
-                            if body_height < toolbar_min_height {
-                                egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(
-                                    ui,
-                                    |ui| {
-                                        toolbar(ui);
-                                        add(ui);
-                                    },
-                                );
-                            } else {
-                                let start = ui.next_widget_position().y;
-                                toolbar(ui);
-                                let toolbar_height = (ui.next_widget_position().y - start).max(0.0);
-                                egui::ScrollArea::vertical()
-                                    .max_height((body_height - toolbar_height).max(0.0))
-                                    .min_scrolled_height(0.0)
-                                    .auto_shrink([false, true])
-                                    .show(ui, add);
-                            }
+                let frame = floating_frame(ui.ctx()).show(ui, |ui| {
+                    ui.set_width(width - floating_frame(ui.ctx()).total_margin().sum().x);
+                    if slot && !collapsed {
+                        ui.set_min_height((height - floating_frame(ui.ctx()).total_margin().sum().y).max(0.0));
+                    }
+                    ui.spacing_mut().item_spacing.y = t.space_2;
+                    let mut collapse = false;
+                    ui.horizontal(|ui| {
+                        let header_width = (width - floating_frame(ui.ctx()).total_margin().sum().x).min(ui.available_width());
+                        let remaining = (header_width - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
+                        let (id, header) = ui.allocate_space(vec2(remaining, FLOATING_HEADER));
+                        let response = super::panel_header_control(ui, id, header, title, true);
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Move {title}")));
+                        self.drag_header(&response, Rect::from_min_size(at, vec2(width, height)), canvas);
+                        response.on_hover_cursor(egui::CursorIcon::Grab);
+                        let (more_rect, more) = ui.allocate_exact_size(vec2(22.0, FLOATING_HEADER), Sense::click());
+                        if more.hovered() || more.has_focus() {
+                            ui.painter().rect_filled(more_rect, t.radius_sm, t.hover);
                         }
-                        collapse
-                    })
-                    .inner
+                        ui.painter().text(more_rect.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(t.font_button), t.text_dim);
+                        more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{title} position")));
+                        egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
+                            for (position, label) in [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")] {
+                                if MenuItem::new(label).choice(self.state.position == position).show(ui) {
+                                    let offset = at - canvas.min;
+                                    self.set_position(position, Some([offset.x, offset.y]));
+                                    ui.close();
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                            if slot && floating {
+                                menu::separator(ui);
+                                if MenuItem::new(&format!("Expand {title}")).show(ui) {
+                                    self.state.size = Some([bounds.width(), bounds.height()]);
+                                    self.state.at = Some([FLOATING_GAP, FLOATING_GAP]);
+                                    ui.ctx().request_repaint();
+                                }
+                                if MenuItem::new(&format!("Reset {title} size")).show(ui) {
+                                    self.state.size = None;
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        });
+                        let (id, rect) = ui.allocate_space(vec2(22.0, FLOATING_HEADER));
+                        let label = format!("{} {title}", if collapsed { "Expand" } else { "Collapse" });
+                        let response = solidcraft_ui_kit::panel_host_disclosure(ui, id, rect, &label, ui.is_enabled(), collapsed, true);
+                        collapse = response.clicked();
+                    });
+                    if !collapsed && body_height > 0.0 {
+                        ui.separator();
+                        if body_height < toolbar_min_height {
+                            egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, !slot]).show(
+                                ui,
+                                |ui| {
+                                    toolbar(ui);
+                                    add(ui);
+                                },
+                            );
+                        } else {
+                            let start = ui.next_widget_position().y;
+                            toolbar(ui);
+                            let toolbar_height = (ui.next_widget_position().y - start).max(0.0);
+                            egui::ScrollArea::vertical()
+                                .max_height((body_height - toolbar_height).max(0.0))
+                                .min_scrolled_height(0.0)
+                                .auto_shrink([false, !slot])
+                                .show(ui, add);
+                        }
+                    }
+                    collapse
+                });
+                if slot && floating && !collapsed {
+                    self.resize_edges(ui, id, title, frame.response.rect, canvas);
+                }
+                frame.inner
             });
         if self.drag.is_some()
             && let Some(pointer) = ui.ctx().input(|i| i.pointer.interact_pos())

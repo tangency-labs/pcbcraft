@@ -249,7 +249,7 @@ fn rule_changes_preserve_net_registry_identity_and_instance_bytes() {
         )
         .unwrap();
     let components: Vec<_> = session.project().unwrap().components().map(|component| component.id()).collect();
-    let footprint = crate::board::definition::starter("resistor-0402").unwrap();
+    let footprint = crate::board::definition::basic_components("resistor-0402").unwrap();
     for component in components {
         session.apply(crate::ASSIGN_FOOTPRINT,&json!({"component":component,"library":footprint.library,"definition":footprint.id,"definition_revision":footprint.revision,"mapping":{"1":"1","2":"2"},"expected_revision":session.revision()})).unwrap();
     }

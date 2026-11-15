@@ -10,9 +10,12 @@ use crate::{Tokens, fonts, menu::CheckKind};
 pub mod catalog;
 pub mod panels;
 
-/// The card is tall enough for the tabs, the groups and PCBcraft Next's 5 point gutter under them.
-const RIBBON_HEIGHT: f32 = 135.0;
+/// Shared tab/group metrics plus the host's horizontal scroll gutter.
+const RIBBON_HEIGHT: f32 = solidcraft_ui_kit::ribbon::TAB_ROW_HEIGHT + solidcraft_ui_kit::ribbon::GROUP_HEIGHT + 1.0 + RIBBON_SCROLL_GUTTER;
+/// Match SolidCraft's compact workspace card; long editor names wrap inside it.
 const WORKSPACE_WIDTH: f32 = 88.0;
+/// The single-line picker in narrow ribbons retains room for editor names and its caret.
+const WORKSPACE_COMPACT_WIDTH: f32 = 120.0;
 const RIBBON_COMPACT_WIDTH: f32 = 1000.0;
 
 /// Compact ribbons promote working tools while retaining planned controls in their group menus.
@@ -28,9 +31,23 @@ const RIBBON_SEPARATOR_WIDTH: f32 = 12.0;
 const RIBBON_CAPTION_GAP: f32 = 5.0;
 const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 
+/// Host source operations share one folder silhouette instead of borrowing electronics glyphs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryFolderAction {
+    Add,
+    Relocate,
+    Remove,
+}
+
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
+    /// Source management composes the shared folder master with an original action badge.
+    LibraryFolder(LibraryFolderAction),
+    /// Pure source refresh has no matching standalone master in the pinned toolkit.
+    LibraryRefresh,
+    /// Generic interface masters come directly from the pinned Craft icon set.
+    Shared(&'static str),
     /// Original lead-and-cross intentional-disconnection glyph.
     NoConnect,
     Select,
@@ -151,6 +168,7 @@ fn floating_frame(ctx: &egui::Context) -> Frame {
 /// The drawing on a workspace's tile in the picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspaceIcon {
+    Library,
     Schematic,
     Layout,
     Render,
@@ -271,6 +289,7 @@ pub enum RibbonSection {
 
 /// Compose a tab ribbon with persistent fields at the right. At narrow widths fields wrap
 /// below the commands, staying visible while only the tab's command strip scrolls horizontally.
+/// The workspace card follows the ribbon's measured outer height, including wrapped rows.
 pub fn ribbon_with_controls(
     ui: &mut Ui,
     workspace: &str,
@@ -281,7 +300,7 @@ pub fn ribbon_with_controls(
 ) -> RibbonResponse {
     let RibbonLayout { workspaces, quick, pinned_fields, controls_label } = layout;
     let t = Tokens::get();
-    let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
+    let wide = ui.available_width() >= 600.0;
     let tab_gap = if wide { t.space_6 } else { t.space_2 };
     let tab_padding = if wide { t.space_8 } else { t.space_4 };
     let tab_width = tabs
@@ -300,12 +319,14 @@ pub fn ribbon_with_controls(
     let control_rows = pinned_fields.div_ceil(columns);
     let compact_height = t.control_height + t.font_small + t.space_8;
     let controls_height = control_rows as f32 * (compact_height + 1.0);
-    let extra_controls = if pinned_fields > 0 && !side_controls { controls_height + t.space_24 } else { 0.0 };
+    // Wrapped fields need their caption and the card's bottom padding below the shared group.
+    let extra_controls = if pinned_fields > 0 && !side_controls { controls_height + t.space_24 + t.space_12 + 1.0 } else { 0.0 };
     let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 } + extra_tab_rows * t.control_height + extra_controls;
     let painter = ui.painter().clone();
     let background = painter.add(Shape::Noop);
     let panel = Panel::top("workspace_ribbon")
-        .exact_size(height + 2.0 * t.space_6)
+        .default_size(height + 2.0 * t.space_6)
+        .min_size(height + 2.0 * t.space_6)
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(Color32::TRANSPARENT).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)))
@@ -313,29 +334,16 @@ pub fn ribbon_with_controls(
             let mut picked = None;
             let mut quick_pick = None;
             ui.horizontal_top(|ui| {
-                if wide {
-                    // Read before the tile can toggle it, so the picker knows the frame it opens on.
-                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                    let tile = card(ui.ctx(), t.space_8)
-                        .show(ui, |ui| {
-                            workspace_tile(
-                                ui,
-                                workspace,
-                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
-                                height,
-                            )
-                        })
-                        .inner;
-                    picked = picker(ui, &tile, workspaces, !was_open);
-                }
-
-                card(ui.ctx(), t.space_4).show(ui, |ui| {
+                // Reserve the leading column, then measure the command card before drawing its peer.
+                let workspace_rect = wide.then(|| ui.allocate_space(vec2(WORKSPACE_WIDTH, height)).1);
+                let ribbon_card = card(ui.ctx(), t.space_4).show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
                         if !wide {
                             let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                            let tile = crate::controls::small_button(ui, format!("{workspace}    "));
+                            let (rect, _) = ui.allocate_exact_size(vec2(WORKSPACE_COMPACT_WIDTH, t.space_24), Sense::hover());
+                            let tile = solidcraft_ui_kit::button_at(ui, workspace, rect, workspace, solidcraft_ui_kit::Button::Small);
                             let c = tile.rect.right_center() - vec2(t.space_6, 0.0);
                             ui.painter()
                                 .add(Shape::line(vec![c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], Stroke::new(1.0, t.text_dim)));
@@ -435,6 +443,23 @@ pub fn ribbon_with_controls(
                         }
                     });
                 });
+                if let Some(mut rect) = workspace_rect {
+                    rect.max.y = ribbon_card.response.rect.bottom();
+                    let mut workspace_ui =
+                        ui.new_child(egui::UiBuilder::new().id_salt("workspace_card").max_rect(rect).layout(Layout::top_down(Align::Min)));
+                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
+                    let tile = card(ui.ctx(), t.space_8)
+                        .show(&mut workspace_ui, |ui| {
+                            workspace_tile(
+                                ui,
+                                workspace,
+                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
+                                ribbon_card.response.rect.height(),
+                            )
+                        })
+                        .inner;
+                    picked = picker(ui, &tile, workspaces, !was_open);
+                }
             });
             (picked, quick_pick)
         });
@@ -446,14 +471,13 @@ pub fn ribbon_with_controls(
 }
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
-/// a caret that points up while the picker is open. The tile is a button that toggles the picker.
+/// a caret that points up while the picker is open. Its width is fixed; `height` follows
+/// the measured ribbon card, including wrapped control rows. Long titles wrap within
+/// the tile while the caption retains its own line.
 fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(if workspace.len() > 10 { WORKSPACE_WIDTH + 32.0 } else { WORKSPACE_WIDTH } - 2.0 * inset, height - 2.0 * inset),
-        Sense::click(),
-    );
+    let (rect, response) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Choose workspace"));
     let open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
     let center = rect.center();
@@ -462,11 +486,14 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32
         p.rect_filled(rect.expand(inset - 1.0), t.radius_md, t.hover);
     }
     p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
-    paint_workspace_glyph(p, icon, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
-    p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
+    paint_workspace_glyph(p, icon, center - vec2(0.0, t.space_24), t.control_height + t.space_2, t, true);
+    let mut title = egui::text::LayoutJob::simple(workspace.to_owned(), fonts::interface_heading(ui, t.font_button), t.text, rect.width());
+    title.halign = Align::Center;
+    let title = p.layout_job(title);
+    p.galley(pos2(center.x, center.y + t.space_12 - t.space_2 - title.size().y / 2.0), title, t.text);
     let caption = p.layout_no_wrap("Workspace".to_owned(), FontId::proportional(t.font_small), t.text_dim);
     let caret = t.space_4 + t.space_3;
-    let caption_center = center + vec2(-caret / 2.0, t.space_24 + t.space_8);
+    let caption_center = center + vec2(-caret / 2.0, t.space_24 + t.space_12);
     let tip = caption_center + vec2(caption.size().x / 2.0 + caret, 0.0);
     p.galley(caption_center - caption.size() / 2.0, caption, t.text_dim);
     let direction = if open { -1.0 } else { 1.0 };
@@ -679,6 +706,7 @@ fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response 
     let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.space_24);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| WidgetInfo::selected(Role::Tab, true, selected, title));
+    crate::automation::publish(ui, &response, format!("tab:{title}"));
     if ui.is_rect_visible(rect) {
         let shared = solidcraft_theme::Tokens::get();
         let style = solidcraft_ui_kit::ribbon::tab_style(
@@ -845,6 +873,18 @@ pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mu
 /// Buttons share a standard width and wrap labels; a wider caption grows its group evenly.
 /// PCBcraft's surrounding layout supplies the separators between these individual groups.
 pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
+    ribbon_group_with_popups(ui, title, tools, menu_tools, |_, _, _| {})
+}
+
+/// Attach host-owned choice menus to actual shared ribbon button responses. The host
+/// renders menu rows through chrome and handles choices after the ribbon pass.
+pub fn ribbon_group_with_popups(
+    ui: &mut Ui,
+    title: &str,
+    tools: &[RibbonTool<'_>],
+    menu_tools: &[RibbonTool<'_>],
+    mut popup: impl FnMut(&mut Ui, usize, &Response),
+) -> Option<usize> {
     use solidcraft_ui_kit::ribbon as shared;
     let t = Tokens::get();
     let caption_width = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24;
@@ -928,8 +968,10 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
     });
     for button in output.buttons {
         if let Some(tool) = tools.get(button.index) {
+            crate::automation::publish_enabled(&group_ui, &button.response, format!("toolbar:{title}:{}", tool.label), tool.enabled);
             paint_icon(ui.painter(), tool.icon, pos2(button.whole.center().x, button.whole.top() + 16.0), RIBBON_TOOL_ICON, t, tool.enabled);
             button.response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled && ui.is_enabled(), tool.active, tool.description));
+            popup(ui, button.index, &button.response);
             button.response.on_hover_text(tool.description);
         }
     }
@@ -1320,6 +1362,9 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
     let stroke = |width: f32, color| Stroke::new(width * scale, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        WorkspaceIcon::Library => {
+            solidcraft_ui_kit::icons::paint_icon(p, Rect::from_center_size(center, vec2(size, size)), "library", if available { 1.0 } else { 0.35 });
+        }
         WorkspaceIcon::Schematic => {
             let outline = stroke(2.55, ink);
             let accent = stroke(3.0, active_2);
@@ -1377,7 +1422,7 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
 /// Draw a ribbon glyph in the theme's icon roles: line art in `icon_line` and accents in the
 /// strongest icon blue, both faded when the action is unavailable. Registered SVG masters use
 /// the embedded loader; other chrome glyphs retain their native painter and menu artwork.
-fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
+pub(crate) fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
     if crate::ribbon_icons::paint(p, icon, center, size, t, enabled) {
         return;
     }
@@ -1387,6 +1432,37 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        ToolIcon::LibraryFolder(action) => {
+            solidcraft_ui_kit::icons::paint_icon(p, Rect::from_center_size(center, vec2(size, size)), "folder", if enabled { 1.0 } else { 0.35 });
+            let center = at(47.0, 47.0);
+            let radius = size * 0.16;
+            p.circle_filled(center, radius * 1.3, t.panel);
+            let mark = Stroke::new(size * 0.065, accent);
+            p.line_segment([center - vec2(radius, 0.0), center + vec2(radius, 0.0)], mark);
+            match action {
+                LibraryFolderAction::Add => {
+                    p.line_segment([center - vec2(0.0, radius), center + vec2(0.0, radius)], mark);
+                }
+                LibraryFolderAction::Relocate => {
+                    p.line_segment([center + vec2(radius * 0.3, -radius * 0.7), center + vec2(radius, 0.0)], mark);
+                    p.line_segment([center + vec2(radius * 0.3, radius * 0.7), center + vec2(radius, 0.0)], mark);
+                }
+                LibraryFolderAction::Remove => {}
+            }
+        }
+        ToolIcon::LibraryRefresh => {
+            let points: Vec<_> = (0..=24)
+                .map(|i| {
+                    let angle = (45.0 + i as f32 * 270.0 / 24.0).to_radians();
+                    at(32.0 + 21.0 * angle.cos(), 32.0 + 21.0 * angle.sin())
+                })
+                .collect();
+            p.add(Shape::line(points, stroke(4.25, ink)));
+            line(&[(39.0, 14.0), (47.0, 17.0), (48.0, 8.0)], stroke(4.25, ink));
+        }
+        ToolIcon::Shared(name) => {
+            solidcraft_ui_kit::icons::paint_icon(p, Rect::from_center_size(center, vec2(size, size)), name, if enabled { 1.0 } else { 0.35 })
+        }
         ToolIcon::NoConnect => {
             line(&[(10., 32.), (42., 32.)], stroke(4., ink));
             line(&[(30., 20.), (54., 44.)], stroke(4., ink));

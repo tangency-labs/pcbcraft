@@ -12,7 +12,7 @@ pub(crate) fn fixture() -> Session {
     }
     let symbols: Vec<_> = session.project().unwrap().symbols.iter().map(|symbol| (symbol.id(), symbol.component)).collect();
     for (index, (symbol, component)) in symbols.iter().enumerate() {
-        let definition = super::super::definition::starter("resistor-0402").unwrap();
+        let definition = super::super::definition::basic_components("resistor-0402").unwrap();
         session
             .apply(
                 super::super::assignment::ASSIGN_FOOTPRINT,

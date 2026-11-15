@@ -1,8 +1,8 @@
 use super::*;
 use crate::persistence::{decode_documents, encode_documents};
 
-const SYMBOL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor-v2.json"));
-const FOOTPRINT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/footprints/resistor-0603.json"));
+const SYMBOL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components/symbols/resistor-v2.json"));
+const FOOTPRINT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/basic-components/footprints/resistor-0603.json"));
 
 /// Original project-owned definitions with a distinct native library identity and retained license.
 fn documents() -> Documents {
@@ -34,7 +34,7 @@ fn source_commands_place_and_pin_offline_through_the_existing_command_path() {
     session
         .apply(
             crate::PLACE_SYMBOL,
-            &json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision}),
+            &json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol)).into_iter().find(|(source,_)| *source == "personal").unwrap().1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision}),
         )
         .unwrap();
     let pinned = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -62,7 +62,7 @@ fn bundled_sources_are_read_only_without_changing_project_or_catalog() {
     let catalog = session.libraries().inspect();
     let generation = session.libraries().generation();
     let bytes = encode_documents(project.clone()).unwrap();
-    for source in ["bundled-starter", "bundled-power"] {
+    for source in ["bundled-basic-components", "bundled-power"] {
         assert!(session.execute(REMOVE, &json!({"source":source})).unwrap_err().to_string().contains("read-only"));
         assert!(session.execute(LOAD, &json!({"source":source,"documents":documents()})).unwrap_err().to_string().contains("read-only"));
         session.mark_library_unavailable(source);
@@ -140,7 +140,7 @@ fn source_refresh_cannot_replace_pinned_geometry_or_bypass_revision_checks() {
     let files = documents();
     session.execute(LOAD, &json!({"source":"source","documents":files})).unwrap();
     let revision = session.revision();
-    let mut params = json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision});
+    let mut params = json!({"library":"local-demo","definition":"resistor","definition_revision":2,"definition_digest":session.libraries().search("",Some(Kind::Symbol)).into_iter().find(|(source,_)| *source == "source").unwrap().1.inspect()["digest"],"x_nm":0,"y_nm":0,"expected_revision":revision});
     session.apply(crate::PLACE_SYMBOL, &params).unwrap();
     let pinned = session.snapshot().unwrap();
     assert!(session.apply(crate::PLACE_SYMBOL, &params).is_err());
@@ -152,7 +152,8 @@ fn source_refresh_cannot_replace_pinned_geometry_or_bypass_revision_checks() {
     session.execute(LOAD, &json!({"source":"source","documents":files})).unwrap();
     params["expected_revision"] = json!(session.revision());
     assert!(session.apply(crate::PLACE_SYMBOL, &params).is_err());
-    params["definition_digest"] = session.libraries().search("", Some(Kind::Symbol))[0].1.inspect()["digest"].clone();
+    params["definition_digest"] =
+        session.libraries().search("", Some(Kind::Symbol)).into_iter().find(|(source, _)| *source == "source").unwrap().1.inspect()["digest"].clone();
     assert!(session.apply(crate::PLACE_SYMBOL, &params).unwrap_err().to_string().contains("pinned project copy"));
     assert!(Arc::ptr_eq(&pinned, &session.snapshot().unwrap()));
 }
@@ -168,7 +169,7 @@ fn external_symbol_placement_names_missing_revision_and_digest_parameters() {
     let state = session.inspect();
     let params = json!({
         "library":"local-demo", "definition":"resistor", "definition_revision":2,
-        "definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],
+        "definition_digest":session.libraries().search("",Some(Kind::Symbol)).into_iter().find(|(source,_)| *source == "personal").unwrap().1.inspect()["digest"],
         "x_nm":0, "y_nm":0, "expected_revision":session.revision()
     });
     for name in ["definition_revision", "definition_digest"] {
@@ -184,4 +185,64 @@ fn external_symbol_placement_names_missing_revision_and_digest_parameters() {
     }
     session.apply(crate::PLACE_SYMBOL, &params).unwrap();
     assert_eq!(session.project().unwrap().symbols().len(), 1);
+}
+
+/// Source browsing retains old/quarantined revisions without weakening placement search.
+#[test]
+fn browse_retains_revisions_and_quarantine_and_redundancy_is_content_exact() {
+    let documents = super::super::bundled_documents().next().unwrap().1;
+    let source = Arc::new(NativeSource::load(&documents).unwrap());
+    let mut catalog = Catalog::default();
+    catalog.install("first", source.clone()).unwrap();
+    assert!(catalog.contains_source(&source));
+    assert_eq!(catalog.source_items("first").len(), source.items().len());
+    catalog.mark_unavailable("first");
+    assert!(catalog.source_items("first").is_empty());
+    assert!(!catalog.contains_source(&source));
+    catalog.install("first", source.clone()).unwrap();
+    let mut different = documents.clone();
+    let path = different.keys().find(|p| p.starts_with("symbols/")).unwrap().clone();
+    let mut symbol: Value = serde_json::from_str(&different[&path]).unwrap();
+    symbol["name"] = json!("Conflicting original test name");
+    different.insert(path, symbol.to_string());
+    let conflicting = Arc::new(NativeSource::load(&different).unwrap());
+    catalog.install("other", conflicting).unwrap();
+    assert!(catalog.source_items("first").iter().any(|item| catalog.conflicting(&item.key)));
+    assert!(!catalog.contains_source(&source));
+}
+
+/// Explicit revision browsing shares matching and quarantine rules with latest-only placement
+/// search, de-duplicates identical sources and leaves project/history authority unchanged.
+#[test]
+fn explicit_revision_search_is_shared_and_never_falls_back_from_conflicts() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let mut files = documents();
+    files.insert("symbols/resistor-old.json".into(), include_str!("../../../../../libraries/basic-components/symbols/resistor-v1.json").into());
+    session.execute(LOAD, &json!({"source":"one","documents":files})).unwrap();
+    session.execute(LOAD, &json!({"source":"two","documents":files})).unwrap();
+    let local = |value: Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["key"]["library"] == "local-demo" && row["key"]["kind"] == "symbol")
+            .map(|row| row["key"]["revision"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor"})).unwrap()), vec![2]);
+    assert_eq!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"RESISTOR","include_older":true})).unwrap()), vec![1, 2]);
+    let mut changed: Value = serde_json::from_str(&files["symbols/resistor.json"]).unwrap();
+    changed["name"] = json!("Conflicting resistor");
+    files.insert("symbols/resistor.json".into(), changed.to_string());
+    session.execute(LOAD, &json!({"source":"two","documents":files})).unwrap();
+    assert!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor"})).unwrap()).is_empty());
+    assert_eq!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor","include_older":true})).unwrap()), vec![1]);
+    session.mark_library_unavailable("one");
+    session.mark_library_unavailable("two");
+    assert!(local(session.execute(SEARCH, &json!({"kind":"symbol","query":"resistor","include_older":true})).unwrap()).is_empty());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
 }

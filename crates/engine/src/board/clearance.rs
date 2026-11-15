@@ -42,6 +42,7 @@ pub struct Authority {
     revision: u64,
     clearance_nm: i64,
     rules: super::rules::Effective,
+    class_rules: Option<Arc<super::class_rules::Context>>,
 }
 
 impl Authority {
@@ -53,13 +54,19 @@ impl Authority {
     pub fn revision(&self) -> u64 {
         self.revision
     }
-    /// Effective clearance for this result, including a request-local rule override.
+    /// Conservative broad-phase spacing, including all captured object classes. Each decision
+    /// reports its actual pair threshold; diagnostic overrides cannot weaken class requirements.
     pub fn clearance_nm(&self) -> i64 {
         self.clearance_nm
     }
     /// Shared resolved values and provenance captured with the immutable board.
     pub fn rules(&self) -> &super::rules::Effective {
         &self.rules
+    }
+    /// Captured per-object class contributions, origins and conflicts. Object addresses and
+    /// profile indices expire with this authority; board-default-only queries omit the context.
+    pub fn class_rules(&self) -> Option<&super::class_rules::Context> {
+        self.class_rules.as_deref()
     }
     /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
     /// Rule overrides are immutable inputs: a different override requires a new query.
@@ -97,6 +104,8 @@ pub struct Decision {
     pub touches: bool,
     pub clearance_violation: bool,
     pub conflicting_nets: bool,
+    /// Actual pair threshold, which may differ from the query's conservative broad-phase radius.
+    pub clearance_nm: i64,
 }
 
 /// Derived decisions retain their authority even when the caller drops the prepared query.
@@ -104,14 +113,17 @@ pub struct Decision {
 pub struct Results {
     pub authority: Authority,
     pub decisions: Vec<Decision>,
+    /// Combined intent of a disposable probe; existing-object policy is in the authority.
+    pub probe_rules: Option<super::class_rules::Applied>,
 }
 
-/// A prepared query over one immutable board snapshot and one effective clearance. Local queries
-/// reuse a packed index (or a small-board scan); all-board pair enumeration retains its sweep.
+/// A prepared query over one immutable board snapshot and its captured per-object requirements.
+/// Local queries reuse a packed index (or a small-board scan); all-board pairs retain their sweep.
 pub struct ClearanceQuery {
     authority: Authority,
     geometry: Arc<BoardGeometry>,
     copper_layers: Vec<Uuid>,
+    net_rules: Option<super::class_rules::NetRules>,
 }
 
 impl Session {
@@ -127,7 +139,6 @@ impl Session {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
         let rules = view.resolve_rules(overrides)?;
-        let clearance_nm = rules.values.clearance_nm;
         let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())
@@ -141,6 +152,9 @@ impl Session {
         });
         // Charge the cold index build to preparation, keeping the first local lookup ready.
         let _ = geometry.index();
+        let net_rules = super::class_rules::NetRules::new(view, rules.clone())?;
+        let class_rules = net_rules.as_ref().map(|rules| rules.capture(view, &geometry)).transpose()?.map(Arc::new);
+        let clearance_nm = class_rules.as_ref().map_or(rules.values.clearance_nm, |context| context.max_clearance(rules.values.clearance_nm));
         Ok(ClearanceQuery {
             authority: Authority {
                 snapshot,
@@ -150,9 +164,11 @@ impl Session {
                 revision: self.revision(),
                 clearance_nm,
                 rules,
+                class_rules,
             },
             geometry,
             copper_layers,
+            net_rules,
         })
     }
 }
@@ -169,9 +185,16 @@ impl ClearanceQuery {
     /// Evaluate conservative sweep candidates on shared layers. Same-island clearance stays
     /// suppressed, while contact between conflicting intended memberships remains observable.
     pub fn pairs(&self) -> Results {
-        let mut decisions: Vec<_> = self.geometry.pairs(self.authority.clearance_nm).collect();
+        let mut decisions: Vec<_> = if self.authority.class_rules.is_none() {
+            self.geometry.pairs(self.authority.clearance_nm).collect()
+        } else {
+            self.geometry
+                .candidate_pairs(self.authority.clearance_nm)
+                .filter_map(|(i, j)| self.geometry.evaluate(i, j, self.pair_clearance(i, j)))
+                .collect()
+        };
         decisions.sort_by_key(|d| (d.first, d.second));
-        Results { authority: self.authority.clone(), decisions }
+        Results { authority: self.authority.clone(), decisions, probe_rules: None }
     }
     /// Exhaustively evaluate all shared-layer pairs, without spatial pruning. Later indexes can
     /// compare their violating/contact pairs against this deliberately simple reference.
@@ -179,12 +202,30 @@ impl ClearanceQuery {
         let mut decisions = Vec::new();
         for i in 0..self.geometry.items.len() {
             for j in i + 1..self.geometry.items.len() {
-                if let Some(decision) = self.geometry.evaluate(i, j, self.authority.clearance_nm) {
+                if let Some(decision) = self.geometry.evaluate(i, j, self.pair_clearance(i, j)) {
                     decisions.push(decision);
                 }
             }
         }
-        Results { authority: self.authority.clone(), decisions }
+        Results { authority: self.authority.clone(), decisions, probe_rules: None }
+    }
+    /// Use independent object requirements for the narrow phase, retaining baseline behavior
+    /// without constructing class metadata when the snapshot has no physical assignments.
+    fn pair_clearance(&self, left: usize, right: usize) -> i64 {
+        self.authority
+            .class_rules
+            .as_ref()
+            .map_or(self.authority.rules.values.clearance_nm, |rules| rules.clearance(Some(left), right, self.authority.rules.values.clearance_nm))
+    }
+    /// Resolve a disposable membership set against this exact captured source and rule request.
+    fn probe_policy(&self, members: &[usize]) -> Result<Option<super::class_rules::Applied>, CommandError> {
+        self.net_rules.as_ref().map(|rules| rules.resolve(&self.authority.snapshot, members)).transpose().map(Option::flatten)
+    }
+    /// Probe and obstacle keep separate class preferences; only their spacing requirements combine.
+    fn membership_clearance(&self, left: &[usize], right: &[usize]) -> i64 {
+        self.net_rules.as_ref().map_or(self.authority.rules.values.clearance_nm, |rules| {
+            crate::net_classes::pair_clearance(rules.clearance(left), rules.clearance(right))
+        })
     }
     /// Enumerate conservative obstacle indices for a contour on explicit copper layers.
     /// Equality is retained so tangency participates in zero-clearance contact checks.
@@ -229,9 +270,19 @@ impl ClearanceQuery {
             .collect();
         let decisions = gaps
             .into_iter()
-            .map(|(index, gap)| decision(None, index, gap, &connected, &self.geometry.items[index].intended_nets, false, self.authority.clearance_nm))
+            .map(|(index, gap)| {
+                decision(
+                    None,
+                    index,
+                    gap,
+                    &connected,
+                    &self.geometry.items[index].intended_nets,
+                    false,
+                    self.membership_clearance(&connected, &self.geometry.items[index].intended_nets),
+                )
+            })
             .collect();
-        Ok(Results { authority: self.authority.clone(), decisions })
+        Ok(Results { authority: self.authority.clone(), decisions, probe_rules: self.probe_policy(&connected)? })
     }
 }
 
@@ -379,13 +430,18 @@ impl BoardGeometry {
     /// work, while the general query continues to expose contact independently for shorts.
     /// Across different islands, unresolved membership remains a clearance obstacle even when
     /// display names match: only one equal, resolved intended net proves a same-net exemption.
-    pub(super) fn clearance_pairs(&self, clearance_nm: i64) -> impl Iterator<Item = Decision> + '_ {
-        self.candidate_pairs(clearance_nm)
+    pub(super) fn clearance_pairs<'a>(
+        &'a self,
+        clearance_nm: i64,
+        context: Option<&'a super::class_rules::Context>,
+    ) -> impl Iterator<Item = Decision> + 'a {
+        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
+        self.candidate_pairs(maximum)
             .filter(move |(i, j)| {
                 let (a, b) = (&self.items[*i], &self.items[*j]);
                 a.island != b.island && !(a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets)
             })
-            .filter_map(move |(i, j)| self.evaluate(i, j, clearance_nm))
+            .filter_map(move |(i, j)| self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm))))
     }
     /// Evaluate shape separation independently of the candidate-enumeration strategy.
     pub(super) fn evaluate(&self, i: usize, j: usize, clearance_nm: i64) -> Option<Decision> {
@@ -407,6 +463,7 @@ fn decision(first: Option<usize>, second: usize, gap_nm: f64, a: &[usize], b: &[
         touches: gap_nm <= 0.,
         clearance_violation: !same_island && !same_net && gap_nm < clearance_nm as f64,
         conflicting_nets,
+        clearance_nm,
     }
 }
 

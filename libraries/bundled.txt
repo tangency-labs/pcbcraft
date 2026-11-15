@@ -1,2 +1,2 @@
-starter
+basic-components
 power

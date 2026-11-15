@@ -89,7 +89,9 @@ or rescales anything already drawn, and pins stay reachable at any spacing becau
 wires attach to them by clicking. When zooming out thins the dots, the button says
 how far apart the drawn dots are (for example *Grid 10 mil · dots 50 mil*). Each pane
 keeps its own spacing through focus changes, splitting and reopening files; the last
-one chosen is kept with your preferences, not in the project.
+one chosen is kept with your preferences, not in the project. Schematic and PCB panes
+remember their spacing separately, so changing the board grid does not replace the
+schematic's startup choice (and the reverse). Both start at 50 mil until changed.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays
@@ -109,9 +111,9 @@ quick actions beside the tabs.
 
 Choose **Capture → Symbol** or press **A** to open the **Parts Catalog** and
 focus search. The large form has library navigation, searchable results and a
-selected-part preview. **Default** contains the resistor, LED,
+selected-part preview. **Basic components** contains the resistor, LED,
 capacitor, two-pin connector, four-pin header and NPN transistor from
-[`libraries/starter`](../libraries/starter); registered sources appear as
+[`libraries/basic-components`](../libraries/basic-components); registered sources appear as
 additional libraries. **Power** contains the built-in power and ground drawings.
 **Manage libraries…** opens the existing source manager. See the
 [native source guide](native-library-sources.md) for loading a library and
@@ -544,9 +546,9 @@ its panes or resetting its camera. Closing the last editor window, or choosing
 **File → Quit** from any window, uses one **Save / Don’t Save / Cancel** decision
 for the project. Canceling or failing a save leaves the project open.
 
-The top **Views** tab represents a named arrangement of the project's panes and
-windows. Use **+** to add one, or right-click a tab to rename, duplicate or delete
-it. Arrangements restore when a saved project is reopened on the same computer;
+Saved arrangements of the project's panes and windows are available under
+**File → Layouts**. Use **New arrangement** to add one; each layout's submenu
+offers **Activate**, **Rename…**, **Duplicate…** and **Delete…**. Arrangements restore when a saved project is reopened on the same computer;
 they live in user-local app settings and do not change or travel with project
 files. Unsaved projects keep arrangements only for the session until their first
 successful save. See the [arrangement persistence details](board-workspace-plan.md#named-arrangements-and-reopening-a-project).

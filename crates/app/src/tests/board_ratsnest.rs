@@ -29,7 +29,7 @@ fn board<'a>(accept: bool) -> Harness<'a, PcbApp> {
     }
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.query_all_by_label("Fit board").next().unwrap().click();
     h.run();
     h

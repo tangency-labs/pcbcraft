@@ -6,16 +6,16 @@ use std::{collections::BTreeSet, sync::Arc};
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
 pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
-pub(crate) const STARTER_IDS: [&str; 7] =
+pub(crate) const BASIC_COMPONENT_IDS: [&str; 7] =
     ["resistor-0402", "resistor-0603", "capacitor-0402", "capacitor-0603", "led-0402", "sot23", "header-1x02-254"];
-const STARTER: [&str; 7] = [
-    include_str!("../../../../libraries/starter/footprints/resistor-0402.json"),
-    include_str!("../../../../libraries/starter/footprints/resistor-0603.json"),
-    include_str!("../../../../libraries/starter/footprints/capacitor-0402.json"),
-    include_str!("../../../../libraries/starter/footprints/capacitor-0603.json"),
-    include_str!("../../../../libraries/starter/footprints/led-0402.json"),
-    include_str!("../../../../libraries/starter/footprints/sot23.json"),
-    include_str!("../../../../libraries/starter/footprints/header-1x02-254.json"),
+const BASIC_COMPONENTS: [&str; 7] = [
+    include_str!("../../../../libraries/basic-components/footprints/resistor-0402.json"),
+    include_str!("../../../../libraries/basic-components/footprints/resistor-0603.json"),
+    include_str!("../../../../libraries/basic-components/footprints/capacitor-0402.json"),
+    include_str!("../../../../libraries/basic-components/footprints/capacitor-0603.json"),
+    include_str!("../../../../libraries/basic-components/footprints/led-0402.json"),
+    include_str!("../../../../libraries/basic-components/footprints/sot23.json"),
+    include_str!("../../../../libraries/basic-components/footprints/header-1x02-254.json"),
 ];
 
 /// A physical land relative to its footprint origin. Surface lands bind to the component
@@ -281,10 +281,10 @@ pub(crate) fn read_saved(bytes: &[u8]) -> Result<Arc<FootprintDefinition>, Strin
 
 /// Resolve an original built-in definition. A project pins this copy once, rather than resolving
 /// its placement geometry from the installed catalog on every load.
-pub(crate) fn starter(id: &str) -> Option<Arc<FootprintDefinition>> {
+pub(crate) fn basic_components(id: &str) -> Option<Arc<FootprintDefinition>> {
     static CATALOG: std::sync::LazyLock<Vec<Option<Arc<FootprintDefinition>>>> =
-        std::sync::LazyLock::new(|| STARTER.iter().map(|text| read_saved(text.as_bytes()).ok()).collect());
-    STARTER_IDS.iter().position(|name| *name == id).and_then(|index| CATALOG[index].clone())
+        std::sync::LazyLock::new(|| BASIC_COMPONENTS.iter().map(|text| read_saved(text.as_bytes()).ok()).collect());
+    BASIC_COMPONENT_IDS.iter().position(|name| *name == id).and_then(|index| CATALOG[index].clone())
 }
 
 #[cfg(test)]

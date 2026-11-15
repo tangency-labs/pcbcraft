@@ -33,8 +33,10 @@ pub fn input(value: &mut String) -> egui::TextEdit<'_> {
 pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     let t = Tokens::get();
     ui.horizontal(|ui| {
-        let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
-        crate::controls::text(ui, value).labelled_by(label.id)
+        let label_response = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
+        let response = crate::controls::text(ui, value).labelled_by(label_response.id);
+        crate::automation::publish(ui, &response, format!("field:{label}"));
+        response
     })
     .inner
 }
@@ -75,6 +77,27 @@ pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, option
         .labelled_by(label.id)
     })
     .inner
+}
+
+/// Compose a value selector with one creation action using the shared dropdown and aligned
+/// menu rows. The host owns the selected key and handles creation after the popup dismisses.
+pub fn choice_with_action(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)], action: &str) -> bool {
+    let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, name)| name.as_str()).unwrap_or("Choose library…");
+    let mut create = false;
+    field(ui, label, |ui| {
+        crate::controls::Choice::from_id_salt(id).selected_text(selected).width(ui.available_width()).show_ui(ui, |ui| {
+            for (key, name) in options {
+                if crate::MenuItem::new(name).choice(*key == value.as_str()).show(ui) {
+                    *value = (*key).into();
+                }
+            }
+            if !options.is_empty() {
+                ui.separator();
+            }
+            create = crate::MenuItem::new(action).show(ui);
+        });
+    });
+    create
 }
 
 /// Align a typed selector with the inspector's text fields, using the full value column and shared control height.
@@ -440,6 +463,17 @@ pub fn inline_text(
         );
     }
     response
+}
+
+/// Read-only Library geometry grows with the Preview's width and shares the
+/// ordinary symbol/board palettes, card corners, hit target and inset rhythm.
+pub fn geometry_preview(ui: &mut Ui, label: &str, footprint: bool) -> (egui::Rect, egui::Response) {
+    let t = Tokens::get();
+    let height = (ui.available_width() * 0.75).clamp(180., 360.);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, ui.is_enabled(), label));
+    ui.painter_at(rect).rect_filled(rect, t.radius_md, if footprint { t.board_canvas } else { t.canvas });
+    (rect.shrink(t.space_12), response)
 }
 
 #[cfg(test)]

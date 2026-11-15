@@ -93,7 +93,7 @@ fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center
             let align = if layout.offset.is_none() { automatic_align } else { Align2([horizontal, egui::Align::Center]) };
             let text = if layout.show_name { format!("{name}: {value}") } else { value.to_owned() };
             let height = (step * layout.height_nm as f32 / GRID_NM as f32).max(1.);
-            let galley = painter.layout_no_wrap(text, FontId::proportional(height), color);
+            let galley = pcbcraft_chrome::canvas_text::layout_no_wrap(painter, text, FontId::proportional(height), color);
             let pos = align.anchor_size(anchor, galley.size()).min;
             let shape = egui::epaint::TextShape::new(pos, galley, color).with_angle_and_anchor(-(layout.rotation as f32).to_radians(), align);
             let bounds = shape.visual_bounding_rect();

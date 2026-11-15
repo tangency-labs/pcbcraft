@@ -10,7 +10,7 @@ use crate::backend::{Backend, is_window_command, needs_live_editor};
 enum Effect {
     /// Only looks.
     ReadOnly,
-    /// Changes the project in memory, undoably.
+    /// Changes the project or operates a live UI, which can reach file/close controls.
     Edits,
 }
 
@@ -21,7 +21,7 @@ fn tool(name: &str, title: &str, desc: &str, props: Value, required: &[&str], ef
         "title": title,
         "description": desc,
         "inputSchema": {"type": "object", "properties": props, "required": required, "additionalProperties": false},
-        "annotations": {"title": title, "readOnlyHint": read_only, "destructiveHint": false, "idempotentHint": read_only, "openWorldHint": false},
+        "annotations": {"title": title, "readOnlyHint": read_only, "destructiveHint": !read_only, "idempotentHint": read_only, "openWorldHint": false},
     })
 }
 
@@ -47,7 +47,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "execute",
             "Run a command",
-            "Run a project or window command. Project commands answer with the project, window commands (view., window., arrangement., app., file.) with the editor; set inspect to false to return only the revision. Board-update preview queries always return their requested review data.",
+            "Run a project or live-window command. ui. commands locate controls or send ordinary input, which can edit, save or close documents; input returns a ticket to poll with ui.inspect. Other window commands (view., window., arrangement., app., file.) answer with the editor; set inspect to false for only the revision. Project commands answer with the project. Board-update queries return review data.",
             json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}}),
             &["command"],
             Effect::Edits,

@@ -1,0 +1,57 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 1.384
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 5.472
+  },
+  {
+    "name": "workspace-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 62.606
+  },
+  {
+    "name": "harness-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 101,
+    "elapsed_s": 3.217
+  }
+]

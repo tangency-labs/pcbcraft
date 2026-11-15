@@ -1,0 +1,245 @@
+{
+  "format": "pcbcraft-issue301-verification/1",
+  "issue": 301,
+  "commit": "7ac9df2c4ef726b62640df40d059184e9814684e",
+  "tree": "29d8eaf5a9418f48ce3e9c3e2812a7abc7aec1d9",
+  "base": "3ba1e4120b66d4e21ec01adad1f8cee1adada722",
+  "branch": "travle1/net-class-assignments",
+  "worktree": "/home/travisl/projects/PCBcraft/work/net-class-assignments",
+  "status": "",
+  "publication": "Local commit only; no push, PR or app launch authorized/performed.",
+  "summary": "Scoped complete-set class assignment, atomic promotion, retained topology origins/conflicts, protected class removal/rebind, sparse project21/instances3 and unsupported-consumer refusal.",
+  "checks": {
+    "workspace": {
+      "command": "cargo test --locked --workspace",
+      "log": "pcbcraft301-workspace-tests-fixed.log",
+      "passed": 1831,
+      "ignored": 11,
+      "exit_code": 0,
+      "host_loopback": true
+    },
+    "clippy": {
+      "command": "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "log": "pcbcraft301-clippy-final.log",
+      "exit_code": 0
+    },
+    "feature_clippy": {
+      "command": "cargo clippy --locked --workspace --all-targets --features pcbcraft-app/performance-harness -- -D warnings",
+      "log": "pcbcraft301-clippy-harness.log",
+      "exit_code": 0
+    },
+    "format": {
+      "command": "cargo fmt --all --check",
+      "log": "pcbcraft301-fmt.log",
+      "exit_code": 0
+    },
+    "browser": {
+      "command": "cargo check --locked -p pcbcraft-web --target wasm32-unknown-unknown",
+      "log": "pcbcraft301-wasm-check.log",
+      "exit_code": 0
+    },
+    "wasi": {
+      "command": "cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib net -- --test-threads=1",
+      "runner": "node --no-warnings /home/travisl/projects/PCBcraft/work/net-class-assignments/scripts/wasi-test-runner.cjs",
+      "log": "pcbcraft301-wasi.log",
+      "passed": 79,
+      "exit_code": 0
+    },
+    "native_build": {
+      "command": "cargo build --locked -p pcbcraft -p pcbcraft-cli",
+      "log": "pcbcraft301-native-build.log",
+      "exit_code": 0
+    },
+    "dependencies": {
+      "command": "cargo deny --locked check licenses sources bans",
+      "log": "pcbcraft301-deny.log",
+      "exit_code": 0
+    },
+    "harness": {
+      "command": "cargo test --locked -p pcbcraft-app --features performance-harness performance::",
+      "log": "pcbcraft301-harness-tests.log",
+      "passed": 12,
+      "failed": 1,
+      "reason": "One capture fixture attempted local loopback denied by the sandbox; only the failed test was rerun with host loopback."
+    },
+    "harness_capture": {
+      "command": "cargo test --locked -p pcbcraft-app --features performance-harness performance::rendered::tests::failed_capture_cannot_produce_a_passing_report",
+      "log": "pcbcraft301-harness-capture-host.log",
+      "passed": 1,
+      "exit_code": 0,
+      "host_loopback": true
+    },
+    "python_harness": {
+      "command": "python3 -B -m unittest discover -s scripts -p 'test*performance*.py'",
+      "log": "pcbcraft301-python-harness.log",
+      "passed": 18,
+      "exit_code": 0
+    },
+    "node_harness": {
+      "command": "node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs",
+      "log": "pcbcraft301-node-harness.log",
+      "passed": 2,
+      "exit_code": 0
+    },
+    "links": {
+      "result": "Every local Markdown file link in changed docs resolves; reviewed final wording and examples against shared-command tests."
+    }
+  },
+  "earlier_failures": [
+    "Initial fixture setup/borrow/API-key mistakes are retained in logs; the final workspace and WASI runs cover the corrected tests.",
+    "The first broad workspace run refused the old format correctly but an existing part-instance test asserted the obsolete full error-message version list. Assertion now checks the rejection reason; the complete workspace rerun passed.",
+    "Initial Clippy found a new impl after a test module; moved it before tests. Final workspace Clippy and feature-enabled Clippy passed.",
+    "The performance-harness sandbox loopback failure is explicitly retained above and passed once rerun with host loopback."
+  ],
+  "performance": {
+    "before": {
+      "move_ms": {
+        "median_ms": 1.197879,
+        "max_ms": 1.483879,
+        "samples": 20
+      },
+      "disconnect_ms": {
+        "median_ms": 1.0339200000000002,
+        "max_ms": 1.195886,
+        "samples": 20
+      }
+    },
+    "after-unassigned": {
+      "move_ms": {
+        "median_ms": 1.1894740000000001,
+        "max_ms": 1.496804,
+        "samples": 20
+      },
+      "disconnect_ms": {
+        "median_ms": 1.0272875,
+        "max_ms": 1.118068,
+        "samples": 20
+      }
+    },
+    "after-assigned": {
+      "move_ms": {
+        "median_ms": 1.19281,
+        "max_ms": 1.501261,
+        "samples": 20
+      },
+      "disconnect_ms": {
+        "median_ms": 1.032007,
+        "max_ms": 1.043809,
+        "samples": 20
+      }
+    },
+    "final-unassigned": {
+      "move_ms": {
+        "median_ms": 1.1965715,
+        "max_ms": 1.563619,
+        "samples": 20
+      },
+      "disconnect_ms": {
+        "median_ms": 1.032873,
+        "max_ms": 1.039791,
+        "samples": 20
+      }
+    },
+    "final-assigned": {
+      "move_ms": {
+        "median_ms": 1.200119,
+        "max_ms": 1.59058,
+        "samples": 20
+      },
+      "disconnect_ms": {
+        "median_ms": 1.0371815,
+        "max_ms": 1.058346,
+        "samples": 20
+      }
+    },
+    "limits": "20 CPU samples per action on a 64-terminal/four promoted unnamed-net fixture. No rendered, naming-command, allocation, endurance, large-project, tail-latency or controlled-host qualification.",
+    "probe_change": "After the baseline, only bound setup and output binding-state reporting were added to the temporary runner; the timed loop and saved action inputs remained unchanged.",
+    "hashes": {
+      "actions.json": "39f47ef867ece3c24662ca18e7237c2764d3a10d2859f3f415f57d996fae420c",
+      "after-assigned.json": "08e21d58c85322a43ae590dd07233d64662d0d31b01f36e7eadab78dfaa8da6a",
+      "after-unassigned.json": "27a7755fc19a5baf5c19a403615911c8854bfcdef02dcf3a5b5445f778c854dc",
+      "before.json": "dc13dc128ccd0ad9b5cdca8f634627c70906eeff8e3003730e5a2ab6e68fbec7",
+      "final-assigned.json": "dd8ec375fbfbc1bada460311b5285718182f316d43fa7e3b1e01636db5d48ae9",
+      "final-unassigned.json": "f2f65f7aa457d84fa613ad58cd22435e26f381173a0dc4fc8d877820fe52f966",
+      "probe-final.rs": "12021a2af0203294b271bc4a01fc11dd1628d8db81b986713ee4725e23dda58f",
+      "probe.rs": "c4eeb1db2461ed11d6c767977fa586a6d50284fc4ae8202e25a457d9b2ad08dd",
+      "registry.pc": "40a79960b718564f244177f404906a04ffe7b8d8481125ef66e6f85c95ee4453"
+    }
+  },
+  "failure_review": "failure-review.md",
+  "unmeasured": [
+    "Large-project/tail CPU behavior, allocation/memory, naming-command timing, rendered/browser interaction, native window/presentation and Wayland endurance.",
+    "Class-aware routing/query/DRC (#302), editor controls (#303), repeated-use/board transfers (#307)."
+  ],
+  "dependencies_changed": false,
+  "external_assets_or_eda_implementation_sources": false,
+  "source_hashes": {
+    ".github/workflows/ci.yml": "de30047e2f2420ad3f50ee31506b114d0706581576dc2f3da2630d7b1442c49e",
+    "ATTRIBUTION.md": "3e7c4967799ac5381e7ce87f175f4e95323a39c18529850b3c36511fd7e41b73",
+    "crates/app/src/board_drc.rs": "1a612cd67a06588741e9f7b69a7bdc7fa99bccbd6fa2e789f2b82641a1b79753",
+    "crates/engine/src/board/clearance.rs": "6932ce903bc400a7a8291d93103a711ddd5ad614be3246482ddc20fc54d8ffc6",
+    "crates/engine/src/board/drc.rs": "5ea51c6c60fb68864560b9077b0500579512c66c2b9a24016b20d8d1bd4f8e64",
+    "crates/engine/src/board/track/preparation.rs": "edf6a2bab472f80477cc76ce9c070e0a86086d4e063bc5db589ec928db63add5",
+    "crates/engine/src/board/view.rs": "c8286b524c52ca066e6922db58cbb29494f9c0d6001ee852c2efbd999b447bf7",
+    "crates/engine/src/lib.rs": "8a7363ec1070b33bc514624e62d52a85602ee08b512f3a9a6b19f2e2e5433ea2",
+    "crates/engine/src/net_classes.rs": "68e9a508702e68a49c9652e67622eace948d5ae9f889d3b2ed15b1336c7ba524",
+    "crates/engine/src/net_classes/commands.rs": "4ab199eb85d32d39b7dd380d224aa316ba5788ff2ee0c0e3aabe18462c4a8484",
+    "crates/engine/src/nets.rs": "30e0ea23fa8712042927c99aa6242f9523e797a59197c9596275609cd3cc8bf0",
+    "crates/engine/src/nets/classes.rs": "e07cd8e3b7c4b09559fc0bb44b4b0894be5e63ec065b9681460b39a868a06676",
+    "crates/engine/src/nets/commands.rs": "76aadf98a62057e02dcf0b87f1da8336ee11c2a1c587ec70713706ffdcc2b4d4",
+    "crates/engine/src/nets/graph.rs": "77f989a060c703618fbdcbe09d2c1d3b4bc0f2967f077b187e5cf23b136854e0",
+    "crates/engine/src/nets/reconcile.rs": "80ca42de64a5d3b9e4d15c3073178eaac537a02f8af485d36f565873faea372c",
+    "crates/engine/src/nets/tests.rs": "fcdc45f177adb97df40e1c68c84de7337bd20d081b5610f7d8ab057a9876bacb",
+    "crates/engine/src/nets/tests/classes.rs": "e57dc7c42a91de565977e2f291eb18e0a135d35452e3169461280998776d4e81",
+    "crates/engine/src/nets/validation.rs": "3b28e514bf40790224e71ec65efa3f64960cd9af1692cf64554a36008969a124",
+    "crates/engine/src/part_instances/tests.rs": "c357281023be8b5502e8a6d0951eaa0e0aaaea3150e949ded306444e4fc2fc10",
+    "crates/engine/src/persistence/documents.rs": "d14e60bbeff079c0ebdf3c06ab27abd6c71d495d35e982a0e5a08e37bfa147b4",
+    "crates/mcp/src/backend.rs": "dd7c31dbd49e90b3d3e7a8e2a31adbe6c9120faeb50bb8fa649bb096c09bdacb",
+    "crates/mcp/src/net_registry_tests.rs": "665cfddf277bc326513cd0f8bedb69520f20ce482f73b9845f90800dd56b1bb2",
+    "crates/storage/src/layout/net_registry_tests.rs": "650bf72eb41d06e6daf6673110ecb1805a395cfc419dc2c36cf1ef061a2e334e",
+    "docs/board-rules.md": "c7648ea1296a08a881ca05aa45d24e7dd996cab7d8ff24c033c90842ea409fe5",
+    "docs/capabilities.md": "cf0273f714e4dac77bc86266363ef15afd89df19118110c1c6a12705e0dce50f",
+    "docs/mcp.md": "592b390fd859f79f66ff029c718d989da8e7358ab4fd2990ee26abf3003e7e3c",
+    "docs/native-project-storage.md": "1bfad5c6a7ecf67db0f3714b195dd2cf0f0915506bfd632b930fd093658e0eae",
+    "docs/net-class-assignments.md": "df0247d3e4ebde8911410b4a47f53e2d4612e88abe2f5f96e2d2e9cb2fec642e",
+    "docs/net-classes.md": "78268be760f67e9b420738c3ef5ad39ecd006310d6487c55597d64d84848073c",
+    "docs/net-identity.md": "fbd068fc89700272109bcb8042735cf4ca3ef2bcf1d085adf611d2cdc5f959b3",
+    "docs/net-registry-storage.md": "2eee854ea03750372938bd4a3f16bfa0729a1cf9234e34082d79a0d05ae868b2",
+    "docs/quickstart.md": "8c0b6822ab0cad1a781eb8f85828c93fb5d7f856754edd015203d877c8b7e2e4"
+  },
+  "log_hashes": {
+    "pcbcraft301-assignment-extended.log": "d08ed40d17607b403ffddb4362da70112dd6b9240aeaa4b44441c2d9cea0775f",
+    "pcbcraft301-assignment-extended2.log": "48e3d0b488879544f4d677ba6fb60cb676ce91fb507759f457d04b4b589fad43",
+    "pcbcraft301-assignment-extended3.log": "62524de6a07a46b9bb5dc569bc48354bff6c983e1107f7ef7917eeba7d0acff5",
+    "pcbcraft301-assignment-extended4.log": "74416eceb1c9ca281e70ab714e7cf693d8a71709e6cab5fe4a6a36312ef7749f",
+    "pcbcraft301-assignment-extended5.log": "626f03c81837c7d8408bb5fc0eb38cf9738f49c58bf2f35478075a940e0e8e8a",
+    "pcbcraft301-assignment-extended6.log": "ba930270d4fa6f57f47445701e20f13191231a22765bd0ba3fc1e781dc0f5497",
+    "pcbcraft301-assignment-tests-fixed.log": "34e6dd9b912fbc9a74a3f92a5a7f965a363460aed8d4043cf19fb05289987d71",
+    "pcbcraft301-assignment-tests-fixed2.log": "9f0287dcb06644df548ca0ade29cb10664840ff48eb798ce9e854a0e338f118a",
+    "pcbcraft301-assignment-tests.log": "41f02403373d23d5fe669d9d9acbcb7a297744f64c2f2837478b5f8b7d6bd521",
+    "pcbcraft301-check-first.log": "b1318c8ae713d96969c649b792428cdfe4bab48ee4928af0c0e52575807128f4",
+    "pcbcraft301-clippy-final.log": "2d43e2459118fffba8d91481eb7591c4e6722804002c8fc29d7d6f0cd0e3ca35",
+    "pcbcraft301-clippy-first.log": "607c43254de1e7b63bcfbe5b7919982e3e954db6c243ba2bb450b6b345948c00",
+    "pcbcraft301-clippy-harness.log": "b89973a0f24dec0a9d2e1bc01b6ef2c8814b631d847eaa6362ceec006d42bf4e",
+    "pcbcraft301-deny.log": "ef8317b369b8527e06290941bfada84d1f8e45b2b8c311d5e1fec1558e00a7be",
+    "pcbcraft301-fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pcbcraft301-harness-capture-host.log": "eca5b2ab5b73b571ecc2eeffe90ceecdc3c8360c149dc767600bf82fde43d5e6",
+    "pcbcraft301-harness-tests.log": "907f471960900919c562016071fae3fd305eb0c6c3ae327b4887c307c0bc95a8",
+    "pcbcraft301-mcp-tests.log": "efd8be7786a3a7497ad5eeaa54a9403c69e42639f1a758de5c5027b2f705f351",
+    "pcbcraft301-mcp-tests2.log": "8afbae078d03cd46cb85780e7b75800fe0907ffd2b2d838c518e8711a14f6204",
+    "pcbcraft301-native-build.log": "d163d5b48c2a651064f7a0a1f189352b2cb44817bdb7dac31ea6d6449208270f",
+    "pcbcraft301-nets-coherent.log": "eced8224ac44bb006a2491ea92875c6a5b69dc4435e8df1833dcde0fadc39c02",
+    "pcbcraft301-nets-final-focused.log": "4ac19dc58b30d95fa71a9a02c6b984d2bcbd2ccfa149b692fbba3d4312b8dd84",
+    "pcbcraft301-nets-first.log": "30e7793a7e6ac19a519718d114cea920dbbaaa0cef604a3646a080808f6659dd",
+    "pcbcraft301-node-harness.log": "ac04c65815a8768115e3b0e458d5c97c1d9ab0ef188d56ad43627f6bf0a7bcd4",
+    "pcbcraft301-probe-build-after.log": "244e63ba9fb1134dd36f52e3d8c999f9ae2c06590f1d8ec6a79c17e9d4bb399f",
+    "pcbcraft301-probe-build-before.log": "b59b48abafaf891daf979f7f37b802db84c7ee427ec1545747b28611255ad7c6",
+    "pcbcraft301-probe-final-build.log": "14ce52d938b484b2803173c4c3453d84db311a958d235bb3655a63ac870ebcbb",
+    "pcbcraft301-python-harness.log": "870201b4bc1d59febbe40cdca52c4d323b6eb959224a3f6681289ba2787e0aa2",
+    "pcbcraft301-storage-tests.log": "b5e45d71d44f4a9f4eb6e3187c26ccff8490f514634604fd3c5ecf960327ead7",
+    "pcbcraft301-wasi.log": "e6e5aacc1b6edc8991ce97ee40c9fef2cb59eb3ddfb72742f0cd10f7169e60b0",
+    "pcbcraft301-wasm-check.log": "7af217e0a93743c93c8081b99fea161cfcf621db7922c617d78c3bbe5754e641",
+    "pcbcraft301-workspace-tests-fixed.log": "a01bd564f170a5c6874f5b2841365bedb094c02d6a7673c357c588f9de995e52",
+    "pcbcraft301-workspace-tests.log": "f0b41822bd2954cb3729efc4e2b623c2a546e5fcb5899230e7726d647996ac9c"
+  }
+}

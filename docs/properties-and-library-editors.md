@@ -172,11 +172,14 @@ to a new file. Keep the editor item as the provenance-bearing authoring master;
 the existing standalone symbol format does not carry its license or stable
 editor primitive IDs. Unknown symbol provenance requires recording its license
 before saving or exporting. Native source registration/search is available through
-**Libraries → Sources**, as described in the [source guide](native-library-sources.md).
+the **Library** workspace (also reached through **Libraries → Sources**), as described in the [source guide](native-library-sources.md).
 Deliberate application of an authored definition to a project remains follow-up
-work; these editors do not yet add their documents to the Parts Catalog or the package catalog.
+work; desktop **Library → Publish…** adds validated native revisions to a writable
+registered folder and refreshes its catalog. **Save Library Copy** retains its
+separate draft-file meaning. See [native publication](native-library-sources.md#edit-and-publish-native-items)
+for identity, older-base warnings and write/recovery behavior.
 
-Live MCP switches the same four workspace types through `app.set_workspace`
+Live MCP switches the five available workspace types through `app.set_workspace`
 and discovers `app.library_new`, `app.library_fork_selected`,
 `app.library_edit`, `app.library_view`, `app.library_focus`, `app.library_open`, `app.library_save`
 and `app.library_close`. Forking addresses an explicit source view ID.
@@ -188,7 +191,7 @@ navigation. `app.set_workspace` accepts source pane and placement; ordinary
 `view.split`, `view.open_beside`, `view.detach`, `view.dock`, `view.open_window` and
 `view.close` use the same layout path for definition and project views. Edits require
 that library revision and use the same engine authoring transactions as the GUI.
-Headless project sessions do not yet host these editor documents. Bulk tables, arbitrary pad shapes, mask/paste, 3D, source publishing
+Headless project sessions do not yet host these editor documents. Bulk tables, arbitrary pad shapes, mask/paste, 3D, browser/remote publishing
 and reviewed updates to placed components remain follow-up scope under #78/#79.
 
 ## Additional manual review and local verification

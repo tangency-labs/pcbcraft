@@ -178,6 +178,9 @@ impl PcbApp {
                 self.message = Some("Selection changed; unapplied property edits were discarded.".into());
             }
             let count = self.views.active.schematic.selection.len();
+            let enabled = matches!(self.dialog, Dialog::None);
+            let mut net_rules = false;
+            let wires = !self.views.active.schematic.selection.wires.is_empty();
             let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
                 ui,
                 egui::Id::unique(("selection_properties", self.views.host)),
@@ -189,12 +192,18 @@ impl PcbApp {
                 |ui| {
                     chrome::inspector_body(ui);
                     ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
+                    if wires {
+                        net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net rules…")).inner.clicked();
+                    }
                 },
             );
             if collapse {
                 self.views.active.schematic.properties.collapsed = !self.views.active.schematic.properties.collapsed;
             }
             self.views.active.schematic.properties.rect = rect;
+            if net_rules {
+                self.begin_net_rules();
+            }
             return rect;
         };
         let enabled = matches!(self.dialog, Dialog::None);
@@ -457,7 +466,7 @@ impl PcbApp {
                             self.dialog = Dialog::EditFields(Box::new(edit));
                         }
                     }
-                    LibraryAction::Sources => self.dialog = Dialog::LibrarySources,
+                    LibraryAction::Sources => self.open_library_workspace(ctx),
                 }
             }
         } else if action.close {

@@ -121,6 +121,26 @@ class LibrarySchemaTests(unittest.TestCase):
                       {"type": "quantity", "value": "-0", "unit": "Ohm"}]:
             self.assertFalse(value_validator.is_valid(value), value)
 
+    def test_optional_drawings_are_versioned_and_pin_maps_require_a_symbol(self):
+        """Format 2 permits independent drawings without weakening the retained format 1."""
+        validator = self.checks[checker.FORMATS["pcbcraft-part/2"]]
+        part = copy.deepcopy(self.part)
+        part["format"] = "pcbcraft-part/2"
+        validator.validate(part)
+        del part["symbol"]
+        self.assertFalse(validator.is_valid(part))
+        for package in part["packages"].values():
+            package["mapping"] = {}
+            package.pop("unconnected_pads", None)
+        validator.validate(part)
+        part["packages"] = {}
+        validator.validate(part)
+        part["symbol"] = None
+        self.assertFalse(validator.is_valid(part))
+        del part["symbol"]
+        part["format"] = "pcbcraft-part/1"
+        self.assertFalse(self.checks[checker.FORMATS["pcbcraft-part/1"]].is_valid(part))
+
     def test_pin_identifiers_and_mapping_are_preserved(self):
         validator = self.checks[checker.FORMATS["pcbcraft-part/1"]]
         value = copy.deepcopy(self.part)

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 mod codec;
+mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
 fn apply(session: &mut Session, command: &str, mut params: Value) {
@@ -433,7 +434,7 @@ fn non_anchor_wire_edits_leave_registry_bytes_and_baseline_nets_derived() {
         apply(
             &mut session,
             crate::ASSIGN_FOOTPRINT,
-            json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"1","2":"2"}}),
+            json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"1","2":"2"}}),
         );
     }
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({}));
@@ -553,3 +554,5 @@ fn opening_a_named_project_sixteen_does_not_promote_or_change_its_bytes() {
     assert_eq!(session.project().unwrap().net_registry.records.len(), 2);
     round_trip(&session);
 }
+
+mod classes;

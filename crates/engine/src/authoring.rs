@@ -2,6 +2,9 @@
 #[cfg(test)]
 mod basics_tests;
 mod operations;
+pub mod publishing;
+#[cfg(test)]
+mod publishing_tests;
 use crate::{
     board::definition as footprint,
     library,
@@ -446,11 +449,24 @@ impl Item {
 
     /// Fork an exact symbol under a new identity, leaving its source and placed copies unchanged.
     pub fn from_symbol(definition: &SymbolDefinition) -> Result<Self, String> {
+        Self::read_symbol(definition, true)
+    }
+
+    /// Reconstruct a published symbol without migrating its drawing or changing terminal/unit IDs.
+    /// Primitive IDs are allocated in native unit, pin and drawing order for this session.
+    pub fn edit_symbol(definition: &SymbolDefinition) -> Result<Self, String> {
+        Self::read_symbol(definition, false)
+    }
+
+    /// Share reconstruction with explicit forks, limiting legacy lead integration to the copy path.
+    fn read_symbol(definition: &SymbolDefinition, fork: bool) -> Result<Self, String> {
         let mut item = Self::new(Kind::Symbol)?;
         item.objects.clear();
-        item.name = format!("{} copy", definition.name).chars().take(64).collect();
+        item.name = copy_name(&definition.name);
         item.source = format!("Fork of {}/{} at revision {}", definition.library, definition.id, definition.revision());
-        let original = library::starter().symbol(&definition.id).cloned();
+        let original = if definition.library == "starter" { library::compatibility::starter() } else { library::basic_components() }
+            .symbol(&definition.id)
+            .cloned();
         let known_original = original.as_ref().is_some_and(|original| {
             serde_json::to_value(library::saved_copy(definition))
                 .ok()
@@ -480,7 +496,7 @@ impl Item {
                         name: pin.name.clone(),
                         electrical_type: pin.electrical_type,
                         at: pin.offset,
-                        appearance: pin.appearance.clone().or_else(|| operations::legacy_pin(unit, pin, &mut consumed)),
+                        appearance: pin.appearance.clone().or_else(|| fork.then(|| operations::legacy_pin(unit, pin, &mut consumed)).flatten()),
                     },
                 );
             }
@@ -505,17 +521,34 @@ impl Item {
         if !item.other_units.is_empty() {
             item.format = MULTI_UNIT_FORMAT.into();
         }
+        if !fork {
+            item.library = definition.library.clone();
+            item.id = definition.id.clone();
+            item.name = definition.name.clone();
+            item.revision = definition.revision();
+            item.allocation.revision = item.revision;
+            item.source = format!("Published {}/{} r{}", item.library, item.id, item.revision);
+        }
         item.validate()?;
         Ok(item)
     }
 
     /// Fork physical data while retaining its license and source; the original receives no writes.
     pub fn from_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
+        let mut item = Self::read_footprint(definition)?;
+        item.name = copy_name(&definition.name);
+        item.source =
+            bounded_text(format!("Fork of {}/{} r{}; {}", definition.library, definition.id, definition.revision, definition.source.reference), 2048);
+        item.validate()?;
+        Ok(item)
+    }
+
+    /// Reconstruct geometry before choosing fork or published metadata. Intermediate copy labels
+    /// cannot invalidate an otherwise editable published definition at its source-text limit.
+    fn read_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
         let mut item = Self::new(Kind::Footprint)?;
         item.objects.clear();
-        item.name = format!("{} copy", definition.name).chars().take(64).collect();
         item.license = definition.license.clone();
-        item.source = format!("Fork of {}/{} r{}; {}", definition.library, definition.id, definition.revision, definition.source.reference);
         item.reference_font = definition.reference.clone();
         item.reference_offset = definition.reference_offset;
         item.original_source = Some(definition.source.clone());
@@ -531,6 +564,18 @@ impl Item {
             item.objects.insert(item.objects.len() as u64 + 1, primitive);
         }
         item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(0);
+        Ok(item)
+    }
+
+    /// Reopen an exact footprint, numbering primitives deterministically and retaining pad IDs.
+    pub fn edit_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
+        let mut item = Self::read_footprint(definition)?;
+        item.library = definition.library.clone();
+        item.id = definition.id.clone();
+        item.name = definition.name.clone();
+        item.source = definition.source.reference.clone();
+        item.revision = definition.revision;
+        item.allocation.revision = item.revision;
         item.validate()?;
         Ok(item)
     }
@@ -662,7 +707,7 @@ impl Item {
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
             || self.revision > self.allocation.revision
-            || self.source.len() > 1024
+            || self.source.len() > if self.kind == Kind::Footprint { 2048 } else { 1024 }
             || self.license.trim().is_empty()
             || self.license.len() > 128
             || self.original_source.as_ref().is_some_and(|source| serde_json::to_vec(source).map_or(true, |bytes| bytes.len() > 16_384))
@@ -728,6 +773,8 @@ pub struct Session {
     revision: u64,
     next_id: u64,
     next_content_revision: u32,
+    published: Option<publishing::Address>,
+    publication_saved: Option<Arc<Item>>,
 }
 
 impl Session {
@@ -737,7 +784,17 @@ impl Session {
         let next_id = item.allocation.object.checked_add(1).ok_or("Primitive ID limit reached.")?;
         let next_content_revision = item.allocation.revision.checked_add(1).ok_or("Content revision limit reached.")?;
         let item = Arc::new(item);
-        Ok(Self { saved: saved.then(|| item.clone()), item, undo: Vec::new(), redo: Vec::new(), revision: 0, next_id, next_content_revision })
+        Ok(Self {
+            saved: saved.then(|| item.clone()),
+            item,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: 0,
+            next_id,
+            next_content_revision,
+            published: None,
+            publication_saved: None,
+        })
     }
     /// Retain immutable data for rendering or an in-flight save.
     pub fn snapshot(&self) -> Arc<Item> {
@@ -929,7 +986,7 @@ impl Session {
     }
     /// Report document and primitive identities used by the GUI and live tools.
     pub fn inspect(&self) -> Value {
-        json!({"revision":self.revision,"dirty":self.dirty(),"saved_content_revision":self.saved.as_ref().map(|item|item.revision),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"item":self.item.as_ref()})
+        json!({"revision":self.revision,"dirty":self.dirty(),"published":self.published,"publication_dirty":self.publication_dirty(),"saved_content_revision":self.saved.as_ref().map(|item|item.revision),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"item":self.item.as_ref()})
     }
 }
 
@@ -945,13 +1002,29 @@ fn restored(item: &Arc<Item>, allocation: Allocation) -> Result<Arc<Item>, Strin
     Ok(Arc::new(item))
 }
 
+/// Keep a bounded, unpadded copy label with the complete suffix and valid UTF-8 in both editors.
+fn copy_name(name: &str) -> String {
+    let prefix = bounded_text(name.to_owned(), 64 - " copy".len());
+    format!("{} copy", prefix.trim_end())
+}
+
+/// Bound UTF-8 text by bytes while retaining complete code points.
+fn bounded_text(mut text: String, limit: usize) -> String {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     /// Stable IDs and source preservation survive geometry edits, undo, redo and reopening.
     #[test]
     fn footprint_authoring_preserves_source_and_history() {
-        let original = footprint::starter("resistor-0402").unwrap();
+        let original = footprint::basic_components("resistor-0402").unwrap();
         let before = (*original).clone();
         let mut s = Session::new(Item::from_footprint(&original).unwrap(), false).unwrap();
         let first = s.snapshot();
@@ -990,7 +1063,7 @@ mod tests {
     /// Native terminal checks and deterministic encoding apply to symbol authoring too.
     #[test]
     fn symbol_terminals_validate_and_save_deterministically() {
-        let definition = library::starter().symbol("connector").unwrap();
+        let definition = library::basic_components().symbol("connector").unwrap();
         let item = Item::from_symbol(definition).unwrap();
         let bytes = item.encode().unwrap();
         assert_eq!(Item::decode(&bytes).unwrap().encode().unwrap(), bytes);

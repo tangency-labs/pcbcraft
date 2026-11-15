@@ -65,10 +65,21 @@ pub struct ReportAction {
 pub fn form(ctx: &egui::Context, primary: &str, enabled: bool, report: bool, add: impl FnOnce(&mut Ui)) -> catalog::FormAction {
     let t = Tokens::get();
     let id = egui::Id::unique("board_update");
+    let width = 800.0_f32.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+    let changed = ctx.data_mut(|data| {
+        let key = id.with("width");
+        let previous = data.get_temp::<f32>(key);
+        data.insert_temp(key, width);
+        previous.is_some_and(|previous| previous != width)
+    });
+    // Modal centering uses the previous pass's measured size. Settle a changed
+    // width now, so the next scroll or click cannot move its header and footer.
+    if changed {
+        ctx.request_discard("Update PCB dialog width changed");
+    }
     let frame = kit::navigation_popup_frame().inner_margin(0);
     let mut closed = false;
     let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
-        let width = 800.0_f32.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
         ui.set_width(width);
         let field_style = ui.style().clone();
         kit::scope(ui, |ui| {

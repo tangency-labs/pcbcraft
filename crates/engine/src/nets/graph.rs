@@ -33,6 +33,7 @@ impl Network {
             primary: primary.clone(),
             fallbacks: self.anchors.iter().filter(|a| *a != primary).take(3).cloned().collect(),
             lineage: Vec::new(),
+            class_bindings: Vec::new(),
             state: State::Active {},
         })
     }
@@ -45,7 +46,7 @@ impl Network {
             Ok(Record { primary: primary.clone(), fallbacks: surviving.into_iter().skip(1).collect(), ..record.clone() })
         } else {
             let next = self.record(record.id, None)?;
-            Ok(Record { lineage: record.lineage.clone(), ..next })
+            Ok(Record { lineage: record.lineage.clone(), class_bindings: record.class_bindings.clone(), ..next })
         }
     }
 }
@@ -175,6 +176,12 @@ impl Graph {
     /// Find the current network for a typed anchor without inferring one from names or geometry.
     pub fn network(&self, anchor: &Anchor) -> Option<usize> {
         self.by_anchor.get(anchor).copied()
+    }
+
+    /// Read exact current endpoint identity for selection without accepting junctions as saved
+    /// registry anchors. A junction may instead resolve through its current electrical group.
+    pub(super) fn endpoint_anchor(&self, sheet: SheetTarget, endpoint: WireEndpoint) -> Option<&Anchor> {
+        self.endpoints.get(&(sheet.id(), endpoint))
     }
 
     /// Requalify transient keys for the first board's whole-scope transfer, preserving memberships.

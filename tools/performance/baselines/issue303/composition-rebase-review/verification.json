@@ -1,0 +1,88 @@
+{
+  "scope": "Explicit composition boundaries after rebasing onto PR #354 guidance",
+  "changes": [
+    "Reusable selection resolution receives model, document target and selections instead of PcbApp",
+    "Draft capture receives snapshot, source, page, unit and typed selection result",
+    "Application shell coordinates source-view capture and validated commands",
+    "Board/class dimensional fields reuse one chrome adapter"
+  ],
+  "focused_tests": {
+    "net_class_editor": 7,
+    "design_rules_navigation": 3,
+    "board_rules": 4,
+    "failed": 0
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4258450510678813
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "-p",
+        "pcbcraft-chrome",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 5.812818295089528
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 2.7221942270407453
+    },
+    {
+      "name": "web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 31.322528670891188
+    },
+    {
+      "name": "native-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "pcbcraft",
+        "-p",
+        "pcbcraft-cli"
+      ],
+      "exit": 0,
+      "seconds": 8.482101832982153
+    }
+  ],
+  "reused_evidence": "Earlier 1866-test workspace suite, 15 harness checks and native/browser layout evidence remain scoped to 971cb07 (byte-identical replay f658c4d). Upstream added only AGENTS/CONTRIBUTING guidance. Affected composition checks repeated after extraction; no new full-suite or visual/performance qualification is claimed.",
+  "contracts": "No values, serialization, commands, resolution, field styling, dependencies or toolkit revision changed",
+  "publication": "Local only; no push or PR",
+  "native_app": "User app/session preserved; rebuilt executable needs restart"
+}

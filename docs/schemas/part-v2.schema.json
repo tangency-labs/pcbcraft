@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:part:2",
+  "title": "PCBcraft reusable part definition, format 2",
+  "description": "Reusable definition with independently optional schematic symbol and physical packages. Placement requirements are operation-specific.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "library",
+    "id",
+    "revision",
+    "name",
+    "license",
+    "source",
+    "packages"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-part/2"
+    },
+    "library": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "id": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "revision": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/revision"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "source": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/source"
+    },
+    "symbol": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+    },
+    "category": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/category_binding"
+    },
+    "fixed_parameters": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/field_id"
+      },
+      "additionalProperties": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/parameter_value"
+      }
+    },
+    "packages": {
+      "type": "object",
+      "minProperties": 0,
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/package"
+      }
+    }
+  },
+  "dependentRequired": {
+    "fixed_parameters": [
+      "category"
+    ]
+  },
+  "$defs": {
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "footprint",
+        "mapping"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "footprint": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+        },
+        "mapping": {
+          "type": "object",
+          "minProperties": 0,
+          "maxProperties": 128,
+          "propertyNames": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+            },
+            "minItems": 1,
+            "maxItems": 128,
+            "uniqueItems": true
+          }
+        },
+        "unconnected_pads": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+          },
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "symbol"
+        ]
+      },
+      "then": {
+        "properties": {
+          "packages": {
+            "additionalProperties": {
+              "properties": {
+                "mapping": {
+                  "minProperties": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "packages": {
+            "additionalProperties": {
+              "properties": {
+                "mapping": {
+                  "maxProperties": 0
+                },
+                "unconnected_pads": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

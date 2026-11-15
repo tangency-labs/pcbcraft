@@ -89,15 +89,15 @@ undo history.
 
 ### Named arrangements and reopening a project
 
-Named arrangements now separate the project's working setups from the documents
-shown inside them. The title bar contains the project name and dirty indicator,
-followed by arrangement tabs and a single **+** for creation. Every project starts
-with **Views**; previously saved arrangement names stay intact. Hovering a tab
-explains that it represents the project's workspaces, split panes and windows.
-Right-click a tab for **Rename…**, **Duplicate…** or **Delete…**.
-Context actions address that tab by ID without activating it first: renaming or
-deleting an inactive arrangement leaves the working layout and windows in place.
-Duplicating an inactive tab activates a copy of that tab’s saved setup.
+Named arrangements separate the project's working setups from the documents
+shown inside them. **File → Layouts** lists these saved setups; the title bar
+keeps the project name and dirty indicator. Every project starts with an
+arrangement named **Views**, and previously saved names stay intact. Use
+**New arrangement** to create a setup. Each layout's submenu offers **Activate**,
+**Rename…**, **Duplicate…** and **Delete…**. Management actions address that layout
+by ID without activating it first: renaming or deleting an inactive arrangement
+leaves the working layout and windows in place. Duplicating an inactive layout
+activates a copy of its saved setup.
 These are user names, not fixed editor modes, and all arrangements share the same
 project, edits and undo. Naming forms stay in the initiating window, keep invalid
 or duplicate names editable, and support Enter, Escape and explicit buttons.
@@ -106,14 +106,14 @@ Closing that editor discards its unfinished form.
 | UI location | Meaning | Example |
 | --- | --- | --- |
 | Project name and dirty indicator | The shared project | Controller |
-| Top tabs | Named arrangements of its windows and panes | Views, Routing, Review |
+| File → Layouts | Named arrangements of its windows and panes | Views, Routing, Review |
 | Split pane header | The document currently shown in that pane | Controller › Main, Controller › Board |
 | Browser sheet selection | Show that sheet in the focused pane | Main |
 | Workspace picker | Open a document here, beside it, or in a native window | PCB layout |
 
 Selecting a Browser sheet changes the focused pane's document while remembering
 its prior navigation. It adds no document tabs. A view of that sheet elsewhere
-stays independent, and the top arrangement tab
+stays independent, and the active arrangement
 stays selected. The common Browser includes all flat schematic sheets, so this
 navigation works from either workspace. The engine supports flat sheets and one
 legacy board; the typed targets carry sheet and board identity,

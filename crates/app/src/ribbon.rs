@@ -165,7 +165,7 @@ const ANALYZE: &[Group] = &[
         title: "Electrical",
         tools: &[
             tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
-            tool(Action::Rules, "Rules", Icon::Rules, "Edit board defaults and routing preferences.", ""),
+            tool(Action::Rules, "Rules", Icon::Rules, "Edit net classes, assignments and board defaults.", ""),
             tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
         ],
         extras: &[tool(Action::NoConnectCheck, "No-connect check", Icon::Erc, "Inspect unused pins, wire ends and marker conflicts", "")],
@@ -252,7 +252,7 @@ impl Action {
             }
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
-            Self::Rules => app.session.available(pcbcraft_engine::SET_RULES) && app.views.active.input(&app.session).is_some(),
+            Self::Rules => project && app.views.active.input(&app.session).is_some(),
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
             Self::ResumeLibraryEditors => app.library_editors.has_documents(),
@@ -362,8 +362,8 @@ impl PcbApp {
             Action::Copy | Action::Cut => self.copy_schematic_clipboard(ctx, action == Action::Cut),
             Action::Paste | Action::PasteOptions => self.request_clipboard(ctx, action == Action::PasteOptions),
             Action::Duplicate => self.duplicate_schematic_clipboard(),
-            Action::Sources => self.dialog = Dialog::LibrarySources,
-            Action::Rules => self.begin_board_rules(),
+            Action::Sources => self.open_library_workspace(ctx),
+            Action::Rules => self.begin_rules(),
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),
             Action::ResumeLibraryEditors => self.resume_library_workspace(ctx),

@@ -259,7 +259,7 @@ fn hierarchy_and_physical_footprints_round_trip_together() {
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
     apply(&mut s, ADD_LABEL, json!({"sheet":child.id(),"name":"ENABLE","direction":"input","x_nm":0,"y_nm":0}));
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(saved.keys().any(|path| path.starts_with("library/footprints/starter/resistor-0402.r")));
+    assert!(saved.keys().any(|path| path.starts_with("library/footprints/basic-components/resistor-0402.r")));
     let reopened = decode_documents(&saved).unwrap();
     assert_eq!(reopened.board_view(reopened.board_target().unwrap()).unwrap().footprints().count(), 1);
     assert_eq!(reopened.for_sheet(child).unwrap().hierarchical_labels()[0].name, "ENABLE");

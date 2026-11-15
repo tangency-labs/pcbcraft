@@ -116,6 +116,20 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
 /// ribbon's left edge, is first scrolled into view as a person would; fully visible controls are
 /// clicked at once, so no extra frame can change the UI.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    let layout = label.strip_prefix("Arrangement ").filter(|name| *name != "name");
+    if (layout.is_some() || label == "New arrangement") && harness.query_by_label(label).is_none() {
+        harness.get_by_label("File").click();
+        harness.run();
+        harness.get_by_label("Layouts").hover();
+        harness.run();
+    }
+    let label = if let Some(name) = layout {
+        harness.get_by_role_and_label(egui::Role::RadioButton, name).hover();
+        harness.run();
+        "Activate"
+    } else {
+        label
+    };
     if !fully_visible(harness, label) {
         harness.get_by_label(label).scroll_to_me();
         harness.run();
@@ -538,7 +552,7 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
 #[test]
 fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     let mut harness = harness();
-    let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB layout").is_some();
+    let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB Layout").is_some();
     click(&mut harness, "Choose workspace");
     assert!(picker_open(&harness));
     harness.get_by_label("Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.");
@@ -577,10 +591,10 @@ fn enter_on_the_workspace_tile_opens_the_picker() {
     harness.run();
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.query_by_label("PCB layout").is_some(), "the opening Enter keeps the picker open");
+    assert!(harness.query_by_label("PCB Layout").is_some(), "the opening Enter keeps the picker open");
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.query_by_label("PCB layout").is_none());
+    assert!(harness.query_by_label("PCB Layout").is_none());
 }
 
 /// The Wire tool reaches a multi-pin symbol's pins where the library draws them, so the
@@ -659,6 +673,39 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
     harness.step();
     let commands = &harness.output().viewport_output[&egui::ViewportId::ROOT].commands;
     assert!(commands.contains(&egui::ViewportCommand::Maximized(true)));
+}
+
+/// Project titles use free bar space and truncate only when utilities need the room.
+#[test]
+fn project_title_uses_available_space_without_covering_controls() {
+    let mut h = harness();
+    h.state_mut().integrated_titlebar = true;
+    new_project(&mut h);
+    let name = "Dual LED · transistor flasher demonstration";
+    h.state_mut().run("project.rename", &json!({"name": name}));
+    let t = pcbcraft_chrome::Tokens::get();
+    let mut wide_width = 0.;
+    for width in [1280., 640.] {
+        h.set_size(egui::vec2(width, 700.));
+        h.run();
+        let bar_bottom = h.get_by_label("File").rect().bottom();
+        let title = h.query_all_by_label(name).find(|node| node.rect().bottom() <= bar_bottom).unwrap().rect();
+        let natural = h.ctx.fonts_mut(|fonts| fonts.layout_no_wrap(name.into(), pcbcraft_chrome::fonts::semibold(t.font_button), t.text)).size().x;
+        if width == 1280. {
+            assert!(title.width() >= natural - 1., "{title:?} cannot show {natural} points of text");
+            wide_width = title.width();
+        } else {
+            assert!(title.width() < wide_width);
+        }
+        let controls_left = ["Assistant", "Preferences", "Help", "Report a bug"]
+            .into_iter()
+            .filter_map(|label| h.query_by_label(label))
+            .map(|node| node.rect().left())
+            .fold(width, f32::min);
+        assert!(title.right() < controls_left);
+        assert!(h.get_by_label("Unsaved changes").rect().right() < controls_left);
+        assert!(h.get_by_label("Close window").rect().right() <= width);
+    }
 }
 
 /// A dirty project keeps its marker when the title no longer fits beside the utilities.
@@ -1769,8 +1816,17 @@ mod live_mcp {
         let connection = (port, token);
         let commands = payload(tool(&mut harness, connection, "list_commands", json!({})));
         let ids: Vec<&str> = commands.as_array().unwrap().iter().filter_map(|command| command["id"].as_str()).collect();
-        assert_eq!(ids.len(), pcbcraft_engine::catalog().len() + window_commands::window_catalog().len());
-        for id in [MOVE_SYMBOL, pcbcraft_engine::DELETE_WIRE, "edit.undo", "view.split", "window.set_panel", "app.set_preferences"] {
+        assert_eq!(ids.len(), pcbcraft_engine::catalog().len() + window_commands::window_catalog().len() + crate::ui_automation::catalog().len());
+        for id in [
+            MOVE_SYMBOL,
+            pcbcraft_engine::DELETE_WIRE,
+            "edit.undo",
+            "view.split",
+            "window.set_panel",
+            "app.set_preferences",
+            "ui.handles",
+            "ui.click",
+        ] {
             assert!(ids.contains(&id), "{id}");
         }
         let before = payload(tool(&mut harness, connection, "inspect_project", json!({})));
@@ -2031,7 +2087,7 @@ mod live_mcp {
             assert_eq!(payload(tool(&mut h, connection, "inspect_editor", json!({}))), before);
         }
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         for tab in ["layout", "route", "draw", "analyze", "manufacture", "libraries", "view"] {
             let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
             h.run();

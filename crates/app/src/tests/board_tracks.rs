@@ -6,6 +6,8 @@ use pcbcraft_engine::{
     persistence::encode_documents,
     schematic::Point,
 };
+use std::collections::BTreeSet;
+use uuid::Uuid;
 
 /// Two 0402 resistors whose first terminals share an accepted net, on a two-layer board,
 /// opened in the PCB layout with the Top copper layer active.
@@ -34,7 +36,7 @@ pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
     assert_eq!(h.state().message, None);
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.query_all_by_label("Fit board").next().unwrap().click();
     h.run();
     click(&mut h, "Activate layer Top");
@@ -52,6 +54,42 @@ fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos
         matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
         if stroke.color == tint && points[1].distance(end) < 0.001)
     })
+}
+
+/// Pointer changes invalidate prepared candidates, but the draft keeps its copper color both
+/// during background preparation and after completion, on either copper side and in both themes.
+#[test]
+fn route_preview_color_does_not_flash_while_preparation_catches_up() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        for layer in ["Top", "Bottom"] {
+            let mut h = routable();
+            h.state_mut().preferences.theme = theme;
+            h.run();
+            click(&mut h, &format!("Activate layer {layer}"));
+            let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            h.key_press(Key::X);
+            h.run();
+            click_route(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 });
+            for x_nm in [3_810_000, 5_080_000, 6_350_000] {
+                let end = at(&h, Point { x_nm, y_nm: 2_540_000 });
+                let color = if layer == "Top" { pcbcraft_chrome::Tokens::get().board_front } else { pcbcraft_chrome::Tokens::get().board_back };
+                h.hover_at(end);
+                h.step();
+                assert_ne!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
+                assert!(preview_ends_at(&h, color, end), "pending {theme:?} {layer}");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while h.state().views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
+                    assert!(std::time::Instant::now() < deadline, "route preparation did not settle");
+                    h.step();
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                assert!(preview_ends_at(&h, color, end), "ready {theme:?} {layer}");
+            }
+            h.key_press(Key::Escape);
+            h.run();
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
 }
 
 /// Whether the real canvas drew the specified track stroke in its effective color.
@@ -127,6 +165,154 @@ fn x_routes_between_pads_in_one_undoable_command() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     assert_eq!(airwires(&h).len(), 1);
+}
+
+/// Author classes through the shared command path until #303 provides editor controls.
+fn classify_route(h: &mut Harness<'_, PcbApp>, name: &str, rules: Value) -> Uuid {
+    let previous: BTreeSet<_> = h.state().session.project().unwrap().net_classes().definitions.iter().map(|class| class.id).collect();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::net_classes::CREATE, &json!({"name":name,"rules":rules,"expected_revision":revision}));
+    let class = h.state().session.project().unwrap().net_classes().definitions.iter().find(|class| !previous.contains(&class.id)).unwrap().id;
+    let report = h.state().session.project().unwrap().inspect_net_registry().unwrap();
+    let anchor = report["nets"][0]["anchor"].clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::nets::SET_CLASSES,
+        &json!({"target":{"kind":"derived","anchor":anchor},"classes":[class],"expected_revision":revision}),
+    );
+    h.run();
+    assert_eq!(h.state().message, None);
+    class
+}
+
+/// The actual X/click path adopts class dimensions once, paints their clearance, commits the
+/// same engine-validated width and restores the classified project through ordinary Undo.
+#[test]
+fn classified_route_uses_defaults_halo_and_shared_undo() {
+    for (theme, size) in [(ThemeChoice::Dark, egui::vec2(1400., 900.)), (ThemeChoice::Light, egui::vec2(960., 640.))] {
+        let mut h = routable();
+        h.set_size(size);
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        h.query_all_by_label("Fit board").next().unwrap().click();
+        h.run();
+        classify_route(&mut h, "Power", json!({"clearance_nm":700000,"min_track_width_nm":400000,"preferred_track_width_nm":500000}));
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let line = airwires(&h)[0].clone();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.from.position);
+        assert_eq!(h.state().views.active.board.tracks.width_nm, 500000);
+        assert_eq!(h.state().message, None);
+        let vertex = Point { x_nm: line.from.position.x_nm, y_nm: -2540000 };
+        let end = at(&h, vertex);
+        h.hover_at(end);
+        h.run();
+        let radius = at(&h, Point { x_nm: 950000, y_nm: 0 }).distance(at(&h, Point { x_nm: 0, y_nm: 0 }));
+        let ink = pcbcraft_chrome::Tokens::get().board_ink.gamma_multiply(0.19);
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path)
+            if path.fill==ink && path.points.iter().any(|point|point.distance(end+egui::vec2(radius,0.))<0.01))),
+            "{theme:?}"
+        );
+        click_route(&mut h, vertex);
+        click_route(&mut h, Point { x_nm: line.to.position.x_nm, y_nm: -2540000 });
+        click_route(&mut h, line.to.position);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while h.state().session.revision() == revision {
+            assert!(std::time::Instant::now() < deadline, "class route did not publish: {:?}", h.state().message);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(tracks(&h).iter().all(|track| track.width_nm == 500000));
+        assert!(airwires(&h).is_empty());
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// A rule edit revokes an active draft; conflicting defaults refuse pickup visibly instead of
+/// routing with a stale board preference or submitting a hidden partial edit.
+#[test]
+fn class_edits_revoke_drafts_and_unresolved_widths_report_errors() {
+    let mut h = routable();
+    let class = classify_route(&mut h, "Power", json!({"min_track_width_nm":400000,"preferred_track_width_nm":500000}));
+    let line = airwires(&h)[0].clone();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(h.state().views.active.board.tracks.routing());
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::net_classes::UPDATE,
+        &json!({"class":class,"name":"Power","rules":{"min_track_width_nm":500000,"preferred_track_width_nm":600000},"expected_revision":revision}),
+    );
+    h.run();
+    assert!(!h.state().views.active.board.tracks.routing());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click_route(&mut h, line.from.position);
+    assert_eq!(h.state().views.active.board.tracks.width_nm, 600000);
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::net_classes::CREATE,
+        &json!({"name":"Alternative","rules":{"preferred_track_width_nm":700000},"expected_revision":revision}),
+    );
+    let alternative = h.state().session.project().unwrap().net_classes().definitions.iter().find(|definition| definition.id != class).unwrap().id;
+    let anchor = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::nets::SET_CLASSES,
+        &json!({"target":{"kind":"derived","anchor":anchor},"classes":[class,alternative],"expected_revision":revision}),
+    );
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(!h.state().views.active.board.tracks.routing());
+    assert!(h.state().message.as_ref().is_some_and(|message| message.contains("unresolved")));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(tracks(&h).is_empty());
+    let anchor = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    h.state_mut()
+        .run(pcbcraft_engine::nets::SET_CLASSES, &json!({"target":{"kind":"derived","anchor":anchor},"classes":[],"expected_revision":revision}));
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert_eq!(h.state().message, None);
+    assert!(h.state().views.active.board.tracks.routing());
+    assert_eq!(h.state().views.active.board.tracks.width_nm, 250000);
+}
+
+/// Pads keep their exact copper contacts when the board uses a coarser or uneven grid. A route
+/// started and finished on the two pads connects the same terminals regardless of snap spacing.
+#[test]
+fn pads_stay_reachable_on_coarse_and_uneven_board_grids() {
+    const MIL: i64 = pcbcraft_chrome::grid::NM_PER_MIL;
+    for spacing in [100 * MIL, 30 * MIL, 330_000] {
+        let mut h = routable();
+        let line = airwires(&h)[0].clone();
+        let view = h.state().views.active.id();
+        h.state_mut().set_view_grid(view, spacing);
+        h.run();
+        h.key_press(Key::X);
+        h.run();
+        route_airwire(&mut h, &line);
+        assert_eq!(h.state().message, None, "{spacing}");
+        assert!(airwires(&h).is_empty(), "{spacing}: the pads still connect");
+        let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
+        assert!(ends.contains(&line.from.position) && ends.contains(&line.to.position), "{spacing}: both pad centers are route endpoints");
+    }
 }
 
 /// The crosshair follows the mouse while the preview and click target snap only within reach.
@@ -1967,4 +2153,187 @@ fn escape_revokes_a_pending_final_route_before_publication() {
     assert_eq!(h.state().session.revision(), revision);
     assert!(tracks(&h).is_empty());
     assert!(!h.state().views.active.board.tracks.routing());
+}
+
+/// Real ribbon selections independently override class preferences and survive subsequent
+/// unclassified pickup. A hard-invalid explicit width is refused without replacement or edits.
+#[test]
+fn explicit_sizes_survive_classified_and_unclassified_pickups() {
+    for (width_override, via_override) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut h = routable();
+        h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+        classify_route(
+            &mut h,
+            "Power",
+            json!({"min_track_width_nm":400000,"preferred_track_width_nm":500000,
+            "preferred_via_diameter_nm":1000000,"preferred_via_drill_nm":500000}),
+        );
+        let line = airwires(&h)[0].clone();
+        if width_override {
+            click(&mut h, "Track / line width");
+            click(&mut h, "0.4 mm");
+        }
+        if via_override {
+            click(&mut h, "Via pad / drill");
+            click(&mut h, "0.8 / 0.4 mm");
+        }
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.from.position);
+        let state = &h.state().views.active.board.tracks;
+        assert_eq!(state.width_nm, if width_override { 400000 } else { 500000 });
+        assert_eq!((state.via_diameter_nm, state.via_drill_nm), if via_override { (800000, 400000) } else { (1000000, 500000) });
+        click(&mut h, "Track / line width");
+        click(&mut h, "0.75 mm");
+        click(&mut h, "Via pad / drill");
+        click(&mut h, "0.8 / 0.4 mm");
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, Point { x_nm: 2540000, y_nm: -2540000 });
+        let state = &h.state().views.active.board.tracks;
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (750000, 800000, 400000));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press_modifiers(Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE }, Key::X);
+        h.run();
+        let revision = h.state().session.revision();
+        click_route(&mut h, line.from.position);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while h.state().session.revision() == revision {
+            assert!(std::time::Instant::now() < deadline, "{:?}", h.state().message);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(h.state().message, None);
+        assert_eq!((vias(&h)[0].diameter_nm, vias(&h)[0].drill_nm), (800000, 400000));
+        h.key_press(Key::Escape);
+        h.run();
+        click(&mut h, "Track / line width");
+        click(&mut h, "0.1 mm");
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.to.position);
+        assert!(!h.state().views.active.board.tracks.routing());
+        assert_eq!(h.state().views.active.board.tracks.width_nm, 100000);
+        assert!(h.state().message.as_ref().is_some_and(|message| message.contains("minimum")));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        let board = h.state().session.project().unwrap().board_target().unwrap().board;
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::SET_RULES,
+            &json!({"board":board,"expected_revision":revision,
+            "rules":pcbcraft_engine::board::rules::Values{clearance_nm:300000,..Default::default()}}),
+        );
+        h.run();
+        assert_eq!(h.state().views.active.board.tracks.width_nm, 250000);
+        click_route(&mut h, line.to.position);
+        assert_eq!(h.state().message, None);
+        assert!(h.state().views.active.board.tracks.routing());
+        let state = &h.state().views.active.board.tracks;
+        assert_eq!((state.width_nm, state.via_diameter_nm, state.via_drill_nm), (500000, 1000000, 500000));
+    }
+}
+
+/// Unresolved via preferences do not prevent a track-only route, but V, layer keys and the
+/// route menu cannot insert stale sizes. An explicit valid pair resolves only that operation.
+#[test]
+fn unresolved_via_defaults_block_layer_changes_until_explicitly_resolved() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let class = classify_route(
+        &mut h,
+        "Power",
+        json!({"preferred_track_width_nm":500000,"preferred_via_diameter_nm":600000,"preferred_via_drill_nm":300000}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::net_classes::CREATE,
+        &json!({"name":"Alternative via","rules":{"preferred_via_diameter_nm":800000,"preferred_via_drill_nm":400000},"expected_revision":revision}),
+    );
+    let alternative = h.state().session.project().unwrap().net_classes().definitions.iter().find(|definition| definition.id != class).unwrap().id;
+    let anchor = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::nets::SET_CLASSES,
+        &json!({"target":{"kind":"derived","anchor":anchor},"classes":[class,alternative],"expected_revision":revision}),
+    );
+    h.run();
+    let line = airwires(&h)[0].clone();
+    let top = layer_named(&h, "Top");
+    let bottom = layer_named(&h, "Bottom");
+    let first = Point { x_nm: line.from.position.x_nm, y_nm: -2540000 };
+    let last = Point { x_nm: line.to.position.x_nm, y_nm: -2540000 };
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(h.state().views.active.board.tracks.routing());
+    assert_eq!(h.state().message, None);
+    via_at(&mut h, first);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    assert!(h.state().message.as_ref().is_some_and(|message| message.contains("unresolved")));
+    click(&mut h, "Track / line width");
+    click(&mut h, "0.75 mm");
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    assert!(h.state().views.active.board.tracks.routing());
+    h.hover_at(at(&h, first));
+    h.run();
+    h.key_press(Key::PageDown);
+    h.run();
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    right_click_route(&mut h, first);
+    click(&mut h, "Place through via");
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert!(h.state().views.active.board.tracks.routing());
+    assert!(vias(&h).is_empty());
+    // Completing a track without a via does not depend on those conflicting preferences.
+    click_route(&mut h, first);
+    click_route(&mut h, last);
+    click_route(&mut h, line.to.position);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while h.state().session.revision() == revision {
+        assert!(std::time::Instant::now() < deadline, "{:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(h.state().message, None);
+    assert!(vias(&h).is_empty());
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(tracks(&h).is_empty());
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    click(&mut h, "Via pad / drill");
+    click(&mut h, "0.8 / 0.4 mm");
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    via_at(&mut h, first);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()));
+    via_at(&mut h, last);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    let revision = h.state().session.revision();
+    click_route(&mut h, line.to.position);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while h.state().session.revision() == revision {
+        assert!(std::time::Instant::now() < deadline, "{:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(h.state().message, None);
+    assert_eq!(vias(&h).len(), 2);
+    assert!(vias(&h).iter().all(|via| via.diameter_nm == 800000 && via.drill_nm == 400000));
+    assert_eq!(h.state().session.revision(), revision + 1);
 }

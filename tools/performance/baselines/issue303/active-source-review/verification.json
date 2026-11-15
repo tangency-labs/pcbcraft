@@ -1,0 +1,171 @@
+{
+  "code": "0cca4c2d022a8e54da06caf9dfad3fe2842a2475",
+  "scope": "Read-only participation classification and UI clarity; resolver policy and serialized/storage/command contracts remain unchanged.",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4287091580918059
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 10.277462395955808
+    },
+    {
+      "name": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace"
+      ],
+      "exit": 0,
+      "seconds": 72.51197510398924
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 5.9583828659961
+    },
+    {
+      "name": "harness-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 6.496321310987696
+    },
+    {
+      "name": "harness-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "performance::"
+      ],
+      "exit": 0,
+      "seconds": 28.157650551991537
+    },
+    {
+      "name": "web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 32.115083641023375
+    },
+    {
+      "name": "native-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "pcbcraft",
+        "-p",
+        "pcbcraft-cli"
+      ],
+      "exit": 0,
+      "seconds": 0.5453241809736937
+    }
+  ],
+  "workspace": {
+    "passed": 1862,
+    "ignored": 11
+  },
+  "harness_tests": 15,
+  "regressions": [
+    "Equal-valued explicit preference overrides baseline instead of reporting both active",
+    "Hard minimum ties and weaker/stricter constraints",
+    "Conflicting inherited/default and differing class preferences have no active winner",
+    "Authored board maximum keeps source UUID while a looser class stays less restrictive",
+    "Class unset fields are disabled Not specified, not baseline values",
+    "Real-control preview changes no snapshot until Assign classes; contextual source names differ before/after save"
+  ],
+  "native_visuals": "Wide dark / compact light GPU readback of class definitions, unsaved preview, saved rules and active/overridden details, including an equal-valued class preference and weaker class clearance.",
+  "browser": {
+    "version": "148.0.7778.96",
+    "errors": [],
+    "console": [
+      {
+        "type": "warning",
+        "text": "The `integrity` attribute is currently ignored for preload destinations that do not support subresource integrity. See https://crbug.com/981419 for more information"
+      },
+      {
+        "type": "warning",
+        "text": "No available adapters."
+      },
+      {
+        "type": "warning",
+        "text": "[egui_wgpu] egui-wgpu/src/lib.rs:718: Software rasterizer detected - loss of performance expected. backend: Gl, device_type: Cpu, name: \"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)\", driver_info: \"WebGL 2.0 (OpenGL ES 3.0 Chromium)\", subgroup_size: 4..=128, transient_saves_memory: None, limit_bucket: None"
+      },
+      {
+        "type": "info",
+        "text": "[eframe::web::web_runner] eframe/src/web/web_runner.rs:94: event handlers installed."
+      }
+    ]
+  },
+  "browser_flow": [
+    "Open exact original assigned-reference archive",
+    "Inspect active sources on Effective net rules",
+    "Toggle Power off: explicit unsaved preview with preview column headings",
+    "Restore saved selection without submitting a command",
+    "Resize open form without further input",
+    "Scroll to effective routing preferences and open saved assignment origins"
+  ],
+  "failure_review": "Contribution states borrow the existing immutable Resolution; only class preference presence and published bounds determine participation. No graph rebuild, mutation, queue, lock or I/O is added. The existing source/revision gate and complete-set assignment transaction are retained. Null preferences never produce an active source, and hard-bound Active is not a claim that cross-property conflicts are absent. Raw source values/order/UUIDs/revisions and serialization remain intact. Class fields retain exact original edit integers; their placeholder is presentation only. Saved assignment origins stay explicitly separate from unsaved proposals.",
+  "limits": [
+    "Native screenshots are offscreen GPU readback, not native presentation latency or endurance",
+    "Browser uses Chrome148 WebGL2/ANGLE SwiftShader; WebGPU reports no adapters",
+    "No new CPU timing claim: this adds a modal-only read projection; ordinary route/resolver algorithms are unchanged",
+    "Existing license/source/ban result reused because dependencies and lockfile are unchanged"
+  ],
+  "native_app": {
+    "path": "/home/travisl/projects/PCBcraft/main/target/debug/pcbcraft",
+    "sha256": "2bb1c9316e2c950f44ba7609c36ef608fa16e8f1aa8747a6700c6fdf9f161946",
+    "launched": false
+  },
+  "publication": "Local commits only; no remote branch or PR update authorized"
+}

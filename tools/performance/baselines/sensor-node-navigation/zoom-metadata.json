@@ -1,0 +1,5 @@
+{
+  "reason": "The baseline invocation reused the earlier navigation environment template. Correct the copied baseline metadata to describe the actual continuous-zoom trace, retaining the unmodified raw baseline locally. Timing samples and texture bytes are unchanged.",
+  "original_report_sha256": "c184c4258f20d1f8022a40a83ceb410594325e04e7d97c8ae12a686c555aa6fd",
+  "baseline_executable_sha256": "44931b6a6051edcefc7c42a46bf7aaa7bd003226c1576b164bd8f6b4e656e4bc"
+}

@@ -437,10 +437,13 @@ impl EditorViews {
         }
     }
 
-    /// Set startup grid spacing for all views; invalid spacing leaves every camera unchanged.
-    pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {
+    /// Seed every live and cached view with the remembered schematic and PCB spacings. Each
+    /// view's active and parked workspace cameras take their own value, so switching workspaces
+    /// does not make one editor inherit the other's spacing. Invalid values leave a camera's
+    /// current spacing unchanged.
+    pub(super) fn set_grid_defaults(&mut self, schematic_nm: i64, board_nm: i64) {
         for view in self.all_mut() {
-            view.camera.set_snap_nm(spacing_nm);
+            view.set_grid_defaults(schematic_nm, board_nm);
         }
     }
 
@@ -731,6 +734,13 @@ impl EditorViews {
             } else {
                 let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
                 if let Some(id) = parked {
+                    let library = self.active.library.clone();
+                    if let Some(view) = self.view_mut(id) {
+                        view.library = library;
+                        if view.library.is_some() {
+                            view.definition = None;
+                        }
+                    }
                     if let Some(document) = self.active.definition
                         && let Some(view) = self.view_mut(id)
                     {
@@ -774,32 +784,40 @@ impl PcbApp {
         if let Some(host) = self.views.hosts.get(&self.views.host) {
             let top = host.rects.iter().map(|(_, pane)| pane.top()).fold(f32::INFINITY, f32::min);
             for (id, pane) in host.rects.iter().filter(|(_, pane)| (pane.top() - top).abs() < 0.5) {
-                let Some(view) = self.views.view(*id) else { continue };
-                if view.unavailable() {
-                    continue;
-                }
-                let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
-                    let Some(camera) = self.library_editors.view_camera(definition, *id) else { continue };
-                    let fill =
-                        if self.library_kind(definition) == Some(pcbcraft_engine::authoring::Kind::Footprint) { t.board_canvas } else { t.canvas };
-                    (camera, fill, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
-                } else if view.workspace == Workspace::Board {
-                    (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
-                } else {
-                    (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
-                };
                 let area = Rect::from_min_max(egui::pos2(pane.left(), ribbon.area.top()), egui::pos2(pane.right(), ribbon.area.bottom()))
                     .intersect(ribbon.area);
-                shapes.push(egui::Shape::rect_filled(area, 0, fill));
-                if let Some(canvas) = camera.schematic_rect()
-                    && let Some(color) = grid::color(ink, opacity)
-                {
-                    let origin = camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, canvas);
-                    shapes.extend(grid::shapes(area, origin, camera.snap_step(), color, style));
-                }
+                shapes.extend(self.view_background_shapes(*id, area));
             }
         }
         ribbon.paint(shapes);
+    }
+
+    /// Paint exposed chrome margins with the addressed view's canvas palette and settled grid.
+    /// Missing/library views retain a plain canvas background; no input or model state changes.
+    fn view_background_shapes(&self, id: ViewId, area: Rect) -> Vec<egui::Shape> {
+        let t = pcbcraft_chrome::Tokens::get();
+        let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
+        let Some(view) = self.views.view(id) else { return plain() };
+        if view.unavailable() || view.library.is_some() {
+            return plain();
+        }
+        let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
+            let Some(camera) = self.library_editors.view_camera(definition, id) else { return plain() };
+            let fill = if self.library_kind(definition) == Some(pcbcraft_engine::authoring::Kind::Footprint) { t.board_canvas } else { t.canvas };
+            (camera, fill, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
+        } else if view.workspace == Workspace::Board {
+            (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
+        } else {
+            (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
+        };
+        let mut shapes = vec![egui::Shape::rect_filled(area, 0, fill)];
+        if let Some(canvas) = camera.schematic_rect()
+            && let Some(color) = grid::color(ink, opacity)
+        {
+            let origin = camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, canvas);
+            shapes.extend(grid::shapes(area, origin, camera.snap_step(), color, style));
+        }
+        shapes
     }
 
     /// Route explicit selection through the coordinator with the current follow policy.
@@ -817,29 +835,38 @@ impl PcbApp {
         }
     }
 
-    /// Change one view's snap spacing and remember it for the next start. This is presentation
+    /// Change one view's snap spacing and remember it for its workspace. This is presentation
     /// only: the project, its revision, its unsaved state and undo history stay as they are,
     /// nothing moves, and other views keep their own spacing. An in-progress gesture is left
     /// alone; its next snapped point follows the new spacing. Out-of-range values are ignored.
+    /// Schematic and PCB views update separate preferences, so changing one never replaces the
+    /// other workspace's startup spacing.
     pub(super) fn set_view_grid(&mut self, id: ViewId, spacing_nm: i64) {
+        let Some(workspace) = self.views.view(id).map(|view| view.workspace) else {
+            return;
+        };
         if let Some(view) = self.views.view_mut(id)
             && view.camera.set_snap_nm(spacing_nm)
         {
-            self.preferences.schematic_grid_nm = spacing_nm;
+            match workspace {
+                Workspace::Schematic => self.preferences.schematic_grid_nm = spacing_nm,
+                Workspace::Board => self.preferences.board_grid_nm = spacing_nm,
+            }
         }
     }
 
     /// Step the active view to the next finer (`finer`) or coarser grid preset, wrapping.
     pub(super) fn cycle_grid(&mut self, finer: bool) {
         let current = self.views.active.camera.snap_nm();
-        if let Some(next) = grid::cycle(current, &grid::SCHEMATIC_SPACING_PRESETS_NM, finer) {
+        let presets = self.views.active.workspace.grid_presets();
+        if let Some(next) = grid::cycle(current, presets, finer) {
             self.set_view_grid(self.views.active.id(), next);
         }
     }
 
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
-        if (self.session.project().is_none() && self.views.active.definition.is_none()) || !matches!(self.dialog, Dialog::None) {
+        if (self.session.project().is_none() && !self.views.active.auxiliary()) || !matches!(self.dialog, Dialog::None) {
             return;
         }
         self.views.set_split(split);
@@ -877,7 +904,7 @@ impl PcbApp {
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
         if let Some(pointer) = pressed
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
-            && (self.views.view(*id).is_some_and(|view| view.definition.is_some())
+            && (self.views.view(*id).is_some_and(|view| view.auxiliary())
                 || !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
         {
             self.activate_editor(ctx, *id);
@@ -893,12 +920,12 @@ impl PcbApp {
             .views
             .hosts
             .get(&self.views.host)
-            .is_some_and(|host| host.layout.views().iter().any(|id| self.views.view(*id).is_some_and(|view| view.definition.is_some())));
+            .is_some_and(|host| host.layout.views().iter().any(|id| self.views.view(*id).is_some_and(|view| view.auxiliary())));
         if self.session.project().is_none() && !has_library {
             self.canvas(ui);
             return;
         }
-        let project_focus = self.views.active.definition.is_none();
+        let project_focus = !self.views.active.auxiliary();
         let board = project_focus && self.views.active.workspace == Workspace::Board;
         let area = ui.available_rect_before_wrap();
         let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
@@ -969,6 +996,12 @@ impl PcbApp {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
             let pane_id = tab_ids.first().copied().unwrap_or(id);
             let path = self.view_title(id);
+            let header = headers.then(|| {
+                let area = Rect::from_min_max(rect.min, egui::pos2(rect.right(), (rect.top() + editor::header_height()).min(rect.bottom())));
+                let painter = ui.painter_at(area);
+                let slot = painter.add(egui::Shape::Noop);
+                (area, painter, slot)
+            });
             ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", pane_id)).max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
@@ -996,6 +1029,13 @@ impl PcbApp {
                         }
                     }
                 }
+                // Workspace painters may fill their maximum rectangle. Keep the shared
+                // pane header outside their clip, including Library and definition panes.
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+                if self.views.view(id).is_some_and(|view| view.library.is_some()) {
+                    self.library_workspace_pane(ui, id);
+                    return;
+                }
                 if self.views.view(id).is_some_and(|view| view.definition.is_some()) {
                     self.library_pane(ui, id);
                     return;
@@ -1010,6 +1050,7 @@ impl PcbApp {
                 }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
+                pcbcraft_chrome::automation::region(ui, format!("canvas:{}", id.0), uncovered, matches!(self.dialog, Dialog::None));
                 if self.views.view(id).is_some_and(|view| view.workspace == Workspace::Board) {
                     if let Some(view) = self.views.view_mut(id)
                         && view.camera.set_uncovered(canvas, uncovered)
@@ -1090,7 +1131,7 @@ impl PcbApp {
                             self.session
                                 .project()
                                 .and_then(|project| project.board_view(self.views.active.board.target?))
-                                .map_or(0, |board| board.footprints().count())
+                                .map_or(0, |board| board.footprint_ids().len())
                         )
                     } else {
                         self.session.project().map_or_else(String::new, |project| {
@@ -1116,6 +1157,9 @@ impl PcbApp {
                     }
                 }
             });
+            if let Some((area, painter, slot)) = header {
+                painter.set(slot, egui::Shape::Vec(self.view_background_shapes(id, area)));
+            }
         }
         self.sync_library_focus();
         if !self.views.pending_reveal.is_empty() {
@@ -1153,7 +1197,7 @@ impl PcbApp {
                         turns: 0,
                     });
                 }
-                crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,
+                crate::parts_browser::Pick::Libraries => self.open_library_workspace(ui.ctx()),
                 crate::parts_browser::Pick::Stale => self.message = Some("View or project changed; reopen the Parts Catalog to continue.".into()),
             }
         }

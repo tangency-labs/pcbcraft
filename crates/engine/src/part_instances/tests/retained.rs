@@ -78,6 +78,8 @@ fn retained_primary_quantities_survive_deletion_history_and_reopen() {
         let revision = session.revision();
         let snapshot = session.snapshot().unwrap();
         shown(&snapshot, "220 nF", true);
+        let inventory = crate::library::sources::inventory::Inventory::from_project(&snapshot).unwrap();
+        assert!(inventory.entries().any(|entry| entry.item.key.kind == sources::Kind::Footprint && entry.used_by.contains("Accepted board history")));
         let saved = encode_documents(snapshot.clone()).unwrap();
         let packed = encode_packed(snapshot.clone()).unwrap();
         let unpacked = decode_packed(&packed).unwrap().project;

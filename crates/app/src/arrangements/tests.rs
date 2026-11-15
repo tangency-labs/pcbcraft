@@ -38,21 +38,86 @@ fn harness() -> Harness<'static, PcbApp> {
     h
 }
 
+/// Project views use the same manual range as definition editors, including real input and
+/// restoration of both the active and parked camera without changing electrical state.
+#[test]
+fn shared_zoom_range_survives_workspace_switches_and_arrangement_restore() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let before = h.state().session.snapshot().unwrap();
+    for workspace in ["schematic", "board"] {
+        h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"workspace":workspace})).unwrap();
+        h.run();
+        let view = h.state().views.active.id();
+        h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view.0,"zoom_percent":102400})).unwrap();
+        h.run();
+        assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+        assert!(h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view.0,"zoom_percent":102401})).is_err());
+        assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+        h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view.0,"zoom_percent":6400})).unwrap();
+        h.run();
+        let area = h.get_by_label(if workspace == "board" { "PCB canvas" } else { "Schematic canvas" }).rect();
+        let camera = &h.state().views.active.camera;
+        let pointer = camera.screen(camera.center(), area) + egui::vec2(17., -11.);
+        let anchor = camera.unsnapped(pointer, area);
+        h.hover_at(pointer);
+        h.run();
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0., 4.),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        assert!(h.state().views.active.camera.zoom() > 64.);
+        for _ in 0..4 {
+            h.event(egui::Event::Zoom(4.));
+            h.run();
+        }
+        assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+        let after = h.state().views.active.camera.unsnapped(pointer, area);
+        assert!((after.x_nm - anchor.x_nm).abs() <= 100 && (after.y_nm - anchor.y_nm).abs() <= 100);
+    }
+    let snapshot = h.state().arrangement_snapshot().unwrap();
+    let encoded = serde_json::to_vec(&snapshot).unwrap();
+    let restored = serde_json::from_slice(&encoded).unwrap();
+    assert!(h.state_mut().restore_arrangement(&restored, &ctx));
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"workspace":"schematic"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.camera.zoom(), 1024.);
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Run an arrangement intent through the deferred path used by the tab strip and future MCP.
 fn action(h: &mut Harness<'_, PcbApp>, action: Action) {
     h.state_mut().queue_arrangement(&egui::Context::default(), action);
     h.run();
 }
 
-/// Right-click the selected arrangement through its real tab, without changing the active layout.
+/// Open a saved layout's context actions without activating its views.
+fn layout_menu(h: &mut Harness<'_, PcbApp>, name: &str) {
+    click(h, "File");
+    h.get_by_label("Layouts").hover();
+    h.run();
+    h.get_by_role_and_label(egui::Role::RadioButton, name).hover();
+    h.run();
+}
+
+/// Open the current layout's actions through File, independent of title-bar presentation.
 #[allow(clippy::unwrap_used)]
 fn active_tab_menu(h: &mut Harness<'_, PcbApp>) {
     let active = h.state().arrangements.active();
     let name = h.state().arrangements.tabs().into_iter().find(|(id, _)| *id == active).unwrap().1;
-    h.get_by_label(&format!("Arrangement {name}")).scroll_to_me();
-    h.run();
-    h.get_by_label(&format!("Arrangement {name}")).click_secondary();
-    h.run();
+    layout_menu(h, &name);
+}
+
+/// Verify a retained layout without requiring persistent title-bar chrome.
+fn has_layout(h: &Harness<'_, PcbApp>, name: &str) {
+    assert!(h.state().arrangements.tabs().iter().any(|(_, candidate)| candidate == name));
+    assert!(h.query_by_label(&format!("Arrangement {name}")).is_none());
 }
 
 /// Save to a temporary project using the production writer with only the file picker bypassed.
@@ -63,15 +128,15 @@ fn save(h: &mut Harness<'_, PcbApp>, path: &std::path::Path, save_as: bool) {
     h.run();
 }
 
-/// Top tabs own arrangements; each activation restores mixed panes with fresh input identities.
+/// Layout menu activation restores mixed panes with fresh input identities.
 #[test]
 fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     let mut h = harness();
-    h.get_by_label("Arrangement Views");
+    assert!(h.query_by_label("Arrangement Views").is_none());
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.state_mut().views.active.camera.center_on(Point { x_nm: 15_000_000, y_nm: 4_000_000 });
     h.run();
     let original = h.state().arrangement_snapshot().unwrap();
@@ -85,7 +150,7 @@ fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     assert_eq!(h.state().arrangement_snapshot().unwrap(), original);
     assert!(h.state().views.view(stale.view()).is_some());
     action(&mut h, Action::Rename { id: 2, name: "Routing".into() });
-    h.get_by_label("Arrangement Routing");
+    has_layout(&h, "Routing");
     h.state_mut().views.active.camera.center_on(Point { x_nm: -30_000_000, y_nm: 0 });
     h.run();
     let routing = h.state().arrangement_snapshot().unwrap();
@@ -105,9 +170,9 @@ fn saved_project_restores_arrangement_windows_and_panels_without_electrical_chan
     let path = dir.path().join("project");
     save(&mut h, &path, false);
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let source = h.state().views.active.id();
     h.state_mut().views.open_window(source).unwrap();
     h.run();
@@ -228,7 +293,7 @@ fn invalid_newer_and_duplicate_placements_do_not_replace_saved_state() {
 fn missing_target_is_not_rebound_and_can_be_explicitly_replaced() {
     let mut h = harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let state = h.state().arrangement_snapshot().unwrap();
     let mut value = serde_json::to_value(&state).unwrap();
     value["views"][state.hosts[0].focused]["target"]["Board"]["board"] = json!("00000000-0000-4000-8000-000000000099");
@@ -239,7 +304,7 @@ fn missing_target_is_not_rebound_and_can_be_explicitly_replaced() {
     assert!(h.state().views.active.input(&h.state().session).is_none());
     h.get_by_label("This document is unavailable. Choose a workspace to replace this view.");
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert!(!h.state().views.active.unavailable());
     assert_eq!(h.state().views.active.workspace, Workspace::Board);
 }
@@ -253,11 +318,11 @@ fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements(
     let revision = h.state().session.revision();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let companion = h.state().views.hosts[&h.state().views.main].layout.views()[1];
     let companion_camera = h.state().views.view(companion).unwrap().camera.saved_state();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let board = h.state().views.active.id();
     assert_ne!(board, original);
     assert_ne!(board, companion);
@@ -273,7 +338,7 @@ fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements(
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     // The picker returns to the existing camera without exposing cached documents as tabs.
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     assert_eq!(h.state().views.active.id(), board);
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert_eq!(h.query_all_by_label("Close view Arrangement test › Board").count(), 2);
@@ -290,7 +355,7 @@ fn workspace_switches_keep_single_views_clear_and_split_actions_address_whole_pa
     let canvas_top = h.get_by_label("Schematic canvas").rect().top();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let board = h.state().views.active.id();
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert!(h.query_by_label("Close view Arrangement test › Board").is_none());
@@ -299,7 +364,7 @@ fn workspace_switches_keep_single_views_clear_and_split_actions_address_whole_pa
     assert_eq!(h.get_by_label("Schematic canvas").rect().top(), canvas_top);
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     click(&mut h, "Choose workspace");
     click(&mut h, "Open Schematic beside current view");
     let group = h.state().views.hosts[&h.state().views.main].layout.group(board).unwrap().views();
@@ -401,7 +466,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
     h.key_press(Key::Enter);
     h.run();
     assert_eq!(h.state().arrangements.tabs().len(), 2);
-    h.get_by_label("Arrangement Routing");
+    has_layout(&h, "Routing");
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
 
@@ -418,7 +483,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
     h.step();
     assert!(!h.output().viewport_output.values().any(|output| output.commands.contains(&egui::ViewportCommand::Close)));
     h.run();
-    h.get_by_label("Arrangement Review");
+    has_layout(&h, "Review");
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
@@ -429,7 +494,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
     h.run();
     h.key_press(Key::Escape);
     h.run();
-    h.get_by_label("Arrangement Review");
+    has_layout(&h, "Review");
     assert!(matches!(h.state().dialog, Dialog::None));
 }
 
@@ -438,6 +503,7 @@ fn arrangement_forms_keep_windows_and_views_alive() {
 fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     use egui::{Key, Modifiers};
     let mut h = harness();
+    let original = h.state().arrangements.active();
     click(&mut h, "New arrangement");
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.key_press(Key::Backspace);
@@ -454,18 +520,21 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     active_tab_menu(&mut h);
     click(&mut h, "Duplicate…");
     click(&mut h, "Create");
-    h.get_by_label("Arrangement Views copy");
+    has_layout(&h, "Views copy");
+    let target = h.state().arrangements.active();
+    assert_ne!(target, original);
     let before = h.state().arrangement_snapshot().unwrap();
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
     click(&mut h, "Cancel");
-    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().arrangements.tabs().iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![original, target]);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
-    h.get_by_label("Arrangement Views");
-    assert_eq!(h.state().arrangements.tabs().len(), 1);
+    assert!(!h.state().arrangements.tabs().iter().any(|(id, _)| *id == target));
+    assert_eq!(h.state().arrangements.tabs().iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![original]);
+    assert_eq!(h.state().arrangements.active(), original);
 }
 
 /// A deliberately single-view setup can be created without losing the original split layout.
@@ -473,7 +542,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
 fn new_single_view_arrangement_keeps_the_previous_setup() {
     let mut h = harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let before = h.state().arrangement_snapshot().unwrap();
     click(&mut h, "New arrangement");
     click(&mut h, "Single view in one window");
@@ -493,9 +562,7 @@ fn compact_arrangement_controls_stay_reachable() {
         h.set_size(egui::vec2(width, 600.0));
         h.run();
         assert!(h.query_by_label("Arrangement options").is_none());
-        let new = h.get_by_label("New arrangement").rect();
-        let utilities = h.get_by_label("Preferences").rect();
-        assert!(new.right() < utilities.left());
+        assert!(h.query_by_label("New arrangement").is_none());
         assert!(h.get_by_label("Close window").rect().right() <= width);
         active_tab_menu(&mut h);
         click(&mut h, "Rename…");
@@ -506,45 +573,45 @@ fn compact_arrangement_controls_stay_reachable() {
     }
 }
 
-/// Context actions address the clicked tab without activating it; duplication uses its own setup.
+/// Layout submenus address inactive layouts without activating them; duplication uses their own setup.
 #[test]
 fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     let mut h = harness();
+    let target = h.state().arrangements.active();
     let design = h.state().arrangement_snapshot().unwrap();
     action(&mut h, Action::Create { name: "Review".into(), start: Start::Current });
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let review = h.state().arrangement_snapshot().unwrap();
     let active = h.state().arrangements.active();
     let view = h.state().views.active.id();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
 
-    h.get_by_label("Arrangement Views").click_secondary();
-    h.run();
+    layout_menu(&mut h, "Views");
     assert_eq!(h.state().arrangements.active(), active);
     click(&mut h, "Rename…");
     h.get_by_label("Arrangement name").type_text("Capture");
     h.run();
     click(&mut h, "Rename");
-    h.get_by_label("Arrangement Capture");
+    has_layout(&h, "Capture");
     assert_eq!(h.state().arrangements.active(), active);
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
 
-    h.get_by_label("Arrangement Capture").click_secondary();
-    h.run();
+    layout_menu(&mut h, "Capture");
     click(&mut h, "Duplicate…");
     click(&mut h, "Create");
-    h.get_by_label("Arrangement Capture copy");
+    has_layout(&h, "Capture copy");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), design);
     click(&mut h, "Arrangement Review");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
     let view = h.state().views.active.id();
-    h.get_by_label("Arrangement Capture").click_secondary();
-    h.run();
+    let expected: Vec<_> = h.state().arrangements.tabs().iter().filter(|(id, _)| *id != target).map(|(id, _)| *id).collect();
+    layout_menu(&mut h, "Capture");
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
-    assert!(h.query_by_label("Arrangement Capture").is_none());
+    assert!(!h.state().arrangements.tabs().iter().any(|(id, _)| *id == target));
+    assert_eq!(h.state().arrangements.tabs().iter().map(|(id, _)| *id).collect::<Vec<_>>(), expected);
     assert_eq!(h.state().arrangements.active(), active);
     assert_eq!(h.state().views.active.id(), view);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
@@ -700,4 +767,67 @@ fn project_open_with_library_panes_does_not_defer_layout_restoration() {
     h.run();
     assert_eq!(h.state().views.active.id(), view);
     assert!(h.state().views.active.input(&h.state().session).is_some());
+}
+
+/// A user-supplied layout name may match a menu action without sharing its widget identity.
+#[test]
+fn layout_names_do_not_collide_with_menu_actions() {
+    let mut h = harness();
+    let before = h.state().session.inspect();
+    action(&mut h, Action::Create { name: "New arrangement".into(), start: Start::Current });
+    click(&mut h, "File");
+    h.get_by_label("Layouts").hover();
+    h.run();
+    let layout = h.get_by_role_and_label(egui::Role::RadioButton, "New arrangement");
+    let create = h.get_by_role_and_label(egui::Role::Button, "New arrangement");
+    assert_ne!(layout.rect(), create.rect());
+    layout.hover();
+    h.run();
+    click(&mut h, "Rename…");
+    h.get_by_label("Arrangement name").type_text("Named layout");
+    h.run();
+    click(&mut h, "Rename");
+    has_layout(&h, "Named layout");
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// A short viewport can scroll to and activate its last saved layout and create another one.
+#[test]
+fn large_layout_menu_keeps_last_layout_and_new_action_reachable() {
+    for theme in [crate::ThemeChoice::Dark, crate::ThemeChoice::Light] {
+        let mut h = harness();
+        h.state_mut().preferences.theme = theme;
+        h.state_mut().integrated_titlebar = true;
+        let first = h.state().arrangements.active();
+        for index in 1..24 {
+            action(&mut h, Action::Create { name: format!("Saved layout {index:02}"), start: Start::Current });
+        }
+        let last = h.state().arrangements.active();
+        action(&mut h, Action::Select(first));
+        h.set_size(egui::vec2(640., 600.));
+        h.run();
+        let before = h.state().session.inspect();
+        click(&mut h, "File");
+        h.get_by_label("Layouts").hover();
+        h.run();
+        h.get_by_role_and_label(egui::Role::RadioButton, "Saved layout 23").scroll_to_me();
+        h.run();
+        assert!(crate::tests::fully_visible(&h, "Saved layout 23"));
+        assert!(h.get_by_label("Saved layout 23").rect().width() <= h.get_by_label("New Project").rect().width() + 1.);
+        h.get_by_role_and_label(egui::Role::RadioButton, "Saved layout 23").hover();
+        h.run();
+        click(&mut h, "Activate");
+        assert_eq!(h.state().arrangements.active(), last);
+        click(&mut h, "File");
+        h.get_by_label("Layouts").hover();
+        h.run();
+        h.get_by_label("New arrangement").scroll_to_me();
+        h.run();
+        assert!(crate::tests::fully_visible(&h, "New arrangement"));
+        click(&mut h, "New arrangement");
+        h.get_by_label("Arrangement name");
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().arrangements.tabs().len(), 24);
+        assert_eq!(h.state().session.inspect(), before);
+    }
 }

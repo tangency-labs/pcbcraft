@@ -89,6 +89,44 @@ fn server() -> Server {
     Server::new(Box::new(Headless::default()))
 }
 
+/// Native publication preparation returns transported documents even with inspection disabled;
+/// it never accepts a filesystem destination or reports a successful durable save.
+#[test]
+fn publication_preparation_mcp_returns_documents_without_paths_or_project_changes() {
+    let mut s = server();
+    let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
+    let manifest = pcbcraft_engine::authoring::publishing::new_library("workshop", "Workshop", &item.license).unwrap();
+    let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let params = json!({"item":item,"documents":{"library.json":manifest}});
+    let result = body(&call(&mut s, "execute", json!({"command":"library.prepare_publication","params":params,"inspect":false})));
+    assert_eq!(result["saved"], false);
+    assert_eq!(result["address"]["library"], "workshop");
+    assert_eq!(result["documents"].as_object().unwrap().len(), 1);
+    let mut copy_params = params.clone();
+    copy_params["copy"] = json!(true);
+    let copied = body(&call(&mut s, "execute", json!({"command":"library.prepare_publication","params":copy_params,"inspect":false})));
+    assert_eq!(copied["copy"], true);
+    assert_ne!(copied["address"]["id"], result["address"]["id"]);
+    let part = pcbcraft_engine::part_authoring::Record::new_part(pcbcraft_engine::library::parts::Reference {
+        library: "basic-components".into(),
+        id: "connector".into(),
+        revision: 1,
+    })
+    .unwrap();
+    let prepared = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":"library.prepare_part_publication","params":{"record":part,"documents":{"library.json":params["documents"]["library.json"]}},"inspect":false}),
+    ));
+    assert_eq!(prepared["saved"], false);
+    assert!(prepared["documents"].as_object().unwrap().keys().all(|path| path.starts_with("parts/")));
+
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), initial);
+    let mut invalid = params;
+    invalid["path"] = json!("/tmp/forbidden-destination");
+    assert_eq!(call(&mut s, "execute", json!({"command":"library.prepare_publication","params":invalid}))["isError"], true);
+}
+
 fn rpc(server: &mut Server, method: &str, params: Value) -> Value {
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
     let reply = server.handle_line(&line).unwrap();
@@ -127,6 +165,31 @@ fn board_rules_mcp_discovery_authorship_and_diagnostics_agree() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), changed);
     let description = call(&mut s, "describe_command", json!({"command":pcbcraft_engine::SET_RULES}));
     assert_ne!(description["isError"], true, "{description}");
+}
+
+/// Real JSON-RPC tool dispatch preserves class query data when full inspection is suppressed.
+#[test]
+fn net_class_mcp_tools_author_inspect_resolve_and_reject_stale_edits() {
+    use pcbcraft_engine::net_classes as classes;
+    let mut s = server();
+    let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let created = call(
+        &mut s,
+        "execute",
+        json!({"command":classes::CREATE,"params":{"expected_revision":initial["revision"],"name":"Power","rules":{"clearance_nm":500_000}}}),
+    );
+    assert_ne!(created["isError"], true, "{created}");
+    let created = body(&created);
+    let class = created["project"]["net_classes"]["definitions"][0]["id"].clone();
+    let inspected = body(&call(&mut s, "execute", json!({"command":classes::INSPECT,"params":{},"inspect":false})));
+    assert_eq!(inspected["net_classes"], created["project"]["net_classes"]);
+    let resolved = body(&call(&mut s, "execute", json!({"command":classes::RESOLVE,"params":{"classes":[class]},"inspect":false})));
+    assert_eq!(resolved["resolution"]["values"]["clearance_nm"], 500_000);
+    assert_eq!(resolved["revision"], created["revision"]);
+    let stale = call(&mut s, "execute", json!({"command":classes::REMOVE,"params":{"class":class,"expected_revision":initial["revision"]}}));
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), created);
+    assert_ne!(call(&mut s, "describe_command", json!({"command":classes::RESOLVE}))["isError"], true);
 }
 
 /// MCP uses the native record resolver and exact quantity normalizer without an open project.
@@ -468,7 +531,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 6);
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 8);
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
@@ -906,6 +969,7 @@ fn headless_sessions_say_window_commands_need_a_live_editor() {
     let before = body(&call(&mut server, "inspect_project", json!({})));
     for (tool, arguments) in [
         ("execute", json!({"command": "view.split", "params": {"view": 0, "split": true}})),
+        ("execute", json!({"command": "ui.click", "params": {"window":0,"target":{"handle":"toolbar:Connect:Wire"}}})),
         ("execute", json!({"command": "app.set_preferences", "params": {"theme": "light"}})),
         ("describe_command", json!({"command": "window.set_panel"})),
         ("inspect_editor", json!({})),

@@ -97,12 +97,13 @@ impl PcbApp {
         let view = self
             .views
             .view(id)
-            .filter(|view| view.definition.is_some() || !view.unavailable())
+            .filter(|view| view.library.is_some() || view.definition.is_some() || !view.unavailable())
             .ok_or("Panel placement requires an available editor view")?;
         let panel = match params["panel"].as_str() {
-            Some("layers") if view.definition.is_none() && view.workspace == Workspace::Board => LAYERS,
+            Some("layers") if view.library.is_none() && view.definition.is_none() && view.workspace == Workspace::Board => LAYERS,
             Some("properties") => PROPERTIES,
-            Some("selection_filters") if view.definition.is_none() => FILTERS,
+            Some("preview") if view.library.is_some() => PROPERTIES,
+            Some("selection_filters") if view.library.is_none() && view.definition.is_none() => FILTERS,
             _ => return Err("That panel is unavailable in this workspace".into()),
         };
         let position = match params["position"].as_str() {
@@ -119,11 +120,18 @@ impl PcbApp {
             }
             _ => return Err("Floating coordinates require both x and y".into()),
         };
-        let state = PanelState { position, at };
+        let size = match (params.get("width"), params.get("height")) {
+            (None, None) => view.panels[panel].saved_state().size,
+            (Some(width), Some(height)) if view.library.is_some() && panel == PROPERTIES && position == Position::Floating => {
+                Some([width.as_f64().ok_or("width must be a number")? as f32, height.as_f64().ok_or("height must be a number")? as f32])
+            }
+            _ => return Err("Dimensions require a floating Library Preview and both width and height".into()),
+        };
+        let state = PanelState { position, at, size };
         if !state.valid() {
             return Err("Panel coordinates are out of range".into());
         }
-        self.views.view_mut(id).ok_or("The addressed view closed")?.panels[panel].set_position(position, at);
+        self.views.view_mut(id).ok_or("The addressed view closed")?.panels[panel] = Panel::from_state(state);
         Ok(())
     }
 

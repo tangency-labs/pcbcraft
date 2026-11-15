@@ -81,6 +81,58 @@ struct Override {
     rgb: [u8; 3],
 }
 
+/// Colors resolved once for one canvas pass, including the current theme and personal overrides.
+/// This disposable palette never survives a layer, visibility, theme or preference change.
+pub(super) struct FootprintColors {
+    technical: Vec<(LayerPurpose, Side, Option<egui::Color32>)>,
+    copper: BTreeMap<Uuid, egui::Color32>,
+    active: Option<Uuid>,
+    component: egui::Color32,
+    through: egui::Color32,
+}
+
+impl FootprintColors {
+    /// Capture visible layer colors once rather than rebuilding the layer catalog for each path.
+    pub(super) fn new(appearance: &Appearance, view: BoardView<'_>, active: Option<&str>, hidden: &BTreeSet<String>) -> Self {
+        let technical = [LayerPurpose::Silkscreen, LayerPurpose::Fabrication, LayerPurpose::Courtyard]
+            .into_iter()
+            .flat_map(|purpose| {
+                [Side::Front, Side::Back].into_iter().map(move |side| (purpose, side, appearance.technical(view, purpose, side, active, hidden)))
+            })
+            .collect();
+        let copper: BTreeMap<_, _> = view
+            .setup()
+            .into_iter()
+            .flat_map(|setup| setup.layers())
+            .filter(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()))
+            .map(|layer| (layer.id, appearance.color(view, layer)))
+            .collect();
+        let active = copper.keys().find(|id| active == Some(id.to_string().as_str())).copied();
+        Self { technical, copper, active, component: board::copper_color(Some(true)), through: pcbcraft_chrome::Tokens::get().board_through }
+    }
+
+    /// Preserve component-side fallback and membership order; active visible copper wins.
+    pub(super) fn copper(&self, membership: &CopperLayers) -> Option<egui::Color32> {
+        match membership {
+            CopperLayers::Unconfigured { binding } => Some(match binding {
+                pcbcraft_engine::board::definition::CopperBinding::ComponentSide => self.component,
+                pcbcraft_engine::board::definition::CopperBinding::AllCopper => self.through,
+            }),
+            CopperLayers::Resolved { layers, .. } => self
+                .active
+                .filter(|id| layers.contains(id))
+                .and_then(|id| self.copper.get(&id))
+                .or_else(|| layers.iter().find_map(|id| self.copper.get(id)))
+                .copied(),
+        }
+    }
+
+    /// Select the already resolved component-side technical ink for a footprint path.
+    pub(super) fn technical(&self, purpose: LayerPurpose, side: Side) -> Option<egui::Color32> {
+        self.technical.iter().find(|(p, s, _)| *p == purpose && *s == side).and_then(|(_, _, color)| *color)
+    }
+}
+
 /// Bounded local settings, keyed by identities rather than display names or stack positions.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -184,6 +236,7 @@ impl Appearance {
 
     /// Choose only visible copper that this pad actually occupies. Active copper is drawn on top;
     /// otherwise physical stack order wins. Unconfigured compatibility bindings stay explicit.
+    #[cfg(test)]
     pub(super) fn copper(
         &self,
         view: BoardView<'_>,
@@ -354,6 +407,63 @@ impl PcbApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Per-pass colors agree with the existing per-object resolver across themes, sides,
+    /// hidden/active layers and personal overrides; rebuilding reflects changed preferences.
+    #[test]
+    fn footprint_palette_preserves_visible_layer_and_theme_rules() {
+        let ctx = egui::Context::default();
+        let mut session = pcbcraft_engine::Session::default();
+        session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
+        for configured in [false, true] {
+            if configured {
+                session
+                    .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":4,"expected_revision":session.revision()}))
+                    .unwrap();
+            }
+            let board = session.project().unwrap().boards().next().unwrap();
+            let layers = board.layers();
+            let mut appearance = Appearance::default();
+            for (index, layer) in layers.iter().enumerate() {
+                appearance.set(board.target, &layer.id.to_string(), Some([index as u8, 43, 91])).unwrap();
+            }
+            let memberships = [
+                CopperLayers::Unconfigured { binding: pcbcraft_engine::board::definition::CopperBinding::ComponentSide },
+                CopperLayers::Unconfigured { binding: pcbcraft_engine::board::definition::CopperBinding::AllCopper },
+                CopperLayers::Resolved {
+                    binding: pcbcraft_engine::board::definition::CopperBinding::AllCopper,
+                    layers: layers.iter().filter(|l| l.purpose == LayerPurpose::Copper).map(|l| l.id).rev().collect(),
+                },
+            ];
+            let defaults = Appearance::default();
+            for appearance in [&defaults, &appearance] {
+                for dark in [true, false] {
+                    pcbcraft_chrome::theme::apply(&ctx, dark);
+                    for hidden in [
+                        BTreeSet::new(),
+                        layers.iter().step_by(2).map(|l| l.id.to_string()).collect(),
+                        layers.iter().map(|l| l.id.to_string()).collect(),
+                    ] {
+                        for active in std::iter::once(None).chain(layers.iter().map(|l| Some(l.id.to_string()))) {
+                            let resolved = FootprintColors::new(appearance, board, active.as_deref(), &hidden);
+                            for membership in &memberships {
+                                assert_eq!(resolved.copper(membership), appearance.copper(board, membership, active.as_deref(), &hidden));
+                            }
+                            for purpose in [LayerPurpose::Silkscreen, LayerPurpose::Fabrication, LayerPurpose::Courtyard] {
+                                for side in [Side::Front, Side::Back] {
+                                    assert_eq!(
+                                        resolved.technical(purpose, side),
+                                        appearance.technical(board, purpose, side, active.as_deref(), &hidden)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        pcbcraft_chrome::theme::apply(&ctx, true);
+    }
     /// Invalid settings and non-ASCII color input cannot panic or introduce ambiguous addresses.
     #[test]
     fn local_settings_and_hex_inputs_are_bounded_and_validated() {

@@ -22,7 +22,7 @@ fn fixture(board: bool) -> Harness<'static, PcbApp> {
     h.run();
     if board {
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
     }
     h
 }

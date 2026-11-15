@@ -191,7 +191,7 @@ fn fresh_forward_addition_connectivity_and_removal_share_one_apply_path() {
     let before = session.snapshot().unwrap();
     assert!(session.apply(APPLY_UPDATE, &json!({"plan_token":blocked["plan_token"],"expected_revision":session.revision()})).is_err());
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
-    let definition = super::super::super::definition::starter("resistor-0402").unwrap();
+    let definition = super::super::super::definition::basic_components("resistor-0402").unwrap();
     edit(
         &mut session,
         ASSIGN_FOOTPRINT,

@@ -1,11 +1,11 @@
 # Try PCBCraft
 
-This guide exercises the schematic editor available today. The
-[capability table](capabilities.md) distinguishes working features from the
-[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB inspection and
-component cross-highlighting are available, while board editing is still being built. The two-resistor
-example below is an original development fixture, not the polished MVP demo or
-a validated circuit design.
+This guide starts with schematic editing and continues through the supported
+PCB tools and shared MCP commands. The [capability table](capabilities.md)
+records current limits, while the [documentation map](README.md) links focused
+guides and format references. The two-resistor example below is an original
+development fixture; the polished MVP demo and its end-to-end acceptance remain
+separate work.
 
 ## Build and open an example
 
@@ -77,7 +77,9 @@ or **New PCB** on Home. Each opens an **Untitled** project in the chosen workspa
 with an empty sheet. **New Schematic** starts without a physical board; **New PCB**
 creates its one board explicitly. Opening the PCB workspace from a schematic-only
 project shows **Create board**; merely switching workspaces does not create it.
-The compact cards wrap as the window narrows.
+The compact cards wrap as the window narrows. Empty PCBs start at a closer drawing
+scale, which **Fit board** restores until the board contains geometry; saved views
+retain their own zoom and position.
 On the desktop, the
 first **Save** asks for a project folder, and the project takes that folder's name.
 
@@ -114,7 +116,7 @@ the same `VCC` net name, which can be changed before placement.
    to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
    to the preserved wire ends.
 2. Press **A** to open the **Parts Catalog** and focus search. The bundled
-   **Default** and **Power** libraries load through the same native source path
+   **Basic components** and **Power** libraries load through the same native source path
    as added libraries. Sources marks them **Built-in** and keeps their registrations
    read-only; external sources remain removable. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose
@@ -230,7 +232,9 @@ visible across PCB tabs, with alignment actions in **Layout → Modify**.
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
 views and windows. Grid opacity affects visible grids in both workspaces; display
-changes leave snapping and each view's spacing unchanged.
+changes leave snapping and each view's spacing unchanged. Schematic and PCB views
+remember their snap spacing separately, so changing one editor's grid does not
+replace the other's startup choice.
 
 To compare views, choose **View → Split**, pan one pane, and select a symbol:
 the other pane highlights it while keeping its own selection. **View → Settings**
@@ -263,18 +267,18 @@ window; double-click those areas to maximize or restore it. Drag an edge or
 corner to resize. These controls also work while a project dialog is open,
 without enabling the editing controls behind it.
 
-The project name stays separate from the top **Views** arrangement tab. Its tooltip
-explains the arrangement and its right-click actions. Use the
-**+** beside it to name a setup, starting with the current views and windows or a
-single view. Right-click any arrangement tab for **Rename…**, **Duplicate…** or
-**Delete…**. Renaming or deleting an inactive tab leaves the current setup in
+Saved view setups are available under **File → Layouts**, leaving the top bar for
+the project title and window controls. Use **New arrangement** to name a setup,
+starting with the current views and windows or a single view. Each layout's submenu offers
+**Activate**, **Rename…**, **Duplicate…** and **Delete…**. Renaming or deleting an inactive layout leaves the current setup in
 place. Naming opens a dialog in the window you are using;
 **Cancel** or **Esc** discards the draft. Each arrangement remembers
 its panes, document navigation, cameras, panels and desktop windows locally; reopening
 the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
-strip; split panes each show one document header whose **×** closes the pane.
+strip; split panes each show one document header whose **×** closes the pane,
+with the canvas background continuing through the space beside the tab.
 The engine supports up to 64 sheets and zero or one physical board. Right-click
 **Sheets** in the Browser and choose **New Sheet…**, or use
 **Sheets → New sheet**; sheet rows also offer
@@ -498,17 +502,41 @@ closure across drawings, edge clearance or manufacturing validity.
 
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
-The preview uses a lighter shade of the layer color and shows the default
-clearance around it. Starting on a trace brightens its copper and dims the rest
+The preview keeps a lighter shade of the layer color while background preparation
+is pending and shows the starting contact's effective clearance around it. Starting on a trace brightens its copper and dims the rest
 of the board while you route. Hold **Ctrl** to bypass the grid. Click a pad,
 track end or via to finish on copper, or press **Enter** after placing the last
 corner in free space. Right-click opens the route menu, which includes **Cancel**.
 Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
 
-Use **Analyze → Rules** to save board limits and preferred routing dimensions.
-Clear **Use built-in defaults** to author values, then Apply; checking it restores
-the built-in values. New routes use those preferences, while existing copper
-keeps its dimensions. See [board rules](board-rules.md) for overrides and sources.
+Use **Analyze → Rules** in either editor to create or edit net classes. **New class**
+opens a sparse definition: check a dimension to give the class an opinion, or leave
+it unchecked to inherit defaults. Save class commits one undoable edit. Classes
+can be authored in a schematic-only project; they do not create a board.
+
+Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
+Properties, or use the **Effective net rules** page in Rules to search for a current net.
+Check the classes to assign and choose **Assign classes**. The page shows effective
+hard limits, routing preferences, conflicts, rule IDs/revisions and assignment
+origins. Naming a net does not classify it. See the [editor workflow](net-class-editor.md)
+for supported targets and the shared MCP commands.
+
+**Board Setup → Design rules** embeds **Board defaults** and **Net classes** as
+pages using the same editors as **Analyze → Rules**. Navigation retains pending
+fields; each page's Save/Apply action saves that page and keeps other drafts.
+Cancel discards fields that have not been saved. The dialog stays in its originating
+window.
+
+**Board defaults…** in Rules opens the board form with the same bounded fields and
+dimension drawings as the class editor. Clear **Use built-in
+defaults** to author values, then Apply; checking it restores built-in values.
+New routes use those preferences while existing copper keeps its dimensions.
+See [board rules](board-rules.md) for overrides and sources. Starting a route on classified copper adopts that
+net's preferred width unless you selected an explicit ribbon width, and uses its
+clearance halo. Explicit changed widths/vias must meet
+applicable hard limits, and unresolved defaults report an error without creating
+copper. `pcb.route_rules` inspects a contact's dimensions, sources and conflicts;
+see the [consumer contract](net-class-consumers.md).
 
 Run **Analyze → DRC** to check the board. The check shows its current stage while
 pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops
@@ -543,6 +571,11 @@ refuses protected copper. See the [lock policy](pcb-layout-workflow.md#fixed-tra
 for mixed selections and indirect footprint/segment changes.
 
 ## Try the same project through MCP
+
+For repeatable UI demonstrations in the native app, the live connection can
+[locate controls and send ordinary input](ui-automation.md). Start with
+`ui.handles` for the intended window, send a named `ui.click`, and wait for its
+completion ticket through `ui.inspect` before continuing.
 
 Build the two desktop binaries from the repository root:
 
@@ -644,6 +677,8 @@ Library and View ribbon tabs, canvas, Browser and Properties. Switch back to
 and pending fields remain available when you return. Select a primitive
 on the canvas or in Browser, edit its Properties and choose **Apply**.
 **More properties…** expands the same draft; lengths accept mm, mil or inches.
+All four editors share wheel/pinch zoom up to 102400%; **View → Fit**
+frames the definition in the canvas clear of the panels.
 The picker’s split and window icons open a definition beside the current pane
 or in its own native window. Within either editor, **View → Split** creates a
 second pane, and **Detach / Dock** moves the focused pane between windows.
@@ -654,7 +689,20 @@ For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
 
-On desktop, **Save Library Copy** chooses a new `.pcitem.json` filename; an
+On desktop, **Parts Library → New → Library** creates a writable native folder.
+Create a symbol or footprint and publish it to that collection first, or choose an
+existing populated writable collection. Select a published item and choose **Edit**, then change its
+geometry in the matching editor. **Library → Publish…** (Ctrl/Cmd+S) adds an
+immutable revision of the same item. New drafts inherit the selected writable collection and bind to it after their
+first successful publication. Publish shows the destination and offers **New
+library…** in its selector. Choosing another collection switches to **Publish
+copy**; **Save as → New item** makes a derivative in the same collection.
+The original stays unchanged, and the editor follows the new copy after saving.
+**Edit copy** also opens an independent draft under a new identity;
+publishing an older base requires confirmation and does not merge newer changes.
+Publishing makes the item discoverable without updating placed project copies.
+
+**Save Library Copy** keeps unfinished work outside the catalog and chooses a new `.pcitem.json` filename; an
 existing file is never overwritten. Reopen it through the editor’s **Library → Open**, or
 through **File → Open Library Item…** inside a definition editor.
 The browser downloads the same editable format and retains its leave warning.
@@ -699,3 +747,31 @@ With a configured board and a closed Board Outline, **Manufacture → Fabricatio
 saves a fabrication ZIP without editing the design. Output names remain unique
 when layer names collide after sanitization; the [editor guide](editor-guide.md)
 describes the generated files and desktop save behavior.
+
+### Browse libraries
+
+Choose **Parts Library** in the workspace picker, or **Libraries → Sources**. Select a
+library and Type in Browser, search its items, and select a row for Preview.
+**Add library** opens a folder or bundle; desktop bundles install into a new
+folder. Remove leaves files intact, while Delete moves an eligible folder to
+system trash after confirmation. In the browser, added libraries need reopening
+after a reload. Projects keep their pinned copies. See the
+[native source guide](native-library-sources.md) for limits and source diagnostics.
+
+## Create a reusable part
+
+Open **Parts Library**, choose **New → Generic part**, and select an existing
+symbol. Add a package, choose its footprint and assign each pad to a terminal or
+to Unconnected. Publish to a writable native library, then find the resolved
+record in the Parts Catalog to place it. A published generic part with a package
+can also receive an orderable manufacturer/MPN record through **Add orderable
+part**. These forms live in the Library workspace; drawing changes still use the
+Symbol and Footprint Editors. Unpublished part documents last for the current
+session, so publish finished work before closing. The [source guide](native-library-sources.md#generic-and-orderable-part-documents)
+covers exact revisions, typed values and recovery.
+
+Generic library parts do not require a symbol. In Parts Library, use **Add
+footprint…** to author a footprint-only part, or add the symbol independently with
+Browse. When both are present, complete the pin mapping before publishing.
+Schematic placement requires a symbol; the current placement command does not
+create board-owned symbol-less instances.

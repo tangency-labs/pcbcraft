@@ -1,7 +1,7 @@
 //! Document-addressed view state. Hosts own placement; the session owns authored data.
 
 use crate::{
-    canvas_camera::{Camera, MAX_BOARD_ZOOM, MAX_ZOOM},
+    canvas_camera::Camera,
     schematic_canvas::{Draft, LegTarget, Tool},
 };
 use pcbcraft_engine::{Session, SheetTarget, board::view::BoardTarget, selection::Selection};
@@ -31,15 +31,23 @@ impl Workspace {
     pub(super) fn title(self) -> &'static str {
         match self {
             Self::Schematic => "Schematic",
-            Self::Board => "PCB layout",
+            Self::Board => "PCB Layout",
         }
     }
 
-    /// Maximum manual camera zoom for this workspace.
-    pub(super) fn max_zoom(self) -> f32 {
+    /// The spacing presets offered by this workspace's grid control.
+    pub(super) fn grid_presets(self) -> &'static [i64] {
         match self {
-            Self::Schematic => MAX_ZOOM,
-            Self::Board => MAX_BOARD_ZOOM,
+            Self::Schematic => &pcbcraft_chrome::grid::SCHEMATIC_SPACING_PRESETS_NM,
+            Self::Board => &pcbcraft_chrome::grid::BOARD_SPACING_PRESETS_NM,
+        }
+    }
+
+    /// The spacing used when this workspace has no remembered choice.
+    pub(super) fn grid_default_nm(self) -> i64 {
+        match self {
+            Self::Schematic => pcbcraft_chrome::grid::SCHEMATIC_SPACING_DEFAULT_NM,
+            Self::Board => pcbcraft_chrome::grid::BOARD_SPACING_DEFAULT_NM,
         }
     }
 }
@@ -123,15 +131,10 @@ fn filters_open_default() -> bool {
 impl ViewState {
     /// Bound layer data and validate transforms before replacing live views.
     pub(super) fn valid(&self) -> bool {
-        let workspace = self.target.workspace();
-        let parked = match workspace {
-            Workspace::Schematic => Workspace::Board,
-            Workspace::Board => Workspace::Schematic,
-        };
         self.title.len() <= 1024
             && self.panels.valid()
-            && self.camera.valid(workspace.max_zoom())
-            && self.parked_camera.valid(parked.max_zoom())
+            && self.camera.valid()
+            && self.parked_camera.valid()
             && self.hidden_layers.len() <= 128
             && self.hidden_layers.iter().chain(self.active_layer.iter()).all(|id| id.len() <= 128)
     }
@@ -333,6 +336,8 @@ pub(super) struct EditorView {
     pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
+    /// Library browsing is a view-local service presentation, never a project target.
+    pub(super) library: Option<crate::library_workspace::State>,
     pub(super) camera: Camera,
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
@@ -351,28 +356,47 @@ impl Default for EditorView {
 }
 
 impl EditorView {
+    /// Service and definition panes own no project edit authority.
+    pub(super) fn auxiliary(&self) -> bool {
+        self.definition.is_some() || self.library.is_some()
+    }
+
     /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
     pub(super) fn target(&self) -> Option<DocumentTarget> {
-        if self.definition.is_some() { None } else { self.binding.map(|binding| binding.target) }
+        if self.auxiliary() { None } else { self.binding.map(|binding| binding.target) }
+    }
+
+    /// Seed the active and parked workspace cameras from their remembered defaults. The workspace
+    /// currently showing takes its own spacing, so switching back later restores the other one.
+    pub(super) fn set_grid_defaults(&mut self, schematic_nm: i64, board_nm: i64) {
+        let (active, parked) = match self.workspace {
+            Workspace::Schematic => (schematic_nm, board_nm),
+            Workspace::Board => (board_nm, schematic_nm),
+        };
+        self.camera.set_snap_nm(active);
+        self.parked_camera.set_snap_nm(parked);
     }
 
     /// Start a successfully opened project's default document in this workspace. Runtime identity,
-    /// snap spacing and selection-filter choices survive, while old document addresses, navigation and edit authority expire.
+    /// each workspace's snap spacing and selection-filter choices survive, while old document
+    /// addresses, navigation and edit authority expire.
     /// Saved arrangements are restored separately afterward and still validate explicit targets.
     /// Definition panes retain their document while refreshing the parked project presentation.
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
         let definition = self.definition.take();
+        let library = self.library.take();
         let workspace = self.workspace;
-        let snap_nm = self.camera.snap_nm();
+        let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
         let panels = self.panels.clone();
-        *self = Self::new(self.id);
+        *self = Self::new_in_workspace(self.id, workspace);
         (self.filters, self.filters_collapsed, self.filters_open) = filters;
         self.panels = panels;
-        self.workspace = workspace;
         self.camera.set_snap_nm(snap_nm);
+        self.parked_camera.set_snap_nm(parked_snap_nm);
         self.sync(session);
         self.definition = definition;
+        self.library = library;
     }
 
     /// Explicitly retarget a view after the host validates the document's existence.
@@ -400,7 +424,7 @@ impl EditorView {
     /// A cached immutable
     /// projection avoids rebuilding geometry caches on every frame; stale caches never authorize input.
     pub(super) fn snapshot(&self, session: &Session) -> Option<std::sync::Arc<pcbcraft_engine::Project>> {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return None;
         }
         let root = session.snapshot()?;
@@ -416,7 +440,7 @@ impl EditorView {
     /// Capture project presentation only; runtime definition views are excluded from project
     /// arrangements. Unresolved saved targets remain intact instead of being rebound.
     pub(super) fn saved_state(&self, session: &Session) -> Option<ViewState> {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return None;
         }
         if let Some(state) = &self.unavailable {
@@ -452,8 +476,7 @@ impl EditorView {
     /// explicit targets retain their snapshot and cannot authorize editing another document.
     /// Filter and card choices restore independently of selection, which always starts empty.
     pub(super) fn from_state(id: ViewId, state: &ViewState, session: &Session) -> Self {
-        let mut view = Self::new(id);
-        view.workspace = state.target.workspace();
+        let mut view = Self::new_in_workspace(id, state.target.workspace());
         view.board.target = state.board;
         view.sheet = state.schematic;
         if let DocumentTarget::Sheet(sheet) = state.target {
@@ -487,18 +510,29 @@ impl EditorView {
 
     /// Create an unbound schematic presentation with fresh navigation and interaction state.
     pub(super) fn new(id: ViewId) -> Self {
+        Self::new_in_workspace(id, Workspace::Schematic)
+    }
+
+    /// Seed fresh navigation for both workspaces, keeping the closer PCB camera in its correct
+    /// active or parked slot when a document binding is created or replaced.
+    fn new_in_workspace(id: ViewId, workspace: Workspace) -> Self {
+        let (camera, parked_camera) = match workspace {
+            Workspace::Schematic => (Camera::default(), Camera::board()),
+            Workspace::Board => (Camera::board(), Camera::default()),
+        };
         Self {
             id,
             binding: None,
             input_epoch: 0,
-            workspace: Workspace::Schematic,
+            workspace,
             filters: crate::selection_filters::Filters::default(),
             filters_collapsed: false,
             filters_open: true,
             panels: crate::workspace_panels::defaults(),
             definition: None,
-            camera: Camera::default(),
-            parked_camera: Camera::default(),
+            library: None,
+            camera,
+            parked_camera,
             schematic: SchematicState::default(),
             board: BoardState::default(),
             unavailable: None,
@@ -522,6 +556,7 @@ impl EditorView {
             filters_open: self.filters_open,
             panels: self.panels.clone(),
             definition: self.definition,
+            library: self.library.clone(),
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
             unavailable: self.unavailable.clone(),
@@ -553,7 +588,8 @@ impl EditorView {
     /// Switch only this view and restore that workspace's navigation. Old input remains invalid
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
-        if self.definition.take().is_some() {
+        let library = self.library.take().is_some();
+        if self.definition.take().is_some() || library {
             self.release_input();
         }
         if self.unavailable.is_some() {
@@ -611,7 +647,7 @@ impl EditorView {
 
     /// Capture input only while this view is bound to its current document opening.
     pub(super) fn input(&self, session: &Session) -> Option<ViewInput> {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return None;
         }
         let binding = self.binding.filter(|binding| Some(*binding) == Binding::current(session, self.workspace, self.board.target, self.sheet))?;
@@ -621,6 +657,9 @@ impl EditorView {
     /// Permit layout controls for definition and unavailable views without granting project edit
     /// authority. Definition tokens include runtime document identity and the view's input epoch.
     pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
+        if self.library.is_some() {
+            return Some(ViewInput { view: self.id, target: None, definition: None, input_epoch: self.input_epoch, revision: 0 });
+        }
         if let Some(document) = self.definition {
             return Some(ViewInput { view: self.id, target: None, definition: Some(document), input_epoch: self.input_epoch, revision: 0 });
         }
@@ -683,7 +722,7 @@ impl EditorView {
     /// sheet/board targets that no longer resolve become unavailable, closeable placeholders;
     /// undo restores their address and navigation. Only omitted targets use compatibility defaults.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
-        if self.definition.is_some() {
+        if self.auxiliary() {
             return false;
         }
         if let Some(state) = &self.unavailable {
@@ -731,17 +770,17 @@ impl EditorView {
         let binding = Binding::current(session, self.workspace, board_target, self.sheet);
         let changed = self.binding != binding;
         if changed {
-            let snap_nm = self.camera.snap_nm();
+            let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
             let workspace = self.workspace;
             let sheet = self.sheet;
             let filters = (self.filters, self.filters_collapsed, self.filters_open);
             let panels = self.panels.clone();
-            *self = Self::new(self.id);
+            *self = Self::new_in_workspace(self.id, workspace);
             (self.filters, self.filters_collapsed, self.filters_open) = filters;
             self.panels = panels;
             self.sheet = sheet;
-            self.workspace = workspace;
             self.camera.set_snap_nm(snap_nm);
+            self.parked_camera.set_snap_nm(parked_snap_nm);
             self.binding = binding;
         }
         self.board.target = board_target;
@@ -798,14 +837,8 @@ impl EditorView {
                 self.schematic.selection = Selection::default();
                 self.schematic.selected_sheet_symbol = None;
             }
-            let placed: std::collections::BTreeSet<_> = self
-                .board
-                .target
-                .and_then(|target| project.board_view(target))
-                .into_iter()
-                .flat_map(|board| board.footprints())
-                .map(|footprint| footprint.id)
-                .collect();
+            let placed: std::collections::BTreeSet<_> =
+                self.board.target.and_then(|target| project.board_view(target)).into_iter().flat_map(|board| board.footprint_ids()).collect();
             self.board.selection.retain(|id| placed.contains(id));
             if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
                 self.board.reference = Default::default();

@@ -85,6 +85,7 @@ impl PcbApp {
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
         let mut reference_action = None;
         let mut reference_pick = None;
+        let mut net_rules = false;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
             host.with("properties"),
@@ -94,7 +95,7 @@ impl PcbApp {
             state.properties_collapsed,
             workspace::panels::card_width(area, false),
             |ui| {
-                if let Some(footprint) = state.reference.selected.as_ref().and_then(|id| target.footprints().find(|footprint| &footprint.id == id))
+                if let Some(footprint) = state.reference.selected.as_ref().and_then(|id| target.footprint(id))
                     && let Some(input) = input
                 {
                     let enabled = settings_enabled && !state.editing_footprint();
@@ -102,7 +103,7 @@ impl PcbApp {
                         state.reference.show(ui, &footprint, input, unit, enabled, pcbcraft_chrome::properties::form_body_height(area));
                     return;
                 }
-                let selected: Vec<_> = target.footprints().filter(|footprint| state.selection.contains(&footprint.id)).collect();
+                let selected: Vec<_> = target.footprints_for_ids(&state.selection).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
                         property(ui, "Reference", footprint.reference);
@@ -144,7 +145,7 @@ impl PcbApp {
                                 &setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count().to_string(),
                             );
                         }
-                        property(ui, "Footprints", &target.footprints().count().to_string());
+                        property(ui, "Footprints", &target.footprint_ids().len().to_string());
                         property(ui, "Tracks", &target.tracks().len().to_string());
                         property(ui, "Vias", &target.vias().len().to_string());
                         if let Some(lines) = unrouted {
@@ -153,6 +154,12 @@ impl PcbApp {
                     }
                     items => property(ui, "Selected footprints", &items.len().to_string()),
                 });
+                if !state.tracks.selected.is_empty() {
+                    net_rules = ui
+                        .add_enabled_ui(settings_enabled && !state.tracks.committing(), |ui| pcbcraft_chrome::controls::button(ui, "Net rules…"))
+                        .inner
+                        .clicked();
+                }
             },
         );
         if collapse {
@@ -184,6 +191,9 @@ impl PcbApp {
         if let Some(layer) = color_pick {
             self.begin_layer_color(view_id, layer);
             self.repaint_editors(ui.ctx());
+        }
+        if net_rules {
+            self.begin_net_rules();
         }
         if setup_open {
             self.begin_board_setup(view_id);

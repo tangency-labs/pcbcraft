@@ -72,7 +72,7 @@ fn bounds(painter: &Painter, unit: &pcbcraft_engine::schematic::SymbolUnit, turn
             if let Shape::Text(anchor, text, align) = shape {
                 let (x, y) = grid(*anchor);
                 let (x, y) = turn(x, y, turns, mirrored);
-                let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
+                let galley = pcbcraft_chrome::canvas_text::layout_no_wrap(painter, text.clone(), font.clone(), egui::Color32::WHITE);
                 let origin = text_anchor(*align, turns, mirrored).anchor_size(pos2(x * step, y * step), galley.size()).min;
                 let ink = galley.mesh_bounds.translate(origin.to_vec2());
                 drawing = drawing.union(Rect::from_min_max(ink.min / step, ink.max / step));

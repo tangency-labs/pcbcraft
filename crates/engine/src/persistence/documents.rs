@@ -45,9 +45,12 @@ pub const MAX_DOCUMENTS: usize = 4096;
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
+const CLASS_PROJECT_FORMAT: &str = "pcbcraft-project/20";
+const BINDING_PROJECT_FORMAT: &str = "pcbcraft-project/21";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
+const BINDING_INSTANCES_FORMAT: &str = "pcbcraft-instances/3";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -102,6 +105,8 @@ struct ProjectDocument {
     #[serde(default, deserialize_with = "present")]
     schematic_instances: Option<crate::instances::Instances>,
     #[serde(default, deserialize_with = "present")]
+    net_classes: Option<crate::net_classes::Catalog>,
+    #[serde(default, deserialize_with = "present")]
     footprint_choices: Option<Vec<crate::board::assignment::Assignment>>,
     #[serde(default, deserialize_with = "present")]
     boards: Option<Vec<BoardReference>>,
@@ -145,11 +150,17 @@ struct FolderReference {
 impl ProjectDocument {
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
     fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
-        let foldered =
-            matches!(self.format.as_str(), FOLDER_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT)
-                || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
+        let foldered = matches!(
+            self.format.as_str(),
+            FOLDER_PROJECT_FORMAT
+                | OCCURRENCE_PROJECT_FORMAT
+                | NET_PROJECT_FORMAT
+                | NO_CONNECT_PROJECT_FORMAT
+                | CLASS_PROJECT_FORMAT
+                | BINDING_PROJECT_FORMAT
+        ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17 or 19"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20 or 21"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -219,7 +230,10 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
 /// Schematic-only records are embedded in the entry point and have no separate managed path.
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if !matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT) {
+    if !matches!(
+        project.format.as_str(),
+        OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT
+    ) {
         return Ok(None);
     }
     Ok(project_board_path(entry)?.and_then(|path| path.strip_suffix("board.json").map(|prefix| format!("{prefix}instances.json"))))
@@ -323,14 +337,37 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let occurrences = matches!(project.format.as_str(), OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT);
+    let occurrences = matches!(
+        project.format.as_str(),
+        OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT
+    );
     let net_format = project.format == NET_PROJECT_FORMAT;
-    let no_connect_format = project.format == NO_CONNECT_PROJECT_FORMAT;
+    let binding_format = project.format == BINDING_PROJECT_FORMAT;
+    let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
+    let no_connect_format = matches!(project.format.as_str(), NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
+    if class_format != project.net_classes.is_some() {
+        return Err("Net-class catalog requires project format 20 or 21, which requires a nonempty catalog.".into());
+    }
+    let mut net_classes = project.net_classes.take();
+    if let Some(catalog) = &mut net_classes {
+        catalog.validate()?;
+        if catalog.definitions.is_empty() {
+            return Err("Empty net-class catalogs must be omitted.".into());
+        }
+        catalog.definitions.sort_by_key(|class| class.id);
+    }
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
         return Err("No-connect intent requires project format 19.".into());
     }
-    let part_format =
-        matches!(project.format.as_str(), PART_PROJECT_FORMAT | OCCURRENCE_PROJECT_FORMAT | NET_PROJECT_FORMAT | NO_CONNECT_PROJECT_FORMAT);
+    let part_format = matches!(
+        project.format.as_str(),
+        PART_PROJECT_FORMAT
+            | OCCURRENCE_PROJECT_FORMAT
+            | NET_PROJECT_FORMAT
+            | NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
+    );
     let foldered = project.layout_root.is_some();
     if !part_format
         && project
@@ -338,7 +375,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17 or 19.".into());
+        return Err("Extended package mappings require project format 15, 16, 17, 19, 20 or 21.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -367,24 +404,26 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
             | NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17 or 19".into());
+        return Err("schematic_instances requires project format 16, 17, 19, 20 or 21".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14, 15, 16, 17 or 19, no board and a nonempty bounded list".into());
+        return Err("project footprint choices require format 13, 14, 15, 16, 17, 19, 20 or 21, no board and a nonempty bounded list".into());
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17 or 19.".into());
+        return Err("Pinned part selections require project format 15, 16, 17, 19, 20 or 21.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17 or 19".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20 or 21".into());
     }
     if matches!(
         project.format.as_str(),
@@ -398,9 +437,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
             | NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17 or 19"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20 or 21"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -416,8 +457,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let expected =
-                    if net_format || (no_connect_format && instance.net_registry.is_some()) { NET_INSTANCES_FORMAT } else { INSTANCES_FORMAT };
+                let expected = if binding_format {
+                    BINDING_INSTANCES_FORMAT
+                } else if net_format || (no_connect_format && instance.net_registry.is_some()) {
+                    NET_INSTANCES_FORMAT
+                } else {
+                    INSTANCES_FORMAT
+                };
                 if instance.format != expected || Some(instance.board) != registered {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
                 }
@@ -434,8 +480,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         None
     };
+    if binding_format
+        != instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings)
+    {
+        return Err("Net class assignments require project format 21 and instances format 3 when board-owned; the new envelope requires nonempty assignments.".into());
+    }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err("Net registry records require project format 17 or 19 and the corresponding instance vocabulary.".into());
+        return Err("Net registry records require project format 17, 19, 20 or 21 and the corresponding instance vocabulary.".into());
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -542,10 +593,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         schematic_packages: Arc::default(),
         board: Arc::default(),
         named_graph: Arc::default(),
+        board_graphics: Arc::default(),
         upgraded_from: None,
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_classes: Arc::default(),
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -926,7 +979,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             selections.insert(component.id, reader.selection(record, symbol, documents, &mut used)?);
         }
     }
-    if no_connect_format != (marker_count != 0) || marker_count > crate::no_connect::MAX_MARKERS {
+    if (!class_format && no_connect_format != (marker_count != 0)) || marker_count > crate::no_connect::MAX_MARKERS {
         return Err("Project format 19 requires nonempty bounded no-connect intent.".into());
     }
     if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
@@ -1035,6 +1088,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         routed.vias = vias;
     }
     crate::part_instances::storage::validate_project(project_data)?;
+    if let Some(catalog) = net_classes {
+        project_data.net_classes = Arc::new(catalog);
+    }
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
@@ -1126,6 +1182,20 @@ pub struct DocumentsEncoder {
     generated_legs: Vec<GeneratedLegRecord<'static>>,
 }
 
+/// Identical shared pins are reusable, but one immutable address cannot discard a different body.
+fn collect_definition<T: PartialEq>(
+    definitions: &mut BTreeMap<crate::board::definition::Key, Arc<T>>,
+    key: crate::board::definition::Key,
+    definition: &Arc<T>,
+    kind: &str,
+) -> Result<(), String> {
+    if definitions.get(&key).is_some_and(|existing| existing != definition) {
+        return Err(format!("Conflicting pinned {kind} {}/{}.r{} during save", key.0, key.1, key.2));
+    }
+    definitions.insert(key, definition.clone());
+    Ok(())
+}
+
 impl DocumentsEncoder {
     /// Retain the immutable save snapshot without walking its contents in the input handler.
     pub fn new(project: Arc<Project>) -> Self {
@@ -1185,11 +1255,27 @@ impl DocumentsEncoder {
                         .assignments
                         .values()
                         .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
+                    p.net_classes.validate()?;
+                    let has_classes = !p.net_classes.definitions.is_empty();
+                    if has_classes && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
+                        return Err("Net classes require adopted storage/occurrence metadata.".into());
+                    }
                     let has_no_connects = p.no_connect_count() != 0;
                     if has_no_connects && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("No-connect intent requires adopted storage/occurrence metadata.".into());
                     }
-                    let format = if has_no_connects {
+                    let has_bindings = p.net_registry.has_class_bindings();
+                    if has_bindings && !has_classes {
+                        return Err("Net class assignments require their class catalog.".into());
+                    }
+                    if has_bindings {
+                        p.net_registry.validate(p)?;
+                    }
+                    let format = if has_bindings {
+                        BINDING_PROJECT_FORMAT
+                    } else if has_classes {
+                        CLASS_PROJECT_FORMAT
+                    } else if has_no_connects {
                         NO_CONNECT_PROJECT_FORMAT
                     } else if !p.net_registry.records.is_empty() {
                         NET_PROJECT_FORMAT
@@ -1233,6 +1319,15 @@ impl DocumentsEncoder {
                     } else if let Some(registrations) = registrations {
                         writeln!(self.bytes, "  \"boards\": {},", json(&registrations)?).map_err(|e| e.to_string())?;
                     }
+                    if has_classes {
+                        // At most 256 bounded definitions, each on its own line for Git diffs.
+                        self.bytes.extend_from_slice(b"  \"net_classes\": {\n    \"format\": \"pcbcraft-net-classes/1\",\n    \"definitions\": [\n");
+                        for (index, class) in p.net_classes.definitions.iter().enumerate() {
+                            let comma = if index + 1 == p.net_classes.definitions.len() { "" } else { "," };
+                            writeln!(self.bytes, "      {}{comma}", json(class)?).map_err(|e| e.to_string())?;
+                        }
+                        self.bytes.extend_from_slice(b"    ]\n  },\n");
+                    }
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
                     self.next();
                 }
@@ -1258,8 +1353,12 @@ impl DocumentsEncoder {
                         if let Some(part) = &c.part {
                             crate::part_instances::storage::collect(part, &mut self.documents)?;
                         }
-                        self.definitions
-                            .insert((c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()), c.definition.clone());
+                        collect_definition(
+                            &mut self.definitions,
+                            (c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()),
+                            &c.definition,
+                            "symbol",
+                        )?;
                         self.cursor = id;
                     } else {
                         if self.project.schematic_packages.assignments.is_empty() {
@@ -1280,7 +1379,7 @@ impl DocumentsEncoder {
                         let key = assignment.key();
                         let definition =
                             self.project.schematic_packages.definitions.get(&key).ok_or("unresolved schematic footprint choice during save")?;
-                        self.footprint_definitions.insert(key, Arc::clone(definition));
+                        collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         self.cursor = id;
                     } else {
                         self.finish_project_document()?;
@@ -1433,7 +1532,7 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, assignment)?;
                         let key = assignment.key();
                         let definition = self.project.board.definitions.get(&key).ok_or("unresolved assigned footprint during save")?;
-                        self.footprint_definitions.insert(key, Arc::clone(definition));
+                        collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         self.cursor = id;
                     } else {
                         if !self.project.board.assignments.is_empty() {
@@ -1446,7 +1545,7 @@ impl DocumentsEncoder {
                     if let Some(f) = self.project.board.footprints().get(self.cursor as usize) {
                         if let Some(key) = f.key() {
                             let definition = self.project.board.definitions.get(&key).ok_or("unresolved pinned footprint during save")?;
-                            self.footprint_definitions.insert(key, Arc::clone(definition));
+                            collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         }
                         record(&mut self.bytes, &mut self.first, f)?;
                         self.cursor += 1;
@@ -1466,7 +1565,7 @@ impl DocumentsEncoder {
                         {
                             let key = (library.clone(), package.definition.clone(), package.revision);
                             let definition = self.project.board.definitions.get(&key).ok_or("unresolved accepted package during save")?;
-                            self.footprint_definitions.insert(key, Arc::clone(definition));
+                            collect_definition(&mut self.footprint_definitions, key, definition, "footprint")?;
                         }
                         self.cursor = id;
                     } else {
@@ -1513,7 +1612,13 @@ impl DocumentsEncoder {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                let format = if self.project.net_registry.records.is_empty() { INSTANCES_FORMAT } else { NET_INSTANCES_FORMAT };
+                let format = if self.project.net_registry.has_class_bindings() {
+                    BINDING_INSTANCES_FORMAT
+                } else if self.project.net_registry.records.is_empty() {
+                    INSTANCES_FORMAT
+                } else {
+                    NET_INSTANCES_FORMAT
+                };
                 write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"board\": \"{board}\",\n").map_err(|error| error.to_string())?;
             } else {
                 self.bytes.extend_from_slice(b"  ],\n  \"schematic_instances\": {\n");

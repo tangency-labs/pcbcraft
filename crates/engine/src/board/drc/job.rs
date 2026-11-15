@@ -14,6 +14,7 @@ pub struct CheckJob {
     copper: Copper,
     members: Vec<Vec<usize>>,
     geometry: Option<BoardGeometry>,
+    class_rules: Option<super::super::class_rules::Context>,
     pairs: Vec<usize>,
     bounds: Vec<[f64; 4]>,
     cursor: (usize, usize),
@@ -46,6 +47,7 @@ impl Session {
             copper: Copper::default(),
             members: Vec::new(),
             geometry: None,
+            class_rules: None,
             pairs: Vec::new(),
             bounds: Vec::new(),
             cursor: (0, 1),
@@ -107,6 +109,7 @@ impl CheckJob {
             return false;
         };
         let rules = self.source.effective.values;
+        let maximum = self.class_rules.as_ref().map_or(rules.clearance_nm, |context| context.max_clearance(rules.clearance_nm));
         match self.phase {
             0 => {
                 let footprints: Vec<_> = view.footprints_range(self.work, budget.min(32)).collect();
@@ -155,13 +158,14 @@ impl CheckJob {
             }
             3 => {
                 if let Some(g) = &self.geometry {
+                    self.class_rules = capture_class_rules(view, g, &self.source.effective, &mut self.found);
                     self.bounds = g.items.iter().map(|i| i.contour.bounds()).collect();
                     self.pairs = (0..g.items.len()).collect();
                     self.pairs.sort_by(|a, b| self.bounds[*a][0].total_cmp(&self.bounds[*b][0]));
                 }
             }
             4 => {
-                view.check_dimensions(rules, &mut self.found);
+                view.check_dimensions(rules, self.class_rules.as_ref(), &mut self.found);
                 if let Some(g) = &self.geometry {
                     view.check_shorts(&g.lands, &g.members, &g.items, &mut self.found);
                 }
@@ -180,13 +184,11 @@ impl CheckJob {
                         let (i, j) = (self.pairs[p], self.pairs[n]);
                         self.cursor.1 += 1;
                         self.work += 1;
-                        if self.bounds[j][0] > self.bounds[i][2] + rules.clearance_nm as f64 {
+                        if self.bounds[j][0] > self.bounds[i][2] + maximum as f64 {
                             self.cursor = (p + 1, p + 2);
                             continue;
                         }
-                        if self.bounds[i][1] > self.bounds[j][3] + rules.clearance_nm as f64
-                            || self.bounds[j][1] > self.bounds[i][3] + rules.clearance_nm as f64
-                        {
+                        if self.bounds[i][1] > self.bounds[j][3] + maximum as f64 || self.bounds[j][1] > self.bounds[i][3] + maximum as f64 {
                             continue;
                         }
                         let (a, b) = (&g.items[i], &g.items[j]);
@@ -194,7 +196,9 @@ impl CheckJob {
                             continue;
                         }
                         let (i, j) = (i.min(j), i.max(j));
-                        if let Some(d) = g.evaluate(i, j, rules.clearance_nm)
+                        let clearance =
+                            self.class_rules.as_ref().map_or(rules.clearance_nm, |context| context.clearance(Some(i), j, rules.clearance_nm));
+                        if let Some(d) = g.evaluate(i, j, clearance)
                             && d.clearance_violation
                         {
                             let (a, b) = (&g.items[i], &g.items[j]);
@@ -205,7 +209,7 @@ impl CheckJob {
                             let message = if d.gap_nm <= 0. {
                                 format!("Copper touches{nets}")
                             } else {
-                                format!("Clearance {} is below the {} rule{nets}", mm(d.gap_nm), mm(rules.clearance_nm as f64))
+                                format!("Clearance {} is below the {} rule{nets}", mm(d.gap_nm), mm(d.clearance_nm as f64))
                             };
                             let mut names = vec![a.name.clone(), b.name.clone()];
                             names.sort();
@@ -236,14 +240,14 @@ impl CheckJob {
             7 => {
                 if let Some(g) = &self.geometry {
                     let end = self.work.saturating_add(budget).min(g.items.len());
-                    view.check_outline(&g.items[self.work..end], rules, &mut self.found);
+                    view.check_outline(&g.items[self.work..end], rules, self.class_rules.as_ref(), &mut self.found);
                     self.work = end;
                     if end < g.items.len() {
                         return false;
                     }
                     // Empty boards still check authored outlines.
                     if g.items.is_empty() {
-                        view.check_outline(&[], rules, &mut self.found);
+                        view.check_outline(&[], rules, self.class_rules.as_ref(), &mut self.found);
                     }
                 }
                 self.cursor = (0, 1);
@@ -277,7 +281,9 @@ impl CheckJob {
                 }
             }
             9 => {
-                self.report = Some(std::mem::take(&mut self.found).finish(rules, self.source.effective.sources.clone()));
+                let mut report = std::mem::take(&mut self.found).finish(rules, self.source.effective.sources.clone());
+                report.class_rules = self.class_rules.take();
+                self.report = Some(report);
             }
             _ => {}
         }

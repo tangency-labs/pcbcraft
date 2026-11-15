@@ -91,6 +91,23 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     assert!(session.history_root_revision() > root);
 }
 
+/// Opening a file rebuilds the view through `bind_opened_project`. Both the active and parked
+/// workspace spacings survive, so the first switch to the other workspace keeps its own grid.
+#[test]
+fn opening_a_project_keeps_both_workspace_spacings() {
+    const MIL: i64 = pcbcraft_chrome::grid::NM_PER_MIL;
+    let session = session();
+    let mut view = EditorView::new(ViewId(7));
+    view.camera.set_snap_nm(25 * MIL);
+    view.parked_camera.set_snap_nm(10 * MIL);
+    view.bind_opened_project(&session);
+    assert_eq!((view.camera.snap_nm(), view.parked_camera.snap_nm()), (25 * MIL, 10 * MIL));
+    view.switch(Workspace::Board, &session);
+    assert_eq!(view.camera.snap_nm(), 10 * MIL);
+    view.switch(Workspace::Schematic, &session);
+    assert_eq!(view.camera.snap_nm(), 25 * MIL);
+}
+
 /// Project replacement cannot silently retarget an explicit board; the placeholder keeps its
 /// address and navigation, rejects stale input, and permits an explicit workspace replacement.
 #[test]

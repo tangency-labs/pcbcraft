@@ -15,7 +15,7 @@ fn optional_board_is_created_explicitly_and_undo_restores_schematic_only_state()
     let revision = h.state().session.revision();
 
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h.get_by_label("Create board");
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
@@ -78,13 +78,13 @@ fn footprint_chooser_does_not_create_a_board_for_schematic_only_parts() {
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
     h.run();
     assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     assert!(h.query_by_label("Place on board").is_none());
     click(&mut h, "Close");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
     h.run();
-    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "basic-components / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Terminal 1");
     click(&mut h, "Pad 2");
     click(&mut h, "Terminal 2");
@@ -127,7 +127,7 @@ fn live_boardless_assignment_shares_history_and_cannot_place() {
     let before = h.state().session.snapshot().unwrap();
     let component = h.state().session.project().unwrap().components().next().unwrap().id();
     let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::ASSIGN_FOOTPRINT,"params":{
-        "component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,
+        "component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,
         "mapping":{"1":"1","2":"2"},"expected_revision":h.state().session.revision()}}});
     let ctx = h.ctx.clone();
     h.state_mut().begin_footprint_assignment(Some(component.clone()));
@@ -155,7 +155,7 @@ fn pending_create_board_click_cannot_follow_project_replacement_or_reopen() {
         let mut h = harness();
         new_project(&mut h);
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout");
+        click(&mut h, "PCB Layout");
         let point = h.get_by_label("Create board").rect().center();
         h.event(egui::Event::PointerMoved(point));
         h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -181,7 +181,7 @@ fn repeated_create_board_clicks_only_create_one_board() {
     let mut h = harness();
     new_project(&mut h);
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     let point = h.get_by_label("Create board").rect().center();
     click(&mut h, "Create board");
     let created = h.state().session.snapshot().unwrap();

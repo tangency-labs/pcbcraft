@@ -1,6 +1,14 @@
 # Shared Craft UI migration
 
-This local branch adopts SolidCraft's extracted interface crates at
+The current pin is SolidCraft **0.41.0**, revision
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, under @travle1's November 13, 2026
+update authorization. The UI kit, look, theme, registry, text and renderer/window
+patches move together. The original migration below records the earlier pin;
+current compatibility notes follow at the end.
+
+## Initial migration
+
+The initial migration adopted SolidCraft's extracted interface crates at
 `f56114219b2d7f6d16de8dd58700479646948f8a`. The migration began at PCBcraft
 `16e7bab` and was rebased onto upstream main `0e81115` on November 11, 2026.
 The first slice establishes dependencies, fonts and toolkit
@@ -150,10 +158,12 @@ left action slot, including when Place is disabled. The bounded browsing area
 hosts the catalog's toolbar and responsive panes, and the app handles Enter
 confirmation and switching between expanded and docked presentations.
 
-Library Sources uses the shared modal frame, named title close, footer, search
-field and import buttons. Its source cards, category filters and responsive
-panes carry the existing source diagnostics and catalog metadata. The manager
-handles an open source-action menu's Escape before dismissing the dialog.
+Library source management now lives in the Library workspace. Its Browser adapts
+the pinned tree rows, with qualified host electronics icons in reserved slots;
+its item tables use the pinned selectable table/cell primitives. Panel surfaces,
+search, Type, compact region choices and source-action confirmations retain the
+shared controls. PCBcraft supplies per-pane source navigation, exact native
+previews and background source lifecycle. The old management modal is removed.
 
 ## Shared property dialogs
 
@@ -223,8 +233,8 @@ Ribbon command groups use the shared ribbon renderer and its button metrics;
 PCBcraft supplies qualified electronics glyphs, enabled/selected state and menu
 actions. The host retains horizontal scrolling and per-workspace tab contents.
 Inline ribbon fields align with the shared group height. App-bar quick actions
-and arrangement tabs use shared button presentation within PCBcraft's existing
-native title-bar placement.
+use shared button presentation within PCBcraft's existing native title-bar
+placement; saved layout actions use shared menu rows under File.
 
 Ribbon buttons use the toolkit's standard 76-point width, wrapping longer
 labels onto two lines. A group grows evenly when its caption needs more room.
@@ -317,10 +327,28 @@ stay direct, while clicks, focus/host changes, blocked canvas input, Fit and
 explicit centering discard outstanding motion. The camera advances once per
 native viewport frame and requests repaint only until the target is reached.
 
+Schematic, PCB layout, symbol and footprint editors share one manual zoom range,
+up to 102400%, across wheel/pinch, live commands and saved camera validation.
+Initial framing, Fit and snap grids remain appropriate to each document's content.
+A workspace-specific manual ceiling needs a concrete constraint; none currently
+requires an exception.
+
 Dots and line grids fade their fine marks as their density limit approaches.
 Every fifth mark stays visible, matching the next coarser grid at the transition.
 Canvas and ribbon backgrounds use the same geometry and fade; actual snap spacing
 and all authored dimensions remain unchanged.
+
+## Canvas text during zoom
+
+The pinned 0.41 toolkit supplies interface text painting and shared font definitions,
+but no adapter for continuously scaled document text with bounded raster sizes.
+`crates/chrome/src/canvas_text.rs` composes those installed fonts with egui's
+existing text-mesh transform. Canvas text layouts share a small set of raster
+sizes while their meshes and visual hit bounds scale continuously. This avoids
+repeated glyph rasterization during smooth camera animation; interface controls
+keep the toolkit's ordinary pixel-aligned text. Schematic fields, pin/body text,
+net labels and PCB pad annotations use the adapter for both painting and bounds.
+At sizes above the largest raster bucket, the same mesh continues scaling.
 
 ## Source and licence record
 
@@ -489,3 +517,51 @@ The compact Board-group correction passed the focused app/chrome ribbon tests,
 formatting, Clippy and WebAssembly compilation. Native X11 captures checked
 1920×850 and 760×650 layouts. The wide-window regression verifies that Board's
 button positions remain unchanged as the viewport grows from 1700 to 2600 points.
+
+
+## November 13 compatibility update
+
+The 0.41.0 kit retains the chrome adapters' control APIs. Its host-installed text
+catalog is now installed explicitly, so shared menu/disclosure text renders as
+English rather than stable message IDs. The retained English subset and licence
+record are in `ATTRIBUTION.md`; source and licence checks accompany the new pin.
+The local eframe native-root lifetime patch remains in place. Although the git
+revision for egui-wgpu and winit advances with the kit, those patch directories
+are unchanged between the two pins.
+
+Inspected additions include the toast component and text-edit menu improvements.
+The documented universal panel runtime still belongs to SolidCraft's application
+and engine rather than these extracted libraries. PCBcraft retains its shared
+host layout, native window routing and ownership. The toolkit's workspace card
+supports side anchoring and an inner width rail; free floating in two dimensions,
+height resizing and full-host expansion remain composed in PCBcraft's existing
+shared Panel adapter using the toolkit's accessible sashes, surfaces and menus.
+This update does not import SolidCraft's application or modelling session.
+
+## Compact workspace card
+
+The workspace card uses SolidCraft 0.41.0's 88-point width and shared ribbon
+height metrics as a minimum, with PCBcraft's existing scroll gutter. Both cards
+share the ribbon's measured outer height, including wrapped tabs and PCB fields,
+and the shell reserves the resulting space above the canvas. Long workspace titles
+wrap within the card. The pinned `app_bar::switcher` accepts a named kit icon
+and returns only a click boolean; it cannot draw the host's electronics glyphs
+or return the response needed by the existing accessible popup. The chrome
+adapter therefore retains its shared card, theme and font composition and
+viewport-scoped popup rather than replacing that interaction.
+
+## Window and pane chrome
+
+Saved project layouts now use File's shared menu surface and aligned rows instead
+of persistent title-bar tabs. The project title uses the available bar width,
+truncating only when the utility controls and drag space need the room. Pane headers retain the pinned Craft tab shape and
+close control, with the host extending each canvas palette/grid behind unused
+header space. Headers consume their exact height without trailing widget spacing,
+so the canvas meets the tab edge without an unpainted band. Tab surfaces and selection ink use the workspace palette so labels
+remain readable over either canvas in both themes. The existing background projection
+serves ribbon margins and pane headers after camera navigation. Title-bar movement
+follows the pinned Craft helper's drag threshold, keeping ordinary clicks in the
+app for double-click maximization. PCBcraft retains
+separate foreground hit regions for its title/brand/gap placement and native controls
+above modals; its existing native-grab recovery still covers consumed drag releases.
+No toolkit version or dependency changes are required.

@@ -1,0 +1,38 @@
+{
+  "browser": "148.0.7778.96",
+  "renderer": "ANGLE SwiftShader (launch args)",
+  "viewports": [
+    "1440x1000",
+    "760x640"
+  ],
+  "fixture": "/home/travisl/projects/PCBcraft/setup/issue303/browser/assigned-reference.pc",
+  "flow": [
+    "Opened existing class",
+    "Opened Board defaults",
+    "Disabled built-in values",
+    "Edited clearance draft to 0.35 mm",
+    "Scrolled to routing preferences",
+    "Resized open form without pointer movement",
+    "Scrolled to last field with footer visible",
+    "Cancelled draft"
+  ],
+  "errors": [],
+  "consoleLog": [
+    {
+      "type": "warning",
+      "text": "The `integrity` attribute is currently ignored for preload destinations that do not support subresource integrity. See https://crbug.com/981419 for more information"
+    },
+    {
+      "type": "warning",
+      "text": "No available adapters."
+    },
+    {
+      "type": "warning",
+      "text": "[egui_wgpu] egui-wgpu/src/lib.rs:718: Software rasterizer detected - loss of performance expected. backend: Gl, device_type: Cpu, name: \"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)\", driver_info: \"WebGL 2.0 (OpenGL ES 3.0 Chromium)\", subgroup_size: 4..=128, transient_saves_memory: None, limit_bucket: None"
+    },
+    {
+      "type": "info",
+      "text": "[eframe::web::web_runner] eframe/src/web/web_runner.rs:94: event handlers installed."
+    }
+  ]
+}

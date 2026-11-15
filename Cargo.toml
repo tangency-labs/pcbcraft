@@ -17,10 +17,11 @@ pcbcraft-engine = { path = "crates/engine" }
 pcbcraft-mcp = { path = "crates/mcp" }
 pcbcraft-storage = { path = "crates/storage" }
 pcbcraft-units = { path = "crates/units" }
-solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
-solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
-solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
-solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+solidcraft-ui-text = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence", "clipboard"] }
 egui = "=0.37.0"
 egui_kittest = "=0.37.0"
@@ -50,5 +51,5 @@ codegen-units = 16
 eframe = { path = "vendor/eframe" }
 
 # Shared viewport callbacks require SolidCraft's published renderer fixes.
-egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
-winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }

@@ -1,0 +1,28 @@
+{
+  "base_head": "fb4751d490ca84b5919fb8a3384abe3dc4b087c8",
+  "source_sha256": {
+    "crates/app/src/board_workspace.rs": "c1f8242ca188085e0d0a91ea1c97a48b3303c57dc49f544dcc13624033b74ae7",
+    "crates/chrome/src/board_setup.rs": "970eb9c982881d3fc9311c5149279459a59830975656dd3268d2364d5c123afd",
+    "crates/app/src/net_class_editor/tests.rs": "5615228bc41bbaf0f163f2caeeaebff4d9c746da0c347dbadefb96934b43729d",
+    "crates/app/src/board_setup/tests.rs": "329ed7a03686f8b4b83779223de06664edc569a8552980abd6215bfc73e9eb53"
+  },
+  "tests": {
+    "app": {
+      "passed": 977,
+      "ignored": 9
+    },
+    "chrome": 32,
+    "engine_class_consumers": 13,
+    "native_gpu_capture": 1
+  },
+  "before_fix": "Rules disabled assertion and unscrollable last rail row failed against the original production behavior",
+  "after_fix": "Both pass; MCP/GUI parity, mixed-unit canonical values/stale rejection and live/headless conflict inspection included in affected app suite",
+  "prior_workspace": "1870 tests, one documentation test and 15 harness tests retained at original scope; affected source changes checked by app/chrome suite and listed consumer tests",
+  "visuals": "1200x360 dark and 1200x420 light GPU readback; packaged Chrome 148 wheel scroll/click at 1200x420 with no page errors",
+  "failure_path_review": "Synchronous presentation-only fix: no new model mutations, worker or file lifecycle. Inspected independent rail/content clipping and host-owned page changes; existing app tests cover stale/cancel/draft/history behavior.",
+  "limits": [
+    "In-process MCP adapter parity rather than a network-client session",
+    "No new timing baseline or native compositor/Wayland endurance certification",
+    "User native app rebuilt but not closed/restarted/launched"
+  ]
+}

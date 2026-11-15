@@ -118,6 +118,11 @@ impl LiveControl {
         self.generation.load(Ordering::Acquire)
     }
 
+    /// Retain revocation identity for queued input even if a replacement listener reuses its port.
+    pub(super) fn automation_owner(&self, chat: bool, generation: u64) -> crate::ui_automation::Owner {
+        crate::ui_automation::Owner { port: self.port, generation, chat, stopped: self.stop.clone() }
+    }
+
     /// The endpoint's port, for a bridge the app configures itself.
     pub(super) fn port(&self) -> u16 {
         self.port
@@ -154,10 +159,10 @@ impl LiveControl {
             Err(mpsc::TryRecvError::Empty) => return Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => return Err("The local MCP connection stopped".to_owned()),
         };
-        if Instant::now() < request.deadline {
+        if !request.expired() {
             return Ok(Some(request));
         }
-        request.answer(Err("The editor did not receive the request in time".to_owned()));
+        request.answer(Err("The live request expired or disconnected before the editor received it".to_owned()));
         Ok(None)
     }
 }
@@ -403,6 +408,9 @@ impl PcbApp {
         }
         let revision = self.session.revision();
         let result = call_editor(&mut LiveEditor { app: self, ctx }, request.body());
+        if let Some(owner) = self.assistant.automation_owner(request.generation()) {
+            self.automation.authorize(owner);
+        }
         if self.session.revision() != revision {
             self.views.sync(&self.session);
             let title = request.body()["params"]["command"].as_str().and_then(pcbcraft_engine::command).map_or("Edit", |command| command.title);
@@ -422,6 +430,11 @@ pub(super) struct LiveEditor<'a> {
 }
 
 impl Editor for LiveEditor<'_> {
+    /// UI actions retain normal dialog and text-field interaction rather than bypassing them
+    /// through project commands. The queue validates native focus and endpoint ownership.
+    fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        self.app.automation_command(self.ctx, id, params)
+    }
     fn session(&mut self) -> &mut Session {
         &mut self.app.session
     }
@@ -433,10 +446,27 @@ impl Editor for LiveEditor<'_> {
     /// discarded in the editor, which is where the GUI asks.
     fn refusal(&self, command: &str) -> Option<String> {
         let app = &*self.app;
+        if app.automation.busy() {
+            return Some("Wait for the queued UI input to complete, or cancel it, before running another command".into());
+        }
+        if (app.library_sources.mutating() || app.library_sources.installing())
+            && (command.starts_with("library.") || command.starts_with("app.library_") || command.starts_with("app.part_"))
+        {
+            return Some("Finish the current library folder operation before changing its sources or editors".into());
+        }
+        if app.library_editors.publisher.busy()
+            && matches!(command, pcbcraft_engine::library::sources::LOAD | pcbcraft_engine::library::sources::REMOVE | "app.library_source")
+        {
+            return Some("Finish the current publication before changing library sources".into());
+        }
         if app.views.editing_text() {
             return Some(format!("Finish the current text edit before running `{command}`"));
         }
-        if !matches!(app.dialog, Dialog::None) || app.files.busy() || app.project_action_pending() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let item_delete_review = command == "app.library_delete_part" && matches!(app.dialog, Dialog::DeleteLibraryItem(_));
+        #[cfg(target_arch = "wasm32")]
+        let item_delete_review = false;
+        if (!matches!(app.dialog, Dialog::None) && !item_delete_review) || app.files.busy() || app.project_action_pending() {
             return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
         }
         if app.parts.is_modal() && !matches!(command, "window.set_catalog_mode" | "window.set_panel") {
@@ -449,7 +479,9 @@ impl Editor for LiveEditor<'_> {
     }
 
     fn window_commands(&self) -> Vec<Value> {
-        window_commands::window_catalog()
+        let mut commands = window_commands::window_catalog();
+        commands.extend(crate::ui_automation::catalog());
+        commands
     }
 
     fn inspect(&self) -> Value {
@@ -576,6 +608,40 @@ mod tests {
         let _client = Connection::connect(endpoint.port, &endpoint.token, request.clone(), timeout)?;
         assert_eq!(endpoint.requests.recv_timeout(timeout).unwrap().body, request);
         Ok(())
+    }
+
+    /// Observe the worker's disconnect flag before letting the editor poll the queued request.
+    /// A bounded channel handoff preserves production poll/expiry behavior without a fixed delay.
+    #[test]
+    fn a_client_disconnected_before_acceptance_cannot_leave_queued_ui_input() {
+        let mut h = crate::tests::harness();
+        crate::tests::resistor_at_origin(&mut h);
+        let ctx = h.ctx.clone();
+        h.state_mut().live_control = Some(LiveControl::start_with_wait(&ctx, Duration::from_secs(10)).unwrap());
+        h.state_mut().automation.observing = true;
+        h.run();
+        let live = h.state_mut().live_control.as_mut().unwrap();
+        let client = Connection::connect(
+            live.port(),
+            &live.token,
+            json!({"method":"engine.execute","params":{"command":"ui.key","params":{"window":0,"key":"W"}}}),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let request = live.requests.recv_timeout(Duration::from_secs(2)).expect("socket worker did not queue the request");
+        let connected = request.connected.clone();
+        let (send, receive) = mpsc::sync_channel(1);
+        send.try_send(request).unwrap();
+        live.requests = receive;
+        drop(client);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while connected.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "socket worker did not publish peer disconnect");
+            thread::sleep(Duration::from_millis(1));
+        }
+        h.run_steps(4);
+        assert!(!h.state().automation.busy());
+        assert!(h.state().views.active.schematic.tool.is_none());
     }
 }
 
@@ -743,5 +809,24 @@ mod copper_tests {
             assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
             assert!(!app.remote_copper.queue.busy());
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod item_delete_tests {
+    use super::*;
+    /// Only the reviewed part-deletion command passes its own modal guard; other commands and
+    /// unrelated dialogs retain ordinary live-control refusal.
+    #[test]
+    fn deletion_confirmation_is_reachable_without_bypassing_other_dialogs() {
+        let (_temp, mut app, key) = crate::native_sources::items::tests::fixture();
+        let ctx = egui::Context::default();
+        app.begin_library_item_delete(&ctx, "deletable-item", &key).unwrap();
+        crate::native_sources::items::tests::finish(&mut app, &ctx);
+        let editor = LiveEditor { app: &mut app, ctx: &ctx };
+        assert!(editor.refusal("app.library_delete_part").is_none());
+        assert!(editor.refusal("app.part_edit").is_some());
+        editor.app.dialog = Dialog::About;
+        assert!(editor.refusal("app.library_delete_part").is_some());
     }
 }

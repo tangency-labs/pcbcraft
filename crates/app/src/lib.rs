@@ -41,13 +41,16 @@ mod home;
 mod inline_text;
 mod library_editors;
 mod library_preview;
+mod library_workspace;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
 mod native_part_properties;
 mod native_sources;
+mod net_class_editor;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
+mod part_documents;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
@@ -58,9 +61,12 @@ mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
+mod rule_diagram;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
+#[cfg(not(target_arch = "wasm32"))]
+mod ui_automation;
 mod unsaved;
 mod window_commands;
 mod workspace_panels;
@@ -169,7 +175,10 @@ enum Dialog {
     #[default]
     None,
     NoConnects(Box<no_connect::Inspection>),
-    LibrarySources,
+    AddLibrary(Option<String>),
+    DeleteLibrary(native_sources::lifecycle::DeleteDraft),
+    #[cfg(not(target_arch = "wasm32"))]
+    DeleteLibraryItem(Box<native_sources::items::Draft>),
     NativePart(Box<native_part_properties::Edit>),
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
@@ -197,12 +206,16 @@ enum Dialog {
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
+    Rules(Box<net_class_editor::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
+    LibraryPublish(library_editors::publishing::Draft),
+    PartReference(Box<part_documents::picker::State>),
+    NewLibrary(library_editors::publishing::NewLibrary),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
     OpenLocation,
@@ -227,8 +240,11 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    automation: ui_automation::Automation,
     clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
+    library_inventory: std::cell::RefCell<library_workspace::project::Cache>,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -237,6 +253,8 @@ pub struct PcbApp {
     assistant: assistant::Assistant,
     session: Session,
     library_editors: library_editors::Editors,
+    pending_part_navigation: Option<u64>,
+    part_updates: Vec<part_documents::DependencyUpdate>,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -300,10 +318,19 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         workspace::Workspace {
             id: "board",
             multiple_views: true,
-            title: "PCB layout",
+            title: "PCB Layout",
             description: "Inspect footprint placements and linked schematic components",
             tabs: Some("Layout · Draw · Analyze · Manufacture · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "library",
+            title: "Parts Library",
+            description: "Browse and manage native libraries",
+            tabs: Some("Manage · View"),
+            icon: workspace::WorkspaceIcon::Library,
+            multiple_views: true,
             current: false,
         },
         workspace::Workspace {
@@ -356,7 +383,7 @@ impl PcbApp {
         pcbcraft_chrome::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         let mut views = EditorViews::default();
-        views.set_grid_everywhere(preferences.schematic_grid_nm);
+        views.set_grid_defaults(preferences.schematic_grid_nm, preferences.board_grid_nm);
         Self {
             library_sources: native_sources::Sources::restore(cc.storage.and_then(|s| s.get_string(native_sources::STORAGE_KEY))),
             home: true,
@@ -563,6 +590,13 @@ impl PcbApp {
             self.ask_name("project.rename");
         }
 
+        if !self.home {
+            let tabs = self.arrangements.tabs();
+            if let Some(intent) = pcbcraft_chrome::arrangements::menu(ui, &tabs, self.arrangements.active()) {
+                self.arrangement_intent(ui.ctx(), intent);
+            }
+        }
+
         // SolidCraft ends File with Preferences and Keyboard Shortcuts, above Quit.
         menu::separator(ui);
         let preferences_shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
@@ -766,9 +800,6 @@ impl PcbApp {
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
     /// Disabling application actions leaves the integrated native window controls available.
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
-        let tabs = if self.home { Vec::new() } else { self.arrangements.tabs() };
-        let active_arrangement = self.arrangements.active();
-        let mut arrangement_action = None;
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
@@ -807,7 +838,7 @@ impl PcbApp {
                     }
                 }
             },
-            |ui| arrangement_action = pcbcraft_chrome::arrangements::tabs(ui, &tabs, active_arrangement),
+            |_| {},
             |ui, width| {
                 if width >= 950.0 {
                     ui.label(dim(format!("v{VERSION}")));
@@ -829,9 +860,6 @@ impl PcbApp {
                 }
             },
         );
-        if let Some(intent) = arrangement_action {
-            self.arrangement_intent(ui.ctx(), intent);
-        }
         #[cfg(not(target_arch = "wasm32"))]
         if assistant_clicked {
             self.toggle_assistant(ui.ctx());
@@ -1145,7 +1173,7 @@ impl PcbApp {
                 }
             }),
             Action::Footprint { board, id, .. } => {
-                project.board_view(*board).is_some_and(|board| board.footprints().any(|footprint| footprint.id == *id))
+                project.board_view(*board).is_some_and(|board| board.footprint_ids().any(|footprint| footprint == *id))
             }
         };
         if !valid {
@@ -1182,6 +1210,7 @@ impl PcbApp {
         let message = self.message.clone();
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
+        let grid_workspace = self.views.active.workspace;
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
         let grid_style = if !self.preferences.grid_visible(self.views.active.workspace == Workspace::Board) {
             grid::Style::Off
@@ -1323,8 +1352,8 @@ impl PcbApp {
                     grid_changed = grid::spacing_menu(
                         ui,
                         &mut spacing,
-                        &grid::SCHEMATIC_SPACING_PRESETS_NM,
-                        grid::SCHEMATIC_SPACING_DEFAULT_NM,
+                        grid_workspace.grid_presets(),
+                        grid_workspace.grid_default_nm(),
                         every,
                         unit,
                         grid_style,
@@ -2104,8 +2133,11 @@ impl PcbApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::NoConnects(inspection) => self.no_connect_dialog(ctx, inspection),
-            Dialog::LibrarySources => self.library_sources_dialog(ctx),
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
+            Dialog::AddLibrary(source) => self.add_library_dialog(ctx, source),
+            Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
@@ -2146,6 +2178,9 @@ impl PcbApp {
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, *edit),
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
+            Dialog::LibraryPublish(draft) => self.library_publish_dialog(ctx, draft),
+            Dialog::PartReference(state) => self.part_reference_dialog(ctx, *state),
+            Dialog::NewLibrary(draft) => self.new_library_dialog(ctx, draft),
             Dialog::PasteOptions(draft) => self.paste_options_dialog(ctx, draft),
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
             Dialog::ExternalPasteOptions(draft) => self.external_paste_options_dialog(ctx, draft),
@@ -2156,6 +2191,7 @@ impl PcbApp {
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
+            Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
@@ -2261,7 +2297,8 @@ impl PcbApp {
         }
     }
 
-    /// Enable or revoke a connection for this window and copy its client configuration on request.
+    /// Require human input to enable a connection or export its credential-bearing configuration.
+    /// Synthetic input may still revoke the endpoint or close this dialog.
     #[cfg(not(target_arch = "wasm32"))]
     fn local_mcp_dialog(&mut self, ctx: &egui::Context, mut error: Option<String>, mut copied: bool) {
         let mut close = false;
@@ -2270,7 +2307,14 @@ impl PcbApp {
                 ui.label("Clients with this configuration can inspect and edit this project and control its editor windows.");
                 let disable = ui
                     .horizontal(|ui| {
-                        if pcbcraft_chrome::controls::button(ui, if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
+                        if pcbcraft_chrome::controls::enabled_button(
+                            ui,
+                            pcbcraft_chrome::automation::human_input(ctx),
+                            if copied { "Configuration copied" } else { "Copy configuration" },
+                        )
+                        .clicked()
+                            && pcbcraft_chrome::automation::human_input(ctx)
+                        {
                             ctx.copy_text(control.client_configuration());
                             copied = true;
                         }
@@ -2283,7 +2327,9 @@ impl PcbApp {
                 }
             } else {
                 ui.label("Let a local MCP client inspect and edit this project and control its editor windows.");
-                if pcbcraft_chrome::controls::button(ui, "Enable local connection").clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, pcbcraft_chrome::automation::human_input(ctx), "Enable local connection").clicked()
+                    && pcbcraft_chrome::automation::human_input(ctx)
+                {
                     match live_control::LiveControl::start(ctx) {
                         Ok(control) => {
                             self.live_control = Some(control);
@@ -2328,6 +2374,9 @@ impl PcbApp {
         }
         let revision = self.session.revision();
         let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        if let Some(live) = &self.live_control {
+            self.automation.authorize(live.automation_owner(false, request.generation()));
+        }
         if self.session.revision() != revision {
             self.views.sync(&self.session);
             let title = request.body()["params"]["command"].as_str().and_then(command).map_or("Edit", |command| command.title);
@@ -2341,7 +2390,6 @@ impl PcbApp {
     /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
-        pcbcraft_chrome::begin_frame();
         let ctx = ui.ctx().clone();
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2349,6 +2397,7 @@ impl PcbApp {
         self.checkpoint_arrangements();
         self.handle_close_request(&ctx);
         self.library_editors.poll();
+        self.poll_library_publication(&ctx);
         self.adopt_opened_library(&ctx);
         self.sync_library_bindings();
         match self.fabrication_exports.poll() {
@@ -2415,6 +2464,25 @@ impl PcbApp {
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let observing = self.automation.observing;
+        #[cfg(target_arch = "wasm32")]
+        let observing = false;
+        pcbcraft_chrome::automation::begin(ui.ctx(), observing);
+        self.editor_host_contents(ui, integrated_titlebar);
+        // Native host gestures remain outside every workspace's early return,
+        // while automation publishes only after the complete host pass.
+        if integrated_titlebar {
+            shell::resize_window_edges(ui);
+        }
+        self.editor_drag_cursor(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.automation_painted(ui.ctx());
+    }
+
+    /// Dispatch workspace content without bypassing the common native-host epilogue.
+    fn editor_host_contents(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
+        let ctx = ui.ctx().clone();
         self.observe_editor_drag(&ctx);
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
@@ -2423,9 +2491,12 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        if self.views.active.library.is_some() && !(main && self.home) {
+            self.library_workspace_frame(ui, integrated_titlebar);
+            return;
+        }
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
-            self.editor_drag_cursor(&ctx);
             return;
         }
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2440,7 +2511,10 @@ impl PcbApp {
             self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         }
         let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
-        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog)) && self.arrangement_dialog_host().is_none();
+        let enabled = !self.project_action_pending()
+            && (main || (!self.home && !had_dialog))
+            && self.arrangement_dialog_host().is_none()
+            && self.rule_dialog_host().is_none();
         self.app_bar(ui, enabled);
         ui.add_enabled_ui(enabled, |ui| {
             let workspace = if self.home && main {
@@ -2482,6 +2556,7 @@ impl PcbApp {
         self.integrated_titlebar = integrated;
         let dialog_host = self
             .arrangement_dialog_host()
+            .or_else(|| self.rule_dialog_host())
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
             .or_else(|| self.external_paste_options_host())
@@ -2490,9 +2565,6 @@ impl PcbApp {
             self.project_dialogs(&ctx);
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {
             ctx.send_viewport_cmd_to(editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
-        }
-        if integrated_titlebar {
-            shell::resize_window_edges(ui);
         }
         self.views.sync(&self.session);
         if ctx.viewport_id() != egui::ViewportId::ROOT && self.pointer != self.pointer_next {
@@ -2503,7 +2575,6 @@ impl PcbApp {
             self.repaint_editors(&ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
-        self.editor_drag_cursor(&ctx);
     }
 }
 
@@ -2548,29 +2619,29 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
-    list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
-    list.push(("PCB layout", "Move reference designator", "M or left drag over the reference".to_owned()));
-    list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
-    list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
-    list.push(("PCB layout", "Flip footprint to the other side", "F".to_owned()));
-    list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
-    list.push(("PCB layout", "Route track", "X".to_owned()));
-    list.push(("PCB layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
-    list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
-    list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
-    list.push(("PCB layout", "Select connected copper", "U".to_owned()));
-    list.push(("PCB layout", "Drag a track segment, keeping it attached", "D".to_owned()));
-    list.push(("PCB layout", "Highlight the net under the pointer", "`".to_owned()));
-    list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
-    list.push(("PCB layout", "Flip track posture", "/".to_owned()));
-    list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
-    list.push(("PCB layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
-    list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
-    list.push(("PCB layout", "Remove last track vertex", "Backspace".to_owned()));
-    list.push(("PCB layout", "Next layer", "+".to_owned()));
-    list.push(("PCB layout", "Previous layer", "−".to_owned()));
-    list.push(("PCB layout", "Front copper layer", "PgUp".to_owned()));
-    list.push(("PCB layout", "Back copper layer", "PgDn".to_owned()));
+    list.push(("PCB Layout", "Move footprint", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Move reference designator", "M or left drag over the reference".to_owned()));
+    list.push(("PCB Layout", "Rotate footprint counterclockwise", "R".to_owned()));
+    list.push(("PCB Layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
+    list.push(("PCB Layout", "Flip footprint to the other side", "F".to_owned()));
+    list.push(("PCB Layout", "Cancel placement", "Esc or right click".to_owned()));
+    list.push(("PCB Layout", "Route track", "X".to_owned()));
+    list.push(("PCB Layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
+    list.push(("PCB Layout", "Place via", key(&PLACE_VIA)));
+    list.push(("PCB Layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
+    list.push(("PCB Layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
+    list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
+    list.push(("PCB Layout", "Move selected tracks and vias", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Flip track posture", "/".to_owned()));
+    list.push(("PCB Layout", "Place via and switch layer while routing", "V".to_owned()));
+    list.push(("PCB Layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
+    list.push(("PCB Layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
+    list.push(("PCB Layout", "Remove last track vertex", "Backspace".to_owned()));
+    list.push(("PCB Layout", "Next layer", "+".to_owned()));
+    list.push(("PCB Layout", "Previous layer", "−".to_owned()));
+    list.push(("PCB Layout", "Front copper layer", "PgUp".to_owned()));
+    list.push(("PCB Layout", "Back copper layer", "PgDn".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));
@@ -2581,6 +2652,11 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
 }
 
 impl eframe::App for PcbApp {
+    /// Deliver authenticated synthetic input before egui builds its pointer/keyboard state.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.automation_input(ctx, input);
+    }
     /// Run shared project logic and visible hosts, then release a dismissed native root and
     /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {

@@ -31,7 +31,7 @@ pub(super) fn fixture() -> Session {
     let ids: Vec<_> = session.project().unwrap().components.keys().copied().collect();
     for (index, id) in ids.into_iter().enumerate() {
         let name = if index == 0 { "resistor-0402" } else { "resistor-0603" };
-        let definition = super::super::definition::starter(name).unwrap();
+        let definition = super::super::definition::basic_components(name).unwrap();
         session
             .apply(
                 super::super::assignment::ASSIGN_FOOTPRINT,

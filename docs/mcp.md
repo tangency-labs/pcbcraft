@@ -4,6 +4,15 @@ PCBCraft offers an in-app Assistant and a live MCP connection on desktop.
 The CLI can also run a separate headless session. Project edits use the
 same engine commands and undo history within each session.
 
+The built-in Assistant instructions and the server instructions sent to external
+MCP clients ask agents working in a live editor to keep the area they are editing
+visible, unless the user requests otherwise. Agents are asked to inspect the
+views before starting, frame planned work with `view.center` and `view.zoom`,
+and reframe after meaningful batches as needed. `view.fit` provides a
+whole-document overview. Requests to keep the camera fixed take precedence,
+and unrelated panes should be left alone. This is guidance for the agent;
+the editor does not automatically move the camera when an agent edits.
+
 Projects from the previous split layout can be copied into the current format
 with `pcbcraft-cli convert SOURCE DESTINATION` before starting MCP. A `.pc`
 destination creates a ZIP; other destinations create a new working folder. See
@@ -121,9 +130,10 @@ command waits while an inline text edit, dialog or file operation is open.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
 clients can identify the state holding command input.
 
-It also lists window commands, marked `"scope": "window"`, which run through the
-same handlers as the editor's own controls and never edit the project, its
-revision or undo history; only `file.save` changes the unsaved state. Call `inspect_editor` for the window,
+It also lists presentation commands, marked `"scope": "window"`, which run through
+the same handlers as the editor's own controls without editing the project, its
+revision or undo history; `file.save` changes the unsaved state. The separate
+`ui.` input commands described below can invoke authored edits. Call `inspect_editor` for the window,
 view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
 
 | Commands | Matching control |
@@ -139,10 +149,10 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
 | `pcb.set_footprint_reference_text` | Set sparse placement-local `appearance` fields for printed text, font, paired size/stroke, local rotation, alignment and visibility, with an optional `offset`. Null appearance resets inheritance. The component's reference and schematic use the separate shared reference edit |
 | `pcb.delete_footprints` | Delete the addressed board placements atomically; retain schematic components and pinned physical assignments for re-placement |
-| `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view; optional `element: "reference"` selects one placement's text and Properties |
+| `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing, remembered separately for schematic and PCB views; click and box selection in a schematic; footprint and Browser selection in a PCB view; optional `element: "reference"` selects one placement's text and Properties |
 | `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state; selection commands refuse disabled object categories |
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
-| `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
+| `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
 | `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
@@ -150,6 +160,12 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window and choosing where to save an Untitled project stay in
 the editor, which asks about unsaved changes. Headless sessions refuse window
 commands with a reason.
+
+The native live connection also exposes `ui.handles`, `ui.at` and queued pointer,
+keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
+for named targets, window-local coordinates, completion tickets and cancellation.
+These calls interact with ordinary controls, including dialogs, and may author
+edits or reach file controls. Headless sessions cannot run them.
 
 ## Headless MCP
 
@@ -356,3 +372,25 @@ atomically with “Remove the no-connect marker before connecting a wire.” Thi
 also covers coordinate and wire/at aliases. Remove the mark through the same
 commands or Delete before connecting; saved conflicts from older projects are
 preserved and remain reportable.
+
+
+## Explicit net-class rules
+
+`net_classes.create`, `net_classes.update` and `net_classes.remove` author the
+project catalog with `expected_revision`, without creating a physical board.
+`net_classes.inspect` reads that catalog, while `net_classes.resolve` combines
+explicit `classes` and optional `other_classes` UUID sets with built-ins or an
+explicitly addressed `board`. Both queries return their data with `inspect: false`.
+See the [property, conflict and storage contract](net-classes.md) for examples
+and precedence. `nets.inspect_classes` discovers current typed targets without
+promotion; with a target it returns bindings, origins and conflicts.
+`nets.set_classes` replaces the full class set with revision checking and promotes
+an eligible derived target in the same history step. The assignment query retains
+its payload with `inspect: false`. See the [assignment contract](net-class-assignments.md)
+for target shapes and protected removal/rebind. `pcb.route_rules` inspects effective
+sizes, clearance and conflicts at an addressed copper contact without mutation,
+including with `inspect: false`. Omitted routing sizes use that contact's class
+preferences; explicit changed copper must satisfy applicable hard dimensions.
+Queries and DRC retain per-object class IDs, revisions and assignment origins.
+See the [consumer contract](net-class-consumers.md) for parameters, provenance,
+stale authority and operation-specific conflict behavior.

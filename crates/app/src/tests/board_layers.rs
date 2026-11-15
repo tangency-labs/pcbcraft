@@ -11,7 +11,7 @@ fn board<'a>() -> Harness<'a, PcbApp> {
     h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
     h.run();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
+    click(&mut h, "PCB Layout");
     h
 }
 
@@ -330,7 +330,7 @@ fn live_layer_navigation_targets_only_the_addressed_view() {
     let view = h.state().views.active.id().0;
     let before = h.state().session.inspect();
     click(&mut h, "Choose workspace");
-    click(&mut h, "Open PCB layout beside current view");
+    click(&mut h, "Open PCB Layout beside current view");
     let other = h.state().views.hosts[&h.state().views.main].layout.visible_views()[1];
     let old = h.state().views.view(other).unwrap().board.active_layer.clone();
     h.state_mut().run_window_command(&ctx, "view.navigate_layer", &json!({"view":view,"direction":"back"})).unwrap();

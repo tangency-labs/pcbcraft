@@ -32,7 +32,7 @@ fn embedded_and_external_documents_are_the_same_native_items() {
         }
     }
     let sources = s.libraries().inspect();
-    assert!(sources.as_array().unwrap().iter().any(|s| s["library"] == "starter" && s["name"] == "Default"));
+    assert!(sources.as_array().unwrap().iter().any(|s| s["library"] == "basic-components" && s["name"] == "Basic components"));
 }
 
 /// Arbitrary library and item identities carry power semantics through normal component fields,
@@ -137,7 +137,7 @@ fn roles_and_defaults_are_versioned_validated_and_preserved_by_authoring() {
     v["format"] = json!(SYMBOL_FORMAT_V2);
     v["defaults"]["field_layout"]["value"]["height_nm"] = json!(0);
     assert!(parse_symbol(&v.to_string()).is_err());
-    let mut ordinary: Value = serde_json::from_str(include_str!("../../../../libraries/starter/symbols/resistor.json")).unwrap();
+    let mut ordinary: Value = serde_json::from_str(include_str!("../../../../libraries/basic-components/symbols/resistor.json")).unwrap();
     ordinary["name"] = json!("GND");
     assert!(parse_symbol(&ordinary.to_string()).unwrap().power_terminal().is_none());
 }
@@ -148,7 +148,7 @@ fn roles_and_defaults_are_versioned_validated_and_preserved_by_authoring() {
 fn bundled_selections_obey_normal_conflicts_and_content_authority() {
     let mut s = Session::default();
     s.apply("project.new", &json!({})).unwrap();
-    let (_, mut docs) = bundled_documents().find(|(id, _)| *id == "starter").unwrap();
+    let (_, mut docs) = bundled_documents().find(|(id, _)| *id == "basic-components").unwrap();
     s.execute(sources::LOAD, &json!({"source":"another-copy","documents":docs})).unwrap();
     assert_eq!(s.libraries().search("resistor", Some(sources::Kind::Symbol)).len(), 1);
     let before = s.snapshot().unwrap();
@@ -156,12 +156,12 @@ fn bundled_selections_obey_normal_conflicts_and_content_authority() {
     symbol["default_value"] = json!("Conflicting");
     docs.insert("symbols/resistor.json".into(), symbol.to_string());
     s.execute(sources::LOAD, &json!({"source":"another-copy","documents":docs})).unwrap();
-    assert!(s.libraries().latest_symbol("starter", "resistor").is_none());
+    assert!(s.libraries().latest_symbol("basic-components", "resistor").is_none());
     assert!(s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).is_err());
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     s.execute(sources::REMOVE, &json!({"source":"another-copy"})).unwrap();
-    assert!(s.libraries().latest_symbol("starter", "resistor").is_some());
-    assert!(s.execute(sources::REMOVE, &json!({"source":"bundled-starter"})).unwrap_err().to_string().contains("read-only"));
+    assert!(s.libraries().latest_symbol("basic-components", "resistor").is_some());
+    assert!(s.execute(sources::REMOVE, &json!({"source":"bundled-basic-components"})).unwrap_err().to_string().contains("read-only"));
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     s.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
 }
@@ -172,9 +172,9 @@ fn bundled_selections_obey_normal_conflicts_and_content_authority() {
 fn digest_without_library_cannot_bypass_pinned_content_authority() {
     let mut s = Session { libraries: Arc::new(sources::Catalog::default()), ..Session::default() };
     s.apply("project.new", &json!({})).unwrap();
-    let (_, mut docs) = bundled_documents().find(|(id, _)| *id == "starter").unwrap();
+    let (_, mut docs) = bundled_documents().find(|(id, _)| *id == "basic-components").unwrap();
     s.execute(sources::LOAD, &json!({"source":"external-starter","documents":docs})).unwrap();
-    place(&mut s, "starter", "resistor", 0, 0, "1k");
+    place(&mut s, "basic-components", "resistor", 0, 0, "1k");
     let before = s.snapshot().unwrap();
     let state = s.inspect();
     let mut symbol: Value = serde_json::from_str(&docs["symbols/resistor.json"]).unwrap();
@@ -182,7 +182,7 @@ fn digest_without_library_cannot_bypass_pinned_content_authority() {
     docs.insert("symbols/resistor.json".into(), symbol.to_string());
     s.execute(sources::REMOVE, &json!({"source":"external-starter"})).unwrap();
     s.execute(sources::LOAD, &json!({"source":"replacement","documents":docs})).unwrap();
-    let d = s.libraries().latest_symbol("starter", "resistor").unwrap();
+    let d = s.libraries().latest_symbol("basic-components", "resistor").unwrap();
     let params = json!({"definition":"resistor","definition_revision":d.revision(),"definition_digest":sources::symbol_digest(&d).unwrap(),"x_nm":10*GRID_NM,"y_nm":0,"expected_revision":s.revision()});
     assert!(s.apply(PLACE_SYMBOL, &params).unwrap_err().to_string().contains("pinned project copy"));
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
@@ -197,7 +197,7 @@ fn explicit_revision_requires_digest_even_without_library() {
     s.apply("project.new", &json!({})).unwrap();
     let before = s.snapshot().unwrap();
     let state = s.inspect();
-    let d = s.libraries().latest_symbol("starter", "resistor").unwrap();
+    let d = s.libraries().latest_symbol("basic-components", "resistor").unwrap();
     let mut params = json!({"definition":"resistor","definition_revision":d.revision(),"x_nm":0,"y_nm":0,"expected_revision":s.revision()});
     let error = s.apply(PLACE_SYMBOL, &params).unwrap_err();
     assert!(error.to_string().contains("`definition_digest` is required"));
@@ -220,7 +220,7 @@ fn native_power_roundtrips_with_schematic_only_package_choices() {
     let mut s = Session::default();
     s.apply("project.new", &json!({})).unwrap();
     place(&mut s, "power", "gnd", 0, 0, "RETURN");
-    place(&mut s, "starter", "resistor", 10 * GRID_NM, 0, "1k");
+    place(&mut s, "basic-components", "resistor", 10 * GRID_NM, 0, "1k");
     let p = s.project().unwrap();
     let component = p.component(&p.symbols()[1]).unwrap().id();
     let footprint = p.footprint_catalog().into_iter().find(|d| d.id == "resistor-0402").unwrap();

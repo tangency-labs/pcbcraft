@@ -1,9 +1,9 @@
-//! Physical package choices and complete logical-terminal to pad mappings.
+//! Physical package choices with logical-terminal maps when a symbol is present.
 use super::{Reference, codec::unique_map};
 use crate::schematic::SymbolDefinition;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-/// One package option owns the exact footprint and complete terminal-to-pads mapping.
+/// One package option owns an exact footprint and its optional logical-terminal map.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Package {
@@ -19,8 +19,8 @@ impl Package {
     pub fn validate(&self) -> Result<(), String> {
         crate::library::check_text("package name", &self.name, 64)?;
         self.footprint.validate()?;
-        if self.mapping.is_empty() || self.mapping.len() > 128 || self.unconnected_pads.len() > 128 {
-            return Err("A package requires a bounded terminal mapping.".into());
+        if self.mapping.len() > 128 || self.unconnected_pads.len() > 128 {
+            return Err("A package supports at most 128 terminals and unconnected pads.".into());
         }
         let mut pads = BTreeSet::new();
         for (terminal, numbers) in &self.mapping {

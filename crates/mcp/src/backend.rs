@@ -4,10 +4,10 @@ use pcbcraft_engine::{Project, Session, board::Pad, catalog, schematic::Terminal
 use serde_json::{Value, json};
 
 /// Command namespaces that act on an open editor window instead of the project document.
-/// Only a live editor can run them, and they never change the project, its revision or its undo
-/// history; only `file.save` changes the unsaved state, by saving. The editor publishes their
-/// catalog during live discovery.
-pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "arrangement.", "app.", "file."];
+/// Only a live editor can run them. Presentation commands retain document history; `file.save`
+/// saves and `ui.` can invoke any ordinary UI action, including authored edits or file controls.
+/// The editor publishes their catalog during live discovery.
+pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "arrangement.", "app.", "file.", "ui."];
 
 /// Whether `id` names a window command, which only an open editor can run.
 pub fn is_window_command(id: &str) -> bool {
@@ -73,7 +73,11 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
             if params["inspect"].as_bool() == Some(false)
                 && !matches!(
                     id,
-                    pcbcraft_engine::PREVIEW_UPDATE
+                    pcbcraft_engine::nets::INSPECT_CLASSES
+                        | pcbcraft_engine::board::class_rules::ROUTE_RULES
+                        | pcbcraft_engine::net_classes::INSPECT
+                        | pcbcraft_engine::net_classes::RESOLVE
+                        | pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION
@@ -85,6 +89,8 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::clipboard_text::OUTLINE
                         | pcbcraft_engine::library::sources::RESOLVE_PART
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
+                        | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
+                        | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())

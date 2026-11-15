@@ -1,0 +1,73 @@
+{
+  "commit": "64831ae1bf022f1fc3290f26ead9df79348ed3ea",
+  "renderer": "Chrome 148 headless; WebGL2/ANGLE SwiftShader. WebGPU reports no available adapters.",
+  "checks": [
+    "Schematic-only class creation with 0.350001 mm through real fields, Save class, refreshed mil display",
+    "Exact command-generated assigned-reference archive opened",
+    "Existing Power binding inspection and clear/restore through Assign classes",
+    "Hard/preferred values change and restore with binding",
+    "Open-modal resize from 1440x1000 to 760x640 centers without pointer input after fix",
+    "Light compact and dark wide screenshots inspected"
+  ],
+  "runtime": {
+    "version": "148.0.7778.96",
+    "errors": [],
+    "console": [
+      {
+        "type": "warning",
+        "text": "The `integrity` attribute is currently ignored for preload destinations that do not support subresource integrity. See https://crbug.com/981419 for more information"
+      },
+      {
+        "type": "warning",
+        "text": "No available adapters."
+      },
+      {
+        "type": "warning",
+        "text": "[egui_wgpu] egui-wgpu/src/lib.rs:718: Software rasterizer detected - loss of performance expected. backend: Gl, device_type: Cpu, name: \"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)\", driver_info: \"WebGL 2.0 (OpenGL ES 3.0 Chromium)\", subgroup_size: 4..=128, transient_saves_memory: None, limit_bucket: None"
+      },
+      {
+        "type": "info",
+        "text": "[eframe::web::web_runner] eframe/src/web/web_runner.rs:94: event handlers installed."
+      }
+    ]
+  },
+  "bundle_sha256": {
+    "pcbcraft-web-5d140ff6d68b1de4.js": "251616ef1888c08bbc17adea24d7157eb669be74ca4b278c4b5a5159a3ad8fdb",
+    "pcbcraft-web-5d140ff6d68b1de4_bg.wasm": "d2afcf6bf80d920497a5f478d7b9d40114ddd514fd87437fd06f0f04a937918b",
+    "index.html": "fe1a411e15d750d75ceef3fe83025d4a796a89c9bdbf7bcafc998582b250b419",
+    "ribbon-notices/PCBCraft-Next-LICENSE-APACHE": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+    "ribbon-notices/PCBCraft-Next-LICENSE-MIT": "92bef93d8478c5368d7652151467531e92d69883de395705d3135b5f398bdaa2",
+    "ribbon-notices/README.md": "693c5669ddaa32f02549fb4b93d3baa4039d42aed0debc47bc6af48b652cb290",
+    "ribbon-notices/SOLIDCRAFT-LICENSE-APACHE": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+    "ribbon-notices/SOLIDCRAFT-LICENSE-MIT": "1a26c1e94401d5d221896c74dd1c58d227edc64516da95aaac6f675567c8af63",
+    "ribbon-notices/SOLIDCRAFT-NOTICE": "09464b0c8f495c9e3c80d93fccf667056d1c2c306445d66101e4bed49494c54d",
+    "ribbon-notices/bus.svg": "aed74219af795251b1306820e9a12f7a0268f057032cdd11fa335c9f6ad53b73",
+    "ribbon-notices/configuration_table.svg": "348d67742590c052dece4ca4b94af229de0adaa4612c10733fea602b08101b34",
+    "ribbon-notices/erc.svg": "f1b77a47c9f406ca2eee8892983b03cd06f12d4e5e7d887f1e610780444f6df7",
+    "ribbon-notices/list.svg": "eaf5009fd724130dff9ddac6ddbd65ed02c4af9dd931abd77bdf2562fdb27c53",
+    "ribbon-notices/mirror.svg": "1e9d1e8ff7fe351ff4249887381b61a265a7d1f565f5b42417ca40f7bf50a8e8",
+    "ribbon-notices/move.svg": "9bd2442fea29e10c458559cdf60922f74da39efbe285afb32e8f721b38393d57",
+    "ribbon-notices/net-label.svg": "b28d8146bc13e4f7df628f742f2dd13e931bc4183227010c3d14efd471ca910e",
+    "ribbon-notices/place-symbol.svg": "21271ad2fc56c7cc849ddb5ff152f2e7758030d50bac76991ba7fb6909048807",
+    "ribbon-notices/port.svg": "c84fd39722cffa5c4f1f122b5192d78d7da6bd25842c4dd4b521a71ceedd8919",
+    "ribbon-notices/power.svg": "4ef9b3067641299eb528ec7b092260950ecc1ab3e234dba10ae8459b6db14ba9",
+    "ribbon-notices/provenance.json": "2a8d2a0a6da0935de443d0e1982cadfc5276b63d93e9a168da0edc2fe1d3ede2",
+    "ribbon-notices/rules.svg": "c0010e30d4f3c37a8f83096dd19ceb590a20baea445649c76d4e58fd869e372b",
+    "ribbon-notices/sheet.svg": "8300f13bdefdb766877f19fef056ab5ea1ef4c4e8a0ddb56a207a963705b7bbd",
+    "ribbon-notices/spin.svg": "7b61b9b594717a8e8284248ed58ef7bd602c089ca725fe5c21b70b551522d76c",
+    "ribbon-notices/subsheet.svg": "479c38a014de407fe78d81b4116d16b9fa9f1bbd5096df171e1e9268d10c8d6e",
+    "ribbon-notices/sync.svg": "0e14daabb6caa6e88b8b146d8246c826e5b35108a166db0fe3cd92f256beadff",
+    "ribbon-notices/text.svg": "35f3e590ad29258c2f2f138f621df190431a7b60fe2b5ccfd8b2499c90a7904d",
+    "ribbon-notices/wire.svg": "f070ae7f4d99e05cd7d3fc8f9caf3d8b6829a599ce5ba4d516f2374f456e2d05",
+    "snippets/pcbcraft-app-7126f162910234c6/inline0.js": "03a6c3309999ab8c1744129944b82e27b4d8e3c07efa63d89d13521db948a5dd",
+    "snippets/pcbcraft-app-7126f162910234c6/inline1.js": "3b2dfd58d348d56a439ed1d745b76d94ecf050ea117aa6b7a8e106f250f826bd",
+    "snippets/pcbcraft-app-7126f162910234c6/inline2.js": "57292508b69fb6f19929cacfcb194308877ebf882af0c1a15ae2b8d8816e3b9c",
+    "snippets/pcbcraft-app-7126f162910234c6/inline3.js": "21cc90bd5c97e62a43cd215c82717a45209ee66fd841ba7912491eed601fcab0",
+    "snippets/pcbcraft-app-7126f162910234c6/inline4.js": "9734ed61c7fb7a43490e3385fa17a4b21400fbf643a64a3247ee54030d836c40",
+    "snippets/pcbcraft-app-7126f162910234c6/inline5.js": "61860fc6c82459b02a65b7537a62469138a76cd488619000f58165a7c38366ed"
+  },
+  "limits": [
+    "Headless software rendering; no compositor/native event-loop latency or endurance claim",
+    "Final browser exercise covers assignment on an existing class; new-class control exercise preceded the last bounded-choice-width/resize-paint fix"
+  ]
+}

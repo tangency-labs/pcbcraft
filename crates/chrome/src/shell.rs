@@ -13,8 +13,8 @@ pub use crate::titlebar::resize_window_edges;
 /// `actions_enabled` gates Home, file/history actions and utilities, leaving native controls usable.
 /// Call [`resize_window_edges`] after dialogs to keep native interactions above their backdrop.
 /// The utility callback gets the full bar width to decide which controls fit.
-/// The title shrinks before taking space from the controls and keeps the unsaved marker if it fits.
-/// `tabs` fills remaining title-bar space with project arrangements, independently of the project label.
+/// The title uses the available space, shrinking before the controls and retaining its unsaved marker.
+/// `tabs` supplies optional inline controls before the free native drag area.
 #[allow(clippy::too_many_arguments)]
 pub fn app_bar(
     ui: &mut Ui,
@@ -77,7 +77,7 @@ pub fn app_bar(
                     let room = (controls_left - area.left()).max(0.0);
                     let marker_room = if dirty { t.space_6 } else { 0.0 };
                     let drag_room = if integrated { (room - marker_room).clamp(0.0, t.space_12) } else { 0.0 };
-                    let title_room = ((room - drag_room) * 0.3).min(160.0).max(marker_room).min(room - drag_room);
+                    let title_room = (room - drag_room - if compact { 0.0 } else { t.space_8 }).max(0.0);
                     if !compact && title_room > t.space_24 {
                         let title = project_title(ui, name, dirty, project.is_some(), title_room, t);
                         if integrated {

@@ -4,12 +4,20 @@ use solidcraft_ui_kit::{self as kit, Button};
 
 /// Render a secondary command action with native focus and accessibility.
 pub fn button(ui: &mut Ui, label: impl Into<WidgetText>) -> Response {
-    kit::button(ui, label, Button::Normal)
+    let label = label.into();
+    let name = format!("button:{}", label.text());
+    let response = kit::button(ui, label, Button::Normal);
+    crate::automation::publish(ui, &response, name);
+    response
 }
 
 /// Compact command action using shared button styling and native small-button sizing.
 pub fn small_button(ui: &mut Ui, label: impl Into<WidgetText>) -> Response {
-    kit::button(ui, label, Button::Small)
+    let label = label.into();
+    let name = format!("button:{}", label.text());
+    let response = kit::button(ui, label, Button::Small);
+    crate::automation::publish(ui, &response, name);
+    response
 }
 
 /// Shared plain text field; the caller retains focus, validation and Enter submission.
@@ -77,7 +85,9 @@ pub fn bounded_button(ui: &mut Ui, id: impl egui::AsIdSalt, label: &str, width: 
         ui.add_enabled_ui(enabled, |ui| {
             ui.scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                kit::button_at(ui, "command", rect, label, Button::Normal)
+                let response = kit::button_at(ui, "command", rect, label, Button::Normal);
+                crate::automation::publish(ui, &response, format!("button:{label}"));
+                response
             })
             .inner
         })
@@ -92,6 +102,7 @@ pub fn action(label: &str, primary: bool) -> impl Widget + '_ {
         let height = ui.spacing().interact_size.y;
         ui.spacing_mut().interact_size.y = height.max(crate::Tokens::get().control_height);
         let response = kit::button(ui, label, if primary { Button::Primary } else { Button::Normal });
+        crate::automation::publish(ui, &response, format!("button:{label}"));
         ui.spacing_mut().interact_size.y = height;
         response
     }
@@ -99,18 +110,22 @@ pub fn action(label: &str, primary: bool) -> impl Widget + '_ {
 
 /// Render a shared checkbox while retaining native change, focus and accessibility responses.
 pub fn checkbox(ui: &mut Ui, value: &mut bool, label: impl AsRef<str>) -> Response {
-    kit::checkbox(ui, label.as_ref(), value)
+    let response = kit::checkbox(ui, label.as_ref(), value);
+    crate::automation::publish(ui, &response, format!("checkbox:{}", label.as_ref()));
+    response
 }
 
 /// Search field with a stable host-owned identity and accessible name.
 pub fn search(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &str, name: &str) -> Response {
-    kit::search_field(ui, id, value, hint).accessible_name(name)
+    let response = kit::search_field(ui, id, value, hint).accessible_name(name);
+    crate::automation::publish(ui, &response, format!("field:{name}"));
+    response
 }
 
 /// Shared quiet hit target for caller-painted command glyphs. The host owns its bounds,
 /// identity and action; toolkit hover/focus/selected chrome preserves disabled behavior.
 pub fn glyph_target(ui: &mut Ui, id: egui::Id, bounds: egui::Rect, label: &str, enabled: bool, selected: bool) -> Response {
-    kit::panel_host_control(
+    let response = kit::panel_host_control(
         ui,
         id,
         bounds,
@@ -126,7 +141,9 @@ pub fn glyph_target(ui: &mut Ui, id: egui::Id, bounds: egui::Rect, label: &str, 
             grip_only: false,
             rtl: false,
         },
-    )
+    );
+    crate::automation::publish_enabled(ui, &response, format!("button:{label}"), enabled);
+    response
 }
 
 /// A host-identified choice menu rendered by the shared dropdown. The app supplies typed rows
@@ -176,6 +193,9 @@ impl Choice {
         } else {
             draw(ui)
         };
+        if let Some(label) = &self.label {
+            crate::automation::publish(ui, &response, format!("field:{label}"));
+        }
         egui::InnerResponse { inner, response }
     }
 }

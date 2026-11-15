@@ -1,0 +1,5 @@
+{
+  "initial_capture": "Rejected: remove_cursor() emitted pointer removal, so the route preview/halo was absent.",
+  "correction": "Retain hover; assert the actual preview endpoint before GPU capture.",
+  "temporary_test_sha256": "d69d41534c8dfccc484a852e01ff37151abca1ce3a149b8bba296aa4e060a900"
+}

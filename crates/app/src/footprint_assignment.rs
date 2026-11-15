@@ -19,7 +19,7 @@ pub(super) struct Edit {
     library: String,
     compatible: bool,
     mounting: Mounting,
-    camera: crate::library_preview::FootprintCamera,
+    camera: crate::library_preview::Camera,
     x: String,
     y: String,
     units: units::Unit,

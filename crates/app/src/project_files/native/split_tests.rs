@@ -15,15 +15,20 @@ use std::{
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs.
 fn session() -> Session {
     let mut s = Session::default();
-    s.open_snapshot(Arc::new(
+    s.open_snapshot(pcbcraft_engine::persistence::migrate_bundled_libraries(legacy_snapshot()).unwrap());
+    s
+}
+
+/// Retain an actual old bundled namespace for tests specifically exercising opening upgrades.
+fn legacy_snapshot() -> Arc<Project> {
+    Arc::new(
         decode(include_bytes!("../../../tests/fixtures/two-resistors.pc"))
             .unwrap()
             .with_board_folders(".")
             .unwrap()
             .with_sheet_occurrences()
             .unwrap(),
-    ));
-    s
+    )
 }
 
 /// A previous split folder opens through desktop/preview and upgrades on an unchanged Save.
@@ -60,7 +65,12 @@ fn previous_split_folder_opens_previews_and_saves_in_place() {
     assert_eq!(fs::read(root.join(board)).unwrap(), documents["board.json"]);
     for (path, bytes) in &documents {
         if path != ENTRY_POINT && path != "board.json" {
-            assert_eq!(fs::read(root.join(path)).unwrap(), *bytes);
+            if path.contains("/starter/") {
+                assert!(!root.join(path).exists());
+                assert!(root.join(path.replace("/starter/", "/basic-components/")).exists());
+            } else {
+                assert_eq!(fs::read(root.join(path)).unwrap(), *bytes);
+            }
         }
     }
 }
@@ -100,7 +110,7 @@ fn schematic_package_choices_open_and_save_through_native_paths() {
     apply(
         &mut s,
         pcbcraft_engine::ASSIGN_FOOTPRINT,
-        json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
+        json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
     );
     let snapshot = s.snapshot().unwrap();
     let documents = encode_documents(snapshot.clone()).unwrap();
@@ -228,7 +238,7 @@ fn every_interrupted_folder_save_reopens_as_old_or_new() {
         let root = dir.path().join("project");
         folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
         fs::write(root.join("README.md"), b"keep me").unwrap();
-        let metadata = ["sheets/.DS_Store", "library/Thumbs.db", "library/symbols/starter/desktop.ini"];
+        let metadata = ["sheets/.DS_Store", "library/Thumbs.db", "library/symbols/basic-components/desktop.ini"];
         for path in metadata {
             fs::write(root.join(path), b"OS metadata").unwrap();
         }
@@ -1093,4 +1103,61 @@ fn background_save_keeps_a_later_net_promotion_dirty_and_intact() {
     complete(&mut files, &mut s, result);
     assert!(!files.dirty(&s));
     assert_eq!(load(&root).unwrap().snapshot.inspect_net_registry().unwrap(), registry);
+}
+
+/// Native open prepares bundled-ID migration off the UI thread, retains the raw save baseline,
+/// and publishes it only through an explicit atomic Save in either supported storage form.
+#[test]
+fn bundled_library_upgrade_is_saved_once_and_preserves_unrelated_source_bytes() {
+    for encoding in [Encoding::Json, Encoding::Zip] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(if encoding == Encoding::Json { "project" } else { "project.pc" });
+        let raw = legacy_snapshot();
+        let mut documents = encode_documents(raw).unwrap();
+        let sheet = documents.keys().find(|path| path.starts_with("sheets/")).unwrap().clone();
+        documents.get_mut(&sheet).unwrap().extend_from_slice(b"\n \t");
+        if encoding == Encoding::Json {
+            folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+        } else {
+            fs::write(&root, encode_packed_documents(documents.clone()).unwrap()).unwrap();
+        }
+        if encoding == Encoding::Json {
+            fs::write(root.join("library/symbols/starter/desktop.ini"), b"OS metadata").unwrap();
+        }
+        let loaded = load(&root).unwrap();
+        assert!(loaded.opened.is_some());
+        assert_eq!(loaded.target.documents.as_deref(), Some(&documents));
+        assert!(loaded.snapshot.components().all(|part| part.definition.library == "starter"));
+        let previous = loaded.snapshot.clone();
+        let target = loaded.target.clone();
+        let mut files = ProjectFiles::default();
+        let mut s = Session::default();
+        assert!(matches!(complete(&mut files, &mut s, Ok(Outcome::Opened(loaded))), Some(Update::Opened)));
+        assert!(s.project().unwrap().components().all(|part| part.definition.library == "basic-components"));
+        assert!(!files.dirty(&s), "a compatibility upgrade is not an electrical edit");
+        assert!(files.open_notice().contains("migrate bundled library"));
+        if encoding == Encoding::Json {
+            assert!(root.join("library/symbols/starter/resistor.r1.json").exists());
+            let entry = fs::read(root.join(ENTRY_POINT)).unwrap();
+            fs::write(root.join(ENTRY_POINT), [entry.as_slice(), b"\n"].concat()).unwrap();
+            assert!(
+                save_target(s.snapshot().unwrap(), Some(&previous), target.clone(), &mut |_| Ok(())).is_err(),
+                "external changes must block migration publication"
+            );
+            assert!(!root.join("library/symbols/basic-components/resistor.r1.json").exists());
+            fs::write(root.join(ENTRY_POINT), entry).unwrap();
+        }
+        let result = save_target(s.snapshot().unwrap(), Some(&previous), target, &mut |_| Ok(()));
+        assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Message(_))));
+        let loaded = load(&root).unwrap();
+        assert!(loaded.opened.is_none());
+        let after = loaded.target.documents.as_ref().unwrap();
+        assert!(!after.keys().any(|path| path.contains("/starter/")));
+        assert_eq!(after[&sheet], documents[&sheet]);
+        if encoding == Encoding::Json {
+            assert_eq!(fs::read(root.join("library/symbols/starter/desktop.ini")).unwrap(), b"OS metadata");
+        }
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), encode_documents(loaded.snapshot.clone()).unwrap());
+        save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| panic!("repeat Save must be a no-op")).unwrap();
+    }
 }

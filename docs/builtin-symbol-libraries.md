@@ -1,13 +1,20 @@
 # Bundled symbol libraries
 
-Default and Power are native libraries distributed with the app. Embedded
+Basic components and Power are native libraries distributed with the app. Embedded
 loading is selected by `libraries/bundled.txt` and supplies the same `library.json` and symbol documents as a folder or
 portable bundle. Both pass through `NativeSource::load` and the normal catalog's
 validation, revisions, conflict checks and content digests.
 
-The Default library keeps the stable identity `starter` for existing project
-links; its display name is Default. Bundled source registrations are
-`bundled-starter` and `bundled-power`. These are session source IDs, not
+Basic components uses the identity `basic-components`. Its folder is
+`libraries/basic-components`, and the visible bundled registrations are
+`bundled-basic-components` and `bundled-power`. A hidden read-only `bundled-starter`
+registration preserves historical `starter` references without duplicating browsing
+results. Opening a native project upgrades recognized, unchanged bundled pins and
+their references to `basic-components` in memory. Ordinary Save publishes that
+migration; opening does not write files. Customized symbol/footprint pins and
+conflicting target addresses retain their exact content and identities. Raw
+codecs still preserve historical bytes for journal checks and other migrations.
+These are session source IDs, not
 component identities, and removing a registration leaves pinned instances intact.
 Source limits include bundled registrations.
 
@@ -39,7 +46,7 @@ Version 1 remains readable and retains its original encoding when saved. Version
 new semantics instead of silently discarding them. Explicit selections from any
 library require a revision and digest. Supplying a revision alone also requires
 its digest. Commands omitting library, revision and digest still default to
-`starter` and may reuse its existing pinned copy. Provenance-free
+`basic-components` and may reuse its existing pinned copy. Provenance-free
 older definitions can match an otherwise identical current definition without
 weakening conflict checks between complete source definitions.
 

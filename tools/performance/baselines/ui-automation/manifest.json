@@ -1,0 +1,268 @@
+{
+  "runtime_commit": "d28a3ab9fd6d04ce9b48cf5d996b585c6c4e04c8",
+  "fixture": "tools/performance/fixtures/reference-v1.json",
+  "fixture_sha256": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+  "files": {
+    "verification.json.gz": {
+      "original_name": "verification.json",
+      "uncompressed_sha256": "37d3049f6ebe9e1541057d56b262ef4b638f6eb62c63616d47fd47fa101d5e81",
+      "uncompressed_bytes": 5413
+    },
+    "failure-review.json.gz": {
+      "original_name": "failure-review.json",
+      "uncompressed_sha256": "c2bde32e786f24517105d311d41b6a7589cc9f9e3d1d5437869c0090815ac607",
+      "uncompressed_bytes": 2234
+    },
+    "native-env-before.json.gz": {
+      "original_name": "native-env-before.json",
+      "uncompressed_sha256": "d570963486497279c29ef985702c88f822be78a738381837dc6dc4498aaf5742",
+      "uncompressed_bytes": 960
+    },
+    "native-env-after.json.gz": {
+      "original_name": "native-env-after.json",
+      "uncompressed_sha256": "2921816ed79fd5034f2498fdaefbd011fe762f9e28b31c8a65a6962f86f2d297",
+      "uncompressed_bytes": 980
+    },
+    "native-before.json.gz": {
+      "original_name": "native-before.json",
+      "uncompressed_sha256": "0c8ce278980f348de46900655408fbb69207639d94fc7ca4d072ceb4f7836cb1",
+      "uncompressed_bytes": 48235
+    },
+    "native-before.log.gz": {
+      "original_name": "native-before.log",
+      "uncompressed_sha256": "9d9b02b42e7f23431a1f8ba8e8ef446c59a6e12472a23e5ca142907bf35e60c0",
+      "uncompressed_bytes": 10907
+    },
+    "native-after.log.gz": {
+      "original_name": "native-after.log",
+      "uncompressed_sha256": "1c58a873a15bc9d9ed00f81b0351b54ea270432ef5521c987e8b96d4ca917aa8",
+      "uncompressed_bytes": 878
+    },
+    "native-comparison-error.log.gz": {
+      "original_name": "native-comparison-error.log",
+      "uncompressed_sha256": "36eaee03cb5eff6e27da625d8d4fddf2007ef3d777669cc980abb49d5534c2f4",
+      "uncompressed_bytes": 1055
+    },
+    "native-input-final.log.gz": {
+      "original_name": "native-input-final.log",
+      "uncompressed_sha256": "172f96afc22d9030e7f13d20e26a8864a5736f5cf3dbdeb142545ac4e49dd4c9",
+      "uncompressed_bytes": 388
+    },
+    "native-focus-final.log.gz": {
+      "original_name": "native-focus-final.log",
+      "uncompressed_sha256": "bffd695f8ca511c0477950a13a4b24322a1540f919f1384983376cf2c14c51ee",
+      "uncompressed_bytes": 40
+    },
+    "xvnc-nvidia-dri3.log.gz": {
+      "original_name": "xvnc-nvidia-dri3.log",
+      "uncompressed_sha256": "2ef259d92bc729addbd7cbce6d5ebb289341f89b3ed6c821f38d1cf4df0878cd",
+      "uncompressed_bytes": 2036
+    },
+    "native-input-nvidia-dri3.log.gz": {
+      "original_name": "native-input-nvidia-dri3.log",
+      "uncompressed_sha256": "8639789d31105f4673de8bd63f2bf2955bbc91a32b860baaf92054a1fc13b0f7",
+      "uncompressed_bytes": 1005
+    },
+    "native-env-before-nvidia-dri3.json.gz": {
+      "original_name": "native-env-before-nvidia-dri3.json",
+      "uncompressed_sha256": "fde65b04249f1d692c27bd4d7d763f6b2861d1e77611b1d4d609f20b697a280b",
+      "uncompressed_bytes": 902
+    },
+    "native-before-nvidia-dri3.json.gz": {
+      "original_name": "native-before-nvidia-dri3.json",
+      "uncompressed_sha256": "6d8cc1913212aace33927ea806cb3fdd1cf2dbaca5fded6a25a5852d582856f1",
+      "uncompressed_bytes": 47958
+    },
+    "browser-comparison.md.gz": {
+      "original_name": "browser-comparison.md",
+      "uncompressed_sha256": "b402d131cae56ec0603a6d4d73fa4fd7d487cc19f70067334699246fbcef9433",
+      "uncompressed_bytes": 15067
+    },
+    "browser-before.log.gz": {
+      "original_name": "browser-before.log",
+      "uncompressed_sha256": "adfc93eb6235f974b82e4019f532564a1720401f2aa9f3dfc4d607716af851d2",
+      "uncompressed_bytes": 18512
+    },
+    "browser-after.log.gz": {
+      "original_name": "browser-after.log",
+      "uncompressed_sha256": "411eb4caf546b506cb8b03d85f51e5c7b0ecc6228bc02d5c1dc05266da42073d",
+      "uncompressed_bytes": 18532
+    },
+    "baseline-build.log.gz": {
+      "original_name": "baseline-build.log",
+      "uncompressed_sha256": "02a3af4419fef4255f80132a707ec252cd52de745aa2891c24289753cfd90e5f",
+      "uncompressed_bytes": 409
+    },
+    "baseline-wasm-build.log.gz": {
+      "original_name": "baseline-wasm-build.log",
+      "uncompressed_sha256": "5488cd14d2ddf8ba81aac9d67d835d7f1cb9b2944bdef967da439fa7651c8bcd",
+      "uncompressed_bytes": 2835
+    },
+    "after-build.log.gz": {
+      "original_name": "after-build.log",
+      "uncompressed_sha256": "aab8bfc21f0504dd5c10abe7e0dc8466ddd3c8b56491ab1c509069af3005d6dc",
+      "uncompressed_bytes": 1012
+    },
+    "after-wasm-build.log.gz": {
+      "original_name": "after-wasm-build.log",
+      "uncompressed_sha256": "b500945ea4a7afe2e795935698a2216e50c19def8ede48136612a95760da918f",
+      "uncompressed_bytes": 5711
+    },
+    "clippy.log.gz": {
+      "original_name": "clippy.log",
+      "uncompressed_sha256": "e7e8281fba11964a7e9692118c10893a9bcbaf4096a8cd2eea3195b4d519598d",
+      "uncompressed_bytes": 265
+    },
+    "workspace-tests.log.gz": {
+      "original_name": "workspace-tests.log",
+      "uncompressed_sha256": "a8d0ac9e2b2d0714187c65822ee0b69f157eabbb33cd41ee2776bd984a8541da",
+      "uncompressed_bytes": 153609
+    },
+    "wasm-check.log.gz": {
+      "original_name": "wasm-check.log",
+      "uncompressed_sha256": "f87ab15ca56c93866edd1b30a613ab3ce9f46574be336a9dcc354319aa2a7d36",
+      "uncompressed_bytes": 675
+    },
+    "deny.log.gz": {
+      "original_name": "deny.log",
+      "uncompressed_sha256": "ef8317b369b8527e06290941bfada84d1f8e45b2b8c311d5e1fec1558e00a7be",
+      "uncompressed_bytes": 33
+    },
+    "desktop-cli-build.log.gz": {
+      "original_name": "desktop-cli-build.log",
+      "uncompressed_sha256": "766c74330e7ee7f3e59e5cd768f5d74d606674a0449725bb60a5d79dfc59b8a8",
+      "uncompressed_bytes": 176
+    },
+    "web-before--environment.json.gz": {
+      "original_name": "web-before/environment.json",
+      "uncompressed_sha256": "1d873b201d02d6d2b65f874001074dc6f625fc759122d80a45ba96b9179cfd11",
+      "uncompressed_bytes": 1123
+    },
+    "web-before--report.json.gz": {
+      "original_name": "web-before/report.json",
+      "uncompressed_sha256": "3f1d046c3f0d5d438309ba14eed86aa9605764abe02238e10a087a05b9837481",
+      "uncompressed_bytes": 45504
+    },
+    "web-after--environment.json.gz": {
+      "original_name": "web-after/environment.json",
+      "uncompressed_sha256": "19bc4b8eff84115d2ee0ec654578744dc0cb541df47c2f66c867719187a59e90",
+      "uncompressed_bytes": 1143
+    },
+    "web-after--report.json.gz": {
+      "original_name": "web-after/report.json",
+      "uncompressed_sha256": "c1d5fcd3f2c6289fd7682d830f717e37e9074001b7611a1398b1743c25f60ae8",
+      "uncompressed_bytes": 45761
+    },
+    "review-fixes.json.gz": {
+      "original_name": "review-fixes.json",
+      "uncompressed_sha256": "b3b4e0da9b76a2dfd5c7a068edfbc9334a0139c1c3c271a7b6e6d5d90eb61733",
+      "uncompressed_bytes": 2522
+    },
+    "review-security-tests.log.gz": {
+      "original_name": "review-security-tests.log",
+      "uncompressed_sha256": "3f0ca36b062b32e60647841e54cfbf5d52887d5aa200c672661ff38ef205f2bd",
+      "uncompressed_bytes": 893
+    },
+    "review-automation-tests.log.gz": {
+      "original_name": "review-automation-tests.log",
+      "uncompressed_sha256": "187a941e3334dbb5c1c1a41f88c3b40d4e26260db25b04f6f9fc52a4d094712d",
+      "uncompressed_bytes": 1801
+    },
+    "review-clippy.log.gz": {
+      "original_name": "review-clippy.log",
+      "uncompressed_sha256": "3a290a48b3815263393f00c48e00f75560887aa84754bf3800d5176657bd0797",
+      "uncompressed_bytes": 169
+    },
+    "review-crate-tests.log.gz": {
+      "original_name": "review-crate-tests.log",
+      "uncompressed_sha256": "0443c7dae62d0aa7a9acbeab747e54ad17ce291baa2403bdf6ee0c1dcf63074e",
+      "uncompressed_bytes": 83692
+    },
+    "review-wasm.log.gz": {
+      "original_name": "review-wasm.log",
+      "uncompressed_sha256": "fb2ad101ab1eddeb70a3802eed3fd00ad9876574dd2016f1260809ad91e3ebce",
+      "uncompressed_bytes": 376
+    },
+    "review-enter.json.gz": {
+      "original_name": "review-enter.json",
+      "uncompressed_sha256": "202b29d2c96a36e456fab914c56b290764b180615c73c4db5bbe10d257f627f4",
+      "uncompressed_bytes": 1082
+    },
+    "review-enter-before.log.gz": {
+      "original_name": "review-enter-before.log",
+      "uncompressed_sha256": "a1a2895dbf5afd7eb9b6dbeba987fe1e62fcdfa589e64c3cb13831a20f00e31c",
+      "uncompressed_bytes": 1057
+    },
+    "review-enter-tests.log.gz": {
+      "original_name": "review-enter-tests.log",
+      "uncompressed_sha256": "fbf2b6ba53f6af0a3540346eb56a76ae2a0bd63f3a14259556b011150492b7c3",
+      "uncompressed_bytes": 982
+    },
+    "review-enter-clippy.log.gz": {
+      "original_name": "review-enter-clippy.log",
+      "uncompressed_sha256": "018f0ec38e61275813218ba3217a9a139892410e1ece134abccb4dd044aea4d9",
+      "uncompressed_bytes": 169
+    },
+    "review-third.json.gz": {
+      "original_name": "review-third.json",
+      "uncompressed_sha256": "9c006e73c37e8741521d3064f0688aa8501fcff9c0bbd3deb7c7f0554fd3407e",
+      "uncompressed_bytes": 2592
+    },
+    "review-third-before.log.gz": {
+      "original_name": "review-third-before.log",
+      "uncompressed_sha256": "4c3cd13519183e3bb0317bd08d2e9d88b3c886e08358b168377f19ece3c19c12",
+      "uncompressed_bytes": 3307
+    },
+    "review-third-automation.log.gz": {
+      "original_name": "review-third-automation.log",
+      "uncompressed_sha256": "81d7defb2c7b9f4f9c683bd3a642c450f8b75af72229d4ddfb4f8f09ec6078b2",
+      "uncompressed_bytes": 1765
+    },
+    "review-third-disconnect.log.gz": {
+      "original_name": "review-third-disconnect.log",
+      "uncompressed_sha256": "ea418ab252b48e50de3a97dbc923ddb766b02452d6496240051e8247ea511873",
+      "uncompressed_bytes": 506
+    },
+    "review-third-clippy.log.gz": {
+      "original_name": "review-third-clippy.log",
+      "uncompressed_sha256": "1350cb0632fefdcdd3f7b6d64fa9e5a4e992959e727e029f4cb31233f8ef7aac",
+      "uncompressed_bytes": 169
+    },
+    "review-third-crate-tests.log.gz": {
+      "original_name": "review-third-crate-tests.log",
+      "uncompressed_sha256": "d579ab844b12e493857267360fb9092c1bf7c55ac6a8dece8cb6b6207f4d1613",
+      "uncompressed_bytes": 81607
+    },
+    "review-third-wasm.log.gz": {
+      "original_name": "review-third-wasm.log",
+      "uncompressed_sha256": "3e9a59e55a5d1e5428280d4d0dae67faa06ba8bd43c732f4617fdd550a218ed4",
+      "uncompressed_bytes": 273
+    },
+    "review-release.json.gz": {
+      "original_name": "review-release.json",
+      "uncompressed_sha256": "a30560abc61011f28bacf00409782eba39f10b8c34879aa237a301b3125562a0",
+      "uncompressed_bytes": 1523
+    },
+    "review-release-before.log.gz": {
+      "original_name": "review-release-before.log",
+      "uncompressed_sha256": "07985885a557e25fedbcc76343ce466ce46cfb2e5c8da66871b98899a1a79383",
+      "uncompressed_bytes": 1213
+    },
+    "review-release-tests.log.gz": {
+      "original_name": "review-release-tests.log",
+      "uncompressed_sha256": "9eda8ace28d7fc15d8bdaf32a8a28c3f7f8b2b90d3b80a4c98ed7ef5c1e7813e",
+      "uncompressed_bytes": 1855
+    },
+    "review-release-clippy.log.gz": {
+      "original_name": "review-release-clippy.log",
+      "uncompressed_sha256": "1fa48ef687fe6f7b5010aea9b4b010dae47483ae3e9f913e1d78a39ee19f98a7",
+      "uncompressed_bytes": 169
+    },
+    "review-release-wasm.log.gz": {
+      "original_name": "review-release-wasm.log",
+      "uncompressed_sha256": "2bc683fb4e4f4f21ee9ee39e2b8ecce2efe20d3b1be57bda5316aa519ab3d30a",
+      "uncompressed_bytes": 72
+    }
+  },
+  "review_fix_base_commit": "41c250918d8398de732d4b2b599733360f189102"
+}

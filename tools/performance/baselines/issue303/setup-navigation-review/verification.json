@@ -1,0 +1,131 @@
+{
+  "scope": "Board Setup Design rules navigation to existing board-default and net-class editors",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 1.4212207219097763
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 6.08214847499039
+    },
+    {
+      "name": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace"
+      ],
+      "exit": 0,
+      "seconds": 72.74267050798517
+    },
+    {
+      "name": "wasm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "pcbcraft-web",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "exit": 0,
+      "seconds": 2.653070247033611
+    },
+    {
+      "name": "harness-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 4.951634292956442
+    },
+    {
+      "name": "harness-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "pcbcraft-app",
+        "--features",
+        "performance-harness",
+        "performance::"
+      ],
+      "exit": 0,
+      "seconds": 25.833024199004285
+    },
+    {
+      "name": "web-package",
+      "command": [
+        "trunk",
+        "build",
+        "--release"
+      ],
+      "exit": 0,
+      "seconds": 28.23903854493983
+    },
+    {
+      "name": "native-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "pcbcraft",
+        "-p",
+        "pcbcraft-cli"
+      ],
+      "exit": 0,
+      "seconds": 1.5961339380592108
+    }
+  ],
+  "workspace_tests": {
+    "passed": 1866,
+    "ignored": 11
+  },
+  "new_regressions": [
+    "Real navigation, shared saves/Undo and no implicit initial setup at widths 1200/700",
+    "Pending layer names, invalid silkscreen text and stale authority retain the original setup draft",
+    "Both destinations preserve applied board setup bytes"
+  ],
+  "failure_path_review": "Navigation checks for pending profile jobs, material edits, partial technical-layer/stackup inputs and changed/invalid setup or silkscreen values. It validates only on navigation, preserves the original view/revision and never refreshes stale authority. Existing profile worker ownership and shared command publication remain unchanged. Tests exercise draft/stale/refusal/Undo paths; other form-local pending-input gates reviewed in code.",
+  "visuals": "Native wide dark rail and light compact selector, shared rule-editor handoffs. Browser dark compact selector and individually verified board/class destinations; see browser-verification.json for interrupted/rejected automation attempts.",
+  "contracts": "No saved-format, resolver policy, engine command, dependency or toolkit revision change. Analyze \u2192 Rules remains accessible in both workspaces.",
+  "limits": [
+    "Pending setup edits must be applied or cancelled before opening a separate rule editor",
+    "No fresh performance baseline or native compositor/endurance claim",
+    "User running native app/session preserved; restart required"
+  ],
+  "publication": "Local only; no push or PR"
+}

@@ -147,7 +147,7 @@ fn paste_targets_the_requested_sheet_and_rotates_the_whole_fragment() {
 fn copied_package_assignments_keep_the_pinned_mapping() {
     let mut source = fixture();
     let component = source.project().unwrap().components().next().unwrap().id();
-    source.apply(crate::ASSIGN_FOOTPRINT,&json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":source.revision()})).unwrap();
+    source.apply(crate::ASSIGN_FOOTPRINT,&json!({"component":component,"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":source.revision()})).unwrap();
     let text = Fragment::capture(source.project().unwrap(), &all(&source)).unwrap().to_text().unwrap();
     let mut target = Session::default();
     target.apply("project.new", &Value::Null).unwrap();

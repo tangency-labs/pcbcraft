@@ -333,7 +333,7 @@ fn equal_display_names_do_not_exempt_unresolved_membership() {
     for item in &mut Arc::get_mut(&mut q.geometry).unwrap().items {
         item.net = Some("DISPLAY_ONLY".into());
     }
-    let decisions: Vec<_> = q.geometry.clearance_pairs(20_000).collect();
+    let decisions: Vec<_> = q.geometry.clearance_pairs(20_000, None).collect();
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0].gap_nm, 19_999.);
     assert!(decisions[0].clearance_violation);

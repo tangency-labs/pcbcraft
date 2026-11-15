@@ -13,7 +13,7 @@ fn session(configured: bool, placed: bool) -> Session {
     }
     s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let component = s.inspect()["project"]["components"][0]["id"].clone();
-    let definition = crate::board::definition::starter("resistor-0402").unwrap();
+    let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
     s.apply(
         ASSIGN_FOOTPRINT,
         &json!({"component":component,"library":definition.library,

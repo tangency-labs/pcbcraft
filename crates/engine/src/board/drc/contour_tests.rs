@@ -16,7 +16,7 @@ fn p(x_nm: i64, y_nm: i64) -> Point {
 /// Seed a validated original definition, then assign and place it through normal commands.
 /// The first pad is the contour under test; the second is a small circular probe or a remote pad.
 pub(crate) fn fixture(shape: PadShape, width_nm: i64, height_nm: i64, probe: Point, probe_width: i64) -> Session {
-    let mut definition = (*super::super::definition::starter("resistor-0402").unwrap()).clone();
+    let mut definition = (*super::super::definition::basic_components("resistor-0402").unwrap()).clone();
     definition.library = "drc-contours".into();
     definition.id = "two-pads".into();
     definition.source = super::super::definition::Source {

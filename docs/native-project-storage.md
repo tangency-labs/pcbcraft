@@ -13,6 +13,8 @@ files remain future work. See the [single-board codec](single-board-storage.md)
 and [occurrence codec](sheet-occurrence-storage.md) for the supported boundaries.
 Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
+Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
+in the entry point; only projects with authored classes select that version.
 
 ## File encodings and save behavior
 
@@ -54,6 +56,28 @@ phase also writes its bounded setup of at most 64 material revisions, 128 layers
 127 strata and 256 nested prepreg plies. A requested download
 does not confirm a durable write and does not clear the editor's dirty state.
 
+## Bundled library address migration
+
+Native desktop/browser opens and headless storage opens normalize recognized,
+unchanged `starter` symbols and footprints to the retained `basic-components`
+revision with identical geometry. Component and sheet references, reusable-part
+dependency addresses, package choices, physical placements and qualified accepted
+board references move together. Revision numbers, terminal/pad IDs, mappings,
+poses, copper and accepted capture IDs/digests are preserved. Historical logical
+references with no remaining symbol body are retained rather than inferred.
+Customized symbol/footprint content and occupied conflicting target addresses
+keep their original identities. Power is unaffected.
+
+Opening prepares this upgrade in memory after validation and does not write any
+project files or add an electrical undo step. The editor retains its original
+saved snapshot and bytes for stale-file checks. Save publishes the upgraded
+references through the ordinary journaled folder or archive path; browser
+Download encodes the same candidate without claiming durable publication.
+Unrelated documents retain their original formatting. Reopening a migrated
+project and saving it unchanged produces no additional diff. Raw decoding and
+journal validation remain byte-preserving; hosts call the shared
+`migrate_bundled_libraries` opening step explicitly.
+
 ## Board folders and first-save migration
 
 New projects use `pcbcraft-project/16`, extending project/14's `layout_root: "."` and required
@@ -88,6 +112,12 @@ entry point. The header and registry presence must agree, and empty/null
 registries are refused. Existing projects without records retain their low-level
 encoding; Open and inspection never promote nets. Older readers must refuse
 these headers rather than discard identity, lineage or unresolved decisions.
+
+A nonempty project class catalog selects project/20; saved
+[net-class bindings](net-class-assignments.md) select project/21 and board-owned
+instances/3. Bindings remain inside the same logical registry and carry class and
+origin net UUIDs, while physical board and sheet formats stay unchanged. Older
+headers refuse the new vocabulary, and the new envelope requires actual bindings.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,

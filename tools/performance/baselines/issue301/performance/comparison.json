@@ -1,0 +1,75 @@
+{
+  "before": {
+    "move_ms": {
+      "median_ms": 1.197879,
+      "max_ms": 1.483879,
+      "samples": 20
+    },
+    "disconnect_ms": {
+      "median_ms": 1.0339200000000002,
+      "max_ms": 1.195886,
+      "samples": 20
+    }
+  },
+  "after-unassigned": {
+    "move_ms": {
+      "median_ms": 1.1894740000000001,
+      "max_ms": 1.496804,
+      "samples": 20
+    },
+    "disconnect_ms": {
+      "median_ms": 1.0272875,
+      "max_ms": 1.118068,
+      "samples": 20
+    }
+  },
+  "after-assigned": {
+    "move_ms": {
+      "median_ms": 1.19281,
+      "max_ms": 1.501261,
+      "samples": 20
+    },
+    "disconnect_ms": {
+      "median_ms": 1.032007,
+      "max_ms": 1.043809,
+      "samples": 20
+    }
+  },
+  "final-unassigned": {
+    "move_ms": {
+      "median_ms": 1.1965715,
+      "max_ms": 1.563619,
+      "samples": 20
+    },
+    "disconnect_ms": {
+      "median_ms": 1.032873,
+      "max_ms": 1.039791,
+      "samples": 20
+    }
+  },
+  "final-assigned": {
+    "move_ms": {
+      "median_ms": 1.200119,
+      "max_ms": 1.59058,
+      "samples": 20
+    },
+    "disconnect_ms": {
+      "median_ms": 1.0371815,
+      "max_ms": 1.058346,
+      "samples": 20
+    }
+  },
+  "limits": "20 CPU samples per action on a 64-terminal/four promoted unnamed-net fixture. No rendered, naming-command, allocation, endurance, large-project, tail-latency or controlled-host qualification.",
+  "probe_change": "After the baseline, only bound setup and output binding-state reporting were added to the temporary runner; the timed loop and saved action inputs remained unchanged.",
+  "hashes": {
+    "actions.json": "39f47ef867ece3c24662ca18e7237c2764d3a10d2859f3f415f57d996fae420c",
+    "after-assigned.json": "08e21d58c85322a43ae590dd07233d64662d0d31b01f36e7eadab78dfaa8da6a",
+    "after-unassigned.json": "27a7755fc19a5baf5c19a403615911c8854bfcdef02dcf3a5b5445f778c854dc",
+    "before.json": "dc13dc128ccd0ad9b5cdca8f634627c70906eeff8e3003730e5a2ab6e68fbec7",
+    "final-assigned.json": "dd8ec375fbfbc1bada460311b5285718182f316d43fa7e3b1e01636db5d48ae9",
+    "final-unassigned.json": "f2f65f7aa457d84fa613ad58cd22435e26f381173a0dc4fc8d877820fe52f966",
+    "probe-final.rs": "12021a2af0203294b271bc4a01fc11dd1628d8db81b986713ee4725e23dda58f",
+    "probe.rs": "c4eeb1db2461ed11d6c767977fa586a6d50284fc4ae8202e25a457d9b2ad08dd",
+    "registry.pc": "40a79960b718564f244177f404906a04ffe7b8d8481125ef66e6f85c95ee4453"
+  }
+}

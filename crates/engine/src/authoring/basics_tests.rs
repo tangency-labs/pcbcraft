@@ -125,7 +125,7 @@ fn renumber_batch_and_legacy_fork_preserve_sources() {
     }
     apply(&mut s, Action::ReplaceMany { primitives: replacements });
     assert!(matches!(&s.snapshot().objects[&1],Primitive::Pin { number,.. } if number == "2"));
-    for source in library::starter().symbols() {
+    for source in library::basic_components().symbols() {
         let before = serde_json::to_value(library::saved_copy(source)).unwrap();
         let fork = Item::from_symbol(source).unwrap();
         assert!(

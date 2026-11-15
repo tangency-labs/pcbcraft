@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct Directory {
     file: Arc<File>,
     #[cfg(not(unix))]
@@ -41,6 +41,39 @@ impl Directory {
             #[cfg(windows)]
             ancestors: Vec::new(),
         })
+    }
+
+    /// Bind a confirmation token to one captured filesystem directory, independently of its
+    /// spelling or a different folder containing identical native documents.
+    pub(super) fn identity(&self) -> io::Result<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = self.file.metadata()?;
+            Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "Stable directory identity is unavailable on this platform"))
+        }
+    }
+    /// Refuse a moved/replaced root before passing a private recovery folder to system trash.
+    /// Unix compares the captured handle's device/inode; other hosts stay unavailable until
+    /// an equivalent stable identity check is implemented and qualified.
+    pub(super) fn matches_path(&self, path: &Path) -> io::Result<bool> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let current = Self::open(path)?;
+            let before = self.file.metadata()?;
+            let after = current.file.metadata()?;
+            Ok(before.dev() == after.dev() && before.ino() == after.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Err(io::Error::new(io::ErrorKind::Unsupported, "Safe per-part deletion is not available on this platform"))
+        }
     }
 
     /// Open one directory component without following links. Creation never adopts a raced-in
@@ -91,16 +124,38 @@ impl Directory {
     /// Open a regular leaf through this parent and reject symlinks, reparse points and special files.
     /// Nonblocking Unix open prevents a raced-in FIFO from stalling the file worker.
     pub(super) fn open_file(&self, name: &str) -> io::Result<Option<File>> {
+        self.open_leaf(name, false)
+    }
+
+    /// Confirm the exact bytes and flush the same handle. Windows FlushFileBuffers requires
+    /// write access; ordinary reads remain read-only and this open never creates or truncates.
+    pub(super) fn confirm_file(&self, name: &str, expected: &[u8]) -> io::Result<()> {
+        let file = self.open_leaf(name, cfg!(windows))?.ok_or_else(|| io::Error::other("Published file disappeared"))?;
+        let mut bytes = Vec::new();
+        (&file).take(expected.len() as u64 + 1).read_to_end(&mut bytes)?;
+        if bytes != expected {
+            return Err(io::Error::other("Published revision bytes differ"));
+        }
+        file.sync_all()
+    }
+
+    /// Apply identical no-follow and regular-file checks to reading and durable confirmation.
+    fn open_leaf(&self, name: &str, writable: bool) -> io::Result<Option<File>> {
         component(name)?;
         #[cfg(unix)]
-        let opened =
-            rustix::fs::openat(self.file.as_ref(), name, OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())
-                .map(File::from)
-                .map_err(io::Error::from);
+        let opened = rustix::fs::openat(
+            self.file.as_ref(),
+            name,
+            (if writable { OFlags::RDWR } else { OFlags::RDONLY }) | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(io::Error::from);
         #[cfg(not(unix))]
         let opened = {
             let mut options = fs::OpenOptions::new();
             options.read(true);
+            options.write(writable);
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt;
@@ -162,6 +217,52 @@ impl Directory {
         return rustix::fs::renameat(self.file.as_ref(), name, destination.file.as_ref(), new_name).map_err(io::Error::from);
         #[cfg(not(unix))]
         return fs::rename(self.path.join(name), destination.path.join(new_name));
+    }
+
+    /// Publish a complete staged file under an unused name. Hard-link creation is atomic and
+    /// refuses collisions on all supported hosts, without replacing an immutable revision.
+    pub(super) fn publish_new(&self, staged: &str, destination: &Self, name: &str) -> io::Result<()> {
+        component(staged)?;
+        component(name)?;
+        #[cfg(unix)]
+        rustix::fs::linkat(self.file.as_ref(), staged, destination.file.as_ref(), name, AtFlags::empty())?;
+        #[cfg(not(unix))]
+        fs::hard_link(self.path.join(staged), destination.path.join(name))?;
+        Ok(())
+    }
+
+    /// Open a reusable writable lock through its captured parent, refusing links and devices.
+    pub(super) fn lock_file(&self, name: &str) -> io::Result<File> {
+        component(name)?;
+        #[cfg(unix)]
+        let file = File::from(rustix::fs::openat(
+            self.file.as_ref(),
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )?);
+        #[cfg(not(unix))]
+        let file = {
+            let mut options = fs::OpenOptions::new();
+            options.read(true).write(true).create(true).truncate(false);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.custom_flags(0x00200000);
+            }
+            options.open(self.path.join(name))?
+        };
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("Lock is not a regular file"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if file.metadata()?.file_attributes() & 0x400 != 0 {
+                return Err(io::Error::other("Reparse-point lock refused"));
+            }
+        }
+        Ok(file)
     }
 
     /// Remove a leaf entry rather than following it. Missing entries are already removed.

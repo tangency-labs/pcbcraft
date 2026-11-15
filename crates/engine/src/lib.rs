@@ -15,9 +15,11 @@ pub mod hierarchy;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
+pub mod net_classes;
 pub mod net_labels;
 pub mod nets;
 pub mod no_connect;
+pub mod part_authoring;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -94,6 +96,8 @@ enum ParamKind {
     NetLabelId,
     LibrarySource,
     LibraryDocuments,
+    AuthoringItem,
+    PartDraft,
     LibraryQuery,
     LibraryKind,
     LibraryQuantity,
@@ -143,6 +147,10 @@ enum ParamKind {
     BoardSide,
     RuleLength,
     BoardRules,
+    ClassRules,
+    ClassSet,
+    ClassId,
+    ClassTarget,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -200,6 +208,12 @@ impl ParamKind {
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
+            Self::PartDraft => {
+                json!({"type":"object","description":"Bounded pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 native draft record"})
+            }
+            Self::AuthoringItem => {
+                json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
+            }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -215,6 +229,10 @@ impl ParamKind {
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
+            Self::ClassRules => net_classes::rules_schema(),
+            Self::ClassSet => net_classes::set_schema(),
+            Self::ClassTarget => nets::class_target_schema(),
+            Self::ClassId => json!({"type":"string","format":"uuid"}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
             Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
@@ -258,7 +276,7 @@ impl ParamKind {
             Self::ResolveExistingFootprints => json!({"type":"boolean"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => {
-                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
+                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::BASIC_COMPONENT_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
                 json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
@@ -401,11 +419,20 @@ impl ParamKind {
             Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
+            Self::PartDraft
+                if serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= library::sources::MAX_FILE_BYTES)
+                    && serde_json::from_value::<part_authoring::Record>(value.clone()).is_ok() =>
+            {
+                Ok(())
+            }
+            Self::PartDraft => Err("must contain a bounded native part or manufacturer record"),
+            Self::AuthoringItem if serde_json::to_vec(value).is_ok_and(|bytes| authoring::Item::decode(&bytes).is_ok()) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
             Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
             Self::LibraryQuantity => Err("must name a supported physical quantity"),
@@ -447,6 +474,18 @@ impl ParamKind {
             Self::ViaDrill if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM..board::track::MAX_VIA_DIAMETER_NM).contains(&n)) => {
                 Ok(())
             }
+            Self::ClassRules => serde_json::from_value::<net_classes::Rules>(value.clone())
+                .map_err(|_| "must contain supported integer-nanometre class rules")
+                .and_then(|rules| net_classes::validate_rules(&rules).map_err(|_| "class dimensions are invalid or contradictory")),
+            Self::ClassSet => net_classes::parse_set(value).map(|_| ()).map_err(|_| "must contain a bounded set of unique non-nil class UUIDs"),
+            Self::ClassTarget => nets::ClassTarget::parse(value)
+                .map(|_| ())
+                .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
+            Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
+                .ok()
+                .filter(|id| !id.is_nil())
+                .map(|_| ())
+                .ok_or("must identify a class by non-nil UUID"),
             Self::BoardRules if value.is_null() || serde_json::from_value::<board::rules::Values>(value.clone()).is_ok() => Ok(()),
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
@@ -507,7 +546,7 @@ impl ParamKind {
             }
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition
-                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::STARTER_IDS.contains(&id)) =>
+                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::BASIC_COMPONENT_IDS.contains(&id)) =>
             {
                 Ok(())
             }
@@ -1092,7 +1131,7 @@ const CATALOG: &[Command] = &[
                 summary: "SHA-256 digest from library.search; required for explicit library selections",
                 kind: ParamKind::LibraryDigest,
             },
-            Param { required: false, name: "library", summary: "Native library ID; omit for the embedded starter", kind: ParamKind::LibrarySource },
+            Param { required: false, name: "library", summary: "Native library ID; omit for Basic components", kind: ParamKind::LibrarySource },
             Param {
                 required: false,
                 name: "definition_revision",
@@ -1607,6 +1646,8 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[3],
     library::sources::COMMANDS[4],
     library::sources::COMMANDS[5],
+    library::sources::COMMANDS[6],
+    library::sources::COMMANDS[7],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -1790,6 +1831,16 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::class_rules::ROUTE_RULES,
+        title: "Inspect Routing Rules",
+        summary: "Inspect scoped net-class routing defaults, hard limits, origins and conflicts at a current copper contact without editing.",
+        params: &[
+            BOARD,
+            Param { name: "at", required: true, summary: "Current copper contact point in integer nanometres", kind: ParamKind::Point },
+            Param { name: "layer", required: false, summary: "Copper layer UUID; omit for a through-via contact", kind: ParamKind::DrawingId },
+        ],
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -1902,6 +1953,109 @@ const CATALOG: &[Command] = &[
             Param { name: "anchor", kind: ParamKind::NetTarget, required: true, summary: "A terminal, label or port on the selected current branch" },
         ],
     },
+    Command {
+        id: net_classes::CREATE,
+        title: "Create Net Class",
+        summary: "Create a project-wide dimensional class without assigning nets or allocating a board.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name; identity is an independent UUID" },
+            Param {
+                name: "rules",
+                kind: ParamKind::ClassRules,
+                required: true,
+                summary: "Sparse dimensional requirements/preferences in integer nanometres",
+            },
+        ],
+    },
+    Command {
+        id: net_classes::UPDATE,
+        title: "Update Net Class",
+        summary: "Replace a class name and complete sparse rule set, preserving its UUID and incrementing its definition revision only on change.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable class UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name" },
+            Param {
+                name: "rules",
+                kind: ParamKind::ClassRules,
+                required: true,
+                summary: "Complete replacement sparse dimensions; omitted properties have no class opinion",
+            },
+        ],
+    },
+    Command {
+        id: net_classes::REMOVE,
+        title: "Remove Net Class",
+        summary: "Remove an unbound project class, or explicitly rebind every current/historical assignment atomically.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable class UUID from inspection" },
+            Param {
+                name: "rebind",
+                kind: ParamKind::ClassId,
+                required: false,
+                summary: "Existing replacement class for all current and retained references",
+            },
+        ],
+    },
+    Command {
+        id: net_classes::INSPECT,
+        title: "Inspect Net Classes",
+        summary: "Read the class catalog without preparing connectivity or changing history.",
+        params: &[],
+    },
+    Command {
+        id: net_classes::RESOLVE,
+        title: "Resolve Net Class Rules",
+        summary: "Intersect explicit classes with built-ins or an addressed board's defaults, returning contributions and conflicts. A second set resolves a symmetric object pair.",
+        params: &[
+            BOARD,
+            Param {
+                name: "classes",
+                kind: ParamKind::ClassSet,
+                required: true,
+                summary: "Explicit class UUID set, including an empty set for defaults",
+            },
+            Param {
+                name: "other_classes",
+                kind: ParamKind::ClassSet,
+                required: false,
+                summary: "Second object's explicit class set for symmetric clearance resolution",
+            },
+        ],
+    },
+    Command {
+        id: nets::SET_CLASSES,
+        title: "Set Net Classes",
+        summary: "Replace a net's complete class set, promoting an eligible derived target in the same undoable transaction. An empty set removes assignments.",
+        params: &[
+            EXPECTED_REVISION,
+            Param {
+                name: "target",
+                kind: ParamKind::ClassTarget,
+                required: true,
+                summary: "Scoped persistent or revision-derived target from net-registry inspection",
+            },
+            Param {
+                name: "classes",
+                kind: ParamKind::ClassSet,
+                required: true,
+                summary: "Complete set of class UUIDs; origin is retained for unchanged assignments",
+            },
+        ],
+    },
+    Command {
+        id: nets::INSPECT_CLASSES,
+        title: "Inspect Net Assignments",
+        summary: "Inspect scoped assignments, origin, identity status and dimensional conflicts without promotion or authored edits.",
+        params: &[Param {
+            name: "target",
+            kind: ParamKind::ClassTarget,
+            required: false,
+            summary: "Optional scoped target; omit to list current identities and eligible derived anchors",
+        }],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -1965,6 +2119,8 @@ pub struct Project {
     board: Arc<Board>,
     /// Project-wide name resolution shared by all immutable sheet projections.
     named_graph: Arc<OnceLock<Connectivity>>,
+    /// Disposable technical graphics, keyed to immutable board and component allocations.
+    board_graphics: Arc<std::sync::Mutex<board::view::GraphicsCache>>,
     /// The older format this snapshot was migrated from when it was opened, if any.
     upgraded_from: Option<u32>,
     /// Versioned project storage metadata; absent for untouched flat-board files.
@@ -1973,6 +2129,8 @@ pub struct Project {
     circuit_use: Option<uuid::Uuid>,
     /// Sparse identity authority; current connectivity remains derived from the schematic.
     net_registry: Arc<nets::Registry>,
+    /// Authored dimensional class definitions, independent of net assignments and boards.
+    net_classes: Arc<net_classes::Catalog>,
 }
 
 impl Project {
@@ -2334,7 +2492,9 @@ impl Session {
             | library::sources::LIST
             | library::sources::SEARCH
             | library::sources::RESOLVE_PART
-            | library::sources::PARSE_QUANTITY => true,
+            | library::sources::PARSE_QUANTITY
+            | library::sources::PREPARE_PART_PUBLICATION
+            | library::sources::PREPARE_PUBLICATION => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -2353,6 +2513,13 @@ impl Session {
             | "project.rename"
             | no_connect::SET
             | no_connect::CHECK
+            | net_classes::CREATE
+            | net_classes::UPDATE
+            | net_classes::REMOVE
+            | net_classes::INSPECT
+            | net_classes::RESOLVE
+            | nets::SET_CLASSES
+            | nets::INSPECT_CLASSES
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2385,6 +2552,7 @@ impl Session {
             | DELETE_DRAWING
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
+            | board::class_rules::ROUTE_RULES
             | EXPORT_FABRICATION
             | ADD_TRACKS
             | ADD_VIA
@@ -2455,6 +2623,7 @@ impl Session {
                 "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
+            if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -2524,6 +2693,18 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
+        if id == nets::INSPECT_CLASSES {
+            self.validate_project_command(id, params)?;
+            return self.inspect_net_class_target(params);
+        }
+        if id == board::class_rules::ROUTE_RULES {
+            self.validate_project_command(id, params)?;
+            return self.route_rule_query(params);
+        }
+        if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
+            self.validate_project_command(id, params)?;
+            return self.net_class_query(id, params);
+        }
         self.apply(id, params)?;
         if id == no_connect::CHECK {
             return self.no_connect_report();
@@ -2584,6 +2765,7 @@ impl Session {
                 | DELETE_DRAWING
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
+                | board::class_rules::ROUTE_RULES
                 | EXPORT_FABRICATION
                 | ADD_TRACKS
                 | ADD_VIA
@@ -2606,6 +2788,13 @@ impl Session {
                 | "project.rename"
                 | no_connect::SET
                 | no_connect::CHECK
+                | net_classes::CREATE
+                | net_classes::UPDATE
+                | net_classes::REMOVE
+                | net_classes::INSPECT
+                | net_classes::RESOLVE
+                | nets::SET_CLASSES
+                | nets::INSPECT_CLASSES
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -2674,10 +2863,12 @@ impl Session {
                 schematic_packages: Arc::default(),
                 board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
                 named_graph: Arc::default(),
+                board_graphics: Arc::default(),
                 upgraded_from: None,
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
                 net_registry: Arc::default(),
+                net_classes: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -2691,6 +2882,14 @@ impl Session {
             no_connect::SET => self.set_no_connect(params)?,
             no_connect::CHECK => {
                 self.open_project()?;
+            }
+            net_classes::CREATE | net_classes::UPDATE | net_classes::REMOVE => self.edit_net_class(id, params)?,
+            net_classes::INSPECT | net_classes::RESOLVE => {
+                self.net_class_query(id, params)?;
+            }
+            nets::SET_CLASSES => self.set_net_classes(params)?,
+            nets::INSPECT_CLASSES => {
+                self.inspect_net_class_target(params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
@@ -2707,8 +2906,8 @@ impl Session {
             PLACE_RESISTOR => {
                 let resistor = self
                     .libraries
-                    .latest_symbol("starter", "resistor")
-                    .ok_or_else(|| CommandError::Unavailable("the default library has no resistor symbol".to_owned()))?;
+                    .latest_symbol("basic-components", "resistor")
+                    .ok_or_else(|| CommandError::Unavailable("Basic components has no resistor symbol".to_owned()))?;
                 self.place_symbol(resistor, params)?;
             }
             part_instances::PLACE_PART => self.place_library_part(params)?,
@@ -2723,7 +2922,7 @@ impl Session {
                 self.place_symbol(component.definition.clone(), params)?;
             }
             PLACE_SYMBOL => {
-                let library = params["library"].as_str().unwrap_or("starter");
+                let library = params["library"].as_str().unwrap_or("basic-components");
                 let id = params["definition"].as_str().unwrap_or_default();
                 let revision = params.get("definition_revision").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
                 let legacy = ["library", "definition_revision", "definition_digest"].iter().all(|name| params.get(*name).is_none());
@@ -2800,6 +2999,9 @@ impl Session {
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
+            board::class_rules::ROUTE_RULES => {
+                self.route_rule_query(params)?;
+            }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }
@@ -3128,7 +3330,8 @@ impl Session {
             };
             footprint.pin_1_pad = first;
         } else {
-            let definition = board::definition::starter(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
+            let definition =
+                board::definition::basic_components(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
             let key = definition.key();
             if project.board.definitions.get(&key).is_some_and(|pinned| pinned.as_ref() != definition.as_ref()) {
                 return Err(CommandError::InvalidParams("footprint identity/revision conflicts with its pinned copy".into()));
@@ -3660,7 +3863,7 @@ mod tests {
     /// named `main`. The placement command and saved unit record preserve that identity.
     #[test]
     fn placement_preserves_the_library_unit_identity() {
-        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
+        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/basic-components/symbols/resistor.json")).unwrap();
         file["units"][0]["id"] = json!("body");
         let mut definition = library::parse_symbol(&file.to_string()).unwrap();
         definition.library = "unit-identity-fixture".into();

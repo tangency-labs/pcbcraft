@@ -66,7 +66,7 @@ fn lettering_height_and_silk_to_pad_clearance_are_physical() {
     let low = paths.iter().flatten().map(|p| p.y_nm).min().unwrap();
     let high = paths.iter().flatten().map(|p| p.y_nm).max().unwrap();
     assert_eq!(high - low + style.stroke_width_nm, style.text_height_nm);
-    let mut pad = super::super::definition::starter("resistor-0402").unwrap().pads[0].clone();
+    let mut pad = super::super::definition::basic_components("resistor-0402").unwrap().pads[0].clone();
     pad.center = Point { x_nm: 0, y_nm: 0 };
     pad.width_nm = 2_000_000;
     pad.height_nm = 2_000_000;

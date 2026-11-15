@@ -49,6 +49,7 @@ impl PcbApp {
         if placement == Placement::Here {
             if let Some(view) = self.views.view_mut(source) {
                 view.definition = None;
+                view.library = None;
                 view.release_input();
             }
             if let Some(project) = self.session.project() {
@@ -328,7 +329,7 @@ impl PcbApp {
         self.board_size_controls(ui, enabled, compact);
     }
 
-    /// Analysis opens DRC, measurement and counterpart tools, plus Rules for editing saved board defaults.
+    /// Analysis keeps physical checks board-gated while shared class authoring needs only a project.
     fn board_analyze_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let checks = [
@@ -344,16 +345,16 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Rules,
                 label: "Rules",
-                description: "Edit board defaults and routing preferences",
+                description: "Edit net classes, assignments and board defaults.",
                 shortcut: "",
-                enabled,
+                enabled: self.session.project().is_some(),
                 active: false,
                 menu_check: None,
             },
         ];
         match workspace::ribbon_group(ui, "Checks", &checks) {
             Some(0) => self.run_drc(),
-            Some(1) => self.begin_board_rules(),
+            Some(1) => self.begin_rules(),
             _ => {}
         }
         workspace::ribbon_separator(ui);
@@ -577,6 +578,7 @@ impl PcbApp {
             })
             .inner;
         if (pick.clipboard.is_some()
+            || pick.error.is_some()
             || pick.items.is_some()
             || pick.selection.is_some()
             || pick.edit.is_some()
@@ -588,6 +590,11 @@ impl PcbApp {
             && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
+            if let Some((source, error)) = pick.error
+                && self.views.active.accepts(source, &self.session)
+            {
+                self.message = Some(error);
+            }
             if let Some(action) = pick.clipboard {
                 self.board_clipboard_action(ui.ctx(), action);
             }

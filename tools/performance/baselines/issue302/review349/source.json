@@ -1,0 +1,12 @@
+{
+  "base": "1f30e82bf57c797463091c34f8ee768ade050fe2",
+  "source": {
+    "crates/app/src/board_tracks.rs": "43dc33b8ae0ffa473b84c0336463bb65ae591bea22ea04009e750037aad7023a",
+    "crates/app/src/board_presets.rs": "09572b6e75f2e5d104a0b040c83c9b2dae3d777d190c7f904881d5b6862c1a23",
+    "crates/app/src/performance.rs": "a5eec86623d0df1500669c37e73eea0e3e03b0552885a7af8d7cae7e3f2b0ff3",
+    "crates/engine/src/board/class_rules.rs": "8fe542cb9b2399314841855b2ad8a6df19a99a001046c3cb1a177f40778a2663",
+    "crates/engine/src/net_classes/resolve.rs": "03df75199d458a99118b876e4f69e2d08500cdc138ed5f8835379d6050e199b8"
+  },
+  "fingerprint": "76960d34b1365d3b564a2860d8ad31a1e72883f629f190e8dd9cb169aeb67553",
+  "scope": "Three CodeRabbit findings; no broad performance rerun. Prior reports remain historical."
+}

@@ -164,8 +164,8 @@ impl Project {
     pub fn footprint_catalog(&self) -> Vec<Arc<definition::FootprintDefinition>> {
         let mut items = self.board.definitions.clone();
         items.extend(self.schematic_packages.definitions.clone());
-        for id in definition::STARTER_IDS {
-            if let Some(item) = definition::starter(id) {
+        for id in definition::BASIC_COMPONENT_IDS {
+            if let Some(item) = definition::basic_components(id) {
                 items.entry(item.key()).or_insert(item);
             }
         }
@@ -204,12 +204,12 @@ impl Project {
             return Some(saved.clone());
         }
         let defaults: Vec<MappingDefault> =
-            serde_json::from_str(include_str!("../../../../libraries/starter/footprint-mapping-defaults.json")).ok()?;
+            serde_json::from_str(include_str!("../../../../libraries/basic-components/footprint-mapping-defaults.json")).ok()?;
         if let Some(default) = defaults.into_iter().find(|default| {
-            default.symbol.library == symbol.library
+            default.symbol.library == crate::library::compatibility::current_id(&symbol.library)
                 && default.symbol.id == symbol.id
                 && default.symbol.revision == symbol.revision()
-                && default.footprint.library == footprint.library
+                && default.footprint.library == crate::library::compatibility::current_id(&footprint.library)
                 && default.footprint.id == footprint.id
                 && default.footprint.revision == footprint.revision
         }) {
@@ -289,7 +289,7 @@ impl Session {
         let definition = project
             .assignment_definition(&key)
             .cloned()
-            .or_else(|| definition::starter(&assignment.definition).filter(|d| d.key() == key))
+            .or_else(|| definition::basic_components(&assignment.definition).filter(|d| d.key() == key))
             .or_else(|| self.libraries.footprint(&key.0, &key.1, key.2))
             .ok_or_else(|| CommandError::InvalidParams("unavailable footprint identity/revision".into()))?;
         let mut next = project.clone();
