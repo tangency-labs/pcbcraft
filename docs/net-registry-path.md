@@ -1,9 +1,15 @@
 # Path to the net registry
 
-November 10, 2026 · **Proposal for discussion.** It proposes how to reach the
-[persistent net identity](net-identity.md) design from today's storage, and
-asks the format-migration questions AGENTS.md wants discussed before the native
-format changes. Related: [#122](https://github.com/tangency-labs/pcbcraft/issues/122)
+November 10, 2026 · **Planning record.** This document proposed the staged path
+to the [persistent net identity](net-identity.md) design and the format-migration
+questions discussed before those changes. The original stages and broader
+proposals are retained below. Current implemented contracts are
+[single-board storage](single-board-storage.md),
+[sheet occurrences](sheet-occurrence-storage.md),
+[the sparse net registry](net-registry-storage.md),
+[class assignments](net-class-assignments.md) and
+[routing/checking consumers](net-class-consumers.md).
+Related: [#122](https://github.com/tangency-labs/pcbcraft/issues/122)
 (multiboard storage), [#77](https://github.com/tangency-labs/pcbcraft/issues/77)
 (net classes and rules), [#57](https://github.com/tangency-labs/pcbcraft/issues/57)
 (copper zones).

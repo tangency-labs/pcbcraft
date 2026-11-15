@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="docs/quickstart.md">Quickstart</a> ·
-  <a href="examples/README.md">Example project</a> ·
+  <a href="docs/README.md">Documentation</a> ·
   <a href="docs/capabilities.md">Capabilities</a> ·
   <a href="CONTRIBUTING.md">Contributing</a> ·
   <a href="VISION.md">Vision</a>
@@ -120,18 +120,18 @@ connections and command examples.
 
 ## Documentation
 
+The [documentation map](docs/README.md) groups user guides, implementation
+references, architecture plans and verification records, with reading paths for
+contributors and agents.
+
 | Guide | Contents |
 | --- | --- |
-| [Quickstart](docs/quickstart.md) | First editing session and board walkthrough |
+| [Quickstart](docs/quickstart.md) · [Example project](examples/README.md) | First editing session |
 | [Editor guide](docs/editor-guide.md) | Tools, shortcuts, wiring, views and project files |
 | [Capabilities](docs/capabilities.md) | Current support, limits and planned work |
-| [Performance testing](docs/performance-testing.md) | Saved workloads, CPU/native/browser replay, resource measurements and before/after comparisons |
-| [AI assistants and MCP](docs/mcp.md) | Desktop Assistant, live editing and headless automation |
-| [Symbols](docs/symbol-library.md) · [Footprints](docs/footprint-library.md) · [Parts and categories](docs/part-schema.md) · [Library sources](docs/library-sources.md) | Definitions, mappings and source policy |
-| [Native storage](docs/native-project-storage.md) | Folder/archive formats and save behavior |
-| [Multiboard and sheet instances](docs/multiboard-and-sheet-instances.md) | Board folders, instances, cross-probing, assembly and output design under #122 |
-| [Net identity](docs/net-identity.md) · [Path to the registry](docs/net-registry-path.md) | Continuation, split/merge, storage and rule-reconciliation design for single-board and multiboard projects, and the proposed storage slices that reach it |
-| [PCB workspace](docs/board-workspace-plan.md) · [Representation](docs/pcb-representation.md) · [Materials](docs/board-materials.md) | Board architecture, implemented slices and planned extensions |
+| [AI assistants and MCP](docs/mcp.md) · [UI automation](docs/ui-automation.md) | Agent connections, shared commands and native UI input |
+| [Contributing](CONTRIBUTING.md) · [Agent instructions](AGENTS.md) | Repository workflow, architecture and checks |
+| [Reference and formats](docs/README.md#reference-and-formats) | Project storage, library schemas, nets, rules and shared geometry |
 
 ## Contributing
 

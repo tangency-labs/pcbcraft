@@ -2,6 +2,11 @@
 
 Read [VISION.md](VISION.md) first. PRs are written by agents; keep them small, and say what the user sees.
 
+Use the [documentation map](docs/README.md) to select the guides and contracts
+for the affected area. Keep task guides and the capability inventory consistent,
+mark proposals and historical plans clearly, and link canonical contracts
+instead of duplicating their rules. Add new documentation to the map.
+
 ## Opening issues
 
 Check for an existing issue and read the repository's current label names and

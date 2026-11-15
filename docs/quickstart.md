@@ -1,11 +1,11 @@
 # Try PCBCraft
 
-This guide exercises the schematic editor available today. The
-[capability table](capabilities.md) distinguishes working features from the
-[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB inspection and
-component cross-highlighting are available, while board editing is still being built. The two-resistor
-example below is an original development fixture, not the polished MVP demo or
-a validated circuit design.
+This guide starts with schematic editing and continues through the supported
+PCB tools and shared MCP commands. The [capability table](capabilities.md)
+records current limits, while the [documentation map](README.md) links focused
+guides and format references. The two-resistor example below is an original
+development fixture; the polished MVP demo and its end-to-end acceptance remain
+separate work.
 
 ## Build and open an example
 
