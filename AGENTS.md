@@ -38,6 +38,31 @@ The project is MIT OR Apache-2.0, so code can move freely between the Craft apps
 - Copying from SolidCraft and the other MIT/Apache Craft apps is fine and encouraged. Record it in `ATTRIBUTION.md`.
 - Add or update Rust `///` doc comments for new or changed public APIs and for new or changed functions with branching logic, including private helpers. Describe behavior callers rely on, such as input constraints, errors, or state changes. Review the diff for missing or stale doc comments before opening a PR. CodeRabbit’s [Docstring Coverage check](https://docs.coderabbit.ai/pr-reviews/pre-merge-checks) targets 80% of eligible functions touched by the diff.
 
+## Composition and module boundaries
+
+Build the codebase through composition: give modules clear responsibilities,
+explicit inputs and small interfaces so behavior can be reused and either side
+of a boundary can change independently. Apply this to engine operations,
+geometry, storage, providers, jobs, command adapters and presentation. Keep the
+application shell responsible for assembling these pieces and coordinating
+their lifecycles.
+
+Reusable modules receive the data and capabilities they need; keep access to
+the whole application at orchestration boundaries. Separate domain computation
+from rendering and I/O, and return typed results or actions for the owner to
+apply. Preserve one authoritative document/transaction path, shared Undo/Redo,
+revision checks and explicit state ownership across GUI, MCP and other clients.
+Document cancellation, errors and resource ownership at asynchronous boundaries.
+
+Reuse existing modules and shared primitives before duplicating behavior.
+Extract repeated behavior behind a shared interface when a concrete change
+needs it, including repeated workspace chrome, forms and command handling.
+Use ordinary functions, structs and modules for local composition; introduce
+traits, adapters or separate crates when current consumers need substitution
+or an independent boundary. A useful extraction reduces knowledge of another
+module's internals and makes the affected behavior independently verifiable.
+Keep broader reorganizations in bounded changes that preserve existing behavior.
+
 ## Shared UI toolkit reuse
 
 Before implementing or restyling an interface, inspect the existing
