@@ -32,7 +32,7 @@ pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R
 /// Align form fields without another scroll container. The pinned selectable table adds a
 /// horizontal scroll host and row focus targets; forms need one outer vertical scroll owner
 /// so keyboard/accessibility reveal reaches off-screen fields. Narrow hosts stack the label.
-pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, items: &mut [T], mut add: impl FnMut(&mut Ui, &mut T, Cell)) {
+pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, headings: [&str; 2], items: &mut [T], mut add: impl FnMut(&mut Ui, &mut T, Cell)) {
     let t = Tokens::get();
     let width = ui.available_width();
     ui.add_space(t.space_8);
@@ -47,7 +47,7 @@ pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, items: &mut [T], mut add: imp
                 cell(ui, rule, |ui| {
                     ui.strong(title);
                 });
-                for (name, width) in [("Value", value), ("Source", source)] {
+                for (name, width) in [(headings[0], value), (headings[1], source)] {
                     cell(ui, width, |ui| {
                         ui.label(crate::shell::dim(name));
                     });
@@ -67,6 +67,12 @@ pub fn rows<T>(ui: &mut Ui, id: &str, title: &str, items: &mut [T], mut add: imp
         } else {
             ui.strong(title);
             ui.separator();
+            ui.horizontal(|ui| {
+                cell(ui, (width * 0.46).min(160.), |ui| {
+                    ui.label(crate::shell::dim(headings[0]));
+                });
+                ui.label(crate::shell::dim(headings[1]));
+            });
             for (index, item) in items.iter_mut().enumerate() {
                 ui.push_id(index, |ui| {
                     add(ui, item, Cell::Rule);

@@ -81,6 +81,13 @@ visible in the result with conflicts. Such a result must not be consumed as a
 valid rule configuration or treated as a successful design check. Resolution
 does not change copper, connectivity, assignments, history or saved bytes.
 
+The read-only native `Resolution::contribution_statuses(property)` helper labels
+those same contributions Active, Overridden, LessRestrictive or Conflicting without
+changing the values, serialized contract or source order. Equal class/baseline
+preferences still follow class precedence; equal hard limits jointly define their
+bound. Unresolved preferences have no active source. An active hard-bound source
+alone does not mean cross-property conflicts permit using the whole configuration.
+
 `Project::resolve_class_clearance(left, right, board)` returns a `PairResolution`
 with the larger of the two independently resolved clearances, canonical
 clearance contributions, and two object reports sorted by class set. Swapping

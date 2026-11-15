@@ -6,28 +6,33 @@ a physical board, footprint, stackup or material catalog. The form uses the
 [existing catalog](net-classes.md), [assignments](net-class-assignments.md) and
 [dimensional resolver](net-class-consumers.md); it adds no saved vocabulary.
 
-On **Classes**, choose an existing definition or **New class**, enter its name,
-and check the dimensions the class should contribute. Hard limits and routing
-preferences have separate sections. An unchecked dimension displays the current
-board default, or the built-in default when there is no board. It remains absent
-from the class. Inputs accept the shared length syntax, including explicit `mm`,
+On **Class definitions**, choose an existing definition or **New class**, enter its
+name, and check the dimensions the class should contribute. Hard limits and routing
+preferences have separate sections. An unchecked dimension reads **Not specified**
+and contributes no class rule.
+Enabling it starts the field from the board or built-in baseline; only saving the
+class authors that value. Inputs accept the shared length syntax, including explicit `mm`,
 `mil` and `in` suffixes. Untouched fields retain their exact nanometres even when
 the selected display unit rounds the text. **Save class** creates or updates one
 stable class identity in one undoable transaction.
 
 Select a schematic wire or net label, or PCB tracks/vias, and use **Net rules…**
-in Properties to open **Selected net**. Alternatively, search the chooser for a
+in Properties to open **Effective net rules**. Alternatively, search the chooser for a
 current supported net. Display names help browsing; typed component, occurrence
 and net identities determine the target. Select the complete set of classes and
 choose **Assign classes**. Clearing all boxes removes the assignment. A previously
 derived net is promoted only when a nonempty assignment is saved.
 
-The page aligns effective values with their sources and reports conflicts above
-the dimension rows.
+The page shows **Effective value** and **Active source**, with conflicts above the
+dimension rows. Changed checkboxes show an **Unsaved assignment preview** with
+preview column headings until **Assign classes** succeeds.
 An unresolved preference displays **Unresolved**, rather than picking one class.
-**Contributions and identities** shows every contributing built-in, board or class
-source, including class UUID and definition revision; **Assignment origins** shows
-the net identities retained through topology reconciliation. These are the same
+**Contributions and identities** distinguishes **Active**, **Overridden**,
+**Less restrictive** and **Conflicting** sources, retaining original values, class
+UUIDs and definition revisions. Equal hard limits can jointly be active; an explicit
+class preference replaces the baseline even when their values match.
+**Saved assignment origins** shows the net identities retained through topology
+reconciliation. These are the same
 sources available through `nets.inspect_classes`, `net_classes.resolve` and the
 PCB contact query `pcb.route_rules`.
 

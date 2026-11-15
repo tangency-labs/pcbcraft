@@ -45,6 +45,8 @@ fn class_form_controls_create_edit_cancel_and_exact_units() {
         h.run();
         click(&mut h, "New class");
         replace(&mut h, "Class name", "Power");
+        assert_eq!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance value").value().as_deref(), Some("Not specified"));
+        assert!(h.get_by_role_and_label(egui::Role::TextInput, "Copper clearance value").accesskit_node().is_disabled());
         click(&mut h, "Copper clearance");
         replace(&mut h, "Copper clearance value", "invalid");
         assert!(h.get_by_role_and_label(egui::Role::Button, "Save class").accesskit_node().is_disabled());
@@ -260,4 +262,46 @@ fn two_classes_reach_pcb_update_split_and_native_reopen() {
         assert_eq!(reopened.inspect_net_classes(&target).unwrap(), inspected);
     }
     assert_eq!(encode_documents(reopened).unwrap(), saved);
+}
+
+/// Static text exposes its displayed value separately from its contextual accessible name.
+fn source_shown(h: &Harness<'_, PcbApp>, name: &'static str) -> bool {
+    h.query(egui_kittest::kittest::By::new().role(egui::Role::Label).predicate(move |node| node.label().as_deref() == Some(name))).is_some()
+}
+
+/// The effective page identifies the actual source even when class/default numbers match,
+/// and staged checkbox changes are explicitly previews until the shared command succeeds.
+#[test]
+fn effective_sources_and_unsaved_previews_are_distinct() {
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    for x in [0, 25400000] {
+        app.run(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
+    }
+    let ids: Vec<_> = app.session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    app.run(
+        pcbcraft_engine::CONNECT_PINS,
+        &json!({"from":{"symbol":ids[0],"terminal":"1"},"to":{"symbol":ids[1],"terminal":"1"},"expected_revision":app.session.revision()}),
+    );
+    app.run(
+        net_classes::CREATE,
+        &json!({"name":"Weak","rules":{"clearance_nm":100000,"preferred_track_width_nm":250000},"expected_revision":app.session.revision()}),
+    );
+    let wire = app.session.project().unwrap().wires()[0].id();
+    app.views.active.schematic.selection.wires.insert(wire);
+    app.begin_net_rules();
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    h.get_by_role_and_label(egui::Role::CheckBox, "Weak").click();
+    h.run();
+    assert!(h.query_by_label("Unsaved assignment preview").is_some());
+    assert!(source_shown(&h, "Preview source Copper clearance: Built-in defaults"));
+    assert!(source_shown(&h, "Preview source Preferred track width: Weak"));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Assign classes");
+    assert!(h.query_by_label("Unsaved assignment preview").is_none());
+    assert!(source_shown(&h, "Active source Copper clearance: Built-in defaults"));
+    assert!(source_shown(&h, "Active source Preferred track width: Weak"));
+    click(&mut h, "Contributions and identities");
+    assert!(h.query_by_label_contains("Overridden · Built-in defaults:").is_some());
 }

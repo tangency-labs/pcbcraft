@@ -3,7 +3,7 @@ use crate::{Dialog, PcbApp, ViewInput, editor_view::DocumentTarget};
 use pcbcraft_chrome::{controls, properties, rule_form as form, shell, units};
 use pcbcraft_engine::{
     Project,
-    net_classes::{self, Definition, Property, Resolution, Rules, Source},
+    net_classes::{self, ContributionStatus, Definition, Property, Resolution, Rules, Source},
     nets::{Anchor, ClassBinding, ClassTarget},
 };
 use serde_json::json;
@@ -255,7 +255,7 @@ impl Edit {
 
 /// Render authored and inherited values in the same aligned form cells. Disabled fields retain
 /// their source value and exact edit text, and the host owns each sparse opinion's checkbox.
-fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft, baseline: pcbcraft_engine::board::rules::Values, unit: units::Unit, board: bool) {
+fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft) {
     ui.label("Class name");
     controls::text(ui, &mut draft.name).accessible_name("Class name");
     for preferred in [false, true] {
@@ -265,13 +265,14 @@ fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft, baseline: pcbcraft_en
                 ui,
                 if preferred { "class_preferences" } else { "class_limits" },
                 if preferred { "Routing preferences" } else { "Hard limits" },
+                ["Class value", "Contribution"],
                 &mut fields,
                 |ui, field, cell| match cell {
                     form::Cell::Rule => {
                         controls::checkbox(ui, &mut field.enabled, label(field.property));
                     }
                     form::Cell::Value => {
-                        let mut inherited = units::label(field.property.value(&baseline), unit);
+                        let mut inherited = "Not specified".to_owned();
                         let text = if field.enabled { &mut field.text } else { &mut inherited };
                         ui.add_enabled_ui(field.enabled, |ui| {
                             ui.add_sized(egui::vec2(ui.available_width(), pcbcraft_chrome::Tokens::get().control_height), properties::input(text))
@@ -279,12 +280,14 @@ fn class_fields(ui: &mut egui::Ui, draft: &mut ClassDraft, baseline: pcbcraft_en
                         });
                     }
                     form::Cell::Source => {
-                        ui.label(shell::dim(if field.enabled {
-                            "This class"
-                        } else if board {
-                            "Board defaults"
+                        ui.label(shell::dim(if !field.enabled {
+                            "None"
+                        } else if field.property.is_preference() {
+                            "Preference"
+                        } else if field.property.is_maximum() {
+                            "Upper limit"
                         } else {
-                            "Built-in defaults"
+                            "Lower limit"
                         }));
                     }
                 },
@@ -299,30 +302,39 @@ fn source_name(project: &Project, source: &Source) -> String {
         Source::Builtin => "Built-in defaults".into(),
         Source::Request => "Request".into(),
         Source::Board { .. } => "Board defaults".into(),
-        Source::Class { rule, .. } => project.net_classes().get(*rule).map_or_else(|| "Class".into(), |class| class.name.clone()),
+        Source::Class { rule, .. } => project.net_classes().get(*rule).map_or_else(|| "Class".into(), |class| class_label(project, class)),
     }
 }
 
-/// Explain sources matching the published value without performing another resolution. An
-/// unresolved preference keeps all exact conflicting contributions available in Details.
+/// Show sources that actually define the result, rather than every numerically matching
+/// candidate. In particular, an overridden baseline is never reported as an active preference.
 fn effective_sources(project: &Project, result: &Resolution, property: Property) -> String {
-    let Some(value) = result.values.get(&property).copied().flatten() else { return "Conflict".into() };
-    result
-        .contributions
-        .get(&property)
-        .into_iter()
-        .flatten()
-        .filter(|source| source.value_nm == value)
-        .map(|source| source_name(project, &source.source))
+    let active = result
+        .contribution_statuses(property)
+        .filter(|(_, status)| *status == ContributionStatus::Active)
+        .map(|(contribution, _)| source_name(project, &contribution.source))
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect::<Vec<_>>();
+    if active.is_empty() { "No active source".into() } else { active.join(", ") }
+}
+
+/// Detail labels describe participation without presenting inactive values as additional rules.
+fn status_label(status: ContributionStatus) -> &'static str {
+    match status {
+        ContributionStatus::Active => "Active",
+        ContributionStatus::Overridden => "Overridden",
+        ContributionStatus::LessRestrictive => "Less restrictive",
+        ContributionStatus::Conflicting => "Conflicting",
+    }
 }
 
 /// Effective values use the same columns as authored dimensions. Surface conflicts before
 /// the table while keeping technical source identities and assignment origins in a disclosure.
-fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: units::Unit, bindings: &[ClassBinding]) {
+fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: units::Unit, bindings: &[ClassBinding], preview: bool) {
+    if preview {
+        ui.label(shell::dim("Unsaved assignment preview"));
+    }
     if !result.conflicts.is_empty() {
         form::conflict(ui, |ui| {
             ui.strong("Rule conflicts");
@@ -339,6 +351,7 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
                 ui,
                 if preferred { "effective_preferences" } else { "effective_limits" },
                 if preferred { "Routing preferences" } else { "Hard limits" },
+                if preview { ["Preview value", "Preview source"] } else { ["Effective value", "Active source"] },
                 &mut fields,
                 |ui, property, cell| match cell {
                     form::Cell::Rule => {
@@ -353,7 +366,9 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
                     }
                     form::Cell::Source => {
                         let text = effective_sources(project, result, *property);
-                        ui.add(egui::Label::new(shell::dim(&text)).truncate()).on_hover_text(text);
+                        ui.add(egui::Label::new(&text).truncate())
+                            .accessible_name(format!("{} {}: {text}", if preview { "Preview source" } else { "Active source" }, label(*property)))
+                            .on_hover_text(text);
                     }
                 },
             );
@@ -363,17 +378,33 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
         controls::collapsing(ui, "rule_sources", "Contributions and identities", false, None, |ui| {
             for property in Property::ALL {
                 ui.strong(label(property));
-                for contribution in result.contributions.get(&property).into_iter().flatten() {
+                for (contribution, status) in result.contribution_statuses(property) {
                     let identity = match contribution.source {
                         Source::Class { rule, revision } => format!(" · {rule} · r{revision}"),
                         Source::Board { rule } => format!(" · {rule}"),
                         _ => String::new(),
                     };
-                    ui.label(format!("{}{}: {}", source_name(project, &contribution.source), identity, units::label(contribution.value_nm, unit)));
+                    let text = format!(
+                        "{} · {}: {}{}",
+                        status_label(status),
+                        source_name(project, &contribution.source),
+                        units::label(contribution.value_nm, unit),
+                        identity
+                    );
+                    ui.add(
+                        egui::Label::new(if status == ContributionStatus::Active {
+                            egui::RichText::new(text)
+                        } else if status == ContributionStatus::Conflicting {
+                            shell::error(text)
+                        } else {
+                            shell::dim(text)
+                        })
+                        .wrap(),
+                    );
                 }
             }
         });
-        controls::collapsing(ui, "class_origins", "Assignment origins", false, None, |ui| {
+        controls::collapsing(ui, "class_origins", "Saved assignment origins", false, None, |ui| {
             for binding in bindings {
                 ui.label(format!("Class {} · origin {}", binding.class, binding.origin));
             }
@@ -431,7 +462,9 @@ impl PcbApp {
         let primary = if edit.page == Page::Classes { "Save class" } else { "Assign classes" };
         let action = pcbcraft_chrome::catalog::settings_form_width(ctx, "Rules", 800., primary, current && valid, |ui| {
             form::body(ui, |ui| {
-                ui.add_enabled_ui(!dirty, |ui| properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Classes"), (Page::Net, "Selected net")]));
+                ui.add_enabled_ui(!dirty, |ui| {
+                    properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Class definitions"), (Page::Net, "Effective net rules")])
+                });
                 if !current {
                     ui.label(shell::error("The project or view changed. Close and reopen Rules to continue."));
                 }
@@ -468,14 +501,8 @@ impl PcbApp {
                                         .clicked();
                                 })
                             });
-                            let base = edit.baseline();
-                            let board = edit
-                                .project
-                                .board_target()
-                                .and_then(|target| edit.project.board_view(target))
-                                .is_some_and(|board| board.authored_rules().is_some());
                             if let Some(draft) = &mut edit.draft {
-                                class_fields(ui, draft, base, edit.unit, board);
+                                class_fields(ui, draft);
                             }
                         }
                         Page::Net => {
@@ -526,7 +553,9 @@ impl PcbApp {
                                 });
                                 match edit.project.resolve_net_classes(&edit.classes.iter().copied().collect::<Vec<_>>(), edit.project.board_target())
                                 {
-                                    Ok(result) => resolution(ui, &edit.project, &result, edit.unit, &edit.bindings),
+                                    Ok(result) => {
+                                        resolution(ui, &edit.project, &result, edit.unit, &edit.bindings, edit.classes != edit.original_classes)
+                                    }
                                     Err(error) => {
                                         ui.label(shell::error(error.to_string()));
                                     }

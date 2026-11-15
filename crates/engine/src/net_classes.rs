@@ -8,7 +8,7 @@ mod tests;
 use crate::{Project, board::track};
 pub(crate) use commands::{parse_set, rules_schema, set_schema};
 pub(crate) use resolve::pair_clearance;
-pub use resolve::{Conflict, Contribution, PairResolution, Resolution, Source};
+pub use resolve::{Conflict, Contribution, ContributionStatus, PairResolution, Resolution, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

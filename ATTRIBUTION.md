@@ -1408,3 +1408,10 @@ shared controls while the form retains one vertical scroll owner. It adds no
 custom control painting, model policy, dependency or toolkit revision. Source
 names and net references are presentation only; exact identities remain retained
 in the expanded details and native commands.
+
+The active-source follow-up adds an original read-only classification over the
+existing resolver result, without changing resolution, commands or saved data.
+The same qualified form rows distinguish class contributions, saved effective
+rules and unsaved assignment previews; technical details identify active,
+overridden, less restrictive and conflicting contributions. No dependency,
+external source, custom drawing or shared toolkit revision was introduced.
