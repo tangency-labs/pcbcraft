@@ -3,6 +3,8 @@
 //! back, and the box is checked once more. `scripts/generate-step-fixtures.py` writes the
 //! fixtures and works the expected boxes out from the dimensions it writes, without a kernel.
 #![cfg(not(target_arch = "wasm32"))]
+// The helpers that load expected.json are not #[test] functions; a malformed file fails the test.
+#![allow(clippy::unwrap_used)]
 
 use std::path::Path;
 
