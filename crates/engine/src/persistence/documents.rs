@@ -380,9 +380,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Net-class catalog requires project format 20, 21, 22 or 23, which requires a nonempty catalog.".into());
     }
     if (!generated_net_format && parameter_format != project.parameters.is_some())
-        || (generated_net_format && project.parameters.as_ref().is_some_and(Vec::is_empty))
+        || (generated_net_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
     {
-        return Err("Project parameters require project format 22, which requires a nonempty list.".into());
+        return Err("Project parameters require project format 22 or 23, with a nonempty list.".into());
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
@@ -459,7 +459,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22 or 23".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
-        || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
+        || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
         return Err("project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23, no board and a nonempty bounded list".into());
@@ -819,7 +819,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
     );
-    if board.tracks.as_ref().is_some_and(Vec::is_empty) || board.vias.as_ref().is_some_and(Vec::is_empty) {
+    if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
     }
     if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())

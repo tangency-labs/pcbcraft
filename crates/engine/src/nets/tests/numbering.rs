@@ -181,3 +181,53 @@ fn number_exhaustion_is_atomic() {
     assert_eq!((session.undo.len(), session.redo.len()), history);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// Inspection maps only active identities after a merge, while retaining historical records
+/// separately and leaving the document and revision untouched.
+#[test]
+fn inspection_indexes_active_networks_without_retired_identities() {
+    let (mut session, pins) = circuit(6, false);
+    for (a, b) in [(0, 1), (2, 3), (4, 5)] {
+        connect(&mut session, &pins[a], &pins[b]);
+    }
+    let retired = [id_for(&session, &pins[0]), id_for(&session, &pins[2])];
+    connect(&mut session, &pins[1], &pins[2]);
+    let expected = [id_for(&session, &pins[0]), id_for(&session, &pins[4])];
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let inspection = before.inspect_net_registry().unwrap();
+    let ids: std::collections::BTreeSet<_> =
+        inspection["nets"].as_array().unwrap().iter().map(|row| Uuid::parse_str(row["id"].as_str().unwrap()).unwrap()).collect();
+    assert_eq!(ids, expected.into_iter().collect());
+    assert!(retired.iter().all(|id| !ids.contains(id)));
+    assert_eq!(before.net_registry.records.len(), 4);
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// Format 23 combines optional project parameters with generated net numbers, for both
+/// schematic-owned and board-owned registries, without changing format 22's parameter contract.
+#[test]
+fn numbered_nets_and_project_parameters_round_trip_together() {
+    for board in [false, true] {
+        let (mut session, pins) = circuit(2, board);
+        connect(&mut session, &pins[0], &pins[1]);
+        let id = id_for(&session, &pins[0]);
+        apply(&mut session, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":"B"}));
+        let docs = encode_documents(session.snapshot().unwrap()).unwrap();
+        let entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/23");
+        assert_eq!(entry["parameters"], json!({"Revision":"B"}));
+        let reopened = decode_documents(&docs).unwrap();
+        assert_eq!(reopened.parameters().get("Revision").map(String::as_str), Some("B"));
+        assert_eq!(reopened.net_registry.record(id).unwrap().generated_number, Some(1));
+        round_trip(&session);
+        let mut old = docs.clone();
+        let mut downgraded = entry.clone();
+        downgraded["format"] = json!("pcbcraft-project/22");
+        old.insert(ENTRY_POINT.into(), serde_json::to_vec(&downgraded).unwrap());
+        assert!(decode_documents(&old).is_err());
+        apply(&mut session, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":null}));
+        round_trip(&session);
+    }
+}

@@ -630,21 +630,28 @@ pub use track_labels::TrackLabels;
 /// A fine glyph halo maintains contrast across both ring and hole. Hide names
 /// that cannot fit inside the circular outline at 11 pt or would be clipped by the viewport.
 pub fn via_net_label(p: &Painter, center: Pos2, diameter: f32, name: &str) {
+    if let Some(shape) = via_net_label_shape(p, center, diameter, name) {
+        p.add(shape);
+    }
+}
+
+/// Group foreground and halo into one removable annotation, rejecting unreadable or clipped text.
+fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> Option<egui::Shape> {
     if name.is_empty() || !diameter.is_finite() || diameter <= 10. || !p.clip_rect().contains(center) {
-        return;
+        return None;
     }
     let halo = Tokens::get().board_canvas;
     let ink = copper_label_ink(halo);
     let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(14.), ink, egui::Align::Center);
     let extent = galley.mesh_bounds.size().length();
     if !extent.is_finite() || extent <= f32::EPSILON {
-        return;
+        return None;
     }
     // Reserving ten points on the diagonal keeps the text and its fine outline inside
     // the circle, including its corners, with at least two points clear of the outer edge.
     let scale = ((diameter - 10.) / extent).min(1.);
     if 14. * scale < 11. {
-        return;
+        return None;
     }
     let mut text = egui::epaint::TextShape::new(Pos2::ZERO, galley, ink);
     text.transform(egui::emath::TSTransform::from_scaling(scale));
@@ -652,14 +659,16 @@ pub fn via_net_label(p: &Painter, center: Pos2, diameter: f32, name: &str) {
     let offset = 0.75;
     let bounds = text.visual_bounding_rect().expand(offset);
     if !p.clip_rect().contains_rect(bounds) {
-        return;
+        return None;
     }
+    let mut shapes = Vec::with_capacity(5);
     for shift in [vec2(-offset, 0.), vec2(offset, 0.), vec2(0., -offset), vec2(0., offset)] {
         let mut outline = text.clone().with_override_text_color(halo);
         outline.pos += shift;
-        p.add(outline);
+        shapes.push(egui::Shape::Text(outline));
     }
-    p.add(text);
+    shapes.push(egui::Shape::Text(text));
+    Some(egui::Shape::Vec(shapes))
 }
 
 #[cfg(test)]

@@ -710,7 +710,12 @@ fn place_group(
             }
             footprint.position = transform(footprint.position);
             footprint.rotation = placement.rotation;
-            let (pads, graphics) = drawing(&footprint, camera, response.rect, visible, &colors);
+            let (mut pads, graphics) = drawing(&footprint, camera, response.rect, visible, &colors);
+            if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
+                for pad in &mut pads {
+                    pad.net = None;
+                }
+            }
             pcbcraft_chrome::board::footprint(
                 ui.painter(),
                 &pads,

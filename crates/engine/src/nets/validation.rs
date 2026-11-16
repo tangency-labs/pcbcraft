@@ -114,18 +114,21 @@ impl Project {
     pub fn inspect_net_registry(&self) -> Result<serde_json::Value, String> {
         let graph = Graph::build(self)?;
         let electrical = self.electrical_connectivity();
+        let mut active_ids = vec![None; graph.networks.len()];
+        for record in &self.net_registry.records {
+            if matches!(record.state, State::Active {})
+                && let Some(index) = graph.network(&record.primary)
+            {
+                active_ids[index].get_or_insert(record.id);
+            }
+        }
         let nets: Vec<_> = graph
             .networks
             .iter()
             .enumerate()
             .filter(|(_, n)| n.meaningful())
             .map(|(index, network)| {
-                let id = self
-                    .net_registry
-                    .records
-                    .iter()
-                    .find(|r| matches!(r.state, State::Active {}) && graph.network(&r.primary) == Some(index))
-                    .map(|r| r.id);
+                let id = active_ids[index];
                 let display_name = network
                     .anchors
                     .iter()

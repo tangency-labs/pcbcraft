@@ -1,7 +1,7 @@
-//! Frame-local track annotations follow copper paint order without leaving partial words.
+//! Frame-local copper annotations follow copper paint order without leaving partial words.
 use super::*;
 
-/// Track text already submitted to this painter. Later copper removes overlapping annotations
+/// Track and via text already submitted to this painter. Later copper removes overlapping annotations
 /// as whole shapes, preserving the active layer's visual priority at junctions and crossings.
 pub struct TrackLabels {
     painter: Painter,
@@ -16,12 +16,24 @@ impl TrackLabels {
 
     /// Paint fitting names, omitting candidates that overlap an existing readable name.
     pub fn track(&mut self, ends: [Pos2; 2], width: f32, name: &str, copper: Color32) {
-        track_net_labels(&self.painter, ends, width, name, copper, |shape| {
-            let bounds = shape.visual_bounding_rect().expand(2.);
-            if !self.labels.iter().any(|(other, _)| other.intersects(bounds)) {
-                self.labels.push((bounds, self.painter.add(shape)));
-            }
-        });
+        let painter = &self.painter;
+        let labels = &mut self.labels;
+        track_net_labels(painter, ends, width, name, copper, |shape| Self::register(painter, labels, shape.into()));
+    }
+
+    /// Paint a via name and its halo as one annotation that later copper can remove in full.
+    pub fn via(&mut self, center: Pos2, diameter: f32, name: &str) {
+        if let Some(shape) = via_net_label_shape(&self.painter, center, diameter, name) {
+            Self::register(&self.painter, &mut self.labels, shape);
+        }
+    }
+
+    /// Reserve the complete annotation bounds and omit candidates overlapping an earlier name.
+    fn register(painter: &Painter, labels: &mut Vec<(Rect, egui::layers::ShapeIdx)>, shape: egui::Shape) {
+        let bounds = shape.visual_bounding_rect().expand(2.);
+        if !labels.iter().any(|(other, _)| other.intersects(bounds)) {
+            labels.push((bounds, painter.add(shape)));
+        }
     }
 
     /// Omit earlier names touched by a later track, including its rounded ends. The expanded

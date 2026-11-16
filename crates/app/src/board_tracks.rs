@@ -1102,12 +1102,7 @@ pub(super) fn paint(
         via(moved(item.at, selected), item.diameter_nm, item.drill_nm, selected, focus.map(|focus| focus.contains_copper(&item.id)));
         let visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
         if visible && let Some(name) = names.and_then(|names| names.get(&item.id)) {
-            pcbcraft_chrome::board::via_net_label(
-                &painter,
-                camera.screen(moved(item.at, selected), rect),
-                width_px(camera, rect, item.diameter_nm),
-                name,
-            );
+            labels.via(camera.screen(moved(item.at, selected), rect), width_px(camera, rect, item.diameter_nm), name);
         }
     }
     labels

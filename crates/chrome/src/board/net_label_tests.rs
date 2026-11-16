@@ -24,7 +24,23 @@ fn shapes_in(size: egui::Vec2, paint: impl Fn(&Painter)) -> Vec<egui::Shape> {
     let mut out =
         ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() }, |ui| paint(ui.painter()));
     out.textures_delta.clear();
-    out.shapes.into_iter().map(|shape| shape.shape).collect()
+    let mut flat = Vec::new();
+    for shape in out.shapes {
+        flatten(shape.shape, &mut flat);
+    }
+    flat
+}
+
+/// Inspect nested annotation groups through the same shapes submitted to the painter.
+fn flatten(shape: egui::Shape, flat: &mut Vec<egui::Shape>) {
+    match shape {
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                flatten(shape, flat);
+            }
+        }
+        shape => flat.push(shape),
+    }
 }
 
 /// A wide viewport needs a few well-separated names, regardless of the zoomed copper width.
@@ -189,5 +205,25 @@ fn circular_pad_names_stay_inside_the_land() {
     let bounds = labels[0].galley.rect.translate(labels[0].pos.to_vec2());
     for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
         assert!(corner.distance(center) < 40.);
+    }
+}
+
+/// Later copper removes both the via name and every halo glyph, preserving uncovered names.
+#[test]
+fn later_copper_removes_the_entire_via_annotation() {
+    for cover in 0..4 {
+        let text = text_shapes(|p| {
+            let mut labels = TrackLabels::new(p.clone());
+            labels.via(pos2(200., 200.), 100., "ALERT_N");
+            labels.via(pos2(400., 200.), 100., "GND");
+            match cover {
+                0 => labels.cover_disc(pos2(225., 200.), 10.),
+                1 => labels.cover_rect(Rect::from_min_max(pos2(222., 190.), pos2(235., 210.))),
+                2 => labels.cover_track([pos2(225., 170.), pos2(225., 230.)], 8.),
+                _ => labels.cover_disc(pos2(280., 200.), 10.),
+            }
+        });
+        assert_eq!(text.iter().filter(|text| text.galley.job.text == "GND").count(), 5);
+        assert_eq!(text.iter().filter(|text| text.galley.job.text == "ALERT_N").count(), if cover == 3 { 5 } else { 0 });
     }
 }

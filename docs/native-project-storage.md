@@ -21,7 +21,7 @@ stored project value select it.
 Project/23 adds persistent generated net numbers to the same instance registry,
 using instances/4 when board-owned. A stored record's positive `generated_number`
 is unique across live and historical identities. This envelope can also carry
-class catalogs, assignments and no-connect intent. Older envelopes reject the
+class catalogs, assignments, project parameters and no-connect intent. Older envelopes reject the
 number field; older files retain their exact no-op encoding until an electrical
 transaction adopts the numbers. See [net registry storage](net-registry-storage.md).
 
