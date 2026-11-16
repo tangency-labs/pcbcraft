@@ -41,6 +41,12 @@ editor input. Completed findings retain their source revision.
 
 - Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
 
+Board setup stores an optional role and base copper for each copper layer, a
+tolerance and basis for its finished thickness, and the declared finished board
+thickness, through `pcb.set_board_setup`. Boards that use them save as board
+format 20 and setup profiles as version 2, which older builds refuse; other
+boards keep their encoding.
+
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.
 Right-click and use Select symbol
