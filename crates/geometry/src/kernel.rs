@@ -1,8 +1,9 @@
 //! The solidcore implementation of the kernel boundary. Nothing here is public: the crate root
 //! converts between these millimetre values and its nanometre types.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use solidcore_record::step::product::{ItemKind, MAX_VISITS, ProductStructure};
 use solidcore_step::write::product::{ExportBody, ExportError, Header};
 
 use crate::guard::guard;
@@ -75,8 +76,16 @@ pub(crate) struct Read {
     pub(crate) refused: Vec<RefusedItem>,
 }
 
+/// Most placements one file's product structure may expand to.
+const MAX_PLACEMENTS: u64 = MAX_VISITS as u64;
+
+/// Most work one expansion may do, counted as each definition visited plus each representation
+/// walked and its items: ten for each placement the expansion is allowed.
+const MAX_EXPANSION_WORK: u64 = 10 * MAX_PLACEMENTS;
+
 /// The named bodies of a STEP text, where its product structure places them, and the solid items
-/// refused. A panic while one solid is handed to the kernel refuses that solid only.
+/// refused. A panic while one solid is handed to the kernel refuses that solid only. A STEP item
+/// the reader lists more than once (a closed shell two surface models share) is one body.
 pub(crate) fn read(text: &str) -> Result<Read> {
     guard("STEP read", || {
         let exchange = solidcore_step::p21::parse(text).map_err(|e| GeometryError::new(ErrorCode::ModelUnreadable, String::from(e)))?;
@@ -89,7 +98,11 @@ pub(crate) fn read(text: &str) -> Result<Read> {
         solids.sort_by_key(|s| s.item);
         let mut bodies = Vec::with_capacity(solids.len());
         let mut body_of_item = BTreeMap::new();
+        let mut tried = BTreeSet::new();
         for solid in solids {
+            if !tried.insert(solid.item) {
+                continue;
+            }
             let made = guard("STEP solid", || {
                 solidcore_ops::Body::from_record(&solid.brep, false).map(|(body, _)| body).map_err(|e| ops_error("STEP solid", e))
             });
@@ -108,16 +121,26 @@ pub(crate) fn read(text: &str) -> Result<Read> {
             }
         }
         refused.sort_by_key(|r| r.entity);
+        refused.dedup_by_key(|r| r.entity);
         let placements = placements(&exchange, &body_of_item, bodies.len())?;
         Ok(Read { bodies, placements, refused })
     })
 }
 
 /// Every use of a read body in the world frame: the product structure's, then each body it does
-/// not place, by the identity. A refused item's placements are dropped with it.
+/// not place, by the identity. A refused item's placements are dropped with it. The expansion is
+/// counted before it runs and refused past [`MAX_PLACEMENTS`] or [`MAX_EXPANSION_WORK`].
 fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<u64, usize>, count: usize) -> Result<Vec<(usize, [[f64; 4]; 4])>> {
     let unreadable = |e: String| GeometryError::new(ErrorCode::ModelUnreadable, format!("assembly structure: {e}"));
     let structure = solidcore_record::step::product::read(exchange).map_err(unreadable)?;
+    let bodies_of = |entity: u64| solidcore_step::topology::items(exchange, entity).iter().filter(|i| body_of_item.contains_key(i)).count() as u64;
+    let cost = Expansion::new(&structure, &bodies_of).total().map_err(unreadable)?;
+    if cost.placements > MAX_PLACEMENTS {
+        return Err(unreadable(format!("the assembly places more than {MAX_PLACEMENTS} bodies")));
+    }
+    if cost.work > MAX_EXPANSION_WORK {
+        return Err(unreadable(format!("the assembly takes more than {MAX_EXPANSION_WORK} steps to expand")));
+    }
     let placed = solidcore_ops::placed_bodies(&structure).map_err(unreadable)?;
     let mut out = Vec::with_capacity(placed.len().max(count));
     let mut seen = vec![false; count];
@@ -136,6 +159,158 @@ fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<
     let identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
     out.extend(seen.iter().enumerate().filter(|(_, s)| !**s).map(|(body, _)| (body, identity)));
     Ok(out)
+}
+
+/// What expanding part of a product structure costs: the placements it emits and the work it does.
+#[derive(Clone, Copy, Default)]
+struct Cost {
+    placements: u64,
+    work: u64,
+}
+
+impl Cost {
+    fn plus(self, other: Cost) -> Cost {
+        Cost { placements: self.placements.saturating_add(other.placements), work: self.work.saturating_add(other.work) }
+    }
+}
+
+/// A memoised node of the count: not reached yet, being counted (a cycle if reached again), or
+/// counted.
+#[derive(Clone, Copy)]
+enum Node {
+    Unseen,
+    Open,
+    Done(Cost),
+}
+
+/// Counts what `solidcore_ops::placed_bodies` would emit without expanding anything: each
+/// definition and representation is counted once and its uses multiply, so a file that places a
+/// body 2^20 times through 20 levels of two mapped items costs 20 small sums. It follows the
+/// walk's rules: a definition walks every representation its shapes reach through relationships
+/// without a transformation, then its occurrences; a representation emits its bodies and walks
+/// each mapped item's representation and those related to it, each once for that item.
+struct Expansion<'a> {
+    structure: &'a ProductStructure,
+    /// The placements one body item gives: the read bodies of its STEP item.
+    bodies_of: &'a dyn Fn(u64) -> u64,
+    /// Representations related to each without a transformation, in relationship order.
+    related: Vec<Vec<usize>>,
+    /// Child definitions of each definition, in occurrence order.
+    children: Vec<Vec<usize>>,
+    definitions: Vec<Node>,
+    representations: Vec<Node>,
+}
+
+impl<'a> Expansion<'a> {
+    fn new(structure: &'a ProductStructure, bodies_of: &'a dyn Fn(u64) -> u64) -> Expansion<'a> {
+        let mut related = vec![Vec::new(); structure.representations.len()];
+        for link in structure.links.iter().filter(|l| l.transformation.is_none()) {
+            if let Some(list) = related.get_mut(link.rep_1) {
+                list.push(link.rep_2);
+            }
+            if let Some(list) = related.get_mut(link.rep_2) {
+                list.push(link.rep_1);
+            }
+        }
+        let mut children = vec![Vec::new(); structure.definitions.len()];
+        for occurrence in &structure.occurrences {
+            if let Some(list) = children.get_mut(occurrence.parent) {
+                list.push(occurrence.child);
+            }
+        }
+        Expansion {
+            structure,
+            bodies_of,
+            related,
+            children,
+            definitions: vec![Node::Unseen; structure.definitions.len()],
+            representations: vec![Node::Unseen; structure.representations.len()],
+        }
+    }
+
+    /// The cost of expanding every root; the first error any of them meets.
+    fn total(&mut self) -> std::result::Result<Cost, String> {
+        let mut cost = Cost::default();
+        for &root in &self.structure.roots {
+            cost = cost.plus(self.definition(root)?);
+        }
+        Ok(cost)
+    }
+
+    /// The cost of expanding `definition` once: one step, one for each representation its
+    /// shapes reach, those representations' costs and its occurrences' children's. An error for
+    /// a definition met again inside its own expansion.
+    fn definition(&mut self, definition: usize) -> std::result::Result<Cost, String> {
+        match self.definitions.get(definition) {
+            None => return Ok(Cost { placements: 0, work: 1 }),
+            Some(Node::Open) => return Err("assembly cycle".into()),
+            Some(Node::Done(cost)) => return Ok(*cost),
+            Some(Node::Unseen) => {}
+        }
+        self.definitions[definition] = Node::Open;
+        let shapes = self.structure.definitions[definition].shapes.clone();
+        let reached = self.closure(&shapes);
+        let mut cost = Cost { placements: 0, work: 1 + reached.len() as u64 };
+        for representation in reached {
+            cost = cost.plus(self.representation(representation)?);
+        }
+        for child in self.children[definition].clone() {
+            cost = cost.plus(self.definition(child)?);
+        }
+        self.definitions[definition] = Node::Done(cost);
+        Ok(cost)
+    }
+
+    /// The representations `start` reaches through relationships without a transformation, each
+    /// once.
+    fn closure(&self, start: &[usize]) -> BTreeSet<usize> {
+        let mut seen = BTreeSet::new();
+        let mut stack = start.to_vec();
+        while let Some(representation) = stack.pop() {
+            if seen.insert(representation) {
+                stack.extend(self.related.get(representation).into_iter().flatten());
+            }
+        }
+        seen
+    }
+
+    /// The cost of walking `representation` once: one step and one for each item, a placement
+    /// for each read body of each body item, and for each mapped item the cost of its
+    /// representation and of those related to it. An error for a missing representation or map,
+    /// and for a representation met again inside its own walk.
+    fn representation(&mut self, representation: usize) -> std::result::Result<Cost, String> {
+        match self.representations.get(representation) {
+            None => return Err(format!("missing representation #{representation}")),
+            Some(Node::Open) => return Err("mapped items form a cycle".into()),
+            Some(Node::Done(cost)) => return Ok(*cost),
+            Some(Node::Unseen) => {}
+        }
+        self.representations[representation] = Node::Open;
+        let structure = self.structure;
+        let items = &structure.representations[representation].items;
+        let mut cost = Cost { placements: 0, work: 1 + items.len() as u64 };
+        for item in items {
+            match &item.kind {
+                ItemKind::Body(_) => cost = cost.plus(Cost { placements: (self.bodies_of)(item.entity), work: 0 }),
+                ItemKind::Mapped { map, .. } => {
+                    let Some(map) = structure.maps.get(*map) else {
+                        return Err(format!("missing representation map #{}", item.entity));
+                    };
+                    // The mapped representation, then each related one, each once for this item.
+                    let mut walked = BTreeSet::new();
+                    let related = self.related.get(map.representation).cloned().unwrap_or_default();
+                    for target in std::iter::once(map.representation).chain(related) {
+                        if walked.insert(target) {
+                            cost = cost.plus(self.representation(target)?);
+                        }
+                    }
+                }
+                ItemKind::Other(_) => {}
+            }
+        }
+        self.representations[representation] = Node::Done(cost);
+        Ok(cost)
+    }
 }
 
 /// A deliberate panic inside a solidcore call, as the kernel's session catches it.

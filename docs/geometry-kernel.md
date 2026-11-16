@@ -96,7 +96,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | Code | Meaning |
 | --- | --- |
 | `invalid_params` | An argument was refused before the kernel saw it, including a name with an ASCII control character, which a STEP string cannot carry |
-| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 levels or more than 100,000 placed instances), or a placement that is not finite or moves a body more than 1 km from the origin |
+| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 levels, or an expansion past 100,000 placed bodies or 1,000,000 steps), or a placement that is not finite or moves a body more than 1 km from the origin |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
 | `kernel_unavailable` | This build has no kernel (the browser) |
@@ -124,13 +124,16 @@ At SolidCraft revision `73bdb6c`:
 | Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
 | A kernel failure while making a body's STEP record (injected: no valid body fails there) | a caught kernel panic stays `kernel_internal`; a record the kernel refuses is `operation_failed` |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
-| A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
+| A solid whose surfaces use an unsupported entity, beside a valid solid | that solid refused with `model_unsupported_entity` and its entity number; the other read and placed |
 | Non-positive sizes, coordinates out of range, names with control characters, nothing to write | `invalid_params` |
 | A transform that flattens, an axis that is not finite, a move out of range | `invalid_params` |
 | A file placing a part exactly 1 km out, and 1 nm further | read; `model_unreadable` |
 | Ten synthetic STEP fixtures, read, written as one part of placed bodies and read again | every bounding box within 1 µm of the box worked out from the generator's dimensions |
 | Inch and metre units | converted to nanometres within 1 µm |
 | A part used twice, turned a quarter the second time | one body, two placements |
+| Two placed surface models sharing one closed shell, each beside its own open shell | three bodies, four placements: the shell placed by each model, nothing left at the origin |
+| A few hundred bytes of mapped items that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
+| An expansion of exactly 1,000,000 steps, and of one more | read; `model_unreadable` |
 | A board of 500 components of 16 pins, each component its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
@@ -200,8 +203,12 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   their surface are refused with their solid; the kernel can make those curves
   but is not asked to yet. Names of assembly occurrences and colours are not
   read yet, and the writer writes no colours.
-- **Assembly size.** A STEP file with more than 100,000 placed bodies, or an
-  assembly nested deeper than 32 levels, is refused as a whole. A large board
+- **Assembly size.** A STEP file whose assembly places more than 100,000 bodies,
+  takes more than 1,000,000 steps to expand (each part visited, each
+  representation walked and each of its items), or nests deeper than 32 levels,
+  is refused as a whole. The reader counts the expansion from the product graph
+  before it expands anything, so a small file that would place a body millions
+  of times through mapped items is refused without being expanded. A large board
   exported with one body for each pin can come near that figure. Memory grows with
   the bodies: the measured board needed about 110 KiB for each placed body
   (944 MiB for 8,500), so a file near the limit can need around 11 GB.

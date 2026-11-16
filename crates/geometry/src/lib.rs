@@ -351,7 +351,8 @@ impl StepRead {
 ///
 /// [`ErrorCode::ModelUnreadable`] when the bytes are not UTF-8 text or not an ISO 10303-21
 /// exchange structure, its product structure is malformed (a cycle, a broken reference, nesting
-/// deeper than 32 levels or more than 100,000 placed instances), or a placement is not finite or
+/// deeper than 32 levels, an expansion past 100,000 placed bodies or 1,000,000 steps,
+/// counted before it runs), or a placement is not finite or
 /// moves a body more than [`MAX_LENGTH_NM`] from the origin;
 /// [`ErrorCode::KernelUnavailable`] without a kernel;
 /// [`ErrorCode::KernelInternal`] when the reader panics.
