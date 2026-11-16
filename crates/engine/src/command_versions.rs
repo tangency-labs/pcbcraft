@@ -102,8 +102,10 @@ pub enum LockMismatch {
 /// Compare `described` commands (as discovery returns them, each with `id` and `version`) with
 /// the `section` of a lock, given the catalog version in code. The lock is not changed.
 ///
-/// A removed command stays in the lock marked `"removed": true` with its last version, so an id
-/// that comes back, in this section or another one, never returns below it.
+/// Each described id is compared with its highest locked version over every section, removed
+/// or not: below it is refused, the same version must keep its contract, and above it counts as
+/// raised. A removed command stays in the lock marked `"removed": true` with its last version,
+/// so an id that comes back, in this section or another one, never returns below it.
 ///
 /// # Errors
 ///
@@ -111,7 +113,7 @@ pub enum LockMismatch {
 /// (also for a removed id that comes back, or an id that moves from another section),
 /// `catalog_version` fell below the lock's, or a version
 /// rose while `catalog_version` stayed at the lock's. Otherwise [`LockMismatch::Stale`] when a
-/// command is added, removed, re-added or re-versioned, or the lock's catalog version differs,
+/// command is added, removed, re-added, moved or re-versioned, or the lock's catalog version differs,
 /// with the section text to commit.
 pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_version: u32) -> Result<(), LockMismatch> {
     let empty = Map::new();
@@ -123,24 +125,28 @@ pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_vers
     for command in described {
         let id = command["id"].as_str().unwrap_or_default();
         let version = command["version"].as_u64().unwrap_or(0);
-        let Some(entry) = locked.get(id) else {
-            match locked_elsewhere(lock, section, id) {
-                Some((other, locked_version)) if version < locked_version => version_problems
-                    .push(format!("`{id}` is version {version}, below its version {locked_version} in `{other}`; versions never fall")),
-                _ => stale.push(format!("`{id}` is not in the lock")),
-            }
+        let Some((from, prior)) = prior_entry(lock, section, id) else {
+            stale.push(format!("`{id}` is not in the lock"));
             continue;
         };
-        let locked_version = entry["version"].as_u64().unwrap_or(0);
-        let removed = is_removed(entry);
-        if version < locked_version {
-            let was = if removed { "its version when it was removed" } else { "its locked version" };
-            version_problems.push(format!("`{id}` is version {version}, below {was} {locked_version}; versions never fall"));
-        } else if version == locked_version && entry["contract"].as_str() != Some(contract_digest(command).as_str()) {
-            version_problems.push(format!("the contract of `{id}` changed; bump the version of `{id}` above {locked_version}"));
-        } else if version > locked_version {
+        let prior_version = prior["version"].as_u64().unwrap_or(0);
+        let here = from == section;
+        if version < prior_version {
+            let was = if !here {
+                format!("its version {prior_version} in `{from}`")
+            } else if is_removed(prior) {
+                format!("its version when it was removed {prior_version}")
+            } else {
+                format!("its locked version {prior_version}")
+            };
+            version_problems.push(format!("`{id}` is version {version}, below {was}; versions never fall"));
+        } else if version > prior_version {
             raised.push(id);
-        } else if removed {
+        } else if prior["contract"].as_str() != Some(contract_digest(command).as_str()) {
+            version_problems.push(format!("the contract of `{id}` changed; bump the version of `{id}` above {prior_version}"));
+        } else if !here {
+            stale.push(if locked.contains_key(id) { format!("`{id}` moved from `{from}`") } else { format!("`{id}` is not in the lock") });
+        } else if is_removed(prior) {
             stale.push(format!("`{id}` was removed and is described again"));
         }
     }
@@ -162,15 +168,15 @@ pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_vers
     if stale.is_empty() { Ok(()) } else { Err(LockMismatch::Stale { problems: stale, section: lock_section(described, locked) }) }
 }
 
-/// The highest version the lock records for `id` in a section other than `section`, with that
-/// section's name: clients see one list of ids, so a command may not move to another section at
-/// a lower version.
-fn locked_elsewhere<'a>(lock: &'a Value, section: &str, id: &str) -> Option<(&'a str, u64)> {
+/// The lock entry that `id` is checked against, with its section's name: the highest version
+/// the lock records for `id` in any section, removed or not, preferring `section` on a tie.
+/// Clients see one list of ids, so a command's version is one number whichever section
+/// describes it.
+fn prior_entry<'a>(lock: &'a Value, section: &str, id: &str) -> Option<(&'a str, &'a Value)> {
     lock.as_object()?
         .iter()
-        .filter(|(name, _)| name.as_str() != section)
-        .filter_map(|(name, entries)| Some((name.as_str(), entries.as_object()?.get(id)?["version"].as_u64()?)))
-        .max_by_key(|(_, version)| *version)
+        .filter_map(|(name, entries)| Some((name.as_str(), entries.as_object()?.get(id)?)))
+        .max_by_key(|(name, entry)| (entry["version"].as_u64().unwrap_or(0), *name == section))
 }
 
 /// Whether a lock entry records a command that is no longer described.

@@ -139,10 +139,150 @@ fn a_command_moved_to_another_section_keeps_its_version() {
     assert_eq!(problems, [format!("`{id}` is version 1, below its version 3 in `commands`; versions never fall")]);
 
     moved["version"] = json!(3);
-    let Err(LockMismatch::Stale { problems, .. }) = check_lock(&lock, "window_commands", &[moved], 3) else {
+    let Err(LockMismatch::Stale { problems, .. }) = check_lock(&lock, "window_commands", &[moved.clone()], 3) else {
         panic!("a moved id was not added to its new section")
     };
     assert_eq!(problems, [format!("`{id}` is not in the lock")]);
+
+    // Moving up is a raise like any other and needs the catalog bump.
+    moved["version"] = json!(4);
+    let Err(LockMismatch::Version(problems)) = check_lock(&lock, "window_commands", &[moved.clone()], 3) else {
+        panic!("a moved id rose without the catalog version")
+    };
+    assert_eq!(problems, [format!("{id} raised its version; raise CATALOG_VERSION above 3")]);
+
+    // The highest version in any section counts, even when the own section has a lower tombstone.
+    let removed = |version: u64| json!({"version": version, "contract": contract_digest(&moved), "removed": true});
+    lock["commands"] = json!({id.clone(): removed(5)});
+    lock["window_commands"] = json!({id.clone(): removed(2)});
+    moved["version"] = json!(3);
+    let Err(LockMismatch::Version(problems)) = check_lock(&lock, "window_commands", &[moved], 3) else {
+        panic!("an id fell below its version in another section")
+    };
+    assert_eq!(problems, [format!("`{id}` is version 3, below its version 5 in `commands`; versions never fall")]);
+}
+
+/// One command's state in code: the lock section that describes it (if any), its version and a
+/// number standing for its contract, and the catalog version.
+#[derive(Clone, Copy, Debug)]
+struct Code {
+    at: Option<usize>,
+    version: u64,
+    contract: u64,
+    catalog: u64,
+}
+
+const SECTIONS: [&str; 2] = ["commands", "window_commands"];
+
+fn synthetic(code: Code) -> Value {
+    json!({"id": "schematic.synthetic", "version": code.version, "params": {"type": "object", "properties": {"p": {"type": "integer", "maximum": code.contract}}}})
+}
+
+/// Every change one edit can make to `code`: add or re-add in either section (at version 1, the
+/// last version or one above, with the last contract or a new one), remove, move to the other
+/// section (one version below, the same or one above), change the contract, raise, lower, or raise
+/// with a new contract; each with the catalog version kept or raised.
+fn edits(code: Code) -> Vec<(String, Code)> {
+    let mut changed = Vec::new();
+    match code.at {
+        None => {
+            for (at, name) in SECTIONS.iter().enumerate() {
+                for version in [1, code.version, code.version + 1] {
+                    for contract in [code.contract, code.contract + 1] {
+                        changed.push((format!("add in {name} at v{version} c{contract}"), Code { at: Some(at), version, contract, ..code }));
+                    }
+                }
+            }
+        }
+        Some(at) => {
+            changed.push(("remove".to_owned(), Code { at: None, ..code }));
+            for version in [code.version - 1, code.version, code.version + 1].into_iter().filter(|version| *version >= 1) {
+                changed.push((format!("move to {} at v{version}", SECTIONS[1 - at]), Code { at: Some(1 - at), version, ..code }));
+            }
+            changed.push(("change contract".to_owned(), Code { contract: code.contract + 1, ..code }));
+            changed.push(("raise".to_owned(), Code { version: code.version + 1, ..code }));
+            changed.push(("raise with new contract".to_owned(), Code { version: code.version + 1, contract: code.contract + 1, ..code }));
+            if code.version > 1 {
+                changed.push(("lower".to_owned(), Code { version: code.version - 1, ..code }));
+            }
+        }
+    }
+    changed
+        .into_iter()
+        .flat_map(|(edit, next)| [(format!("{edit}, raise catalog"), Code { catalog: next.catalog + 1, ..next }), (edit, next)])
+        .collect()
+}
+
+/// Run every section's lock check for `code`: `Err` with the problems when any section refuses a
+/// version; otherwise the lock after pasting every stale section, which must then pass.
+fn apply(lock: &Value, code: Code) -> Result<Value, Vec<String>> {
+    let described = |at: usize| if code.at == Some(at) { vec![synthetic(code)] } else { Vec::new() };
+    let catalog = u32::try_from(code.catalog).unwrap();
+    let mut refreshed = lock.clone();
+    for (at, name) in SECTIONS.iter().enumerate() {
+        match check_lock(lock, name, &described(at), catalog) {
+            Ok(()) => {}
+            Err(LockMismatch::Version(problems)) => return Err(problems),
+            Err(LockMismatch::Stale { section, .. }) => refreshed[*name] = serde_json::from_str(&section).unwrap(),
+        }
+    }
+    refreshed["catalog_version"] = json!(code.catalog);
+    for (at, name) in SECTIONS.iter().enumerate() {
+        assert_eq!(check_lock(&refreshed, name, &described(at), catalog), Ok(()), "the refreshed {name} section");
+    }
+    Ok(refreshed)
+}
+
+/// Which rule refuses `code` after the accepted history: the highest version accepted with its
+/// contract, and the catalog version of the lock.
+fn refused_by(published: Option<(u64, u64)>, catalog: u64, code: Code) -> Option<&'static str> {
+    if code.catalog < catalog {
+        return Some("the catalog version fell");
+    }
+    let (Some(_), Some((version, contract))) = (code.at, published) else { return None };
+    if code.version < version {
+        Some("a version fell")
+    } else if code.version == version && code.contract != contract {
+        Some("a contract changed at the same version")
+    } else if code.version > version && code.catalog == catalog {
+        Some("a version rose without the catalog version")
+    } else {
+        None
+    }
+}
+
+fn walk(lock: &Value, published: Option<(u64, u64)>, code: Code, history: &mut Vec<String>, refusals: &mut BTreeMap<&'static str, usize>) {
+    if history.len() == 4 {
+        return;
+    }
+    let catalog = lock["catalog_version"].as_u64().unwrap();
+    for (edit, next) in edits(code) {
+        history.push(edit);
+        let expected = refused_by(published, catalog, next);
+        match (apply(lock, next), expected) {
+            (Ok(refreshed), None) => {
+                let published = if next.at.is_some() { Some((next.version, next.contract)) } else { published };
+                walk(&refreshed, published, next, history, refusals);
+            }
+            (Err(_), Some(rule)) => *refusals.entry(rule).or_default() += 1,
+            (Ok(_), Some(rule)) => panic!("{rule}, but the lock accepted: {}", history.join(" > ")),
+            (Err(problems), None) => panic!("refused {problems:?}: {}", history.join(" > ")),
+        }
+        history.pop();
+    }
+}
+
+/// Every history of up to four edits of one command over two sections keeps the three rules: a
+/// version never falls, a changed contract needs a new version, and a raised version needs a raised
+/// catalog version. The lock refuses exactly the edits that break one of them.
+#[test]
+fn every_short_history_keeps_the_version_rules() {
+    let lock = json!({"catalog_version": 1, "commands": {}, "window_commands": {}});
+    let mut refusals = BTreeMap::new();
+    walk(&lock, None, Code { at: None, version: 1, contract: 0, catalog: 1 }, &mut Vec::new(), &mut refusals);
+    for rule in ["a version fell", "a contract changed at the same version", "a version rose without the catalog version"] {
+        assert!(refusals.get(rule).is_some_and(|count| *count > 0), "no history tried: {rule}");
+    }
 }
 
 /// Added and removed commands and description key order leave versions alone but keep the lock
