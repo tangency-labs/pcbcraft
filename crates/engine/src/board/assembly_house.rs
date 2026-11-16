@@ -222,7 +222,7 @@ impl<'a> BoardView<'a> {
 pub(crate) fn schema() -> Value {
     let coordinate = json!({"type":"integer","minimum":-MAX_OFFSET_NM,"maximum":MAX_OFFSET_NM});
     let id = json!({"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"});
-    // Printable, with no leading or trailing white space, as `validate_profile` requires.
+    // No control characters and no leading or trailing white space, as `validate_profile` requires.
     let name = "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$";
     json!({"oneOf":[
         {"type":"null"},

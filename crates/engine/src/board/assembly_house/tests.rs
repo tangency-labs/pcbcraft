@@ -167,6 +167,54 @@ fn rows_name_what_is_missing() {
     assert_eq!(view(&s).placement_row(&id, Some(house(&s, "Empty"))).unwrap(), view(&s).placement_row(&id, None).unwrap());
 }
 
+/// Houses change no fabrication output, legacy markers never match an offset, and a row fails
+/// while an outline-attached origin has no outline to resolve against.
+#[test]
+fn houses_leave_fabrication_and_legacy_markers_alone() {
+    let mut s = crate::board::track::tests::routed_fixture();
+    crate::board::drc::tests::outline(&mut s);
+    let [front, back] = crate::board::track::tests::copper_layers(&s)[..] else { panic!("two copper layers") };
+    let y = 20 * MM;
+    let route = [Point { x_nm: 5 * MM, y_nm: y }, Point { x_nm: 7 * MM, y_nm: y }, Point { x_nm: 9 * MM, y_nm: y }];
+    crate::board::track::tests::route_with_vias(&mut s, front, &route, &[(1, back)]).unwrap();
+    let before = s.execute(crate::EXPORT_FABRICATION, &json!({})).unwrap()["fabrication"].clone();
+    let project = s.project().unwrap();
+    let packages: Vec<_> = project
+        .board
+        .footprints()
+        .iter()
+        .map(|f| (f.library.clone().unwrap_or_else(|| LIBRARY.into()), f.definition.clone()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|(library, definition)| json!({"library":library,"definition":definition,"rotation":90,"centroid":{"x_nm":MM,"y_nm":MM}}))
+        .collect();
+    set(&mut s, None, json!({"name":"Everything","bottom_side":"viewed_from_bottom","packages":packages})).unwrap();
+    assert_eq!(s.execute(crate::EXPORT_FABRICATION, &json!({})).unwrap()["fabrication"], before);
+    // Format 27 carries the tracks, vias, outline, setup and accepted baseline beside the house.
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let saved: Value = serde_json::from_slice(&documents[&test_board_path(&documents)]).unwrap();
+    assert_eq!(saved["format"], "pcbcraft-board/27");
+    assert!(saved["tracks"].is_array() && saved["vias"].is_array() && saved["baseline"].is_object());
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+
+    let marker = Footprint::new(1, 1, 1, Point { x_nm: 0, y_nm: 0 });
+    let definition = crate::board::FOOTPRINT_DEFINITION;
+    let house = House {
+        format: FORMAT.into(),
+        id: Uuid::from_u128(1),
+        name: "Marker".into(),
+        bottom_side: BottomSide::ViewedFromTop,
+        packages: vec![PackageOffset { library: LIBRARY.into(), definition: definition.into(), rotation: 90, centroid: None }],
+    };
+    assert!(house.validate().is_ok());
+    assert!(house.offset_for(&marker).is_none(), "a legacy marker has no library identity");
+
+    let (mut s, [id, _, _]) = fixture();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(SET_PLACEMENT_ORIGIN, &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"outline_lower_left"}})).unwrap();
+    assert!(view(&s).placement_row(&id, None).is_err(), "no outline to measure from");
+}
+
 /// The command creates, replaces in place and removes houses, one undo step each, keeps
 /// identities, ignores repeats and puts package offsets in canonical order.
 #[test]
@@ -201,8 +249,8 @@ fn houses_are_edited_in_one_undo_step() {
     crate::assert_same_content(&original, &s.snapshot().unwrap());
 }
 
-/// Every refused request leaves the project untouched. The last good value of each edge is
-/// accepted at the end.
+/// Each request below is refused and leaves the project untouched. The last good value of
+/// each edge is accepted at the end.
 #[test]
 fn bad_requests_change_nothing() {
     let (mut s, _) = fixture();

@@ -377,8 +377,8 @@ nothing.
 
 A profile is `{"name":...,"bottom_side":...,"packages":[...]}`:
 
-- `name`: 1 to 64 characters, unique on the board, printable, with no leading or
-  trailing white space.
+- `name`: 1 to 64 characters, unique on the board, with no control characters and no
+  leading or trailing white space.
 - `bottom_side`: `viewed_from_top` (the default) or `viewed_from_bottom`; see
   [placement output conventions](footprint-schema.md#placement-output-conventions).
 - `packages` (optional, up to 4096): one entry per footprint definition, each with
