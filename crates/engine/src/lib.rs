@@ -12,6 +12,8 @@ pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
 pub mod hierarchy;
+#[cfg(test)]
+mod identity_tests;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
