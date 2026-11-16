@@ -79,8 +79,9 @@ be placed on the canvas around it. **Show grid
 outside paper** (on by default) continues the schematic grid there; turn it off
 for a clean surround.
 
-**Appearance → Paper background** defaults to **Uniform**, with the same canvas
-colour on both sides of the page outline and no paper shadow. **Shaded** uses
+Under **Appearance → Schematic canvas**, **Paper background** defaults to
+**Uniform**, with the same canvas colour on both sides of the page outline and
+no paper shadow. **Shaded** uses
 the theme's paper fill; **Custom** enables the **Sheet color** picker. **Canvas
 color** changes the schematic editing surface. Both colours follow the active
 theme until overridden, with separate light/dark choices. **Use theme** clears

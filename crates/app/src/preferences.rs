@@ -509,7 +509,7 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
         });
         settings::hint(ui, "System follows your desktop or browser.");
     });
-    settings::section(ui, "Schematic paper", |ui| {
+    settings::section(ui, "Schematic canvas", |ui| {
         settings::row_with_keywords(ui, "Paper background", &["sheet", "shade", "uniform", "color", "colour"], |ui| {
             settings::segmented(
                 ui,
@@ -528,6 +528,9 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
                 let saved = if dark { &mut preferences.schematic_paper_color_dark } else { &mut preferences.schematic_paper_color_light };
                 paper_color(ui, "Sheet color", saved, t.schematic_paper);
             });
+        });
+        settings::row_with_keywords(ui, "Show grid outside paper", &["schematic", "sheet", "page", "surround", "off-paper"], |ui| {
+            settings::checkbox(ui, "Enabled", "Show grid outside paper", &mut preferences.schematic_grid_outside_paper);
         });
     });
     settings::section(ui, "Scale", |ui| {
@@ -566,10 +569,6 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
             grid::opacity_control(ui, &mut preferences.grid_opacity_percent);
         });
         settings::hint(ui, "Only the grid fades. Snapping still follows the grid at 0%.");
-        settings::row_with_keywords(ui, "Show grid outside paper", &["schematic", "sheet", "page", "surround", "off-paper"], |ui| {
-            settings::checkbox(ui, "Enabled", "Show grid outside paper", &mut preferences.schematic_grid_outside_paper);
-        });
-        settings::hint(ui, "Schematic only. Parts can be placed outside the paper either way.");
         settings::row_with_keywords(ui, "Units", &["mil", "mm", "millimetres", "millimeters", "metric", "imperial", "inch"], |ui| {
             settings::segmented(ui, &mut preferences.units, &[(Unit::Mil, "mil"), (Unit::Mm, "mm")]);
         });
