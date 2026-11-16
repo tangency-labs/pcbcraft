@@ -979,6 +979,19 @@ format line is refused, for the caller to offer for discard. The store's layout
 and record encoding are private to PCBCraft and carry no compatibility promise
 beyond that refusal. Directory flushes have the same Unix-only limit as saves.
 
+The journal is bounded. When it grows past twice the size of its snapshot, or
+past 1 MiB if that is larger, the state after the edit that crossed the limit
+becomes a new snapshot and the journal starts again empty. Recovery therefore
+reads at most the snapshot, twice its size in records and one more record, and
+rewriting snapshots adds at most half again to the bytes the journal writes. If
+the new snapshot cannot be written, the old snapshot and journal stay as they
+were, already holding that edit, and the next edit tries again.
+
+Each recorded edit encodes the whole project and fingerprints the complete
+document set, on the writer thread. Nothing yet removes the entry of a session
+that has ended: its snapshot, journal and lock file stay in the store. Removing
+them belongs to the recovery offer on start, which is not built yet.
+
 ## Compatibility and fixtures
 
 App version 0.1.0 introduces this layout. Earlier working

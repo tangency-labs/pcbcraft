@@ -369,3 +369,106 @@ fn copper_commits_and_save_adoption_are_journaled() {
     assert_eq!(recovered.project.name, "Saved As");
     assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
 }
+
+/// Place one more resistor and record it, returning the documents after it and the append result.
+fn place_and_append(session: &mut Session, journal: &mut EditJournal) -> (Documents, Result<(), String>) {
+    let x = i64::try_from(session.project().unwrap().symbols().len()).unwrap() * 10 * GRID_NM;
+    let revision = session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":x,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let project = session.snapshot().unwrap();
+    let documents = encode_documents(project.clone()).unwrap();
+    let result = journal.append(&CommittedEdit { command: PLACE_SYMBOL.to_owned(), params: json!({}), revision, project }, documents.clone());
+    (documents, result)
+}
+
+/// A new journal on a new project, with the size limit set to `limit` bytes past its header.
+fn limited_journal(dir: &Path, limit: u64) -> (Session, EditJournal) {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let mut journal = EditJournal::create(dir, "entry", encode_documents(session.snapshot().unwrap()).unwrap()).unwrap();
+    journal.floor = 0;
+    journal.rebase_after = journal.journal_bytes + limit;
+    (session, journal)
+}
+
+/// The size of the entry's journal file.
+fn journal_len(dir: &Path) -> u64 {
+    fs::metadata(entry_file(dir, "entry", "journal")).unwrap().len()
+}
+
+/// The journal is bounded: the edit that takes it past its limit becomes a new snapshot with an
+/// empty journal, and the recovered state is the same before and after the switch.
+#[test]
+fn crossing_the_size_limit_starts_a_new_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    let header = journal_len(dir.path());
+    let (first, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let before = recover(dir.path(), "entry").unwrap();
+    assert_eq!((before.documents, before.commands.len()), (first.clone(), 1));
+    assert!(journal_len(dir.path()) > header);
+
+    journal.rebase_after = journal.journal_bytes;
+    let (second, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let after = recover(dir.path(), "entry").unwrap();
+    assert_eq!((after.documents, after.commands.len(), after.stop), (second, 0, None));
+    assert_eq!(journal_len(dir.path()), journal.journal_bytes);
+    assert!(journal.rebase_after >= 2 * fs::metadata(entry_file(dir.path(), "entry", "pc")).unwrap().len());
+
+    let (third, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len()), (third, 1));
+    assert_eq!(rebase_limit(10, REBASE_FLOOR_BYTES), REBASE_FLOOR_BYTES);
+    assert_eq!(rebase_limit(REBASE_FLOOR_BYTES, REBASE_FLOOR_BYTES), REBASE_RATIO * REBASE_FLOOR_BYTES);
+}
+
+/// A snapshot that cannot be written at the limit leaves the old snapshot and journal valid,
+/// holding the edit that crossed it; the count is kept, so the next edit tries again.
+#[test]
+fn a_failed_snapshot_at_the_limit_keeps_the_old_pair() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
+    journal.rebase_after = journal.journal_bytes;
+    // A folder that does not exist makes publishing the new snapshot fail; the open journal
+    // file is still appended to.
+    journal.dir = dir.path().join("missing");
+    let (second, result) = place_and_append(&mut session, &mut journal);
+    journal.dir = dir.path().to_path_buf();
+    assert!(result.unwrap_err().contains("could not be renewed"));
+    assert_eq!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (second, 2, None));
+
+    let (third, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len()), (third, 0));
+    assert_ne!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
+}
+
+/// A kill after the new snapshot is published at the limit, before its journal, leaves the old
+/// journal naming the old snapshot. Recovery ignores that journal and returns the new snapshot,
+/// which holds every recorded edit.
+#[test]
+fn a_kill_between_the_new_snapshot_and_its_journal_recovers_the_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    let old_journal = fs::read(entry_file(dir.path(), "entry", "journal")).unwrap();
+    journal.rebase_after = journal.journal_bytes;
+    let (third, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    drop(journal);
+    // The old journal as it stood before the crossing edit; at the kill it would also hold that
+    // edit's record, and recovery ignores the whole file either way.
+    fs::write(entry_file(dir.path(), "entry", "journal"), old_journal).unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.documents, third);
+    assert_eq!(recovered.stop, Some(Stop::OtherSnapshot));
+    assert!(recovered.commands.is_empty());
+}

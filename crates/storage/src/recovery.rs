@@ -52,6 +52,14 @@ const COMMAND_VERSION: u32 = 1;
 /// A frame holds at most a whole project's documents plus the command and its parameters.
 const MAX_FRAME_BYTES: usize = MAX_DOCUMENTS_BYTES + 16 * 1024 * 1024;
 const MAX_ID_LEN: usize = 64;
+/// A journal is replaced by a new snapshot once it holds more than this many times the bytes of
+/// its snapshot, or [`REBASE_FLOOR_BYTES`] if that is larger. With 2, rewriting snapshots adds at
+/// most half again to the bytes the journal writes, and recovery reads at most the snapshot,
+/// twice its size of records and the one record that crossed the limit.
+const REBASE_RATIO: u64 = 2;
+/// The least journal size that starts a new snapshot, so a small project is not snapshotted
+/// and flushed every few edits.
+const REBASE_FLOOR_BYTES: u64 = 1024 * 1024;
 
 /// The recovery folder: `PCBCRAFT_RECOVERY_DIR`, else `recovery` in the per-user data folder
 /// ([`data_dir`]). Tests of this crate use a folder of their own under the temporary folder.
@@ -251,6 +259,28 @@ fn publish(dir: &Path, path: &Path, bytes: &[u8]) -> Result<File, String> {
     Ok(file)
 }
 
+/// Publish `<id>.pc` holding `base`, returning its size in bytes.
+fn publish_snapshot(dir: &Path, id: &str, base: &Documents) -> Result<u64, String> {
+    let packed = encode_packed_documents(base.clone())?;
+    publish(dir, &entry_file(dir, id, "pc"), &packed)?;
+    Ok(u64::try_from(packed.len()).unwrap_or(u64::MAX))
+}
+
+/// Publish `<id>.journal` holding only the header for the snapshot fingerprinted `base_sha256`,
+/// returning the open file and its size in bytes.
+fn publish_journal(dir: &Path, id: &str, base_sha256: &str) -> Result<(File, u64), String> {
+    let header = serde_json::to_vec(&Header { base_sha256: base_sha256.to_owned() }).map_err(|e| e.to_string())?;
+    let mut journal = MAGIC.to_vec();
+    journal.extend(frame(&header)?);
+    let file = publish(dir, &entry_file(dir, id, "journal"), &journal)?;
+    Ok((file, u64::try_from(journal.len()).unwrap_or(u64::MAX)))
+}
+
+/// The journal size above which a snapshot of `snapshot_bytes` is replaced, at least `floor`.
+fn rebase_limit(snapshot_bytes: u64, floor: u64) -> u64 {
+    snapshot_bytes.saturating_mul(REBASE_RATIO).max(floor)
+}
+
 /// The writing side of one recovery entry. It holds the entry's lock for its whole life, so a
 /// scan for entries left by crashed sessions can tell this one is still in use.
 #[derive(Debug)]
@@ -262,8 +292,15 @@ pub struct EditJournal {
     file: File,
     documents: Documents,
     sha256: String,
-    /// Set when an append failed part-way; the next edit starts a new snapshot instead.
+    /// Set when an append failed part-way, or a new snapshot was published without its journal;
+    /// the next edit starts a new snapshot instead of appending.
     broken: bool,
+    /// Bytes in the journal file, header included.
+    journal_bytes: u64,
+    /// Journal size above which the next recorded edit starts a new snapshot.
+    rebase_after: u64,
+    /// The least `rebase_after`; [`REBASE_FLOOR_BYTES`] outside tests.
+    floor: u64,
 }
 
 impl EditJournal {
@@ -277,8 +314,21 @@ impl EditJournal {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let lock = open_lock_file(&entry_file(dir, id, "lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
-        let (file, sha256) = Self::write_base(dir, id, &base)?;
-        Ok(Self { dir: dir.to_path_buf(), id: id.to_owned(), _lock: lock, file, documents: base, sha256, broken: false })
+        let snapshot_bytes = publish_snapshot(dir, id, &base)?;
+        let sha256 = documents_sha256(&base);
+        let (file, journal_bytes) = publish_journal(dir, id, &sha256)?;
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            id: id.to_owned(),
+            _lock: lock,
+            file,
+            documents: base,
+            sha256,
+            broken: false,
+            journal_bytes,
+            rebase_after: rebase_limit(snapshot_bytes, REBASE_FLOOR_BYTES),
+            floor: REBASE_FLOOR_BYTES,
+        })
     }
 
     /// The entry id, the stem of each of its files.
@@ -294,29 +344,29 @@ impl EditJournal {
     /// Replace the snapshot with `base` and start an empty journal. The snapshot is published
     /// first: a crash in between leaves a journal naming the old snapshot, which recovery
     /// ignores in favour of the new snapshot, already holding every recorded edit.
+    ///
+    /// If the snapshot cannot be written, nothing on disk changes and the old snapshot and
+    /// journal stay valid; the size count is kept, so the next edit tries again. If only the new
+    /// journal cannot be written, the new snapshot already holds `base` and the next edit starts
+    /// another snapshot.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
-        let (file, sha256) = Self::write_base(&self.dir, &self.id, &base)?;
-        self.file = file;
+        let snapshot_bytes = publish_snapshot(&self.dir, &self.id, &base)?;
+        self.sha256 = documents_sha256(&base);
         self.documents = base;
-        self.sha256 = sha256;
+        self.broken = true;
+        let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &self.sha256)?;
+        self.file = file;
         self.broken = false;
+        self.journal_bytes = journal_bytes;
+        self.rebase_after = rebase_limit(snapshot_bytes, self.floor);
         Ok(())
-    }
-
-    /// Publish `<id>.pc`, then a journal holding only its header.
-    fn write_base(dir: &Path, id: &str, base: &Documents) -> Result<(File, String), String> {
-        let sha256 = documents_sha256(base);
-        publish(dir, &entry_file(dir, id, "pc"), &encode_packed_documents(base.clone())?)?;
-        let header = serde_json::to_vec(&Header { base_sha256: sha256.clone() }).map_err(|e| e.to_string())?;
-        let mut journal = MAGIC.to_vec();
-        journal.extend(frame(&header)?);
-        let file = publish(dir, &entry_file(dir, id, "journal"), &journal)?;
-        Ok((file, sha256))
     }
 
     /// Record that `edit` produced `documents`, and flush the record to disk before returning.
     /// After a failed append the journal may end in a torn record, so the next call starts a new
     /// snapshot rather than appending past it. An edit that changed no document is not recorded.
+    /// Once the journal passes its size limit, the recorded state becomes a new snapshot; if that
+    /// fails the edit stays recorded in the old journal and the error is returned.
     pub fn append(&mut self, edit: &CommittedEdit, documents: Documents) -> Result<(), String> {
         if self.broken {
             return self.rebase(documents);
@@ -329,8 +379,12 @@ impl EditJournal {
         self.broken = true;
         self.file.write_all(&bytes).and_then(|()| self.file.sync_data()).map_err(|e| e.to_string())?;
         self.broken = false;
+        self.journal_bytes = self.journal_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         self.documents = documents;
         self.sha256 = sha256;
+        if self.journal_bytes > self.rebase_after {
+            return self.rebase(self.documents.clone()).map_err(|e| format!("The recovery snapshot could not be renewed: {e}"));
+        }
         Ok(())
     }
 }
@@ -404,8 +458,8 @@ impl EditObserver for JournalRecorder {
 }
 
 /// The worker: encode each reported state and write it to the entry, until the recorder is gone.
-/// Errors are kept for the next `sync`; an edit that cannot be encoded or written leaves the
-/// journal to start a new snapshot at the next state that can.
+/// Errors are kept for the next `sync`. A state that cannot be encoded is skipped; the next
+/// recorded edit carries its changes, or a new snapshot follows a root that failed.
 fn record(dir: &Path, id: &str, receiver: &mpsc::Receiver<Message>) {
     let mut journal: Option<EditJournal> = None;
     let mut error: Option<String> = None;
@@ -415,15 +469,23 @@ fn record(dir: &Path, id: &str, receiver: &mpsc::Receiver<Message>) {
                 let _ = reply.send(error.take().map_or(Ok(()), Err));
                 continue;
             }
-            Message::Opened(project) => encode_documents(project).and_then(|documents| write(&mut journal, dir, id, None, documents)),
+            Message::Opened(project) => {
+                let result = encode_documents(project).and_then(|documents| write(&mut journal, dir, id, None, documents));
+                // A root that could not be snapshotted must not be journaled as an edit.
+                if result.is_err()
+                    && let Some(journal) = &mut journal
+                {
+                    journal.broken = true;
+                }
+                result
+            }
+            // An edit that cannot be encoded is folded into the next record, which starts from
+            // the last state written; the journal marks itself broken after a failed write.
             Message::Committed(edit) => {
                 encode_documents(edit.project.clone()).and_then(|documents| write(&mut journal, dir, id, Some(&edit), documents))
             }
         };
         if let Err(failure) = result {
-            if let Some(journal) = &mut journal {
-                journal.broken = true;
-            }
             error.get_or_insert(failure);
         }
     }
