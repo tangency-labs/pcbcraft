@@ -215,9 +215,9 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   of times through mapped items, or make the expansion scan thousands of
   relationships for each of them, is refused without being expanded. A large
   board exported with one body for each pin can come near the 100,000-body
-  figure. Memory grows with
-  the bodies: the measured board needed about 110 KiB for each placed body
-  (944 MiB for 8,500), so a file near the limit can need around 11 GB.
+  figure. Memory grows with the bodies: the measured board needed about 110 KiB
+  for each placed body (944 MiB for 8,500), so a file near the limit can need
+  around 11 GB.
 - **Writing assemblies.** `write_step` writes one part. A placed read is written
   as one body per placement, so a part used twice is written twice; writing the
   product structure back is left to STEP assembly export.

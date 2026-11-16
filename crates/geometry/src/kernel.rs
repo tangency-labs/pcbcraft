@@ -297,8 +297,9 @@ impl<'a> Expansion<'a> {
 
     /// The cost of walking `representation` once: one step and one for each item, a placement
     /// for each read body of each body item, and for each mapped item one step for each
-    /// relationship of the file and the cost of its representation and of those related to it. An error for a missing representation or map,
-    /// and for a representation met again inside its own walk.
+    /// relationship of the file and the cost of its representation and of those related to it.
+    /// An error for a missing representation or map, and for a representation met again inside
+    /// its own walk.
     fn representation(&mut self, representation: usize) -> std::result::Result<Cost, String> {
         match self.representations.get(representation) {
             None => return Err(format!("missing representation #{representation}")),

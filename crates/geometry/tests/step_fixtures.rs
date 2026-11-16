@@ -257,12 +257,12 @@ fn with_unrelated_links(tree: Vec<u8>, count: usize) -> Vec<u8> {
     out.into_bytes()
 }
 
-/// The steps the reader counts for `mapped_tree(&[2; levels], false, pad)` with `links`
-/// unrelated relationships, as the reader's `Expansion` defines a step. Before the walk, the one part's shape reaches one representation, and every relationship is checked
-/// against it: 1 + links. The part: 1, and 1 for its representation. The block's
-/// representation: 1 + 2 + pad.0 items, walked 2^levels times. Each level: 1 + 3 items, plus
-/// links for each of its two mapped items, walked 2^levels − 1 times in all. The part's shape:
-/// pad.1 more items.
+/// The steps the reader counts for `mapped_tree(&[2; levels], false, pad)` with `links` unrelated
+/// relationships, as the reader's `Expansion` defines a step. Before the walk, the one part's shape
+/// reaches one representation, and every relationship is checked against it: 1 + links. The part:
+/// 1, and 1 for its representation. The block's representation: 1 + 2 + pad.0 items, walked
+/// 2^levels times. Each level: 1 + 3 items, plus links for each of its two mapped items, walked
+/// 2^levels − 1 times in all. The part's shape: pad.1 more items.
 fn steps(levels: u32, pad: (u64, u64), links: u64) -> u64 {
     let uses = 1u64 << levels;
     (1 + links) + 2 + uses * (3 + pad.0) + (4 + 2 * links) * (uses - 1) + pad.1
