@@ -110,7 +110,8 @@ impl Frame {
 
     /// Express a footprint placement in output terms. Top-side placements always keep the
     /// output X and the board rotation; `convention` decides how bottom-side rows are written.
-    /// Exact for every input: X is negated at most once and rotation stays in whole degrees.
+    /// Any rotation is reduced to 0 through 359. Exact for points within the board coordinate
+    /// range, which every placement and origin is.
     pub fn place(self, at: Point, rotation: u16, on_bottom: bool, convention: BottomSide) -> Placed {
         let at = self.to_output(at);
         let rotation = rotation % 360;

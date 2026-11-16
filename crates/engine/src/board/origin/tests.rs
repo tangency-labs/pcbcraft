@@ -269,3 +269,33 @@ fn each_convention_reproduces_the_bottom_pads() {
         }
     }
 }
+
+/// Rotations are folded into one turn: 359 is 1 seen from below, and 360 or 750 write the
+/// same rows as 0 or 30.
+#[test]
+fn rotation_is_folded_into_one_turn() {
+    let at = Point { x_nm: 40 * MM, y_nm: 25 * MM };
+    let frame = Frame::BOARD_ZERO;
+    let placed = |rotation, convention| frame.place(at, rotation, true, convention).rotation;
+    assert_eq!(placed(359, BottomSide::ViewedFromTop), 359);
+    assert_eq!(placed(359, BottomSide::ViewedFromBottom), 1);
+    for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
+        for on_bottom in [false, true] {
+            assert_eq!(frame.place(at, 360, on_bottom, convention), frame.place(at, 0, on_bottom, convention));
+            assert_eq!(frame.place(at, 750, on_bottom, convention), frame.place(at, 30, on_bottom, convention));
+        }
+        assert_eq!(placed(0, convention), 0);
+    }
+}
+
+/// Both convention names read back, and an unknown name is refused.
+#[test]
+fn bottom_side_names_round_trip() {
+    for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
+        let name = serde_json::to_value(convention).unwrap();
+        assert_eq!(serde_json::from_value::<BottomSide>(name).unwrap(), convention);
+    }
+    assert_eq!(serde_json::from_value::<BottomSide>(json!("viewed_from_top")).unwrap(), BottomSide::ViewedFromTop);
+    assert_eq!(serde_json::from_value::<BottomSide>(json!("viewed_from_bottom")).unwrap(), BottomSide::ViewedFromBottom);
+    assert!(serde_json::from_value::<BottomSide>(json!("viewed_from_below")).is_err());
+}
