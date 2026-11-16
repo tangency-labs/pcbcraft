@@ -237,3 +237,37 @@ fn saved_origins_refuse_nil_ids_out_of_range_points_and_extra_fields() {
         assert!(decode_documents(&altered).is_err(), "{to}");
     }
 }
+
+/// Excellon coordinates are rounded to 0.001 mm from integer nanometres with halves going up,
+/// so a hole at a half micrometre writes the same rounding on both sides of zero and after any
+/// whole-millimetre shift, and a hole just left of zero writes 0.000 rather than -0.000.
+#[test]
+fn drill_coordinates_round_the_same_way_wherever_the_origin_is() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let (via_x, via_y) = (7 * MM + 2_500, 20 * MM);
+    route_with_vias(
+        &mut s,
+        front,
+        &[Point { x_nm: 5 * MM, y_nm: via_y }, Point { x_nm: via_x, y_nm: via_y }, Point { x_nm: 9 * MM, y_nm: via_y }],
+        &[(1, back)],
+    )
+    .unwrap();
+    let drill = |s: &Session| view(s).fabrication_outputs().unwrap().into_iter().find(|f| f.name.ends_with("-PTH.drl")).unwrap();
+    for (offset, written) in
+        [(-2_500, "0.003"), (2_500, "-0.002"), (400, "0.000"), (-400, "0.000"), (-10 * MM - 2_500, "10.003"), (10 * MM + 2_500, "-10.002")]
+    {
+        set(&mut s, json!({"kind":"point","x_nm":via_x + offset,"y_nm":via_y})).unwrap();
+        let near = drill(&s);
+        assert!(near.contents.contains(&format!("\nX{written}Y0.000\n")), "{offset}: {}", near.contents);
+        assert!(!near.contents.contains("-0.000"));
+        set(&mut s, json!({"kind":"point","x_nm":via_x + offset - 10 * MM,"y_nm":via_y + 10 * MM})).unwrap();
+        let shifted = drill(&s);
+        let (before, after) = (coordinates(&near), coordinates(&shifted));
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert_eq!((b.0, b.1), (a.0 + 10_000, a.1 + 10_000), "{offset}");
+        }
+    }
+}
