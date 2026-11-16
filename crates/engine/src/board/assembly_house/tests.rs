@@ -190,10 +190,10 @@ fn houses_leave_fabrication_and_legacy_markers_alone() {
         .collect();
     set(&mut s, None, json!({"name":"Everything","bottom_side":"viewed_from_bottom","packages":packages})).unwrap();
     assert_eq!(s.execute(crate::EXPORT_FABRICATION, &json!({})).unwrap()["fabrication"], before);
-    // Format 27 carries the tracks, vias, outline, setup and accepted baseline beside the house.
+    // Format 22 carries the tracks, vias, outline, setup and accepted baseline beside the house.
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let saved: Value = serde_json::from_slice(&documents[&test_board_path(&documents)]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/27");
+    assert_eq!(saved["format"], "pcbcraft-board/22");
     assert!(saved["tracks"].is_array() && saved["vias"].is_array() && saved["baseline"].is_object());
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
 
@@ -362,7 +362,7 @@ fn profile_and_board_limits() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
-/// Format 27 is written only while a house exists, carries an origin, rules and every earlier
+/// Format 22 is written only while a house exists, carries an origin, rules and every earlier
 /// field, reopens to the same bytes, and removing the houses restores the earlier encoding.
 #[test]
 fn house_format_round_trips_and_reset_restores_previous_bytes() {
@@ -386,7 +386,7 @@ fn house_format_round_trips_and_reset_restores_previous_bytes() {
     set(&mut s, None, json!({"name":"Plain"})).unwrap();
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/27");
+    assert_eq!(saved["format"], "pcbcraft-board/22");
     let reel = &saved["assembly_houses"][0];
     assert_eq!(reel["packages"][0], json!({"library":LIBRARY,"definition":"resistor-0402","rotation":180,"centroid":{"x_nm":1,"y_nm":-2}}));
     assert_eq!(reel["packages"][1], json!({"library":LIBRARY,"definition":"sot23","rotation":270}));
@@ -403,7 +403,7 @@ fn house_format_round_trips_and_reset_restores_previous_bytes() {
         altered.insert(path.clone(), text.replacen(from, to, 1).into_bytes());
         decode_documents(&altered).is_err()
     };
-    assert!(refused("pcbcraft-board/27", "pcbcraft-board/21"), "older headers refuse houses");
+    assert!(refused("pcbcraft-board/22", "pcbcraft-board/21"), "older headers refuse houses");
     assert!(refused("\"pcbcraft-assembly-house/1\"", "\"pcbcraft-assembly-house/2\""));
     assert!(refused("\"bottom_side\":\"viewed_from_bottom\",", ""), "the saved convention is required");
     assert!(refused("\"rotation\":270", "\"rotation\":360"));
@@ -430,11 +430,11 @@ fn house_format_round_trips_and_reset_restores_previous_bytes() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
     let mut missing = original.clone();
     let text = String::from_utf8(original[&path].clone()).unwrap();
-    missing.insert(path, text.replacen("pcbcraft-board/21", "pcbcraft-board/27", 1).into_bytes());
-    assert!(decode_documents(&missing).is_err(), "format 27 requires a house");
+    missing.insert(path, text.replacen("pcbcraft-board/21", "pcbcraft-board/22", 1).into_bytes());
+    assert!(decode_documents(&missing).is_err(), "format 22 requires a house");
 }
 
-/// A house without an origin or rules still writes format 27 and reopens to the same bytes.
+/// A house without an origin or rules still writes format 22 and reopens to the same bytes.
 #[test]
 fn house_without_origin_round_trips() {
     let (mut s, _) = fixture();
@@ -442,7 +442,7 @@ fn house_without_origin_round_trips() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/27");
+    assert_eq!(saved["format"], "pcbcraft-board/22");
     assert!(saved.get("placement_origin").is_none() && saved.get("rules").is_none());
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
 }

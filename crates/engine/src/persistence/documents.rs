@@ -73,7 +73,7 @@ const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
-const HOUSE_BOARD_FORMAT: &str = "pcbcraft-board/27";
+const HOUSE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -357,7 +357,7 @@ pub fn is_document_path(path: &str) -> bool {
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 21
 /// requires a validated placement origin and may carry rules and every earlier field.
-/// Board format 27 requires at least one validated assembly house and may carry an origin,
+/// Board format 22 requires at least one validated assembly house and may carry an origin,
 /// rules and every earlier field; older headers reject houses.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
@@ -788,7 +788,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // earlier field. Empty arrays are never written, so they are refused.
     let housed = board.format == HOUSE_BOARD_FORMAT;
     if housed != board.assembly_houses.is_some() {
-        return Err("board.json: assembly houses require format 27, which requires at least one house.".into());
+        return Err("board.json: assembly houses require format 22, which requires at least one house.".into());
     }
     if let Some(houses) = &board.assembly_houses {
         if houses.is_empty() {
@@ -1846,7 +1846,7 @@ impl DocumentsEncoder {
 /// Keep legacy bytes until newer authored data requires a newer format. Locked copper
 /// uses format 18 while an authored lock exists, unless board defaults require format 19.
 /// Format 19 requires validated rules and accepts earlier physical fields. Format 21
-/// requires a placement origin and accepts every earlier field, including rules. Format 27
+/// requires a placement origin and accepts every earlier field, including rules. Format 22
 /// requires an assembly house and accepts every earlier field, including an origin. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
