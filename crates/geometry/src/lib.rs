@@ -144,10 +144,12 @@ impl Body {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::InvalidParams`] when a size is not positive or a coordinate lies more than
-    /// [`MAX_LENGTH_NM`] from zero; [`ErrorCode::KernelUnavailable`] without a kernel; otherwise
-    /// the kernel's failure.
+    /// [`ErrorCode::InvalidParams`] when the name has an ASCII control character, a size is not
+    /// positive or a coordinate lies more than [`MAX_LENGTH_NM`] from zero;
+    /// [`ErrorCode::KernelUnavailable`] without a kernel; otherwise the kernel's failure.
     pub fn cuboid(name: impl Into<String>, origin_nm: [i64; 3], size_nm: [i64; 3]) -> Result<Body> {
+        let name = name.into();
+        check_name("body name", &name)?;
         if size_nm.iter().any(|&s| s <= 0) {
             return Err(GeometryError::new(ErrorCode::InvalidParams, "every cuboid size must be positive"));
         }
@@ -159,7 +161,7 @@ impl Body {
         point_mm(far)?;
         let size = point_mm(size_nm)?;
         let solid = kernel::cuboid(origin, size)?;
-        Ok(Body { name: name.into(), solid })
+        Ok(Body { name, solid })
     }
 
     /// The body's name: the STEP solid's own name, else its product's; empty when it has none.
@@ -222,16 +224,23 @@ pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
 
 /// Writes `bodies` as one part named `part_name` in an AP242 STEP file, exactly as the kernel
 /// holds them, without colours. The output depends only on the input: the header carries no time
-/// stamp, so writing the same bodies twice gives the same bytes.
+/// stamp, so writing the same bodies twice gives the same bytes. Names are written unchanged,
+/// including quotes, backslashes and non-ASCII characters. An empty part name is written as
+/// `Part`, and a body with an empty name reads back with its part's name.
 ///
 /// # Errors
 ///
-/// [`ErrorCode::InvalidParams`] when `bodies` is empty; [`ErrorCode::OperationFailed`] when the
+/// [`ErrorCode::InvalidParams`] when `bodies` is empty or the part name or a body name has an
+/// ASCII control character, which STEP strings cannot carry; [`ErrorCode::OperationFailed`] when the
 /// writer refuses a body; [`ErrorCode::KernelUnavailable`] without a kernel;
 /// [`ErrorCode::KernelInternal`] when the kernel panics.
 pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
     if bodies.is_empty() {
         return Err(GeometryError::new(ErrorCode::InvalidParams, "there are no bodies to write"));
+    }
+    check_name("part name", part_name)?;
+    for body in bodies {
+        check_name("body name", &body.name)?;
     }
     let named: Vec<(&str, &kernel::KernelBody)> = bodies.iter().map(|b| (b.name.as_str(), &b.solid)).collect();
     kernel::write(part_name, &named).map(String::into_bytes)
@@ -246,6 +255,15 @@ pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
 /// [`ErrorCode::KernelUnavailable`] without a kernel.
 pub fn kernel_crash_test() -> Result<()> {
     kernel::crash_test()
+}
+
+/// Refuses a name that STEP cannot carry unchanged: its strings have no ASCII control characters
+/// (ISO 10303-21 allows only printable characters in a string), and the writer would drop them.
+fn check_name(what: &str, name: &str) -> Result<()> {
+    if name.chars().any(|c| c.is_ascii_control()) {
+        return Err(GeometryError::new(ErrorCode::InvalidParams, format!("the {what} has a control character")));
+    }
+    Ok(())
 }
 
 /// A point in nanometres as the kernel's millimetres.

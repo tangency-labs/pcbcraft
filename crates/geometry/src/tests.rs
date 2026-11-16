@@ -55,10 +55,16 @@ fn every_body_of_a_part_reads_back() {
     let second = Body::cuboid("Spacer", [20_000_000, 0, 0], [3_000_000, 3_000_000, 5_000_000]).unwrap();
     let bytes = write_step("fixture", &[first, second]).unwrap();
     let read = read_step(&bytes).unwrap();
-    let mut names: Vec<&str> = read.bodies.iter().map(Body::name).collect();
-    names.sort_unstable();
+    // The reader keeps the file's entity order, which is the order the bodies were written in.
+    let names: Vec<&str> = read.bodies.iter().map(Body::name).collect();
     assert_eq!(names, ["Block", "Spacer"]);
     assert!(read.refused.is_empty());
+
+    let (first, _) = block();
+    let second = Body::cuboid("Spacer", [20_000_000, 0, 0], [3_000_000, 3_000_000, 5_000_000]).unwrap();
+    let read = read_step(&write_step("fixture", &[second, first]).unwrap()).unwrap();
+    let names: Vec<&str> = read.bodies.iter().map(Body::name).collect();
+    assert_eq!(names, ["Spacer", "Block"]);
 }
 
 #[test]
@@ -127,4 +133,52 @@ fn millimetre_conversion_rounds_once_to_the_nanometre() {
     assert_eq!(point_nm([0.000_000_4, -0.000_000_6, 1.5]).unwrap(), [0, -1, 1_500_000]);
     assert_eq!(point_nm([f64::NAN, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
     assert_eq!(point_nm([2e6, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
+}
+
+#[test]
+fn both_ends_of_the_coordinate_range_are_accepted_and_one_past_is_refused() {
+    // One-millimetre blocks: a one-nanometre block a kilometre out is below the kernel's
+    // tolerance there, and the kernel refuses its box.
+    let mm = NM_PER_MM;
+    let top = Body::cuboid("top", [MAX_LENGTH_NM - mm, 0, 0], [mm, mm, mm]).unwrap();
+    let bottom = Body::cuboid("bottom", [-MAX_LENGTH_NM, 0, 0], [mm, mm, mm]).unwrap();
+    assert_eq!(top.bounding_box().unwrap().max_nm[0], MAX_LENGTH_NM);
+    assert_eq!(bottom.bounding_box().unwrap().min_nm[0], -MAX_LENGTH_NM);
+
+    assert_eq!(Body::cuboid("x", [MAX_LENGTH_NM, 0, 0], [1, 1, 1]).unwrap_err().code(), ErrorCode::InvalidParams);
+    assert_eq!(Body::cuboid("x", [-MAX_LENGTH_NM - 1, 0, 0], [1, 1, 1]).unwrap_err().code(), ErrorCode::InvalidParams);
+
+    let limit_mm = MAX_LENGTH_NM as f64 / NM_PER_MM as f64;
+    let one_nm_mm = 1.0 / NM_PER_MM as f64;
+    assert_eq!(point_nm([limit_mm, -limit_mm, 0.0]).unwrap(), [MAX_LENGTH_NM, -MAX_LENGTH_NM, 0]);
+    assert_eq!(point_nm([limit_mm + one_nm_mm, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
+    assert_eq!(point_nm([0.0, -limit_mm - one_nm_mm, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
+}
+
+fn names_after_round_trip(part_name: &str, body_name: &str) -> Vec<String> {
+    let body = Body::cuboid(body_name, [0; 3], [1_000_000; 3]).unwrap();
+    let read = read_step(&write_step(part_name, &[body]).unwrap()).unwrap();
+    assert!(read.refused.is_empty(), "{:?}", read.refused);
+    read.bodies.iter().map(|b| b.name().to_string()).collect()
+}
+
+#[test]
+fn names_read_back_unchanged() {
+    let awkward = "O'Brien \\ bracket Ø 中 🚀";
+    assert_eq!(names_after_round_trip("fixture", awkward), [awkward]);
+    assert_eq!(names_after_round_trip(awkward, "Block"), ["Block"]);
+    assert_eq!(names_after_round_trip("", "Block"), ["Block"]);
+    // A body without a name of its own takes its part's name, as Body::name says, and the writer
+    // names a part without a name "Part".
+    assert_eq!(names_after_round_trip("fixture", ""), ["fixture"]);
+    assert_eq!(names_after_round_trip("", ""), ["Part"]);
+}
+
+#[test]
+fn names_with_control_characters_are_refused() {
+    for name in ["tab\there", "line\nbreak", "nul\0", "delete\u{7f}"] {
+        assert_eq!(Body::cuboid(name, [0; 3], [1; 3]).unwrap_err().code(), ErrorCode::InvalidParams, "{name:?}");
+        let (body, _) = block();
+        assert_eq!(write_step(name, &[body]).unwrap_err().code(), ErrorCode::InvalidParams, "{name:?}");
+    }
 }
