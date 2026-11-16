@@ -12,8 +12,9 @@
 //! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
 //! replies.
 //!
-//! The kernel is built for native targets only. On `wasm32` the same API compiles and every
-//! operation answers [`ErrorCode::KernelUnavailable`].
+//! The kernel is built for native targets only. On `wasm32` the same API compiles, no [`Body`]
+//! can be made, and every operation that reaches the kernel answers
+//! [`ErrorCode::KernelUnavailable`]; arguments refused before the kernel keep their own codes.
 //!
 //! `docs/geometry-kernel.md` records the kernel choice, its qualification and its known limits.
 #![forbid(unsafe_code)]
@@ -301,5 +302,7 @@ fn point_nm(mm: [f64; 3]) -> Result<[i64; 3]> {
     Ok(out)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests;

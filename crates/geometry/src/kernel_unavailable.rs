@@ -1,5 +1,5 @@
-//! The kernel boundary for builds without a kernel (`wasm32`): every operation answers
-//! [`ErrorCode::KernelUnavailable`], and no body can exist.
+//! The kernel boundary for builds without a kernel (`wasm32`): every operation that reaches it
+//! answers [`ErrorCode::KernelUnavailable`], and no body can exist.
 
 use crate::{ErrorCode, GeometryError, RefusedItem, Result};
 
