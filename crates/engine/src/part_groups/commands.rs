@@ -106,8 +106,9 @@ impl Session {
             return Ok(());
         }
         let mut candidate = original.group_candidate()?;
+        // The part instance and every group were checked above and the set is sorted and unique;
+        // every other set comes unchanged from the valid open snapshot, so nothing else needs a scan.
         Arc::make_mut(&mut candidate.part_group_memberships).replace(part_instance, &groups);
-        candidate.validate_part_group_memberships(candidate.part_group_memberships.iter()).map_err(CommandError::InvalidParams)?;
         self.change(candidate)
     }
 
