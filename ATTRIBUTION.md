@@ -266,6 +266,7 @@ flat-bar treatment; no external source, artwork or dependency was added.
 | `crates/mcp/src/backend.rs`, `crates/mcp/src/tools.rs` | same paths | Kept the `Backend` seam and tool annotations. Wrote new tools over PCBCraft's commands. |
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
+| `crates/storage/src/recovery.rs` | `crates/engine/src/recovery.rs` at `73bdb6cdd39efc3899fb54e7217289a630a89efe` | Kept the per-user recovery folder rules, the override variable and the `<id>` entry with its held lock. Added the edit journal; dropped the legacy folder copy and reopen marker. |
 
 The Floating and Compact **Panel style** in `crates/chrome/src/workspace.rs`,
 `crates/chrome/src/workspace/panels.rs` and

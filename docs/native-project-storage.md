@@ -940,6 +940,43 @@ the replacement to an external symlink target. A final visible-tree check stops
 adoption and retains the journal if registered paths no longer match the completed
 document set. Restoring the original directory permits ordinary recovery.
 
+## Unsaved-work recovery store
+
+The save transaction above protects saved files. Unsaved edits are kept in a
+separate per-user recovery store, `pcbcraft_storage::recovery`, which never
+writes into a project folder, its `.pcbcraft-save` transaction or its lock file.
+The store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
+`%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
+`$XDG_DATA_HOME/pcbcraft` (`~/.local/share/pcbcraft`). The browser has no store.
+
+Each editing session owns one entry, named by the project UUID, the process and
+a time stamp so two sessions never share it:
+
+| File | Contents |
+|---|---|
+| `<id>.pc` | Recovery snapshot, in the packed project format |
+| `<id>.journal` | Every edit committed since that snapshot |
+| `<id>.lock` | Held locked by the writing session while it runs |
+
+[`Session::observe_edits`](../crates/engine/src/lib.rs) reports every edit
+committed through the shared command path, from the GUI, CLI or MCP, and each
+new history root. `JournalRecorder` encodes and writes them on its own thread,
+so neither editing nor saving waits for it. Each record names its command,
+command version and parameters, and stores the documents the edit added, changed
+or removed with the same codec a save uses, plus fingerprints of the complete
+document set before and after. Records hold results rather than commands to run
+again, because commands that create objects draw fresh random identities.
+
+The journal starts with the line `pcbcraft-recovery/1`. Each record is framed by
+its length and SHA-256 and flushed before the next. Recovery reads the snapshot
+and applies records in order. It stops at the first torn, damaged or
+inconsistent record and keeps the last complete state, so a kill loses at most
+the edit being written. A journal that names an older snapshot is ignored,
+because the snapshot is published first and already holds its edits. A newer
+format line is refused, for the caller to offer for discard. The store's layout
+and record encoding are private to PCBCraft and carry no compatibility promise
+beyond that refusal. Directory flushes have the same Unix-only limit as saves.
+
 ## Compatibility and fixtures
 
 App version 0.1.0 introduces this layout. Earlier working

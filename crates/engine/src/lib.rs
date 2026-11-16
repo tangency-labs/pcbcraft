@@ -11,6 +11,7 @@ pub mod authoring;
 pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
+pub mod edits;
 pub mod hierarchy;
 pub mod instances;
 pub mod library;
@@ -2438,6 +2439,8 @@ pub struct Session {
     update_plan: Option<board::update::CachedPlan>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
+    /// Told about each new history root and committed edit; never part of the project.
+    observer: Option<Arc<dyn edits::EditObserver>>,
 }
 
 impl Default for Session {
@@ -2454,6 +2457,7 @@ impl Default for Session {
             history_root_revision: 0,
             update_plan: None,
             defer_net_reconciliation: false,
+            observer: None,
         }
     }
 }
@@ -2466,6 +2470,17 @@ impl Session {
     /// Share the exact current snapshot with a background save without copying model data.
     pub fn snapshot(&self) -> Option<Arc<Project>> {
         self.project.clone()
+    }
+
+    /// Report later history roots and committed edits to `observer`, replacing any earlier one,
+    /// or stop reporting with `None`. An open project is reported at once as the first root, so
+    /// the observer always knows the state the next edit builds on. Neither the project nor its
+    /// history changes.
+    pub fn observe_edits(&mut self, observer: Option<Arc<dyn edits::EditObserver>>) {
+        if let (Some(observer), Some(project)) = (&observer, &self.project) {
+            observer.opened(project.clone());
+        }
+        self.observer = observer;
     }
 
     /// Adopt a validated project as a new history root. Advance past its highest stored ID
@@ -2483,6 +2498,9 @@ impl Session {
         self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.opened(project.clone());
+        }
     }
 
     pub fn revision(&self) -> u64 {
@@ -2830,7 +2848,21 @@ impl Session {
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
+    /// A command that advances the revision is reported to the edit observer once it has
+    /// been adopted; failures, no-ops and queries are not reported.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        let before = self.revision;
+        let revision = self.apply_command(id, params)?;
+        if revision != before
+            && let (Some(observer), Some(project)) = (&self.observer, &self.project)
+        {
+            observer.committed(edits::CommittedEdit { command: id.to_owned(), params: params.clone(), revision, project: project.clone() });
+        }
+        Ok(revision)
+    }
+
+    /// Route a command to its query, library, sheet or project handler. See [`Self::apply`].
+    fn apply_command(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         // A read-only query that needs no project: accepted like `execute`, changing nothing.
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
