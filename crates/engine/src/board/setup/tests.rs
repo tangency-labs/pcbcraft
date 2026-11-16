@@ -777,13 +777,16 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
         saved_board(&s, "pcbcraft-board/23");
     }
     let bad = [
-        (json!({"base_copper":{"weight_milli_oz":100_001}}), json!({}), "base copper needs a weight"),
+        (json!({"base_copper":{"weight_milli_oz":100_001}}), json!({}), "base copper weight must be from 0.001 to 100 oz"),
+        (json!({"base_copper":{"weight_milli_oz":0}}), json!({}), "base copper weight must be from 0.001 to 100 oz"),
+        (json!({"base_copper":{}}), json!({}), "base copper needs a weight or a foil thickness"),
         (json!({"base_copper":{"weight_milli_oz":-1}}), json!({}), "invalid value: integer `-1`"),
         (json!({"base_copper":{"weight_milli_oz":4_294_967_296_u64}}), json!({}), "invalid value: integer `4294967296`"),
         (json!({"base_copper":{"weight_milli_oz":"1000"}}), json!({}), "invalid type: string \"1000\""),
         (json!({"base_copper":{"weight_milli_oz":Value::Null}}), json!({}), "invalid type: null"),
-        (json!({"base_copper":{"thickness_nm":100_000_001}}), json!({}), "base copper needs a weight"),
-        (json!({"base_copper":{"thickness_nm":-1}}), json!({}), "base copper needs a weight"),
+        (json!({"base_copper":{"thickness_nm":100_000_001}}), json!({}), "base copper foil thickness must be from 1 nm to 100 mm"),
+        (json!({"base_copper":{"thickness_nm":-1}}), json!({}), "base copper foil thickness must be from 1 nm to 100 mm"),
+        (json!({"base_copper":{"thickness_nm":0}}), json!({}), "base copper foil thickness must be from 1 nm to 100 mm"),
         (json!({"thickness_nm":99_000_000,"thickness_tolerance_nm":1_000_001}), json!({}), "copper tolerance requires"),
         (json!({"thickness_nm":35_000,"thickness_basis":"typical"}), json!({}), "unknown variant `typical`"),
         (json!({"thickness_nm":35_000,"thickness_basis":Value::Null}), json!({}), "invalid type: null"),
@@ -796,7 +799,8 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
         (json!({}), json!({"finished_thickness_nm":99_000_000,"finished_thickness_tolerance_nm":1_000_001}), "board thickness tolerance requires"),
         (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":-1}), "board thickness tolerance requires"),
         (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":Value::Null}), "invalid type: null"),
-        (json!({}), json!({"declared_minimum_thickness_nm":100_000_001}), "finished board thickness must be"),
+        (json!({}), json!({"declared_minimum_thickness_nm":100_000_001}), "declared minimum board thickness must be a positive"),
+        (json!({}), json!({"declared_minimum_thickness_nm":0}), "declared minimum board thickness must be a positive"),
         (json!({}), json!({"declared_minimum_thickness_nm":Value::Null}), "invalid type: null"),
         (
             json!({}),
@@ -817,7 +821,7 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
     let value = field + text[field..].find("100000").unwrap();
     let mut changed = saved.clone();
     changed.insert(path, format!("{}100001{}", &text[..value], &text[value + 6..]).into_bytes());
-    refused_because(&changed, "base copper needs a weight");
+    refused_because(&changed, "base copper weight must be from 0.001 to 100 oz");
 }
 
 /// A copper-count reduction refuses to discard an inner layer that has only a role.
