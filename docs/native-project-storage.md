@@ -995,8 +995,11 @@ as the old snapshot and the journal together. If the new snapshot cannot be
 written, the old snapshot and journal stay as they were, already holding that
 edit, and the next edit tries again. While snapshots keep failing, for example
 because the recovery folder was removed or became read-only, every edit is still
-appended, so the journal grows past the limit until a snapshot succeeds or the
-session ends.
+appended to the open journal, so it grows past the limit until a snapshot
+succeeds or the session ends. When no journal is open, because a record or a new
+journal could not be written or an opened or saved project could not be
+snapshotted, edits are not recorded until a snapshot succeeds; recovery then
+returns the last recorded state.
 
 Each recorded edit encodes the whole project and fingerprints the complete
 document set, on the writer thread. Nothing yet removes the entry of a session

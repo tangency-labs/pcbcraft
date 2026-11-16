@@ -58,8 +58,10 @@ const MAX_ID_LEN: usize = 64;
 /// one large edit can make the new snapshot as large as the old one and the journal together.
 /// While new snapshots succeed, recovery reads at most the snapshot, records up to the larger of
 /// twice its size and the floor, and the one record that crossed the limit. While they keep
-/// failing, every edit still appends, so the journal grows until a snapshot succeeds or the
-/// session ends.
+/// failing with the old journal still open, every edit still appends, so the journal grows until
+/// a snapshot succeeds or the session ends. With no journal open (after a failed append, a failed
+/// journal publish or a root that could not be snapshotted), edits are not recorded until a
+/// snapshot succeeds, and recovery returns the last recorded state.
 const REBASE_RATIO: u64 = 2;
 /// The least journal size that starts a new snapshot, so a small project is not snapshotted
 /// and flushed every few edits.
