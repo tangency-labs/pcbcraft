@@ -18,7 +18,7 @@ const FORMAT: &str = "pcbcraft-origin/1";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Anchor {
-    /// Board coordinate zero, which outputs have always used.
+    /// Board coordinate zero, the built-in default.
     BoardZero,
     /// The lower-left corner of the Board Outline's bounding box, followed when the outline changes.
     OutlineLowerLeft,
