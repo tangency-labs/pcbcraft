@@ -138,8 +138,9 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   the same gate.
 - **Browser.** `solidcore` itself checks for `wasm32-unknown-unknown`, but
   `solidcore-step` has not been built for it, and the kernel README asks for a
-  wasm stack larger than the default 1 MB. Until that is qualified, the browser
-  shows meshes only and STEP actions return `kernel_unavailable`.
+  wasm stack larger than the default 1 MB. Until that is qualified, every operation
+  of the crate on `wasm32` returns `kernel_unavailable`, and a browser 3D view
+  would use meshes.
 - **Size.** A probe outside this workspace measured about 9.5 MB added to a
   native release binary for a full kernel round trip. The browser size is not
   measured; the kernel should load there only when a 3D view or STEP action
