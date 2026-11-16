@@ -561,3 +561,178 @@ fn complete_initial_setup_drafts_preserve_legacy_drawings() {
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
+
+/// Write the board's file, check its header, and require a decode/encode round trip to keep every byte.
+fn saved_board(s: &Session, format: &str) -> persistence::Documents {
+    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let board: Value = serde_json::from_slice(&documents[&persistence::test_board_path(&documents)]).unwrap();
+    assert_eq!(board["format"], format);
+    assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
+    documents
+}
+
+/// Replace the board header of saved documents, keeping its body.
+fn with_header(documents: &persistence::Documents, from: &str, to: &str) -> persistence::Documents {
+    let path = persistence::test_board_path(documents);
+    let text = String::from_utf8(documents[&path].clone()).unwrap();
+    assert!(text.contains(from));
+    let mut changed = documents.clone();
+    changed.insert(path, text.replace(from, to).into_bytes());
+    changed
+}
+
+/// Copper roles, base copper and finished thickness qualifiers, and the declared board thickness,
+/// are one undoable setup edit that saves losslessly in its own board format. Unset values stay
+/// unknown and boards without these fields keep their earlier format and bytes.
+///
+/// The bottom layer's 47.9 µm is IPC-2221A clause 10.1.1, Table 10-1: minimum external conductor
+/// thickness after processing for 1 oz foil, Class 1 and 2. The 35 µm foil for 1 oz follows
+/// IPC-2251 clause 4.1.1.3. The other values are arbitrary.
+#[test]
+fn copper_strata_and_board_thickness_round_trip_in_board_format_20() {
+    let mut s = session(4);
+    let original = saved_board(&s, "pcbcraft-board/2");
+    let revision = s.revision();
+    let mut candidate = setup(&s);
+    let ids: Vec<Uuid> = s.project().unwrap().board_setup().unwrap().copper_stack().map(|copper| copper.layer).collect();
+    let [top, inner_1, inner_2, bottom] = ids[..] else { panic!("four copper layers") };
+    let strata = &mut candidate["stackup"]["strata"];
+    strata[0]["role"] = json!("signal");
+    strata[0]["base_copper"] = json!({"weight_milli_oz":1000,"thickness_nm":35_000});
+    strata[0]["thickness_nm"] = json!(47_900);
+    strata[0]["thickness_tolerance_nm"] = json!(4_800);
+    strata[0]["thickness_basis"] = json!("nominal");
+    strata[4]["role"] = json!("plane");
+    strata[6]["thickness_nm"] = json!(47_900);
+    strata[6]["thickness_basis"] = json!("minimum");
+    candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    candidate["stackup"]["finished_thickness_tolerance_nm"] = json!(160_000);
+    candidate["stackup"]["declared_minimum_thickness_nm"] = json!(1_500_000);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(setup(&s), candidate);
+
+    let documents = saved_board(&s, "pcbcraft-board/20");
+    let reopened = persistence::decode_documents(&documents).unwrap();
+    let stack = reopened.board_setup().unwrap();
+    assert_eq!(stack, s.project().unwrap().board_setup().unwrap());
+    let base = BaseCopper { weight_milli_oz: Some(1000), thickness_nm: Some(35_000) };
+    let finished = CopperThickness { thickness_nm: 47_900, tolerance_nm: Some(4_800), basis: Some(ThicknessBasis::Nominal) };
+    assert_eq!(
+        stack.copper(top),
+        Some(CopperFacts { layer: top, role: Some(CopperRole::Signal), base_copper: Some(base), finished: Some(finished) })
+    );
+    assert_eq!(stack.copper(inner_1), Some(CopperFacts { layer: inner_1, role: None, base_copper: None, finished: None }));
+    assert_eq!(stack.copper(inner_2).unwrap().role, Some(CopperRole::Plane));
+    assert_eq!(stack.copper(inner_2).unwrap().finished, None);
+    assert_eq!(
+        stack.copper(bottom).unwrap().finished,
+        Some(CopperThickness { thickness_nm: 47_900, tolerance_nm: None, basis: Some(ThicknessBasis::Minimum) })
+    );
+    assert_eq!(stack.copper(stack.stackup().id), None);
+    assert_eq!(stack.stackup().finished_thickness_nm, Some(1_600_000));
+    assert_eq!(stack.stackup().finished_thickness_tolerance_nm, Some(160_000));
+    assert_eq!(stack.board_thickness_for_checks(), Some((1_500_000, ThicknessBasis::Minimum)));
+    let inspected = s.inspect()["project"]["board"]["setup"]["stackup"]["strata"].clone();
+    assert!(inspected[2].get("thickness_nm").is_none() && inspected[4].get("thickness_nm").is_none());
+
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved_board(&s, "pcbcraft-board/2"), original);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(saved_board(&s, "pcbcraft-board/20"), documents);
+
+    for older in ["pcbcraft-board/3", "pcbcraft-board/5", "pcbcraft-board/19"] {
+        assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/20", older)).is_err(), "{older}");
+    }
+    assert!(persistence::decode_documents(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/20")).is_err());
+}
+
+/// Without a declared minimum, checks use the nominal finished thickness and say so.
+#[test]
+fn board_thickness_for_checks_says_which_value_it_uses() {
+    let mut s = session(2);
+    assert_eq!(s.project().unwrap().board_setup().unwrap().board_thickness_for_checks(), None);
+    let mut candidate = setup(&s);
+    candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    assert_eq!(s.project().unwrap().board_setup().unwrap().board_thickness_for_checks(), Some((1_600_000, ThicknessBasis::Nominal)));
+    saved_board(&s, "pcbcraft-board/20");
+}
+
+/// Qualifiers without their value, empty or out-of-range base copper, inverted board limits and
+/// explicit nulls are refused before any state, history or saved byte changes.
+#[test]
+fn invalid_copper_and_board_thickness_fields_never_change_state() {
+    let mut s = session(2);
+    let base = setup(&s);
+    let mut invalid = vec![];
+    for (field, value) in [
+        ("thickness_tolerance_nm", json!(1_000)),
+        ("thickness_basis", json!("nominal")),
+        ("base_copper", json!({})),
+        ("base_copper", json!({"weight_milli_oz":0})),
+        ("base_copper", json!({"thickness_nm":0})),
+        ("base_copper", json!({"weight_milli_oz":1000,"grade":"rtf"})),
+        ("role", json!("ground")),
+        ("role", Value::Null),
+    ] {
+        let mut candidate = base.clone();
+        candidate["stackup"]["strata"][0][field] = value;
+        invalid.push(candidate);
+    }
+    for (thickness, tolerance) in [(35_000, 35_000), (35_000, -1)] {
+        let mut candidate = base.clone();
+        candidate["stackup"]["strata"][0]["thickness_nm"] = json!(thickness);
+        candidate["stackup"]["strata"][0]["thickness_tolerance_nm"] = json!(tolerance);
+        invalid.push(candidate);
+    }
+    for stackup in [
+        json!({"finished_thickness_tolerance_nm":160_000}),
+        json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":1_600_000}),
+        json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_001}),
+        json!({"finished_thickness_nm":0}),
+        json!({"declared_minimum_thickness_nm":0}),
+        json!({"finished_thickness_nm":Value::Null}),
+    ] {
+        let mut candidate = base.clone();
+        for (field, value) in stackup.as_object().unwrap() {
+            candidate["stackup"][field] = value.clone();
+        }
+        invalid.push(candidate);
+    }
+    for candidate in invalid {
+        let revision = s.revision();
+        reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate,"expected_revision":revision}));
+    }
+}
+
+/// A copper-count reduction refuses to discard an inner layer that has only a role.
+#[test]
+fn reducing_copper_count_keeps_authored_roles() {
+    let mut s = session(4);
+    let mut candidate = setup(&s);
+    candidate["stackup"]["strata"][2]["role"] = json!("plane");
+    candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    let stack = s.project().unwrap().board_setup().unwrap();
+    assert!(stack.with_copper_count(2).is_err());
+    let grown = stack.with_copper_count(6).unwrap();
+    assert_eq!(grown.stackup().finished_thickness_nm, Some(1_600_000));
+    assert_eq!(grown.copper_stack().filter(|copper| copper.role == Some(CopperRole::Plane)).count(), 1);
+}
+
+/// Board rules and the stack fields share format 20; removing the stack fields returns to format 19.
+#[test]
+fn board_format_20_carries_rules() {
+    let mut s = crate::board::track::tests::routed_fixture();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    apply(&mut s, crate::board::rules::SET_RULES, json!({"board":board,"rules":crate::board::rules::Values::default()}));
+    let ruled = saved_board(&s, "pcbcraft-board/19");
+    let mut candidate = setup(&s);
+    candidate["stackup"]["strata"][0]["role"] = json!("mixed");
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    let stacked = saved_board(&s, "pcbcraft-board/20");
+    assert!(persistence::decode_documents(&with_header(&stacked, "pcbcraft-board/20", "pcbcraft-board/19")).is_err());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved_board(&s, "pcbcraft-board/19"), ruled);
+}
