@@ -302,7 +302,11 @@ fn point_nm(mm: [f64; 3]) -> Result<[i64; 3]> {
     Ok(out)
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+// Two attributes, not cfg(all(..)): Clippy treats a module as test code only under a plain
+// #[cfg(test)], and the test-only lint allowances depend on it.
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests;
-#[cfg(all(test, target_arch = "wasm32"))]
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
 mod wasm_tests;
