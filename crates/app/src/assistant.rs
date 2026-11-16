@@ -1131,6 +1131,9 @@ mod tests {
 }
 
 #[cfg(test)]
+mod library_tests;
+
+#[cfg(test)]
 mod chat_tests {
     use std::{
         collections::VecDeque,

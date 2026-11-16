@@ -177,7 +177,9 @@ impl PcbApp {
             self.editor_workspace(ui, area);
             #[cfg(not(target_arch = "wasm32"))]
             if main {
-                self.host_assistant(&ctx, Some(area), enabled, self.session.project().is_some());
+                // An open part document gives the Assistant a document without a project.
+                let part = self.views.active.library.as_ref().is_some_and(|state| state.part_document.is_some());
+                self.host_assistant(&ctx, Some(area), enabled, part || self.session.project().is_some());
             }
         });
         let dialog_host = self.arrangement_dialog_host().or_else(|| self.rule_dialog_host()).unwrap_or(self.views.main);
