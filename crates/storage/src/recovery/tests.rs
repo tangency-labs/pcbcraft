@@ -476,3 +476,29 @@ fn a_kill_between_the_new_snapshot_and_its_journal_recovers_the_snapshot() {
     assert_eq!(recovered.stop, Some(Stop::OtherSnapshot));
     assert!(recovered.commands.is_empty());
 }
+
+/// A folder flush that fails after the new snapshot was renamed into place adopts that
+/// snapshot: the old journal, which recovery would now ignore, is closed, and the next edit
+/// starts another snapshot instead of appending edits recovery could not see.
+#[test]
+fn a_failed_flush_after_the_snapshot_rename_adopts_the_new_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
+    journal.rebase_after = journal.journal_bytes;
+    FAIL_NEXT_FLUSH.with(|fail| fail.set(true));
+    let (second, result) = place_and_append(&mut session, &mut journal);
+    assert!(result.unwrap_err().contains("could not be flushed"));
+    assert_ne!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
+    assert!(journal.file.is_none());
+    assert_eq!(journal.sha256(), documents_sha256(&second));
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.stop), (second, Some(Stop::OtherSnapshot)));
+
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    let (fourth, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (fourth, 1, None));
+}

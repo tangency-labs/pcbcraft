@@ -260,18 +260,50 @@ fn decode_record(payload: &[u8]) -> Result<(Record, WrittenDocuments), String> {
 
 /// Write `bytes` to `path` through a flushed sibling temporary file and an atomic rename, then
 /// flush the folder where the platform allows it, so a reader sees the old or the new file.
-fn publish(dir: &Path, path: &Path, bytes: &[u8]) -> Result<File, String> {
-    let mut staged = tempfile::Builder::new().prefix(".recovery-").tempfile_in(dir).map_err(|e| e.to_string())?;
-    staged.write_all(bytes).map_err(|e| e.to_string())?;
-    staged.as_file().sync_all().map_err(|e| e.to_string())?;
-    let file = staged.persist(path).map_err(|e| e.error.to_string())?;
-    crate::folder::sync_dir(dir)?;
+///
+/// A failure says whether the rename had already happened: then `path` holds `bytes`, though
+/// the folder flush that makes the rename durable did not complete.
+fn publish(dir: &Path, path: &Path, bytes: &[u8]) -> Result<File, PublishError> {
+    let before = |error: String| PublishError { replaced: false, message: error };
+    let mut staged = tempfile::Builder::new().prefix(".recovery-").tempfile_in(dir).map_err(|e| before(e.to_string()))?;
+    staged.write_all(bytes).map_err(|e| before(e.to_string()))?;
+    staged.as_file().sync_all().map_err(|e| before(e.to_string()))?;
+    let file = staged.persist(path).map_err(|e| before(e.error.to_string()))?;
+    sync_after_rename(dir).map_err(|message| PublishError { replaced: true, message })?;
     Ok(file)
 }
 
+/// Why [`publish`] failed, and whether the new file was already in place.
+#[derive(Debug)]
+struct PublishError {
+    replaced: bool,
+    message: String,
+}
+
+impl From<PublishError> for String {
+    fn from(error: PublishError) -> Self {
+        error.message
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes the next folder flush after a rename on this thread fail, for tests.
+    static FAIL_NEXT_FLUSH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Flush `dir` after a rename into it.
+fn sync_after_rename(dir: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    if FAIL_NEXT_FLUSH.with(|fail| fail.replace(false)) {
+        return Err("The recovery folder could not be flushed.".to_owned());
+    }
+    crate::folder::sync_dir(dir)
+}
+
 /// Publish `<id>.pc` holding `base`, returning its size in bytes.
-fn publish_snapshot(dir: &Path, id: &str, base: &Documents) -> Result<u64, String> {
-    let packed = encode_packed_documents(base.clone())?;
+fn publish_snapshot(dir: &Path, id: &str, base: &Documents) -> Result<u64, PublishError> {
+    let packed = encode_packed_documents(base.clone()).map_err(|message| PublishError { replaced: false, message })?;
     publish(dir, &entry_file(dir, id, "pc"), &packed)?;
     Ok(u64::try_from(packed.len()).unwrap_or(u64::MAX))
 }
@@ -355,17 +387,22 @@ impl EditJournal {
     /// ignores in favour of the new snapshot, already holding every recorded edit.
     ///
     /// If the snapshot cannot be written, nothing on disk changes and the old snapshot and
-    /// journal stay valid; the size count is kept, so the next edit tries again. If only the new
-    /// journal cannot be written, the new snapshot already holds `base`, no journal is open and
-    /// the next edit starts another snapshot.
+    /// journal stay valid; the size count is kept, so the next edit tries again. If the snapshot
+    /// was renamed into place but the folder could not be flushed, or the new journal cannot be
+    /// written, the new snapshot holds `base`: the old journal is closed, since recovery would
+    /// ignore anything appended to it, and the next edit starts another snapshot.
     ///
     /// The old journal is closed before the new one is renamed over it, because Windows refuses
     /// to replace a file that is open.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
-        let snapshot_bytes = publish_snapshot(&self.dir, &self.id, &base)?;
+        let published = publish_snapshot(&self.dir, &self.id, &base);
+        if let Err(PublishError { replaced: false, message }) = published {
+            return Err(message);
+        }
         self.sha256 = documents_sha256(&base);
         self.documents = base;
         drop(self.file.take());
+        let snapshot_bytes = published?;
         let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &self.sha256)?;
         self.file = Some(file);
         self.journal_bytes = journal_bytes;
