@@ -120,6 +120,31 @@ fn a_removed_command_keeps_its_version() {
     assert_eq!(check_lock(&lock_from(&section, 3), "commands", &commands, 3), Ok(()));
 }
 
+/// Clients see one list of ids, so a command removed from one section cannot come back lower in
+/// another.
+#[test]
+fn a_command_moved_to_another_section_keeps_its_version() {
+    let mut commands = described();
+    commands[0]["version"] = json!(3);
+    let id = commands[0]["id"].as_str().unwrap().to_owned();
+    let mut moved = commands.remove(0);
+    let Err(LockMismatch::Stale { section, .. }) = check_lock(&lock_of(&[moved.clone()], 3), "commands", &[], 3) else { panic!("a removal passed") };
+    let mut lock = lock_from(&section, 3);
+    lock["window_commands"] = json!({});
+
+    moved["version"] = json!(1);
+    let Err(LockMismatch::Version(problems)) = check_lock(&lock, "window_commands", &[moved.clone()], 3) else {
+        panic!("a moved id went below its version")
+    };
+    assert_eq!(problems, [format!("`{id}` is version 1, below its version 3 in `commands`; versions never fall")]);
+
+    moved["version"] = json!(3);
+    let Err(LockMismatch::Stale { problems, .. }) = check_lock(&lock, "window_commands", &[moved], 3) else {
+        panic!("a moved id was not added to its new section")
+    };
+    assert_eq!(problems, [format!("`{id}` is not in the lock")]);
+}
+
 /// Added and removed commands and description key order leave versions alone but keep the lock
 /// current.
 #[test]

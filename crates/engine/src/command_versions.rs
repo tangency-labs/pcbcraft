@@ -103,12 +103,13 @@ pub enum LockMismatch {
 /// the `section` of a lock, given the catalog version in code. The lock is not changed.
 ///
 /// A removed command stays in the lock marked `"removed": true` with its last version, so an id
-/// that comes back never returns below it.
+/// that comes back, in this section or another one, never returns below it.
 ///
 /// # Errors
 ///
 /// [`LockMismatch::Version`] when a contract changed without a version bump, a version fell
-/// (also for a removed id that comes back), `catalog_version` fell below the lock's, or a version
+/// (also for a removed id that comes back, or an id that moves from another section),
+/// `catalog_version` fell below the lock's, or a version
 /// rose while `catalog_version` stayed at the lock's. Otherwise [`LockMismatch::Stale`] when a
 /// command is added, removed, re-added or re-versioned, or the lock's catalog version differs,
 /// with the section text to commit.
@@ -123,7 +124,11 @@ pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_vers
         let id = command["id"].as_str().unwrap_or_default();
         let version = command["version"].as_u64().unwrap_or(0);
         let Some(entry) = locked.get(id) else {
-            stale.push(format!("`{id}` is not in the lock"));
+            match locked_elsewhere(lock, section, id) {
+                Some((other, locked_version)) if version < locked_version => version_problems
+                    .push(format!("`{id}` is version {version}, below its version {locked_version} in `{other}`; versions never fall")),
+                _ => stale.push(format!("`{id}` is not in the lock")),
+            }
             continue;
         };
         let locked_version = entry["version"].as_u64().unwrap_or(0);
@@ -155,6 +160,17 @@ pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_vers
         stale.push(format!("the lock's catalog version is {locked_catalog}, not {catalog_version}"));
     }
     if stale.is_empty() { Ok(()) } else { Err(LockMismatch::Stale { problems: stale, section: lock_section(described, locked) }) }
+}
+
+/// The highest version the lock records for `id` in a section other than `section`, with that
+/// section's name: clients see one list of ids, so a command may not move to another section at
+/// a lower version.
+fn locked_elsewhere<'a>(lock: &'a Value, section: &str, id: &str) -> Option<(&'a str, u64)> {
+    lock.as_object()?
+        .iter()
+        .filter(|(name, _)| name.as_str() != section)
+        .filter_map(|(name, entries)| Some((name.as_str(), entries.as_object()?.get(id)?["version"].as_u64()?)))
+        .max_by_key(|(_, version)| *version)
 }
 
 /// Whether a lock entry records a command that is no longer described.
