@@ -392,7 +392,7 @@ def find_broken_links(repo: Path, files: list[Path]) -> list[str]:
             for offset, target, html_attribute in sorted(targets):
                 if not _local_target(repo, source, target, html_attribute=html_attribute):
                     number = first_line + bisect_right(newlines, offset)
-                    problems.append(f"{source.relative_to(repo)}:{number}: missing local link target: {target}")
+                    problems.append(f"{source.relative_to(repo).as_posix()}:{number}: missing local link target: {target}")
     return problems
 
 
