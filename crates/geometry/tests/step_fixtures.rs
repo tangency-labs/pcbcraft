@@ -48,6 +48,15 @@ fn every_fixture_round_trips_within_one_micrometre() {
     let (tolerance, fixtures) = fixtures(&dir);
     assert_eq!(tolerance, 1_000, "the qualification tolerance is one micrometre");
     assert_eq!(fixtures.len(), FIXTURE_COUNT);
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".step"))
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = fixtures.iter().map(|f| f.file.clone()).collect();
+    listed.sort();
+    assert_eq!(on_disk, listed, "every STEP file in the folder has an expected box, and only those");
 
     for fixture in &fixtures {
         let name = &fixture.file;

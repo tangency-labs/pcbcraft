@@ -84,7 +84,7 @@ Current operations:
 | `write_step(part_name, bodies)` | One AP242 part; the same bodies always give the same bytes (no time stamp) |
 | `Body::transformed(transform)` | A moved copy; the body itself is unchanged |
 | `StepRead::placements` | Every use of a body in the file's world frame: one per assembly occurrence (a part used twice is one body placed twice), and each body outside any product placed once where it is |
-| `StepRead::placed_bodies()`, `StepRead::bounding_box()` | The placed bodies, and their exact box in the world frame |
+| `StepRead::placed_bodies()`, `StepRead::bounding_box()` | The placed bodies, and their box in the world frame, each body measured after it is moved |
 | `kernel_crash_test()` | `kernel_internal` from a deliberate kernel panic |
 
 Error codes are stable snake_case names that MCP and CLI replies can carry:

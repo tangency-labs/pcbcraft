@@ -295,8 +295,8 @@ impl StepRead {
     }
 
     /// The box of every placed body in the file's world frame; `None` when nothing was read.
-    /// Each body is moved before it is measured, so the box bounds the turned surfaces exactly,
-    /// not the turned box of each body.
+    /// Each body is moved before it is measured, so a turned body gives the box of its turned
+    /// surfaces, not the turned box of the body.
     ///
     /// # Errors
     ///
