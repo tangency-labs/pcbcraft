@@ -50,7 +50,7 @@ boards keep their encoding.
 Materials take sourced thermal conductivity, thermal expansion, dielectric
 strength and CTI reports, each with its unit in the field name, its test
 conditions and a required source; a CTI given with a material group must lie in
-that group's IEC 60664-1 band. Boards that use them save as board format 24 and
+that group's IEC 60664-1 band. Boards that use them save as board format 23 and
 setup profiles as version 3, which older builds refuse; other boards keep their
 encoding.
 

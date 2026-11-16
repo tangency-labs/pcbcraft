@@ -73,7 +73,7 @@ const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/20";
-const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/24";
+const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -353,7 +353,7 @@ pub fn is_document_path(path: &str) -> bool {
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 20 requires
 /// a copper role, base copper, copper thickness qualifier or finished board thickness and may
-/// carry every earlier field; older headers refuse those setup fields. Board format 24 requires
+/// carry every earlier field; older headers refuse those setup fields. Board format 23 requires
 /// a thermal conductivity, thermal expansion, dielectric strength or tracking report on a
 /// material and may carry every earlier field, including format 20's; older headers refuse them.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
@@ -1011,7 +1011,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
     if reported != setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format) {
-        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 24, which requires at least one of them.".into());
+        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 23, which requires at least one of them.".into());
     }
     if !reported && stacked != setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format) {
         return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 20, which requires at least one of them.".into());
@@ -1833,7 +1833,7 @@ impl DocumentsEncoder {
 /// uses format 18 while an authored lock exists, unless board defaults require format 19.
 /// Format 19 requires validated rules and accepts earlier physical fields. Format 20 is chosen
 /// whenever the setup uses copper roles, base copper, copper thickness qualifiers or finished
-/// board thickness, and accepts every earlier field, including rules. Format 24 is chosen whenever
+/// board thickness, and accepts every earlier field, including rules. Format 23 is chosen whenever
 /// a material carries a thermal conductivity, thermal expansion, dielectric strength or tracking
 /// report, and accepts every earlier field, including format 20's. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
