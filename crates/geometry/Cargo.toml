@@ -18,4 +18,8 @@ pcbcraft-units = { workspace = true }
 # (docs/geometry-kernel.md).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 solidcore-ops = { workspace = true }
+solidcore-record = { workspace = true }
 solidcore-step = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

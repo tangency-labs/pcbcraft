@@ -1,6 +1,8 @@
 //! The solidcore implementation of the kernel boundary. Nothing here is public: the crate root
 //! converts between these millimetre values and its nanometre types.
 
+use std::collections::BTreeMap;
+
 use solidcore_step::write::product::{ExportError, Header, solidcore_bodies};
 
 use crate::guard::guard;
@@ -22,6 +24,16 @@ pub(crate) fn bounds(body: &KernelBody) -> Result<([f64; 3], [f64; 3])> {
     guard("bounding box", || body.0.bounds().map_err(|e| ops_error("bounding box", e)))
 }
 
+/// A copy of `body` moved by the affine `matrix` (rows 0 to 2 the images of x, y and z, row 3 the
+/// translation in millimetres).
+pub(crate) fn transformed(body: &KernelBody, matrix: &[[f64; 4]; 4]) -> Result<KernelBody> {
+    guard("transform", || {
+        let copy = body.0.copy().map_err(|e| ops_error("transform", e))?;
+        copy.transform(matrix).map_err(|e| ops_error("transform", e))?;
+        Ok(KernelBody(copy))
+    })
+}
+
 /// STEP text of `bodies` as one AP242 part named `part_name`.
 pub(crate) fn write(part_name: &str, bodies: &[(&str, &KernelBody)]) -> Result<String> {
     guard("STEP write", || {
@@ -31,11 +43,17 @@ pub(crate) fn write(part_name: &str, bodies: &[(&str, &KernelBody)]) -> Result<S
     })
 }
 
-/// The named bodies read from a file, and the solid items refused.
-pub(crate) type Read = (Vec<(String, KernelBody)>, Vec<RefusedItem>);
+/// What a file holds: its named bodies, their placements and the solid items refused.
+pub(crate) struct Read {
+    pub(crate) bodies: Vec<(String, KernelBody)>,
+    /// Each use of a body (index into `bodies`) with its matrix into the world frame, in
+    /// millimetres.
+    pub(crate) placements: Vec<(usize, [[f64; 4]; 4])>,
+    pub(crate) refused: Vec<RefusedItem>,
+}
 
-/// The named bodies of a STEP text, and the solid items refused. A panic while one solid is
-/// handed to the kernel refuses that solid only.
+/// The named bodies of a STEP text, where its product structure places them, and the solid items
+/// refused. A panic while one solid is handed to the kernel refuses that solid only.
 pub(crate) fn read(text: &str) -> Result<Read> {
     guard("STEP read", || {
         let exchange = solidcore_step::p21::parse(text).map_err(|e| GeometryError::new(ErrorCode::ModelUnreadable, String::from(e)))?;
@@ -43,12 +61,16 @@ pub(crate) fn read(text: &str) -> Result<Read> {
         let mut refused: Vec<RefusedItem> =
             solids.failures.into_iter().map(|f| RefusedItem { entity: f.item, code: reader_refusal(&f.message), message: f.message }).collect();
         let mut bodies = Vec::with_capacity(solids.solids.len());
+        let mut body_of_item = BTreeMap::new();
         for solid in solids.solids {
             let made = guard("STEP solid", || {
                 solidcore_ops::Body::from_record(&solid.brep, false).map(|(body, _)| body).map_err(|e| ops_error("STEP solid", e))
             });
             match made {
-                Ok(body) => bodies.push((solid.name, KernelBody(body))),
+                Ok(body) => {
+                    body_of_item.insert(solid.item, bodies.len());
+                    bodies.push((solid.name, KernelBody(body)));
+                }
                 Err(e) => {
                     let code = match e.code() {
                         ErrorCode::KernelInternal => ErrorCode::KernelInternal,
@@ -59,8 +81,34 @@ pub(crate) fn read(text: &str) -> Result<Read> {
             }
         }
         refused.sort_by_key(|r| r.entity);
-        Ok((bodies, refused))
+        let placements = placements(&exchange, &body_of_item, bodies.len())?;
+        Ok(Read { bodies, placements, refused })
     })
+}
+
+/// Every use of a read body in the world frame: the product structure's, then each body it does
+/// not place, by the identity. A refused item's placements are dropped with it.
+fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<u64, usize>, count: usize) -> Result<Vec<(usize, [[f64; 4]; 4])>> {
+    let unreadable = |e: String| GeometryError::new(ErrorCode::ModelUnreadable, format!("assembly structure: {e}"));
+    let structure = solidcore_record::step::product::read(exchange).map_err(unreadable)?;
+    let placed = solidcore_ops::placed_bodies(&structure).map_err(unreadable)?;
+    let mut out = Vec::with_capacity(placed.len().max(count));
+    let mut seen = vec![false; count];
+    for p in placed {
+        // A surface model holding closed shells beside open ones is read as one body per closed
+        // shell and one for the rest; the model's placement places them all.
+        for item in solidcore_step::topology::items(exchange, p.entity) {
+            if let Some(&body) = body_of_item.get(&item) {
+                out.push((body, p.transform));
+                if let Some(s) = seen.get_mut(body) {
+                    *s = true;
+                }
+            }
+        }
+    }
+    let identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    out.extend(seen.iter().enumerate().filter(|(_, s)| !**s).map(|(body, _)| (body, identity)));
+    Ok(out)
 }
 
 /// A deliberate panic inside a solidcore call, as the kernel's session catches it.

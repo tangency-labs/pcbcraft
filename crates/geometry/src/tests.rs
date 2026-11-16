@@ -128,3 +128,39 @@ fn millimetre_conversion_rounds_once_to_the_nanometre() {
     assert_eq!(point_nm([f64::NAN, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
     assert_eq!(point_nm([2e6, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
 }
+
+#[test]
+fn a_transformed_copy_moves_and_leaves_the_original() {
+    let (body, expected) = block();
+    // A quarter turn about z (x to y, y to -x), then a move.
+    let turn = Transform { axes: [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [1_000_000, 0, 5_000_000] };
+    let moved = body.transformed(&turn).unwrap();
+    assert_eq!(moved.name(), "Block");
+    let turned = BoundingBox { min_nm: [-10_500_000, -2_000_000, 5_000_000], max_nm: [-2_500_000, 10_500_000, 6_600_000] };
+    let got = moved.bounding_box().unwrap();
+    assert!(got.max_deviation_nm(&turned) <= ROUND_TRIP_TOLERANCE_NM, "{got:?}");
+    assert!(body.bounding_box().unwrap().max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM);
+
+    let flat = Transform { axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]], translation_nm: [0; 3] };
+    assert_eq!(body.transformed(&flat).unwrap_err().code(), ErrorCode::InvalidParams);
+    let not_finite = Transform { axes: [[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [0; 3] };
+    assert_eq!(body.transformed(&not_finite).unwrap_err().code(), ErrorCode::InvalidParams);
+    assert_eq!(body.transformed(&Transform::translation([MAX_LENGTH_NM + 1, 0, 0])).unwrap_err().code(), ErrorCode::InvalidParams);
+}
+
+#[test]
+fn bodies_outside_any_assembly_are_placed_once_where_they_are() {
+    let (body, expected) = block();
+    let read = read_step(&write_step("fixture", &[body]).unwrap()).unwrap();
+    assert_eq!(read.placements, [Placement { body: 0, transform: Transform::IDENTITY }]);
+    let whole = read.bounding_box().unwrap().unwrap();
+    assert!(whole.max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM, "{whole:?}");
+    assert_eq!(read_step(b"ISO-10303-21;DATA;ENDSEC;END-ISO-10303-21;").unwrap().bounding_box().unwrap(), None);
+}
+
+#[test]
+fn a_union_holds_both_boxes() {
+    let a = BoundingBox { min_nm: [0, -5, 2], max_nm: [10, 0, 3] };
+    let b = BoundingBox { min_nm: [-1, -2, 4], max_nm: [3, 7, 9] };
+    assert_eq!(a.union(&b), BoundingBox { min_nm: [-1, -5, 2], max_nm: [10, 7, 9] });
+}
