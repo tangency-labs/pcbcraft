@@ -298,7 +298,8 @@ fn part_instance_keys_round_trip_through_addresses() {
     // The published address form is pinned literally: saved projects and reports use it.
     assert_eq!(part_instance_key("component-42"), Some(42));
     assert_eq!(part_instance_address(42), "component-42");
-    for invalid in ["R1", "component-", "component-x", "42"] {
+    let non_numeric = format!("{PART_INSTANCE_ADDRESS_PREFIX}x");
+    for invalid in ["R1", "component-", non_numeric.as_str(), "42"] {
         assert_eq!(part_instance_key(invalid), None);
     }
 }
