@@ -286,19 +286,71 @@ impl From<PublishError> for String {
     }
 }
 
+/// Failures that tests inject into one recovery folder. Each switch is keyed by the folder, so
+/// tests running in parallel, and the recorder's worker thread, see only their own.
 #[cfg(test)]
-thread_local! {
-    /// Makes the next folder flush after a rename on this thread fail, for tests.
-    static FAIL_NEXT_FLUSH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+mod faults {
+    use std::{
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
+
+    /// Folders with the number of folder flushes after a rename still to pass before one fails.
+    static FLUSHES: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
+    /// Folders whose next record write stops after half its frame.
+    static TORN: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    /// Make the `nth` folder flush after a rename in `dir` fail, counting from 1, once.
+    pub fn fail_flush(dir: &Path, nth: usize) {
+        assert!(nth > 0, "flushes are counted from 1");
+        FLUSHES.lock().unwrap().push((dir.to_path_buf(), nth));
+    }
+
+    /// Count one folder flush in `dir`; true if it is the one to fail.
+    pub fn flush_fails(dir: &Path) -> bool {
+        let mut flushes = FLUSHES.lock().unwrap();
+        let Some(index) = flushes.iter().position(|(folder, _)| folder == dir) else {
+            return false;
+        };
+        flushes[index].1 -= 1;
+        if flushes[index].1 > 0 {
+            return false;
+        }
+        flushes.swap_remove(index);
+        true
+    }
+
+    /// Make the next record write in `dir` stop after half its frame, once.
+    pub fn tear_next_record(dir: &Path) {
+        TORN.lock().unwrap().push(dir.to_path_buf());
+    }
+
+    /// True, once, if the record write in `dir` is the one to tear.
+    pub fn record_tears(dir: &Path) -> bool {
+        let mut torn = TORN.lock().unwrap();
+        torn.iter().position(|folder| folder == dir).map(|index| torn.swap_remove(index)).is_some()
+    }
 }
 
 /// Flush `dir` after a rename into it.
 fn sync_after_rename(dir: &Path) -> Result<(), String> {
     #[cfg(test)]
-    if FAIL_NEXT_FLUSH.with(|fail| fail.replace(false)) {
+    if faults::flush_fails(dir) {
         return Err("The recovery folder could not be flushed.".to_owned());
     }
     crate::folder::sync_dir(dir)
+}
+
+/// Append one framed record to the journal in `dir` and flush it to disk.
+#[cfg_attr(not(test), allow(unused_variables))]
+fn write_record(dir: &Path, file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if faults::record_tears(dir) {
+        file.write_all(&bytes[..bytes.len() / 2])?;
+        file.sync_data()?;
+        return Err(std::io::Error::other("The record write was cut short."));
+    }
+    file.write_all(bytes).and_then(|()| file.sync_data())
 }
 
 /// Publish `<id>.pc` holding `base`, returning its size in bytes.
@@ -424,7 +476,7 @@ impl EditJournal {
             return Ok(());
         }
         let bytes = frame(&encode_record(edit, &self.documents, &self.sha256, &documents, &sha256)?)?;
-        if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
+        if let Err(error) = write_record(&self.dir, file, &bytes) {
             // The journal may now end in a torn record; close it so nothing is appended past it.
             self.file = None;
             return Err(error.to_string());

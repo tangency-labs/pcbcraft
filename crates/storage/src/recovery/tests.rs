@@ -487,7 +487,7 @@ fn a_failed_flush_after_the_snapshot_rename_adopts_the_new_snapshot() {
     place_and_append(&mut session, &mut journal).1.unwrap();
     let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
     journal.rebase_after = journal.journal_bytes;
-    FAIL_NEXT_FLUSH.with(|fail| fail.set(true));
+    faults::fail_flush(dir.path(), 1);
     let (second, result) = place_and_append(&mut session, &mut journal);
     assert!(result.unwrap_err().contains("could not be flushed"));
     assert_ne!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
@@ -497,6 +497,87 @@ fn a_failed_flush_after_the_snapshot_rename_adopts_the_new_snapshot() {
     assert_eq!((recovered.documents, recovered.stop), (second, Some(Stop::OtherSnapshot)));
 
     place_and_append(&mut session, &mut journal).1.unwrap();
+    let (fourth, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (fourth, 1, None));
+}
+
+/// A folder flush that fails after the new journal was renamed into place, at the size limit,
+/// leaves the new snapshot with an empty journal that no handle is open on: recovery returns
+/// the new snapshot, the next edit starts another snapshot, and the edit after it replays.
+#[test]
+fn a_failed_flush_after_the_journal_rename_leaves_the_new_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    journal.rebase_after = journal.journal_bytes;
+    // The first flush is the new snapshot's, the second the new journal's.
+    faults::fail_flush(dir.path(), 2);
+    let (second, result) = place_and_append(&mut session, &mut journal);
+    assert!(result.unwrap_err().contains("could not be flushed"));
+    assert!(journal.file.is_none());
+    assert_eq!(journal.sha256(), documents_sha256(&second));
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (second, 0, None));
+
+    let (third, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (third, 0, None));
+    let (fourth, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (fourth, 1, None));
+}
+
+/// A recorder whose first entry cannot be created, because the flush after its snapshot or
+/// after its journal fails, keeps that error for `sync`, releases the entry and creates it
+/// again from the next edit, so later edits are recovered.
+#[test]
+fn a_failed_first_flush_is_reported_and_later_edits_are_recovered() {
+    for nth in [1, 2] {
+        let dir = tempfile::tempdir().unwrap();
+        faults::fail_flush(dir.path(), nth);
+        let recorder = Arc::new(JournalRecorder::start(dir.path().to_path_buf(), "entry".to_owned()).unwrap());
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name":"Before"})).unwrap();
+        session.observe_edits(Some(recorder.clone()));
+        session.apply("project.rename", &json!({"name":"Recreated"})).unwrap();
+        assert!(recorder.sync().unwrap_err().contains("could not be flushed"), "flush {nth}");
+        session.apply("project.rename", &json!({"name":"After"})).unwrap();
+        session.observe_edits(None);
+        Arc::into_inner(recorder).unwrap().finish().unwrap();
+        let recovered = recover(dir.path(), "entry").unwrap();
+        assert_eq!((recovered.commands, recovered.stop), (vec!["project.rename".to_owned()], None), "flush {nth}");
+        assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap(), "flush {nth}");
+    }
+}
+
+/// An append that fails after writing part of its frame closes the journal: recovery stops at
+/// the torn record with the last good state, the next edit becomes a new snapshot, and the
+/// edit after it replays.
+#[test]
+fn a_record_write_cut_short_closes_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    let (first, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let before = journal_len(dir.path());
+    faults::tear_next_record(dir.path());
+    let result = place_and_append(&mut session, &mut journal).1;
+    assert!(result.unwrap_err().contains("cut short"));
+    assert!(journal.file.is_none());
+    assert!(journal_len(dir.path()) > before);
+    assert_eq!(journal.sha256(), documents_sha256(&first));
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.documents, first);
+    assert!(matches!(recovered.stop, Some(Stop::Unreadable { index: 1, .. })), "{:?}", recovered.stop);
+
+    let (third, result) = place_and_append(&mut session, &mut journal);
+    result.unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (third, 0, None));
     let (fourth, result) = place_and_append(&mut session, &mut journal);
     result.unwrap();
     let recovered = recover(dir.path(), "entry").unwrap();
