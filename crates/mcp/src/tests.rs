@@ -1305,6 +1305,47 @@ fn fabrication_result_names_the_placement_origin_it_used() {
     assert_eq!(origin["axes"], "x_right_y_up");
 }
 
+/// Assembly house profiles are created, inspected and removed through the shared dispatcher,
+/// and a malformed profile is refused before it reaches the project.
+#[test]
+fn assembly_house_profiles_round_trip_through_execute() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap().board;
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let description = call(&mut server, "describe_command", json!({"command":pcbcraft_engine::SET_ASSEMBLY_HOUSE}));
+    assert_ne!(description["isError"], true, "{description}");
+    let set = |server: &mut Server, house: Option<&Value>, profile: Value| {
+        let revision = body(&call(server, "inspect_project", json!({})))["revision"].clone();
+        let mut params = json!({"board":board,"expected_revision":revision,"profile":profile});
+        if let Some(house) = house {
+            params["house"] = house.clone();
+        }
+        call(server, "execute", json!({"command":pcbcraft_engine::SET_ASSEMBLY_HOUSE,"params":params}))
+    };
+    let profile = json!({"name":"Reel","bottom_side":"viewed_from_bottom","packages":[
+        {"library":"basic-components","definition":"sot23","rotation":180},
+        {"library":"basic-components","definition":"capacitor-0402","centroid":{"x_nm":100_000,"y_nm":0}}
+    ]});
+    let response = set(&mut server, None, profile);
+    assert_ne!(response["isError"], true, "{response}");
+    let houses = body(&response)["project"]["boards"][0]["assembly_houses"].clone();
+    assert_eq!(houses.as_array().unwrap().len(), 1);
+    assert_eq!(houses[0]["format"], "pcbcraft-assembly-house/1");
+    assert_eq!(houses[0]["bottom_side"], "viewed_from_bottom");
+    assert_eq!(houses[0]["packages"][0]["definition"], "capacitor-0402", "packages come back in canonical order");
+    assert_eq!(houses[0]["packages"][1], json!({"library":"basic-components","definition":"sot23","rotation":180}));
+
+    let refused = set(&mut server, None, json!({"name":"Bad","packages":[{"library":"basic-components","definition":"sot23","rotation":360}]}));
+    assert_eq!(refused["isError"], true, "{refused}");
+    let inspected = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(inspected["project"]["boards"][0]["assembly_houses"], houses);
+
+    let response = set(&mut server, Some(&houses[0]["id"]), Value::Null);
+    assert_ne!(response["isError"], true, "{response}");
+    assert_eq!(body(&response)["project"]["boards"][0]["assembly_houses"], json!([]));
+}
+
 /// Board Copy/Cut return native payloads with inspect:false, and a same-project cut can relocate
 /// its existing logical component through the ordinary shared paste transaction.
 #[test]

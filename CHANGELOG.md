@@ -39,6 +39,7 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
+- Save assembly house profiles with `pcb.set_assembly_house`: a bottom-side convention and, per footprint definition, a rotation and centroid offset, so a package whose reel orientation differs from the library zero orientation is written right for that house without editing an exported file. Generic rows and other houses are unchanged. Boards with a house use board format 27; boards without one keep their previous encoding.
 - Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin use board format 21; boards without one keep their previous encoding and output bytes.
 - Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
 

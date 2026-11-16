@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod assembly_house;
 pub mod assignment;
 pub mod class_rules;
 pub mod clearance;
@@ -295,6 +296,8 @@ pub(crate) struct Board {
     pub(crate) rules: Option<rules::Settings>,
     /// The named origin outputs are measured from; absent boards use board zero.
     pub(crate) placement_origin: Option<origin::Origin>,
+    /// Assembly house profiles in creation order; empty boards keep their earlier saved format.
+    pub(crate) assembly_houses: Vec<assembly_house::House>,
     /// Copper segments in stable ID order; empty boards keep their earlier saved format.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.

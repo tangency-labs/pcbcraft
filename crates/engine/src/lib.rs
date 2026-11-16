@@ -27,6 +27,7 @@ pub mod schematic;
 pub mod selection;
 pub mod sheets;
 pub mod wire;
+pub use board::assembly_house::SET_ASSEMBLY_HOUSE;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
@@ -150,6 +151,10 @@ enum ParamKind {
     RuleLength,
     BoardRules,
     PlacementOrigin,
+    /// An assembly house UUID from inspection.
+    AssemblyHouseId,
+    /// An assembly house profile, or null to remove the addressed house.
+    AssemblyHouse,
     ClassRules,
     ClassSet,
     ClassId,
@@ -247,6 +252,8 @@ impl ParamKind {
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
+            Self::AssemblyHouseId => json!({"type":"string","format":"uuid"}),
+            Self::AssemblyHouse => board::assembly_house::schema(),
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
@@ -517,6 +524,10 @@ impl ParamKind {
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::PlacementOrigin if board::origin::parse(value).is_ok() => Ok(()),
             Self::PlacementOrigin => Err("must be a board_zero, outline_lower_left or in-range point origin, or null to reset"),
+            Self::AssemblyHouseId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
+            Self::AssemblyHouseId => Err("must identify an assembly house by non-nil UUID"),
+            Self::AssemblyHouse if board::assembly_house::valid_profile(value) => Ok(()),
+            Self::AssemblyHouse => Err("must be a house profile with a name and valid, distinct package offsets, or null to remove the house"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
@@ -1940,6 +1951,27 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_ASSEMBLY_HOUSE,
+        title: "Set Assembly House",
+        summary: "Create, replace or remove an assembly house profile in one undo step: its bottom-side convention and per-package rotation and centroid offsets for placement rows.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param {
+                name: "house",
+                required: false,
+                summary: "UUID of the house to replace or remove, from inspection; omit to create one",
+                kind: ParamKind::AssemblyHouseId,
+            },
+            Param {
+                name: "profile",
+                required: true,
+                summary: "{\"name\":..,\"bottom_side\":\"viewed_from_top\"|\"viewed_from_bottom\",\"packages\":[{\"library\":..,\"definition\":..,\"rotation\":0-359,\"centroid\":{\"x_nm\":..,\"y_nm\":..}}]}, or null to remove the house",
+                kind: ParamKind::AssemblyHouse,
+            },
+        ],
+    },
+    Command {
         id: board::class_rules::ROUTE_RULES,
         title: "Inspect Routing Rules",
         summary: "Inspect scoped net-class routing defaults, hard limits, origins and conflicts at a current copper contact without editing.",
@@ -2661,6 +2693,7 @@ impl Session {
             | DELETE_FOOTPRINTS
             | SET_RULES
             | SET_PLACEMENT_ORIGIN
+            | SET_ASSEMBLY_HOUSE
             | SET_SILKSCREEN
             | ADD_DRAWING
             | SET_DRAWING
@@ -2728,11 +2761,12 @@ impl Session {
     /// with per-property provenance; inspecting these fields never authors defaults.
     /// Each board's `placement_origin` reports the saved origin and the resolved one outputs
     /// use, or null when an outline-attached origin has no outline to attach to.
+    /// Each board's `assembly_houses` lists its saved house profiles in creation order.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_houses":board.assembly_houses()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2893,6 +2927,7 @@ impl Session {
                 | SET_BOARD_SETUP
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
+                | SET_ASSEMBLY_HOUSE
                 | SET_SILKSCREEN
                 | ADD_DRAWING
                 | SET_DRAWING
@@ -2961,6 +2996,7 @@ impl Session {
                 | DELETE_FOOTPRINTS
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
+                | SET_ASSEMBLY_HOUSE
                 | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
@@ -3144,6 +3180,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_RULES => self.set_rules(params)?,
             SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
+            SET_ASSEMBLY_HOUSE => self.set_assembly_house(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,

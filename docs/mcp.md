@@ -365,6 +365,35 @@ the `anchor`, its `source` (`builtin` or the board origin's UUID), the resolved 
 point in board coordinates, and `axes: "x_right_y_up"`. Without a saved origin the
 outputs are the same bytes as before origins existed.
 
+## Assembly houses
+
+`pcb.set_assembly_house` saves how one assembly house wants placement rows of a
+board written. It requires an explicit `board`, `expected_revision` and `profile`.
+Without `house` it creates a profile with a new UUID; with `house` (a UUID from
+inspection) it replaces that profile in place, keeping its UUID and position, or
+removes it when `profile` is `null`. A `null` `house` is refused rather than read as a
+new one. Each change is one undo step, and repeating the current profile changes
+nothing.
+
+A profile is `{"name":...,"bottom_side":...,"packages":[...]}`:
+
+- `name`: 1 to 64 characters, unique on the board, printable, with no leading or
+  trailing white space.
+- `bottom_side`: `viewed_from_top` (the default) or `viewed_from_bottom`; see
+  [placement output conventions](footprint-schema.md#placement-output-conventions).
+- `packages` (optional, up to 4096): one entry per footprint definition, each with
+  `library` and `definition` ids and at least one change. `rotation` is 0 to 359 whole
+  degrees from the library zero orientation to the house's, counterclockwise seen
+  from the component side. `centroid` is a nonzero point in library footprint
+  coordinates (nanometres, Y down, as pad centers are given), at most 100 mm from the
+  footprint origin on each axis. An offset applies to every revision of the
+  definition; legacy marker footprints have no definition and never match.
+
+A board holds at most 64 profiles. Board inspection lists them under
+`assembly_houses` in creation order, with packages sorted by library and definition.
+Profiles change no board geometry and no fabrication output; boards without them keep
+their earlier encoding.
+
 ## Saved board defaults
 
 `pcb.set_rules` requires an explicit `board`, `expected_revision` and complete
