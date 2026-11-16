@@ -206,8 +206,10 @@ fn board_graphics(gerber: &mut Gerber, view: BoardView<'_>, purpose: LayerPurpos
     }
 }
 
-/// Keep file names portable: letters, digits, `-` and `_` only.
-fn file_part(text: &str) -> String {
+/// Keep file names portable: ASCII letters, digits and `-` are kept, and every other
+/// character, including spaces, dots and non-ASCII letters, becomes `_`. A name with nothing
+/// left but underscores, such as an empty one, falls back to `board`.
+pub(crate) fn file_part(text: &str) -> String {
     let cleaned: String = text.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     if cleaned.trim_matches('_').is_empty() { "board".into() } else { cleaned }
 }

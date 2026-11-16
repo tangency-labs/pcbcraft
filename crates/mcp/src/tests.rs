@@ -1346,6 +1346,26 @@ fn assembly_house_profiles_round_trip_through_execute() {
     assert_eq!(body(&response)["project"]["boards"][0]["assembly_houses"], json!([]));
 }
 
+/// A netlist export with inspect:false still returns its file and leaves the project unchanged.
+#[test]
+fn netlist_file_survives_suppressed_project_inspection() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::EXPORT_NETLIST,"params":{},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    let files = result["netlist"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(files[0]["name"].as_str().unwrap().ends_with("-netlist.json"));
+    assert!(files[0]["contents"].as_str().unwrap().contains("\"components\""));
+    assert_eq!(result["revision"], before["revision"]);
+    assert!(result.get("project").is_none());
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
 /// Board Copy/Cut return native payloads with inspect:false, and a same-project cut can relocate
 /// its existing logical component through the ordinary shared paste transaction.
 #[test]

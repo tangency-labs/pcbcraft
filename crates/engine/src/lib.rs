@@ -17,6 +17,7 @@ pub mod library;
 pub mod library_graphics;
 pub mod net_classes;
 pub mod net_labels;
+pub mod netlist;
 pub mod nets;
 pub mod no_connect;
 pub mod parameters;
@@ -1218,6 +1219,17 @@ const CATALOG: &[Command] = &[
         params: &[sheets::SHEET, EXPECTED_REVISION],
     },
     Command { id: "project.rename", title: "Rename Project", summary: "Change the open project's name.", params: &[NAME] },
+    Command {
+        id: netlist::EXPORT_NETLIST,
+        title: "Export Netlist",
+        summary: "Generate the project's netlist as JSON: every component and logical terminal, and every net across all sheets with its persistent ID and terminals. Edits nothing; execute returns the file's name and text and any findings.",
+        params: &[Param {
+            name: "dry_run",
+            required: false,
+            summary: "True returns the file name and findings without the file text",
+            kind: ParamKind::Flag,
+        }],
+    },
     Command {
         id: PLACE_RESISTOR,
         title: "Place Resistor",
@@ -2657,6 +2669,7 @@ impl Session {
             | parameters::LIST
             | parameters::RESOLVE
             | "project.rename"
+            | netlist::EXPORT_NETLIST
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
@@ -2851,6 +2864,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
+        if id == netlist::EXPORT_NETLIST {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
+        }
         if id == nets::INSPECT_CLASSES {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
@@ -2960,6 +2977,7 @@ impl Session {
                 | parameters::RESOLVE
                 | sheets::DELETE_SHEET
                 | "project.rename"
+                | netlist::EXPORT_NETLIST
                 | no_connect::SET
                 | no_connect::CHECK
                 | net_classes::CREATE
@@ -3077,6 +3095,9 @@ impl Session {
             parameters::SET => self.set_parameter(params)?,
             parameters::LIST | parameters::RESOLVE => {
                 self.parameter_query(id, params)?;
+            }
+            netlist::EXPORT_NETLIST => {
+                self.export_netlist()?;
             }
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD

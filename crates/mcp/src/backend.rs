@@ -81,6 +81,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION
+                        | pcbcraft_engine::netlist::EXPORT_NETLIST
                         | pcbcraft_engine::clipboard::COPY
                         | pcbcraft_engine::clipboard::CUT
                         | pcbcraft_engine::board::clipboard::COPY
