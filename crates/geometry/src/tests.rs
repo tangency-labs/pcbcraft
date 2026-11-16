@@ -166,12 +166,22 @@ fn names_after_round_trip(part_name: &str, body_name: &str) -> Vec<String> {
 fn names_read_back_unchanged() {
     let awkward = "O'Brien \\ bracket Ø 中 🚀";
     assert_eq!(names_after_round_trip("fixture", awkward), [awkward]);
+    assert_eq!(names_after_round_trip("fixture", "  padded  "), ["  padded  "]);
+    assert_eq!(names_after_round_trip(awkward, ""), [awkward]);
     assert_eq!(names_after_round_trip(awkward, "Block"), ["Block"]);
     assert_eq!(names_after_round_trip("", "Block"), ["Block"]);
     // A body without a name of its own takes its part's name, as Body::name says, and the writer
     // names a part without a name "Part".
     assert_eq!(names_after_round_trip("fixture", ""), ["fixture"]);
     assert_eq!(names_after_round_trip("", ""), ["Part"]);
+    // The writer treats the part name as a file name: trailing STEP suffixes go, and a blank
+    // result is "Part".
+    assert_eq!(names_after_round_trip("board.STEP", ""), ["board"]);
+    assert_eq!(names_after_round_trip("board.stp.STEP", ""), ["board"]);
+    // `.step` suffixes go first, then `.stp` ones, so a `.step` before a `.stp` stays.
+    assert_eq!(names_after_round_trip("board.step.stp", ""), ["board.step"]);
+    assert_eq!(names_after_round_trip(".step", ""), ["Part"]);
+    assert_eq!(names_after_round_trip("  ", ""), ["Part"]);
 }
 
 #[test]

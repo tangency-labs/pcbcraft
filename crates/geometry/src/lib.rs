@@ -6,9 +6,10 @@
 //! [`Body`], [`BoundingBox`] and [`GeometryError`] only, so the kernel can be replaced without
 //! touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
-//! Every kernel call runs under a guard: a panic inside the kernel becomes an error with the code
-//! [`ErrorCode::KernelInternal`] instead of ending the application, and the caller's own data is
-//! unchanged. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
+//! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
+//! guard: a panic inside it becomes an error with the code [`ErrorCode::KernelInternal`] instead
+//! of ending the application, and the caller's own data is unchanged. Dropping a [`Body`] frees
+//! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
 //! replies.
 //!
 //! The kernel is built for native targets only. On `wasm32` the same API compiles and every
@@ -193,11 +194,11 @@ pub struct RefusedItem {
     pub message: String,
 }
 
-/// What [`read_step`] found: every body it read, in the file's entity order, and every solid
-/// item it refused.
+/// What [`read_step`] found: every body it read, in ascending entity-number order, and every
+/// solid item it refused. For a file written by [`write_step`] that is the order written.
 #[derive(Debug, Default)]
 pub struct StepRead {
-    /// The bodies read, in the file's entity order.
+    /// The bodies read, in ascending entity-number order.
     pub bodies: Vec<Body>,
     /// The solid items refused, with their reasons.
     pub refused: Vec<RefusedItem>,
@@ -224,9 +225,12 @@ pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
 
 /// Writes `bodies` as one part named `part_name` in an AP242 STEP file, exactly as the kernel
 /// holds them, without colours. The output depends only on the input: the header carries no time
-/// stamp, so writing the same bodies twice gives the same bytes. Names are written unchanged,
-/// including quotes, backslashes and non-ASCII characters. An empty part name is written as
-/// `Part`, and a body with an empty name reads back with its part's name.
+/// stamp, so writing the same bodies twice gives the same bytes. Body names are written
+/// unchanged, including spaces, quotes, backslashes and non-ASCII characters. The part name is
+/// written as given except that trailing `.step` suffixes and then trailing `.stp` suffixes
+/// (in any case) are dropped, and a part name that is then empty or only spaces is written as
+/// `Part`. A body with an empty name
+/// reads back with its part's name.
 ///
 /// # Errors
 ///

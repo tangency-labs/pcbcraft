@@ -57,10 +57,12 @@ could later move into an engine module if that proves simpler.
   `pcbcraft_units::MAX_LENGTH_NM` of zero. The kernel's millimetre floats are
   converted at the boundary, each coordinate rounded once to the nearest
   nanometre.
-- **Panic guard.** Every kernel call runs under a guard that turns a panic into
+- **Panic guard.** Every kernel operation the crate calls (make, measure, read,
+  write) runs under a guard that turns a panic into
   the error `kernel_internal`, adapted from SolidCraft's kernel boundary. The
   reader refuses only the solid whose conversion panicked and keeps the others.
   `kernel_crash_test()` lets a diagnostics command prove the guard works.
+  Dropping a body frees its kernel data outside the guard.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
   outside tests.
 - **Native only.** The kernel crates are target dependencies for
@@ -106,8 +108,8 @@ At SolidCraft revision `73bdb6c`:
 | Dependency closure of `pcbcraft-engine` | no `solidcore` crate |
 | Round trip of a synthetic block written by the kernel as AP242 and read back | bounding box within 1 µm, name kept |
 | Two bodies in one part | both read back by name, in the order written |
-| Names with an apostrophe, a backslash and non-ASCII characters | read back unchanged |
-| An empty body name, an empty part name | the body reads back with its part's name; a part without a name is written as `Part` |
+| Body names with an apostrophe, a backslash, non-ASCII characters and leading or trailing spaces | read back unchanged |
+| An empty body name; part names `board.STEP`, `board.stp.STEP`, `board.step.stp`, `.step`, blank | the body reads back with its part's name; the part name loses its trailing `.step` suffixes and then its trailing `.stp` suffixes (any case), so `board.step.stp` becomes `board.step`; a part name left empty or blank is written as `Part` |
 | 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
 | Writing the same bodies twice | identical bytes |
 | Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
