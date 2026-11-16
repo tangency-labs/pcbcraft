@@ -38,6 +38,20 @@ Coline's format, and adds adoption around existing drawings. The paper backdrop,
 palette scopes and Browser Paper menu are original PCBcraft work built on the
 shared Craft menu rows. No other code was copied.
 
+## Sheet and project parameters
+
+The parameter naming rule, list limits, `@scope.Name` reference parser, nested
+resolver and the `parameter.set`/`parameter.list`/`parameter.resolve` command shapes
+in `crates/engine/src/parameters.rs` are ported from Coline
+(`crates/format/src/parameter.rs`, `crates/model/src/params.rs` and
+`crates/engine/src/commands/parameters.rs`) at revision
+`bdd89dfb371e622f9ba94f368190c8c086d170d6`, MIT OR Apache-2.0. PCBcraft's version
+keeps only the project, sheet and instance scopes, adds standard sheet values that
+default to the project's, refuses writes to built-ins, matches names without case
+when editing, and stores JSON in project/22 and sheet/9. The Properties table is
+original PCBcraft work built on the shared form fields, including the pinned
+Craft text field's inherited-value hint, context menu and focus behavior.
+
 ## Layer-aware spatial queries
 
 The #244 implementation uses `geo-index` 0.4.0 (MIT OR Apache-2.0), pinned by

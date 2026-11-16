@@ -1,9 +1,10 @@
 # Sheet frames, parameters and templates
 
-**Status: proposal, partly implemented.** PR 1 (paper on the sheet) is
-implemented; its storage contract is in
-[native project storage](native-project-storage.md#sheet-paper-records). PRs 2–4
-are proposals. Design agreed November 15, 2026 for
+**Status: proposal, partly implemented.** PR 1 (paper on the sheet) and PR 2
+(parameters) are implemented; their storage contracts are in
+[native project storage](native-project-storage.md#sheet-paper-records) and
+[parameter records](native-project-storage.md#parameter-records). PRs 3–4 are
+proposals. Design agreed November 15, 2026 for
 [#46](https://github.com/tangency-labs/pcbcraft/issues/46). Interactive
 mockup (private):
 <https://claude.ai/code/artifact/7119e9c8-def3-4fb0-a498-3e2a431ef947>.
@@ -26,8 +27,10 @@ zone markers and a title block. The title block shows parameter values such as
 - The schematic Y axis points down (`canvas_camera.rs`, `screen`). Coline's Y
   axis points up from the paper's bottom-left corner, so ported geometry must be
   flipped.
-- There are no project or sheet parameters, and no text resolves references.
-  Components have named fields (`schematic/fields.rs`) and library parts have
+- Projects and sheets have parameters (PR 2), edited in Properties when
+  nothing is selected or with the `parameter.*` commands. No drawn text resolves
+  references yet; title blocks (PR 3) are the first consumer. Components have
+  named fields (`schematic/fields.rs`) and library parts have
   `fixed_parameters`, but those are unrelated.
 
 ## Decisions
@@ -76,13 +79,20 @@ The second row is the one change from Coline: a sheet's values point at the
 project by default, so you set them once for the project and each sheet can
 override them. The `@part` and `@board` scopes come later.
 
+Only values that differ from these defaults are stored, and `Name`, `Page` and
+`Pages` can't be set. Editing matches names without case, so `revision` edits
+`Revision`.
+
 Commands, shared by the GUI and MCP, with one undo step per edit:
 `parameter.set` (set, rename, remove), `parameter.list`, `parameter.resolve`
-and `sheet.set_page`.
+and `sheet.set_page`. In Properties, a standard value that is not set shows its
+inherited value as a hint, leaving a field submits it, clearing a field removes
+the value, and **New** adds an empty parameter by name.
 
 ## Storage sketch
 
-The `page` record without `template` is final as of sheet/9; the rest is not.
+The `page` record without `template` and both `parameters` objects are final as
+of sheet/9 and project/22; the template parts are not.
 Coordinates are in nanometres, like the rest of the format.
 
 ```jsonc

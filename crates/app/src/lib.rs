@@ -67,6 +67,7 @@ mod rule_diagram;
 mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
+mod sheet_parameters;
 #[cfg(not(target_arch = "wasm32"))]
 mod ui_automation;
 mod unsaved;

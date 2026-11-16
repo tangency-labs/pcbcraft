@@ -41,6 +41,19 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     .inner
 }
 
+/// A labelled single-line field whose empty state shows `hint` dimmed, such as an inherited
+/// value. Its accessible and automation names come from `label`, like [`text`].
+pub fn text_hint(ui: &mut Ui, label: &str, value: &mut String, hint: &str) -> egui::Response {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        let label_response = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
+        let response = solidcraft_ui_kit::text_field_reserving(ui, value, hint, 0.0).1.labelled_by(label_response.id);
+        crate::automation::publish(ui, &response, format!("field:{label}"));
+        response
+    })
+    .inner
+}
+
 /// Keep a labelled value and its trailing action inside the form, reserving the action's measured width.
 /// The returned flag reports only the action; its accessible name includes the field label.
 pub fn text_action(ui: &mut Ui, label: &str, value: &mut String, action: &str) -> bool {
