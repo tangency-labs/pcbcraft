@@ -53,9 +53,13 @@ const COMMAND_VERSION: u32 = 1;
 const MAX_FRAME_BYTES: usize = MAX_DOCUMENTS_BYTES + 16 * 1024 * 1024;
 const MAX_ID_LEN: usize = 64;
 /// A journal is replaced by a new snapshot once it holds more than this many times the bytes of
-/// its snapshot, or [`REBASE_FLOOR_BYTES`] if that is larger. With 2, rewriting snapshots adds at
-/// most half again to the bytes the journal writes, and recovery reads at most the snapshot,
-/// twice its size of records and the one record that crossed the limit.
+/// its snapshot, or [`REBASE_FLOOR_BYTES`] if that is larger. While the project stays about the
+/// same size, rewriting snapshots adds at most about half again to the bytes the journal writes;
+/// one large edit can make the new snapshot as large as the old one and the journal together.
+/// While new snapshots succeed, recovery reads at most the snapshot, records up to the larger of
+/// twice its size and the floor, and the one record that crossed the limit. While they keep
+/// failing, every edit still appends, so the journal grows until a snapshot succeeds or the
+/// session ends.
 const REBASE_RATIO: u64 = 2;
 /// The least journal size that starts a new snapshot, so a small project is not snapshotted
 /// and flushed every few edits.

@@ -395,8 +395,8 @@ fn journal_len(dir: &Path) -> u64 {
     fs::metadata(entry_file(dir, "entry", "journal")).unwrap().len()
 }
 
-/// The journal is bounded: the edit that takes it past its limit becomes a new snapshot with an
-/// empty journal, and the recovered state is the same before and after the switch.
+/// The journal has a size limit: the edit that takes it past the limit becomes a new snapshot
+/// with an empty journal, and the recovered state is the same before and after the switch.
 #[test]
 fn crossing_the_size_limit_starts_a_new_snapshot() {
     let dir = tempfile::tempdir().unwrap();

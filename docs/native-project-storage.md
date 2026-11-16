@@ -979,13 +979,19 @@ format line is refused, for the caller to offer for discard. The store's layout
 and record encoding are private to PCBCraft and carry no compatibility promise
 beyond that refusal. Directory flushes have the same Unix-only limit as saves.
 
-The journal is bounded. When it grows past twice the size of its snapshot, or
-past 1 MiB if that is larger, the state after the edit that crossed the limit
-becomes a new snapshot and the journal starts again empty. Recovery therefore
-reads at most the snapshot, twice its size in records and one more record, and
-rewriting snapshots adds at most half again to the bytes the journal writes. If
-the new snapshot cannot be written, the old snapshot and journal stay as they
-were, already holding that edit, and the next edit tries again.
+The journal has a size limit. When it grows past twice the size of its snapshot,
+or past 1 MiB if that is larger, the state after the edit that crossed the limit
+becomes a new snapshot and the journal starts again empty. Recovery then reads
+the snapshot, records up to the larger of twice its size and 1 MiB, and the one
+record that crossed the limit. While a project stays about the same size,
+rewriting snapshots adds at most about half again to the bytes the journal
+writes; one large edit, such as a big paste, can make the new snapshot as large
+as the old snapshot and the journal together. If the new snapshot cannot be
+written, the old snapshot and journal stay as they were, already holding that
+edit, and the next edit tries again. While snapshots keep failing, for example
+because the recovery folder was removed or became read-only, every edit is still
+appended, so the journal grows past the limit until a snapshot succeeds or the
+session ends.
 
 Each recorded edit encodes the whole project and fingerprints the complete
 document set, on the writer thread. Nothing yet removes the entry of a session
