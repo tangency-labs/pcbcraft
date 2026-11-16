@@ -15,15 +15,17 @@ Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
-Project/22 adds [project parameters](#parameter-records); only projects with a
-stored project value select it.
+Project/22 adds [project parameters](#parameter-records); projects with stored
+project values and no generated net numbers select it. Projects with generated
+net numbers use project/23, which can also store project parameters.
 
 Project/23 adds persistent generated net numbers to the same instance registry,
 using instances/4 when board-owned. A stored record's positive `generated_number`
 is unique across live and historical identities. This envelope can also carry
-class catalogs, assignments, project parameters and no-connect intent. Older envelopes reject the
-number field; older files retain their exact no-op encoding until an electrical
-transaction adopts the numbers. See [net registry storage](net-registry-storage.md).
+class catalogs, assignments, project parameters and no-connect intent. Older
+envelopes reject the number field; older files retain their exact no-op encoding
+until an electrical transaction adopts the numbers. See
+[net registry storage](net-registry-storage.md).
 
 ## File encodings and save behavior
 
@@ -439,8 +441,9 @@ values that differ from the defaults are stored, so a project that sets none
 keeps its earlier bytes.
 
 A sheet/9 document may carry a nonempty `parameters` object directly after
-`page`. Project/22 adds a required nonempty `parameters` object to the entry
-point, directly before `sheets`:
+`page`. A project/22 entry point requires a nonempty `parameters` object;
+project/23 accepts the same object optionally alongside generated net numbers.
+In either project format, the object appears directly before `sheets`:
 
 ```json
 "parameters": {
@@ -455,11 +458,14 @@ letters, digits or `_`; a value is a string of at most 1000 bytes and may hold
 references. Editing ignores case, so a name that differs from another stored
 name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
-rejected. Empty objects, null, other value types and lists in other versions
-are rejected. Project/22 is a superset of project/21 whose net-class catalog,
-class assignments, net registry and no-connect intent are optional, each with
-its existing rules. Like project/20, it requires adopted storage and occurrence
-metadata; setting the first project value adopts them in the same undo step.
+rejected. Empty objects, null and other value types are rejected. Sheet parameter
+objects require sheet/9; project parameter objects require project/22 or
+project/23 and are rejected in other project versions. Project/22 is a superset
+of project/21 whose net-class catalog, class assignments, net registry and
+no-connect intent are optional, each with its existing rules. Project/23 requires
+generated net numbers and permits those same optional fields, including project
+parameters. Both formats require adopted storage and occurrence metadata;
+setting the first project value adopts them in the same undo step.
 Removing the last project value returns the entry point to the version its other
 content needs. The diagnostic single-file encoding refuses parameters.
 
