@@ -147,8 +147,18 @@ fn xy(frame: Frame, point: Point) -> String {
 }
 
 /// Millimeters with a fixed number of decimals, from nanometers.
+///
+/// Rounds in integers, with halves going up, so the rounding does not depend on where the
+/// origin is: shifting every point by a whole number of output units shifts every written
+/// value by exactly that amount. Zero is written without a sign.
 fn mm(nm: i64, decimals: usize) -> String {
-    format!("{:.*}", decimals, nm as f64 / 1_000_000.)
+    let decimals = decimals.min(6) as u32;
+    let unit = 10_i64.pow(6 - decimals);
+    let scale = 10_u64.pow(decimals);
+    let units = (nm + unit / 2).div_euclid(unit);
+    let sign = if units < 0 { "-" } else { "" };
+    let magnitude = units.unsigned_abs();
+    format!("{sign}{}.{:0width$}", magnitude / scale, magnitude % scale, width = decimals as usize)
 }
 
 /// A rectangle's outline with each corner replaced by a quarter arc of `radius`.

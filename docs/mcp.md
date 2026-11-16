@@ -363,7 +363,9 @@ Fabrication outputs shift every coordinate to this origin and write Y up, as see
 from the top; rotations are unchanged. The export result's `fabrication.origin` names
 the `anchor`, its `source` (`{"kind":"builtin"}` without a saved origin, otherwise
 `{"kind":"board","origin":"<uuid>"}`), the resolved `at` point in board coordinates, and `axes: "x_right_y_up"`. Without a saved origin, outputs
-are measured from board zero.
+are measured from board zero. Gerber writes exact nanometres; Excellon rounds each
+millimetre value to three decimals from integer nanometres with halves going up, so
+moving the origin by whole micrometres shifts every written value by exactly that amount.
 
 ## Saved board defaults
 
