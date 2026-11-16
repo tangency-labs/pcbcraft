@@ -109,10 +109,10 @@ impl Thumbnail {
         self.symbols.is_empty() && self.wires.is_empty() && self.blocks.is_empty() && self.labels.is_empty()
     }
 
-    /// Fit the saved geometry and its paper in the card and paint with the active theme, like
+    /// Fit saved geometry and paper in the card using the resolved personal appearance, like
     /// the canvas. Canvas labels follow
     /// the existing zoom threshold; library strokes, rotations and wire corners use the same data.
-    pub(crate) fn paint(&self, painter: &Painter, rect: Rect) {
+    pub(crate) fn paint(&self, painter: &Painter, rect: Rect, appearance: pcbcraft_chrome::paper::Appearance) {
         if self.is_empty() || !rect.is_positive() {
             return;
         }
@@ -122,12 +122,13 @@ impl Thumbnail {
         let step = (target.width() / bounds.width()).min(target.height() / bounds.height()).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
         let screen = |point: Pos2| target.center() + (point - bounds.center()) * step;
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(rect));
+        painter.rect_filled(rect, 0, appearance.canvas);
         if let Some((sheet, border)) = self.paper {
             let paper = pcbcraft_chrome::paper::Paper {
                 sheet: Rect::from_min_max(screen(sheet.min), screen(sheet.max)),
                 border: Rect::from_min_max(screen(border.min), screen(border.max)),
             };
-            painter.extend(pcbcraft_chrome::paper::sheet(rect, paper));
+            painter.extend(pcbcraft_chrome::paper::sheet(rect, paper, appearance));
         }
         for path in &self.wires {
             painter
@@ -155,7 +156,7 @@ impl Thumbnail {
                 placement.turns(),
                 placement.is_mirrored(),
                 Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text),
-                if self.paper.is_some_and(|(sheet, _)| sheet.contains(grid_pos(placement.position))) { t.schematic_paper } else { t.canvas },
+                if self.paper.is_some_and(|(sheet, _)| sheet.contains(grid_pos(placement.position))) { appearance.fill() } else { appearance.canvas },
             );
             fields::paint_labels(
                 &painter,
@@ -212,7 +213,7 @@ mod tests {
         let ctx = egui::Context::default();
         pcbcraft_chrome::fonts::install(&ctx);
         ctx.begin_pass(egui::RawInput::default());
-        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(1200., 800.)));
+        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(1200., 800.)), Default::default());
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         let text: Vec<_> = output
@@ -257,7 +258,7 @@ mod native_power_tests {
         pcbcraft_chrome::fonts::install(&ctx);
         ctx.begin_pass(egui::RawInput::default());
         // The preview frames the whole A4 sheet; a large card keeps field text above the label zoom.
-        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(1600., 1100.)));
+        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(1600., 1100.)), Default::default());
         let mut out = ctx.end_pass();
         out.textures_delta.clear();
         let text: Vec<_> = out

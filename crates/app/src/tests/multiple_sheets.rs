@@ -374,6 +374,8 @@ fn catalog_drag_background_follows_paper_before_drop() {
         h.run();
         click(&mut h, "Fit schematic");
         let before = h.state().session.snapshot().unwrap();
+        h.state_mut().preferences.schematic_paper_background = crate::preferences::PaperBackground::Shaded;
+        h.run();
         let source = h.state().views.active.input(&h.state().session).unwrap();
         egui::DragAndDrop::set_payload(&h.ctx, crate::PartDrag { placement: crate::parts_browser::Placement::new(definition.clone()), source });
         let t = pcbcraft_chrome::Tokens::get();
@@ -394,5 +396,36 @@ fn catalog_drag_background_follows_paper_before_drop() {
             );
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         }
+    }
+}
+
+/// Paper appearance is live personal state: the colour controls follow the selected mode,
+/// while Cancel restores the initial appearance without editing the schematic.
+#[test]
+fn paper_preferences_are_optional_and_cancelable() {
+    use crate::preferences::PaperBackground;
+    for dark in [true, false] {
+        let mut h = sheet_harness(1400.);
+        h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        assert_eq!(h.state().preferences.schematic_paper_background, PaperBackground::Uniform);
+        click(&mut h, "Preferences");
+        assert!(h.get_by_role_and_label(egui::Role::ColorWell, "Sheet color").accesskit_node().is_disabled());
+        assert!(!h.get_by_role_and_label(egui::Role::ColorWell, "Canvas color").accesskit_node().is_disabled());
+        click(&mut h, "Shaded");
+        assert_eq!(h.state().preferences.schematic_paper_background, PaperBackground::Shaded);
+        click(&mut h, "Custom");
+        assert!(!h.get_by_role_and_label(egui::Role::ColorWell, "Sheet color").accesskit_node().is_disabled());
+        h.get_by_role_and_label(egui::Role::ColorWell, "Canvas color").click();
+        h.run();
+        assert!(egui::Popup::is_any_open(&h.ctx), "the canvas colour picker opens");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::Preferences(_)), "Escape closes the colour picker before Preferences");
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().preferences.schematic_paper_background, PaperBackground::Uniform);
+        assert!(h.state().preferences.schematic_canvas_color_dark.is_none() && h.state().preferences.schematic_canvas_color_light.is_none());
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     }
 }

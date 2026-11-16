@@ -1327,9 +1327,7 @@ fn zoom_to_fit_on_an_empty_sheet_frames_its_paper() {
     assert!(paper.width() > canvas.width() / 2.0 || paper.height() > canvas.height() / 2.0, "Fit zooms to the paper");
     let shapes = &harness.output().shapes;
     assert!(
-        shapes
-            .iter()
-            .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == pcbcraft_chrome::Tokens::get().schematic_paper && r.rect == paper))
+        shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == harness.state().preferences.paper().fill() && r.rect == paper))
     );
     let dots = |harness: &Harness<'_, PcbApp>| -> Vec<egui::Pos2> {
         harness

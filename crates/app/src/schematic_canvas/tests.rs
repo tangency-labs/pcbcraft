@@ -148,7 +148,7 @@ fn disabled_no_connect_canvas_returns_focus_loss_cancellation() {
             false,
             false,
             Navigation::default(),
-            super::GridDisplay { opacity: 35, outside_paper: true },
+            super::Display { opacity: 35, outside_paper: true, appearance: Default::default() },
             true,
             false,
             pcbcraft_chrome::units::Unit::Mil,
@@ -172,8 +172,26 @@ fn symbol_backgrounds_match_the_surface_under_them() {
     for dark in [true, false] {
         pcbcraft_chrome::theme::apply(&egui::Context::default(), dark);
         let t = Tokens::get();
-        assert_eq!(surface_at(&project, Point { x_nm: 0, y_nm: 0 }), t.schematic_paper);
-        assert_eq!(surface_at(&project, min), t.schematic_paper, "the paper's edge is on the paper");
-        assert_eq!(surface_at(&project, Point { x_nm: max.x_nm + GRID_NM, y_nm: 0 }), t.canvas);
+        assert_eq!(
+            surface_at(
+                &project,
+                Point { x_nm: 0, y_nm: 0 },
+                pcbcraft_chrome::paper::Appearance { paper: Some(t.schematic_paper), ..Default::default() }
+            ),
+            t.schematic_paper
+        );
+        assert_eq!(
+            surface_at(&project, min, pcbcraft_chrome::paper::Appearance { paper: Some(t.schematic_paper), ..Default::default() }),
+            t.schematic_paper,
+            "the paper's edge is on the paper"
+        );
+        assert_eq!(
+            surface_at(
+                &project,
+                Point { x_nm: max.x_nm + GRID_NM, y_nm: 0 },
+                pcbcraft_chrome::paper::Appearance { paper: Some(t.schematic_paper), ..Default::default() }
+            ),
+            t.canvas
+        );
     }
 }

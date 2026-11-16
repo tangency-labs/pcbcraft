@@ -78,9 +78,8 @@ pub struct Tokens {
     pub canvas: Color32,
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
-    /// Schematic paper: white in the light theme, a darker drawing surface than [`Self::canvas`]
-    /// in the dark theme. The canvas around the paper keeps [`Self::canvas`] wherever the
-    /// drawing lies, so moving parts across the paper edge never changes the background.
+    /// Optional shaded-paper fill: white in light and darker than the canvas in dark.
+    /// Uniform presentation uses the resolved canvas colour instead.
     pub schematic_paper: Color32,
     pub schematic_wire: Color32,
     /// Intentional no-connect geometry is distinct from electrical wire ink.
@@ -492,7 +491,7 @@ mod tests {
                 assert!(contrast(t.canvas_ink, surface) >= 3.0);
                 assert!(contrast(t.schematic_highlight, surface) >= 4.5);
             }
-            assert_ne!(t.schematic_paper, t.canvas, "the page boundary stays visible");
+            assert_ne!(t.schematic_paper, t.canvas, "optional shaded paper stays distinct");
             assert!(contrast(t.error, t.panel) >= 4.5);
         }
     }

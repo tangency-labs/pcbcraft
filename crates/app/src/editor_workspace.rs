@@ -811,7 +811,7 @@ impl PcbApp {
         } else if let Some(canvas) = view.camera.schematic_rect()
             && let Some(project) = view.snapshot(&self.session)
         {
-            return crate::schematic_canvas::backdrop(&project, &view.camera, canvas, area, self.preferences.schematic_grid());
+            return crate::schematic_canvas::backdrop(&project, &view.camera, canvas, area, self.preferences.schematic_display());
         } else {
             (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
         };
@@ -1134,7 +1134,7 @@ impl PcbApp {
                                     false,
                                     false,
                                     self.preferences.navigation,
-                                    self.preferences.schematic_grid(),
+                                    self.preferences.schematic_display(),
                                     self.preferences.auto_heal_wires,
                                     self.parts.repeats(),
                                     self.preferences.units,

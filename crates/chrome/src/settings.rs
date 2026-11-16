@@ -508,6 +508,13 @@ pub fn checkbox(ui: &mut Ui, label: &str, accessible_name: &str, value: &mut boo
     solidcraft_ui_kit::checkbox(ui, label, value).accessible_name(accessible_name)
 }
 
+/// The pinned Craft opaque RGB field, with the host's setting name for accessibility.
+pub fn color(ui: &mut Ui, name: &str, rgb: &mut [u8; 3]) -> Response {
+    let response = solidcraft_ui_kit::color_field(ui, rgb);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, ui.is_enabled(), name));
+    response
+}
+
 /// A keyboard key or gesture as a bordered chip, for read-only shortcut lists.
 pub fn key_chip(ui: &mut Ui, text: &str) -> Response {
     let t = Tokens::get();

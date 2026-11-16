@@ -1596,3 +1596,14 @@ and attachment positions remain unchanged. Both distributed demos are regenerate
 through their original command builders and native codecs with the corrected
 definitions. This is original drawing data; no external artwork, source or
 dependency was introduced.
+
+
+## Schematic paper appearance preferences
+
+The uniform default, optional shaded/custom paper and per-theme canvas/sheet
+colour overrides follow @travle1's local testing feedback. They are original
+PCBcraft presentation state outside project files and Undo. Controls reuse the
+pinned Craft settings rows, segmented choices, opaque RGB field with its shared
+colour popover, and action buttons through chrome. The thin colour adapter adds
+the host's accessible setting name without replacing the toolkit's drawing or
+interaction. No new dependency, artwork or external EDA source was introduced.

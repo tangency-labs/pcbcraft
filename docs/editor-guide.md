@@ -79,6 +79,14 @@ be placed on the canvas around it. **Show grid
 outside paper** (on by default) continues the schematic grid there; turn it off
 for a clean surround.
 
+**Appearance → Paper background** defaults to **Uniform**, with the same canvas
+colour on both sides of the page outline and no paper shadow. **Shaded** uses
+the theme's paper fill; **Custom** enables the **Sheet color** picker. **Canvas
+color** changes the schematic editing surface. Both colours follow the active
+theme until overridden, with separate light/dark choices. **Use theme** clears
+an override. These preferences do not change page geometry, snapping, project
+files or Undo.
+
 In PCB layout, wheel and pinch zoom go up to 64× for close inspection of copper
 and clearances. **Fit board** returns to the whole board.
 
