@@ -13,12 +13,12 @@ canvas. The choice is remembered with your settings and available
 through `app.set_preferences`; each view keeps its saved dock side and floating
 positions, and project data and history are unchanged.
 
-Components can be grouped into named component classes shared by the schematic
-and the board. `component_classes.create`, `update`, `remove` and `inspect`
-manage the catalog, and `components.set_classes` and
-`components.inspect_classes` set and read a component's classes by its stable
-component ID, so annotation does not change membership. A class that still has
-members cannot be removed. Projects with component classes save as
+Part instances can be collected into named part groups shared by the schematic
+and the board. `part_groups.create`, `update`, `remove` and `inspect`
+manage the catalog, and `part_instances.set_groups` and
+`part_instances.inspect_groups` set and read a part instance's groups by its
+stable ID, so annotation does not change membership. A group that still has
+members cannot be removed. Projects with part groups save as
 `pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
 exist); other projects keep their format and bytes.
 

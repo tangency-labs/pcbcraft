@@ -9,20 +9,20 @@
 mod allocation_tests;
 pub mod authoring;
 pub mod board;
-mod class_catalog;
 pub mod clipboard;
 pub mod clipboard_text;
-pub mod component_classes;
 pub mod hierarchy;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
+mod named_catalog;
 pub mod net_classes;
 pub mod net_labels;
 pub mod nets;
 pub mod no_connect;
 pub mod parameters;
 pub mod part_authoring;
+pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -2148,58 +2148,58 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
-        id: component_classes::CREATE,
-        title: "Create Component Class",
-        summary: "Create a project-wide component class without assigning components or allocating a board.",
+        id: part_groups::CREATE,
+        title: "Create Part Group",
+        summary: "Create a project-wide part group without assigning part instances or allocating a board.",
         params: &[
             EXPECTED_REVISION,
-            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name; identity is an independent UUID" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name; identity is an independent UUID" },
         ],
     },
     Command {
-        id: component_classes::UPDATE,
-        title: "Update Component Class",
-        summary: "Rename a component class, preserving its UUID and membership and incrementing its definition revision only on change.",
+        id: part_groups::UPDATE,
+        title: "Update Part Group",
+        summary: "Rename a part group, preserving its UUID and membership and incrementing its revision only on change.",
         params: &[
             EXPECTED_REVISION,
-            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable component-class UUID from inspection" },
-            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name" },
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name" },
         ],
     },
     Command {
-        id: component_classes::REMOVE,
-        title: "Remove Component Class",
-        summary: "Remove a component class that no component belongs to; a class with members is refused and its members are listed.",
+        id: part_groups::REMOVE,
+        title: "Remove Part Group",
+        summary: "Remove a part group that no part instance belongs to; a group with members is refused and its members are listed.",
         params: &[
             EXPECTED_REVISION,
-            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable component-class UUID from inspection" },
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
         ],
     },
     Command {
-        id: component_classes::INSPECT,
-        title: "Inspect Component Classes",
-        summary: "Read the component-class catalog without reading membership or changing history.",
+        id: part_groups::INSPECT,
+        title: "Inspect Part Groups",
+        summary: "Read the part-group catalog without reading membership or changing history.",
         params: &[],
     },
     Command {
-        id: component_classes::SET_CLASSES,
-        title: "Set Component Classes",
-        summary: "Replace a component's complete class set in one undoable step. An empty set removes its memberships.",
+        id: part_groups::SET_GROUPS,
+        title: "Set Part-Instance Groups",
+        summary: "Replace a part instance's complete group set in one undoable step. An empty set removes its memberships.",
         params: &[
             EXPECTED_REVISION,
-            Param { name: "component", kind: ParamKind::Text, required: true, summary: "Stable component ID from project inspection" },
-            Param { name: "classes", kind: ParamKind::ClassSet, required: true, summary: "Complete set of component-class UUIDs" },
+            Param { name: "part_instance", kind: ParamKind::Text, required: true, summary: "Stable part-instance ID from project inspection" },
+            Param { name: "groups", kind: ParamKind::ClassSet, required: true, summary: "Complete set of part-group UUIDs" },
         ],
     },
     Command {
-        id: component_classes::INSPECT_CLASSES,
-        title: "Inspect Component Memberships",
-        summary: "Read one component's classes, or every classified component, without changing history.",
+        id: part_groups::INSPECT_GROUPS,
+        title: "Inspect Part-Instance Groups",
+        summary: "Read one part instance's groups, or every grouped part instance, without changing history.",
         params: &[Param {
-            name: "component",
+            name: "part_instance",
             kind: ParamKind::Text,
             required: false,
-            summary: "Optional component ID; omit to list every component that belongs to a class",
+            summary: "Optional part-instance ID; omit to list every part instance that belongs to a group",
         }],
     },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
@@ -2279,10 +2279,10 @@ pub struct Project {
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
     parameters: Arc<parameters::Parameters>,
-    /// Authored component class definitions, independent of membership.
-    component_classes: Arc<component_classes::Catalog>,
-    /// Explicit component memberships, sorted by component and class; stored with the instances.
-    component_class_bindings: Arc<Vec<component_classes::Binding>>,
+    /// Authored part groups, independent of membership.
+    part_groups: Arc<part_groups::Catalog>,
+    /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
+    part_group_memberships: Arc<Vec<part_groups::Membership>>,
 }
 
 impl Project {
@@ -2675,12 +2675,12 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
-            | component_classes::CREATE
-            | component_classes::UPDATE
-            | component_classes::REMOVE
-            | component_classes::INSPECT
-            | component_classes::SET_CLASSES
-            | component_classes::INSPECT_CLASSES
+            | part_groups::CREATE
+            | part_groups::UPDATE
+            | part_groups::REMOVE
+            | part_groups::INSPECT
+            | part_groups::SET_GROUPS
+            | part_groups::INSPECT_GROUPS
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2785,7 +2785,7 @@ impl Session {
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
-            if !p.component_classes.definitions.is_empty() { inspected["component_classes"] = json!(p.component_classes()); }
+            if !p.part_groups.groups.is_empty() { inspected["part_groups"] = json!(p.part_groups()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -2874,9 +2874,9 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
         }
-        if matches!(id, component_classes::INSPECT | component_classes::INSPECT_CLASSES) {
+        if matches!(id, part_groups::INSPECT | part_groups::INSPECT_GROUPS) {
             self.validate_project_command(id, params)?;
-            return self.component_class_query(id, params);
+            return self.part_group_query(id, params);
         }
         if matches!(id, parameters::LIST | parameters::RESOLVE) {
             self.validate_project_command(id, params)?;
@@ -2982,12 +2982,12 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
-                | component_classes::CREATE
-                | component_classes::UPDATE
-                | component_classes::REMOVE
-                | component_classes::INSPECT
-                | component_classes::SET_CLASSES
-                | component_classes::INSPECT_CLASSES
+                | part_groups::CREATE
+                | part_groups::UPDATE
+                | part_groups::REMOVE
+                | part_groups::INSPECT
+                | part_groups::SET_GROUPS
+                | part_groups::INSPECT_GROUPS
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -3064,8 +3064,8 @@ impl Session {
                 net_registry: Arc::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
-                component_classes: Arc::default(),
-                component_class_bindings: Arc::default(),
+                part_groups: Arc::default(),
+                part_group_memberships: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3088,10 +3088,10 @@ impl Session {
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
             }
-            component_classes::CREATE | component_classes::UPDATE | component_classes::REMOVE => self.edit_component_class(id, params)?,
-            component_classes::SET_CLASSES => self.set_component_classes(params)?,
-            component_classes::INSPECT | component_classes::INSPECT_CLASSES => {
-                self.component_class_query(id, params)?;
+            part_groups::CREATE | part_groups::UPDATE | part_groups::REMOVE => self.edit_part_group(id, params)?,
+            part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,
+            part_groups::INSPECT | part_groups::INSPECT_GROUPS => {
+                self.part_group_query(id, params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
@@ -3628,12 +3628,12 @@ impl Session {
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
-    /// Memberships of components the candidate no longer contains are dropped in the same step;
-    /// edits that keep the component map itself skip that scan.
+    /// Memberships of part instances the candidate no longer holds are dropped in the same step;
+    /// edits that keep the part-instance map itself skip that scan.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
-        if !self.project.as_ref().is_some_and(|previous| Arc::ptr_eq(&previous.components, &project.components)) {
-            project.prune_component_class_bindings();
+        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+            project.prune_part_group_memberships();
         }
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;

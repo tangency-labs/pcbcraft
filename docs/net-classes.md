@@ -131,7 +131,7 @@ edits rather than reusing the example's number.
 
 Projects with classes but no bindings use `pcbcraft-project/20`; bindings select
 project/21 and board-owned instances/3; project/23 and project/24 carry them optionally beside
-generated net numbers or component classes. The required nonempty
+generated net numbers or part groups. The required nonempty
 `net_classes` record is stored in `project.json`, with definitions sorted by UUID
 and one definition per line. It extends the existing folder/occurrence vocabulary
 and permits the supported optional no-connect and persistent-net records
@@ -153,5 +153,5 @@ use this resolver with snapshot validity and explicit conflicts; #303 adds the
 [shared editor workflow](net-class-editor.md). Definitions alone do not assign
 classes to nets: consumers use persistent assignments rather than inferring
 bindings from class names.
-[Component classes](component-classes.md) use the same identity rules for
-components, with their own catalog record and membership commands.
+[Part groups](part-groups.md) use the same identity rules for part
+instances, with their own catalog record and membership commands.

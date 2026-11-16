@@ -19,9 +19,9 @@ board-owned **instances/4** instead, with optional class catalogs, assignments a
 no-connect intent in that envelope. Every record stored under project/23 has a positive
 `generated_number`; duplicate numbers, explicit nulls, missing numbers and use
 under older headers are rejected. Project/24 carries the same records beside
-[component classes](component-classes.md), with generated numbers optional: a
+[part groups](part-groups.md), with generated numbers optional: a
 registry there numbers every record under the same rules or numbers none.
-Board-owned memberships select instances/5; a component-class catalog without
+Board-owned memberships select instances/5; a part-group catalog without
 memberships keeps the instance header the other records need, such as
 instances/4 for a numbered registry. Active, ambiguous and retired records reserve
 their numbers, which are never inferred from component references.

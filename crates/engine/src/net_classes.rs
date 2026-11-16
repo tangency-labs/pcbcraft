@@ -201,9 +201,12 @@ pub(crate) fn validate_rules(rules: &Rules) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) use crate::class_catalog::validate_name;
+/// Net-class names follow the shared catalog rule, reported as a class name.
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
+    crate::named_catalog::validate_name("class", name)
+}
 
-impl crate::class_catalog::Entry for Definition {
+impl crate::named_catalog::Entry for Definition {
     fn id(&self) -> Uuid {
         self.id
     }
@@ -225,13 +228,13 @@ pub fn validate_draft(name: &str, rules: &Rules) -> Result<(), String> {
 impl Catalog {
     /// Validate the complete bounded catalog before adoption. Duplicate IDs never overwrite records.
     pub fn validate(&self) -> Result<(), String> {
-        crate::class_catalog::validate(&self.format, "pcbcraft-net-classes/1", "net-class", &self.definitions)?;
+        crate::named_catalog::validate(&self.format, "pcbcraft-net-classes/1", "net-class", "class", &self.definitions)?;
         self.definitions.iter().try_for_each(|class| validate_rules(&class.rules))
     }
 
     /// Resolve an exact class identity. Names and vector positions are never lookup authority.
     pub fn get(&self, id: Uuid) -> Option<&Definition> {
-        crate::class_catalog::get(&self.definitions, id)
+        crate::named_catalog::get(&self.definitions, id)
     }
 }
 

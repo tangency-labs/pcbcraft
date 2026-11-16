@@ -77,8 +77,8 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::net_classes::INSPECT
                         | pcbcraft_engine::net_classes::RESOLVE
-                        | pcbcraft_engine::component_classes::INSPECT
-                        | pcbcraft_engine::component_classes::INSPECT_CLASSES
+                        | pcbcraft_engine::part_groups::INSPECT
+                        | pcbcraft_engine::part_groups::INSPECT_GROUPS
                         | pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN

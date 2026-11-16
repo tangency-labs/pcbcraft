@@ -494,14 +494,14 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, occurrence IDs, sheet paper and net or component classes require split
+    /// drawings, rotation, occurrence IDs, sheet paper, net classes and part groups require split
     /// documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
         }
-        if !project.component_classes.definitions.is_empty() {
-            return Err("Component classes require split documents or a packed archive.".into());
+        if !project.part_groups.groups.is_empty() {
+            return Err("Part groups require split documents or a packed archive.".into());
         }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
@@ -1047,8 +1047,8 @@ fn validate_with_hierarchy(
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
-        component_classes: Arc::default(),
-        component_class_bindings: Arc::default(),
+        part_groups: Arc::default(),
+        part_group_memberships: Arc::default(),
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;
