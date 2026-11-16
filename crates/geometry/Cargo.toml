@@ -23,3 +23,8 @@ solidcore-step = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+# Prints its timings and memory instead of using the test harness.
+[[test]]
+name = "step_board"
+harness = false

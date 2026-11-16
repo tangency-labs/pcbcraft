@@ -1648,8 +1648,8 @@ introduced. Test projects use production commands and native codecs.
 
 ## Solid geometry kernel
 
-`crates/geometry` depends on `solidcore`, `solidcore-ops` and `solidcore-step`
-from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
+`crates/geometry` depends on `solidcore`, `solidcore-ops`, `solidcore-record`
+and `solidcore-step` from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
 `73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision already pinned for the
 Craft UI crates. Unlike the rest of SolidCraft, which is MIT OR Apache-2.0,
 these kernel crates are Apache-2.0 only, copyright (c) 2026 The solidcore
@@ -1668,3 +1668,12 @@ panic message, returns PCBcraft's `kernel_internal` error code and drops the
 per-thread depth that SolidCraft's crash reports use. The crate's kernel-neutral
 API follows the same boundary rule as SolidCraft's `solidcraft-kernel`: no kernel
 type in the public API.
+
+The board test `crates/geometry/tests/step_board.rs` adapts SolidCraft's
+`crates/kernel/examples/step_board_fixture.rs` at the same revision (MIT OR
+Apache-2.0, copyright (c) 2026 SolidCraft contributors). It keeps the component
+and pin layout, the sizes, the grid and the environment-variable size controls,
+calls `solidcore-ops` and `solidcore-step` directly, leaves the package edges
+sharp, and reads the file back to report the read time and peak memory. The STEP
+fixtures in `crates/geometry/tests/fixtures/step` and their generator
+`scripts/generate-step-fixtures.py` are original.
