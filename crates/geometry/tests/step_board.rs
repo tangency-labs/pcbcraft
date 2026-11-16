@@ -1,14 +1,14 @@
 //! A board-like STEP assembly, read without error, with its read time and peak memory printed.
 //!
-//! Every component is its own product holding a package body and its own pins, nothing shared:
+//! Every part instance is its own product holding a package body and its own pins, nothing shared:
 //! the worst case for an import. Adapted from SolidCraft's `crates/kernel/examples/
 //! step_board_fixture.rs` at revision `73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR
 //! Apache-2.0, copyright (c) 2026 SolidCraft contributors); the packages here are plain blocks
 //! with sharp edges.
 //!
-//! `PCBCRAFT_STEP_BOARD_COMPONENTS` and `PCBCRAFT_STEP_BOARD_PINS` set the size. The default, 2
-//! components of 16 pins, runs in a few seconds in a debug build. SolidCraft's size, 500
-//! components of 16 pins, runs on request with `PCBCRAFT_STEP_BOARD_COMPONENTS=500`; it takes
+//! `PCBCRAFT_STEP_BOARD_PART_INSTANCES` and `PCBCRAFT_STEP_BOARD_PINS` set the size. The default, 2
+//! part instances of 16 pins, runs in a few seconds in a debug build. SolidCraft's size, 500
+//! part instances of 16 pins, runs on request with `PCBCRAFT_STEP_BOARD_PART_INSTANCES=500`; it takes
 //! minutes in a debug build, almost all of it the kernel building bodies, and
 //! docs/geometry-kernel.md records its figures. A child process builds the file and hands it over
 //! on its standard output, so the reader's peak memory is measured in a process that held no
@@ -54,11 +54,11 @@ mod board {
     /// The argument that makes this program the child that builds the file.
     pub const GENERATE: &str = "generate";
 
-    /// Components when `PCBCRAFT_STEP_BOARD_COMPONENTS` is unset.
-    const DEFAULT_COMPONENTS: usize = 2;
+    /// Part instances when `PCBCRAFT_STEP_BOARD_PART_INSTANCES` is unset.
+    const DEFAULT_PART_INSTANCES: usize = 2;
 
-    /// One component: a package block and `pins` pins below its two long sides.
-    fn component(c: usize, pins: usize) -> Result<Vec<Body>, String> {
+    /// One part instance: a package block and `pins` pins below its two long sides.
+    fn part_instance(c: usize, pins: usize) -> Result<Vec<Body>, String> {
         let w = 4.0 + (c % 7) as f64 * 0.37;
         let d = 3.0 + (c % 5) as f64 * 0.29;
         let h = 1.2 + (c % 3) as f64 * 0.1;
@@ -75,10 +75,10 @@ mod board {
     /// The child: builds the board and writes its STEP text to standard output, its build and
     /// write seconds to standard error.
     pub fn generate() -> Result<(), String> {
-        let components = count("COMPONENTS", DEFAULT_COMPONENTS)?;
+        let part_instances = count("PART_INSTANCES", DEFAULT_PART_INSTANCES)?;
         let pins = count("PINS", 16)?;
         let start = Instant::now();
-        let owned = (0..components).map(|c| component(c, pins)).collect::<Result<Vec<_>, _>>()?;
+        let owned = (0..part_instances).map(|c| part_instance(c, pins)).collect::<Result<Vec<_>, _>>()?;
         let build_s = start.elapsed().as_secs_f64();
 
         let start = Instant::now();
@@ -100,8 +100,8 @@ mod board {
                 children: Vec::new(),
             })
             .collect();
-        let side = (components as f64).sqrt().ceil().max(1.0) as usize;
-        let children = (0..components)
+        let side = (part_instances as f64).sqrt().ceil().max(1.0) as usize;
+        let children = (0..part_instances)
             .map(|c| {
                 let (x, y) = ((c % side) as f64 * 12.0, (c / side) as f64 * 10.0);
                 // Column-major: the fourth column is the translation, onto the 1.6 mm board's top.
@@ -136,7 +136,7 @@ mod board {
 
     /// The parent: has the child build the board, then reads it.
     pub fn run() -> Result<(), String> {
-        let components = count("COMPONENTS", DEFAULT_COMPONENTS)?;
+        let part_instances = count("PART_INSTANCES", DEFAULT_PART_INSTANCES)?;
         let pins = count("PINS", 16)?;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let child = Command::new(exe).arg(GENERATE).output().map_err(|e| e.to_string())?;
@@ -157,7 +157,7 @@ mod board {
         let peak = peak_kib();
         let phases = phases(&text)?;
 
-        let bodies = components * (pins + 1);
+        let bodies = part_instances * (pins + 1);
         if !read.refused.is_empty() {
             return Err(format!("{} items refused, the first {:?}", read.refused.len(), read.refused.first()));
         }
@@ -167,7 +167,7 @@ mod board {
         let mib = |kib: Option<u64>| kib.map_or_else(|| "unknown".to_string(), |k| format!("{:.0} MiB", k as f64 / 1024.0));
         println!("step_board: reader phases alone: {phases}");
         println!(
-            "step_board: {components} components of {pins} pins, {bodies} bodies, {:.1} MB of STEP text; built in {build_s:.1} s, written in {write_s:.1} s, read in {read_s:.1} s; peak resident memory {} holding the text, {} after the read",
+            "step_board: {part_instances} part instances of {pins} pins, {bodies} bodies, {:.1} MB of STEP text; built in {build_s:.1} s, written in {write_s:.1} s, read in {read_s:.1} s; peak resident memory {} holding the text, {} after the read",
             text.len() as f64 / 1e6,
             mib(before),
             mib(peak),

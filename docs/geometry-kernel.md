@@ -136,7 +136,7 @@ At SolidCraft revision `73bdb6c`:
 | An expansion of exactly 1,000,000 steps, and of one more | read; `model_unreadable` |
 | 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 64 placements and 7,870 relationships at exactly 1,000,000 steps, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | A surface model of 20,000 empty closed shells beside the block, both placed 32,768 times through mapped items | read in under 30 s: one body, 32,768 placements, the model refused |
-| A board of 500 components of 16 pins, each component its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
+| A board of 500 part instances of 16 pins, each part instance its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
 the integration tests in `crates/geometry/tests/`.
@@ -171,13 +171,13 @@ tolerance, 1 µm, is stored in the same file.
 ### Board-sized read
 
 `crates/geometry/tests/step_board.rs`, adapted from SolidCraft's board fixture,
-builds a board whose components are each their own product with a package and
+builds a board whose part instances are each their own product with a package and
 its own pins, the worst case for an import, and reads it back. By default it
-builds 2 components of 16 pins so a debug test run takes a few seconds. The
+builds 2 part instances of 16 pins so a debug test run takes a few seconds. The
 figures above are for the full size:
 
 ```sh
-PCBCRAFT_STEP_BOARD_COMPONENTS=500 PCBCRAFT_STEP_BOARD_PINS=16 \
+PCBCRAFT_STEP_BOARD_PART_INSTANCES=500 PCBCRAFT_STEP_BOARD_PINS=16 \
     cargo test -p pcbcraft-geometry --test step_board
 ```
 
