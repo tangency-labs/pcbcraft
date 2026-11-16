@@ -288,6 +288,11 @@ fn refused_by(published: Option<(u64, u64)>, catalog: u64, code: Code) -> Option
     }
 }
 
+/// Applies every edit of `edits` to `code` and checks the lock's answer against `refused_by`,
+/// stopping after four edits. Only a history the lock accepted is walked further, with the lock it
+/// printed; a refused edit is counted under its rule and undone. `published` keeps the version and
+/// contract last accepted while the command was present, so it still holds after a removal and a
+/// command that comes back is judged against it. Panics when the lock and the rules disagree.
 fn walk(lock: &Value, published: Option<(u64, u64)>, code: Code, history: &mut Vec<String>, refusals: &mut BTreeMap<&'static str, usize>) {
     if history.len() == 4 {
         return;
@@ -389,7 +394,8 @@ fn prose_is_not_part_of_the_contract() {
 
 /// The keys of `dependentRequired`, `dependentSchemas` and `dependencies` name parameters, so a
 /// parameter called `title`, `summary` or `description` there is part of the contract. There is no
-/// prose in those maps to leave out: each key is a parameter name.
+/// prose in those maps to leave out: each key is a parameter name. A changed constraint at the same
+/// version is refused by the lock as a contract change that needs a bump.
 #[test]
 fn dependency_maps_keep_parameter_names() {
     let original = crate::command(crate::SET_SYMBOL_FIELDS).unwrap().to_json();
@@ -405,6 +411,13 @@ fn dependency_maps_keep_parameter_names() {
             let mut changed = with.clone();
             changed["params"][keyword][name] = second.clone();
             assert_ne!(contract_digest(&changed), contract_digest(&with), "a changed {keyword}.{name} kept the contract");
+            let id = with["id"].as_str().unwrap();
+            let version = with["version"].as_u64().unwrap();
+            let lock = lock_of(std::slice::from_ref(&with), 1);
+            let Err(LockMismatch::Version(problems)) = check_lock(&lock, "commands", std::slice::from_ref(&changed), 1) else {
+                panic!("a changed {keyword}.{name} at the same version passed the lock")
+            };
+            assert_eq!(problems, [format!("the contract of `{id}` changed; bump the version of `{id}` above {version}")]);
             let mut renamed = original.clone();
             renamed["params"][keyword] = json!({"other": first.clone()});
             assert_ne!(contract_digest(&renamed), contract_digest(&with), "{keyword} lost the name {name}");

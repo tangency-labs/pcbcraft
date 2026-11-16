@@ -216,9 +216,12 @@ changed digest at an unchanged version is a contract change without a bump.
 Comparing with the lock on the merge base in CI would catch that case too. To change a command's contract,
 raise its entry in that file's version table and `CATALOG_VERSION`, then copy
 the section the failing test prints into the lock. Adding or removing a command
-only needs the lock refreshed the same way; a removed command stays in the lock,
-marked `"removed": true` with its last version, and the tests refuse its id
-coming back at a lower version in any section. Every version in the lock,
+changes no version and not `CATALOG_VERSION`: no contract that a client used
+has changed, since a new id was not there before and a removed id is gone from
+`list_commands` and refused as unknown. Copy the printed section into the lock
+the same way; a removed command stays in the lock, marked `"removed": true`
+with its last version, and the tests refuse its id coming back at a lower
+version in any section. Every version in the lock,
 `catalog_version` included, must be a whole number of at least 1 (`3`, not
 `3.0` or `"3"`); any other value fails the tests. The tests see only the described schemas: a
 changed result, or a stricter check that the parameter schema does not express,
