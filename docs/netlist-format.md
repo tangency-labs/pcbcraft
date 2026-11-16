@@ -29,6 +29,10 @@ always `schematic` in format 1. Board copper is not consulted.
 Every object is closed: a reader may reject unknown fields.
 UUIDs are written in the lowercase 36-character hyphenated form, and the reader
 accepts only that hyphenated form.
+Integers, such as a definition's `revision`, are written as plain digits, and the
+reader accepts only plain digits, like the other native readers. On this one point the
+schema is wider: its `integer` type counts by value, so it also allows `1.0` or `1e0`,
+which the reader refuses.
 
 ### Components
 

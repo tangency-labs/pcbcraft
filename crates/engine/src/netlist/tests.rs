@@ -360,6 +360,42 @@ fn reader_and_schema_agree_on_field_edges() {
     }
 }
 
+/// Known difference: the schema's `integer` type counts by value, so `1.0` and `1e0` are valid
+/// integers there, but the reader, like the other native readers, takes integers only as plain
+/// digits. Every integer in the exported document is tried in both spellings; the writer never
+/// produces them.
+#[test]
+fn integers_spelled_as_decimals_are_valid_in_the_schema_but_refused_by_the_reader() {
+    let Fixture { session, .. } = fixture();
+    let text = session.export_netlist().unwrap().0.contents;
+    let original: Value = serde_json::from_str(&text).unwrap();
+    let mut numbers = Vec::new();
+    numbers_in(&original, String::new(), &mut numbers);
+    assert!(!numbers.is_empty());
+    for pointer in numbers {
+        // The writer uses plain digits for every integer.
+        let plain = original.pointer(&pointer).unwrap().as_u64().unwrap();
+        for spelling in [format!("{plain}.0"), format!("{plain}e0")] {
+            let mut marked = original.clone();
+            *marked.pointer_mut(&pointer).unwrap() = json!("@integer@");
+            let document = marked.to_string().replace("\"@integer@\"", &spelling);
+            let value: Value = serde_json::from_str(&document).unwrap();
+            assert!(check(&schema(), &schema(), &value, "$").is_ok(), "schema: {pointer} = {spelling}");
+            assert!(Netlist::parse(&document).unwrap_err().contains("floating point"), "reader: {pointer} = {spelling}");
+        }
+    }
+}
+
+/// The JSON pointer of every number in a document.
+fn numbers_in(value: &Value, at: String, found: &mut Vec<String>) {
+    match value {
+        Value::Number(_) => found.push(at),
+        Value::Object(map) => map.iter().for_each(|(key, child)| numbers_in(child, format!("{at}/{key}"), found)),
+        Value::Array(items) => items.iter().enumerate().for_each(|(index, child)| numbers_in(child, format!("{at}/{index}"), found)),
+        _ => {}
+    }
+}
+
 /// The schema's closed vocabularies are exactly the ones the code writes.
 #[test]
 fn schema_vocabularies_match_the_types() {
@@ -467,7 +503,8 @@ fn check(root: &Value, schema: &Value, value: &Value, at: &str) -> Result<(), St
                 let actual = match value {
                     Value::Null => "null",
                     Value::Bool(_) => "boolean",
-                    Value::Number(n) if n.is_u64() || n.is_i64() => "integer",
+                    // JSON Schema counts integers by value, so 1.0 and 1e0 are integers too.
+                    Value::Number(n) if n.is_u64() || n.is_i64() || n.as_f64().is_some_and(|f| f.fract() == 0.0) => "integer",
                     Value::Number(_) => "number",
                     Value::String(_) => "string",
                     Value::Array(_) => "array",
