@@ -1,7 +1,7 @@
 //! The solidcore implementation of the kernel boundary. Nothing here is public: the crate root
 //! converts between these millimetre values and its nanometre types.
 
-use solidcore_step::write::product::{ExportError, Header, solidcore_bodies};
+use solidcore_step::write::product::{ExportBody, ExportError, Header};
 
 use crate::guard::guard;
 use crate::{ErrorCode, GeometryError, RefusedItem, Result};
@@ -24,10 +24,33 @@ pub(crate) fn bounds(body: &KernelBody) -> Result<([f64; 3], [f64; 3])> {
 
 /// STEP text of `bodies` as one AP242 part named `part_name`.
 pub(crate) fn write(part_name: &str, bodies: &[(&str, &KernelBody)]) -> Result<String> {
+    let header = Header { file_name: part_name.to_string(), originating_system: ORIGINATING_SYSTEM.to_string(), ..Header::default() };
+    write_with(
+        bodies,
+        |body| body.0.to_record().map(|(record, _)| record),
+        |records| {
+            let list =
+                records.iter().map(|(name, record)| ExportBody { name: (*name).to_string(), record, color: None, faces: Vec::new() }).collect();
+            solidcore_step::write::product::bodies(list, &header).map_err(export_error)
+        },
+    )
+}
+
+/// Makes each body's kernel record with `record`, then writes the records with `emit`, all under
+/// one guard. A record that cannot be made keeps its kernel error's code, so a panic the kernel's
+/// session caught stays [`ErrorCode::KernelInternal`]. solidcore-step's own `solidcore_bodies`
+/// would fold that error into a writer refusal, which reads as `operation_failed`.
+pub(crate) fn write_with<B, R>(
+    bodies: &[(&str, B)],
+    record: impl Fn(&B) -> solidcore_ops::Result<R>,
+    emit: impl FnOnce(&[(&str, R)]) -> Result<String>,
+) -> Result<String> {
     guard("STEP write", || {
-        let named: Vec<(&str, &solidcore_ops::Body)> = bodies.iter().map(|(name, body)| (*name, &body.0)).collect();
-        let header = Header { file_name: part_name.to_string(), originating_system: ORIGINATING_SYSTEM.to_string(), ..Header::default() };
-        solidcore_bodies(&named, &header).map_err(export_error)
+        let mut records = Vec::with_capacity(bodies.len());
+        for (name, body) in bodies {
+            records.push((*name, record(body).map_err(|e| ops_error("STEP write", e))?));
+        }
+        emit(&records)
     })
 }
 
@@ -42,8 +65,12 @@ pub(crate) fn read(text: &str) -> Result<Read> {
         let solids = solidcore_step::topology::read_solids(&exchange);
         let mut refused: Vec<RefusedItem> =
             solids.failures.into_iter().map(|f| RefusedItem { entity: f.item, code: reader_refusal(&f.message), message: f.message }).collect();
-        let mut bodies = Vec::with_capacity(solids.solids.len());
-        for solid in solids.solids {
+        // The reader lists a surface model's closed shells in the model's reference order and then
+        // the model itself, so its list is not always in entity order; the stable sort makes it so.
+        let mut solids = solids.solids;
+        solids.sort_by_key(|s| s.item);
+        let mut bodies = Vec::with_capacity(solids.len());
+        for solid in solids {
             let made = guard("STEP solid", || {
                 solidcore_ops::Body::from_record(&solid.brep, false).map(|(body, _)| body).map_err(|e| ops_error("STEP solid", e))
             });

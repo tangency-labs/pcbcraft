@@ -192,3 +192,68 @@ fn names_with_control_characters_are_refused() {
         assert_eq!(write_step(name, &[body]).unwrap_err().code(), ErrorCode::InvalidParams, "{name:?}");
     }
 }
+
+#[test]
+fn a_body_record_the_kernel_cannot_make_keeps_its_code() {
+    // A valid body cannot be made to fail its record here, so the record step is replaced.
+    let bodies = [("Block", ())];
+    let emit = |_: &[(&str, ())]| -> Result<String> { Ok(String::new()) };
+    let caught = kernel::write_with(&bodies, |_| Err(solidcore_ops::Error::Internal("probe".into())), emit);
+    assert_eq!(caught.unwrap_err().code(), ErrorCode::KernelInternal);
+    let panicked = kernel::write_with(&bodies, |_| -> solidcore_ops::Result<()> { panic!("probe") }, emit);
+    assert_eq!(panicked.unwrap_err().code(), ErrorCode::KernelInternal);
+    let refused = kernel::write_with(&bodies, |_| Err(solidcore_ops::Error::Unsupported("probe")), emit);
+    assert_eq!(refused.unwrap_err().code(), ErrorCode::OperationFailed);
+}
+
+/// Each `#id=MANIFOLD_SOLID_BREP('name',#shell);` line of a STEP text: id, shell, name.
+fn solid_lines(text: &str) -> Vec<(u64, u64, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let (id, body) = line.strip_prefix('#')?.split_once('=')?;
+            let rest = body.strip_prefix("MANIFOLD_SOLID_BREP('")?;
+            let (name, shell) = rest.rsplit_once("',#")?;
+            Some((id.parse().ok()?, shell.strip_suffix(");")?.parse().ok()?, name.to_string()))
+        })
+        .collect()
+}
+
+#[test]
+fn a_surface_model_with_shells_out_of_order_reads_back_in_entity_order() {
+    let a = Body::cuboid("A", [0; 3], [1_000_000; 3]).unwrap();
+    let b = Body::cuboid("B", [20_000_000, 0, 0], [1_000_000; 3]).unwrap();
+    let text = String::from_utf8(write_step("fixture", &[a, b]).unwrap()).unwrap();
+    let solids = solid_lines(&text);
+    assert_eq!(solids.len(), 2, "{text}");
+    let face = text
+        .lines()
+        .find_map(|line| {
+            let (id, body) = line.strip_prefix('#')?.split_once('=')?;
+            body.starts_with("ADVANCED_FACE(").then(|| id.to_string())
+        })
+        .unwrap();
+    let (first, second) = (&solids[0], &solids[1]);
+    let (low, high) = (first.1.min(second.1), first.1.max(second.1));
+    // The first solid becomes an open shell of one face, and the second a surface model holding
+    // both closed shells, the higher-numbered first, and that open shell. The reader expands the
+    // model into its closed shells in that order, then the model.
+    let text: Vec<String> = text
+        .lines()
+        .map(|line| {
+            if line.starts_with(&format!("#{}=", first.0)) {
+                format!("#{}=OPEN_SHELL('',(#{face}));", first.0)
+            } else if line.starts_with(&format!("#{}=", second.0)) {
+                format!("#{}=SHELL_BASED_SURFACE_MODEL('',(#{high},#{low},#{}));", second.0, first.0)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    let read = read_step(text.join("\n").as_bytes()).unwrap();
+    assert!(read.bodies.len() >= 2, "{:?} {:?}", read.bodies, read.refused);
+    let x_of = |shell: u64| if solids.iter().any(|s| s.1 == shell && s.2 == "A") { 0 } else { 20_000_000 };
+    for (body, shell) in read.bodies.iter().zip([low, high]) {
+        let min_x = body.bounding_box().unwrap().min_nm[0];
+        assert!((min_x - x_of(shell)).abs() <= ROUND_TRIP_TOLERANCE_NM as i64, "{min_x} for shell #{shell}");
+    }
+}
