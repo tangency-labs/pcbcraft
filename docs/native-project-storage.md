@@ -994,9 +994,11 @@ writes; one large edit, such as a big paste, can make the new snapshot as large
 as the old snapshot and the journal together. If the new snapshot cannot be
 written, the old snapshot and journal stay as they were, already holding that
 edit, and the next edit tries again. While snapshots keep failing, for example
-because the recovery folder was removed or became read-only, every edit is still
+because the recovery folder became read-only or full, every edit is still
 appended to the open journal, so it grows past the limit until a snapshot
-succeeds or the session ends. When no journal is open, because a record or a new
+succeeds or the session ends. Removing the recovery folder while a session runs
+is different: on Unix it deletes the snapshot and journal, and edits the writer
+still appends to the open, deleted journal cannot be recovered. When no journal is open, because a record or a new
 journal could not be written or an opened or saved project could not be
 snapshotted, edits are not recorded until a snapshot succeeds; recovery then
 returns the last recorded state.
