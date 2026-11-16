@@ -43,7 +43,9 @@ pub struct Output {
 /// Every fabrication file of one board and the origin their coordinates are measured from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Fabrication {
+    /// The origin every coordinate in these files is measured from.
     pub origin: Resolved,
+    /// The files in a fixed order with unique portable names.
     pub files: Vec<Output>,
 }
 
