@@ -87,6 +87,8 @@ fn authored_tool(state: &BoardState) -> bool {
         || state.reference_drag.is_some()
         || state.placement.is_some()
         || state.box_drag.is_some()
+        || state.zones.tool.is_some()
+        || state.zones.source().is_some()
         || state.drawing.tool.is_some()
         || state.drawing.source().is_some()
         || state.tracks.busy()
@@ -438,6 +440,7 @@ impl PcbApp {
     }
     /// Apply one mixed editing selection after correspondence handling has cleared old categories.
     pub(super) fn select_board_items(&mut self, selected: BoardSelection) {
+        self.views.active.board.zones.select(None);
         self.views.select_board(selected.footprints, &self.session, self.preferences.selection_follow);
         self.views.active.board.drawing.select_many(selected.drawings);
         self.views.active.board.tracks.selected = selected.tracks.union(&selected.vias).copied().collect();

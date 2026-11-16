@@ -269,9 +269,17 @@ impl PcbApp {
                 active: self.views.active.board.tracks.via_tool,
                 menu_check: None,
             },
+            RibbonTool {
+                icon: ToolIcon::Zone,
+                label: "Zone",
+                description: "Draw zone outlines",
+                shortcut: "",
+                enabled: enabled && self.can_route() && !editing,
+                active: self.views.active.board.zones.tool.is_some(),
+                menu_check: None,
+            },
         ];
         let planned = [
-            planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)"),
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
             planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
@@ -279,6 +287,7 @@ impl PcbApp {
         match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
+            Some(2) => self.begin_zone(),
             _ => {}
         }
     }
@@ -488,6 +497,7 @@ impl PcbApp {
             return;
         }
         self.views.active.board.drawing.cancel();
+        self.views.active.board.zones.cancel();
         self.views.active.board.measure.cancel();
         self.views.active.board.tracks.start_via();
     }
@@ -509,6 +519,7 @@ impl PcbApp {
             return;
         }
         self.views.active.board.drawing.cancel();
+        self.views.active.board.zones.cancel();
         self.views.active.board.measure.cancel();
         self.views.active.board.tracks.start();
     }
@@ -584,6 +595,7 @@ impl PcbApp {
             || pick.edit.is_some()
             || pick.reference_edit.is_some()
             || pick.reference_pick.is_some()
+            || pick.zone_edit.is_some()
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
@@ -606,6 +618,16 @@ impl PcbApp {
             }
             if let Some(footprint) = pick.reference_pick {
                 self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(mut edit) = pick.zone_edit
+                && self.views.active.accepts(edit.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                edit.params["board"] = serde_json::json!(target.board);
+                self.run(edit.id, &edit.params);
+                if self.message.is_some() {
+                    edit.restore_rejected(&mut self.views.active.board.zones);
+                }
             }
             if let Some(mut edit) = pick.drawing_edit
                 && self.views.active.accepts(edit.source, &self.session)

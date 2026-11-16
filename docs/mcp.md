@@ -193,6 +193,12 @@ IDs, anchors, lineage and decisions only when a registry exists, and never
 creates records. See the [storage and command contract](net-registry-storage.md)
 for scope and version details. There are no new editor controls in this slice.
 
+`pcb.add_zone`, `pcb.set_zone` and `pcb.delete_zones` edit
+[zone outlines](copper-zone-outlines.md#shared-commands) through the same revision-checked
+transactions as PCB Layout. A derived typed net target is promoted in the same
+undo step as creation; inspection reports authored zone records and current net
+identity state. These commands do not create conductive fill.
+
 `pcb.add_drawing`, `pcb.set_drawing` and `pcb.delete_drawing` use the same
 transactions as canvas Board Outline editing. Each takes `board` and
 `expected_revision`; creation also takes a `layer` UUID, ordered `points`

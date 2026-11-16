@@ -673,3 +673,35 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
 
 #[cfg(test)]
 mod net_label_tests;
+
+/// Light screen-space hatching distinguishes zone intent from conductive fill. Scan conversion
+/// clips the work to the viewport and pairs intersections, supporting concave outlines.
+pub fn zone_hatch(p: &Painter, points: &[Pos2], color: Color32) {
+    if points.len() < 3 {
+        return;
+    }
+    let bounds = Rect::from_points(points).intersect(p.clip_rect());
+    if !bounds.is_positive() {
+        return;
+    }
+    let spacing = 12.0_f32;
+    let lines = ((bounds.height() / spacing).ceil() as usize).min(512);
+    for index in 0..lines {
+        let y = bounds.top() + index as f32 * spacing;
+        let mut xs: Vec<f32> = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .take(points.len())
+            .filter(|(a, b)| (a.y <= y && b.y > y) || (b.y <= y && a.y > y))
+            .map(|(a, b)| a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y))
+            .collect();
+        xs.sort_by(f32::total_cmp);
+        for pair in xs.as_chunks::<2>().0 {
+            let a = pair[0].max(bounds.left());
+            let b = pair[1].min(bounds.right());
+            if a < b {
+                p.line_segment([egui::pos2(a, y), egui::pos2(b, y)], Stroke::new(0.7, color.gamma_multiply(0.3)));
+            }
+        }
+    }
+}

@@ -202,6 +202,7 @@ pub(super) struct BoardState {
     pub(super) clipboard: crate::board_clipboard::State,
     pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
+    pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
     /// The last design rules check run from this view, with its card and focused finding.
     pub(super) drc: crate::board_drc::Drc,
@@ -306,6 +307,7 @@ impl BoardState {
     /// nor saved files change, and unfinished drawing gestures expire.
     pub(super) fn set_layer_visibility(&mut self, layers: impl IntoIterator<Item = String>, active_only: bool) {
         self.drawing.cancel();
+        self.zones.cancel();
         self.tracks.cancel();
         let overlays: Vec<_> = self.hidden_layers.iter().filter(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY)).cloned().collect();
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
@@ -317,6 +319,7 @@ impl BoardState {
     pub(super) fn set_layer(&mut self, id: &str, active: bool, visible: Option<bool>) {
         if active && self.active_layer.as_deref() != Some(id) {
             self.drawing.cancel();
+            self.zones.cancel();
             self.active_layer = Some(id.to_owned());
         }
         if let Some(visible) = visible {
@@ -324,6 +327,7 @@ impl BoardState {
                 self.hidden_layers.remove(id);
             } else {
                 self.drawing.cancel();
+                self.zones.cancel();
                 self.tracks.cancel();
                 self.hidden_layers.insert(id.to_owned());
             }
@@ -694,6 +698,7 @@ impl EditorView {
         self.schematic.clipboard = crate::clipboard::State::default();
         self.board.clipboard = crate::board_clipboard::State::default();
         self.board.drawing.cancel();
+        self.board.zones.cancel();
         self.board.tracks.cancel();
         self.board.measure.cancel();
         self.board.draft = None;

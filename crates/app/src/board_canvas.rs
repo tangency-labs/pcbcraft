@@ -106,6 +106,7 @@ pub(super) struct Interaction {
     pub(super) error: Option<(ViewInput, String)>,
     pub(super) clipboard: Option<crate::board_clipboard::Action>,
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
+    pub(super) zone_edit: Option<crate::board_drawing::Command>,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) items: Option<pcbcraft_engine::board::clipboard::BoardSelection>,
@@ -203,6 +204,8 @@ pub(super) fn show(
         && filters.footprints
         && state.draft.is_none()
         && state.box_drag.is_none()
+        && state.zones.tool.is_none()
+        && state.zones.source().is_none()
         && state.drawing.tool.is_none()
         && state.drawing.source().is_none()
         && !state.tracks.busy();
@@ -258,6 +261,8 @@ pub(super) fn show(
     // tools and existing drawing edits keep their own input even when crossing a footprint.
     let footprint_drag = drag_start
         && visible
+        && state.zones.tool.is_none()
+        && state.zones.source().is_none()
         && state.drawing.tool.is_none()
         && state.drawing.source().is_none()
         && !state.tracks.busy()
@@ -282,10 +287,34 @@ pub(super) fn show(
             && state.draft.is_none()
             && state.box_drag.is_none()
             && !footprint_drag
+            && state.zones.tool.is_none()
+            && state.zones.source().is_none()
             && state.drawing.tool.is_none()
             && state.drawing.source().is_none(),
         hovered.is_some(),
         crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
+    );
+    state.zones.zone = true;
+    let zone = crate::board_drawing::interact(
+        ui,
+        &response,
+        camera,
+        project,
+        &mut state.zones,
+        state.tracks.width_nm,
+        state.active_layer.as_deref(),
+        &state.hidden_layers,
+        source,
+        enabled
+            && state.draft.is_none()
+            && state.box_drag.is_none()
+            && !footprint_drag
+            && !route.consumed
+            && !state.tracks.busy()
+            && state.drawing.tool.is_none()
+            && state.drawing.source().is_none(),
+        state.move_requested,
+        filters.zones,
     );
     let edge = crate::board_drawing::interact(
         ui,
@@ -297,21 +326,29 @@ pub(super) fn show(
         state.active_layer.as_deref(),
         &state.hidden_layers,
         source,
-        enabled && state.draft.is_none() && state.box_drag.is_none() && !footprint_drag && !route.consumed && !state.tracks.busy(),
+        enabled && state.draft.is_none() && state.box_drag.is_none() && !footprint_drag && !route.consumed && !zone.consumed && !state.tracks.busy(),
         state.move_requested,
         filters.graphics,
     );
-    let enabled = enabled && !edge.consumed && !route.consumed;
+    let enabled = enabled && !edge.consumed && !route.consumed && !zone.consumed;
     let mut out = Interaction {
         error: source.zip(route.error),
         drawing_edit: edge.command,
+        zone_edit: zone.command,
         track_edit: route.command,
         reference_edit,
         reference_pick,
         ..Interaction::default()
     };
-    if (edge.consumed || route.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some()) {
+    if (edge.consumed || route.consumed || zone.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some()) {
         out.selection = Some(BTreeSet::new());
+    }
+    if zone.consumed {
+        state.drawing.select(None);
+        state.tracks.selected.clear();
+    }
+    if route.consumed || edge.consumed {
+        state.zones.select(None);
     }
     if route.consumed {
         state.drawing.select(None);
@@ -339,6 +376,8 @@ pub(super) fn show(
         && !lost_focus
         && state.box_drag.is_none()
         && state.draft.is_none()
+        && state.zones.tool.is_none()
+        && state.zones.source().is_none()
         && state.drawing.tool.is_none()
         && state.drawing.source().is_none()
         && !state.tracks.busy()
@@ -462,6 +501,7 @@ pub(super) fn show(
     }
     let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
     let context = board::context_painter(&p, focus.is_some());
+    crate::board_drawing::paint(&context, rect, camera, project, &state.zones, state.tracks.width_nm, &state.hidden_layers, appearance);
     crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, state.tracks.width_nm, &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
@@ -605,9 +645,12 @@ pub(super) fn show(
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if project.footprints().next().is_none()
+        && project.zones().is_empty()
         && project.drawings().is_empty()
         && project.tracks().is_empty()
         && project.vias().is_empty()
+        && state.zones.tool.is_none()
+        && state.zones.source().is_none()
         && state.drawing.tool.is_none()
         && !state.tracks.busy()
         && state.placement.is_none()

@@ -36,6 +36,9 @@ struct Edit {
 /// Independent selection/tool/gesture state for one board view, never stored in project files.
 #[derive(Debug, Default)]
 pub(super) struct State {
+    pub(super) zone: bool,
+    pub(super) zone_choices: Option<(pcbcraft_engine::board::view::BoardTarget, u64, Vec<crate::board_zones::NetChoice>)>,
+    pub(super) zone_target: Option<pcbcraft_engine::nets::ClassTarget>,
     pub(super) tool: Option<Tool>,
     pub(super) selected: Option<String>,
     selected_many: BTreeSet<uuid::Uuid>,
@@ -45,6 +48,9 @@ pub(super) struct State {
     draft: Option<Draft>,
     edit: Option<Edit>,
     layer: Option<String>,
+    /// A press owns its original revision even before movement crosses the drag threshold.
+    press: Option<ViewInput>,
+    blocked_press: bool,
     /// Geometry submitted this frame, painted until the next pass sees the engine's result.
     committed: Option<Drawing>,
 }
@@ -80,6 +86,15 @@ pub(super) struct Interaction {
 }
 
 impl State {
+    /// Project the selected authored category into the shared outline gesture geometry.
+    fn geometry(&self, view: BoardView<'_>) -> Vec<Drawing> {
+        if self.zone {
+            view.zones().iter().map(|z| Drawing { id: z.id, layer: z.layer, points: z.points.clone(), closed: true, stroke_nm: None }).collect()
+        } else {
+            view.drawings()
+        }
+    }
+
     /// Read explicit graphic selections, including older single-item callers.
     pub(super) fn selection(&self) -> BTreeSet<uuid::Uuid> {
         self.selected_many.iter().copied().chain(self.selected.as_ref().and_then(|id| id.parse().ok())).collect()
@@ -105,6 +120,8 @@ impl State {
     /// Drop all drawing gestures when focus, workspace, layer or project authority changes.
     pub(super) fn cancel(&mut self) {
         self.tool = None;
+        self.press = None;
+        self.blocked_press = false;
         self.draft = None;
         self.edit = None;
         self.delete_requested = false;
@@ -170,8 +187,23 @@ fn command(source: ViewInput, id: &'static str, mut params: Value) -> Command {
 
 /// Choose the existing typed command for the active material. Copper paths become atomic
 /// track segments, including closure; other layers retain a graphic with its physical stroke.
-/// An over-limit copper closure returns None so the caller retains the editable draft.
-fn create_path(source: ViewInput, view: BoardView<'_>, layer: &str, points: &[Point], closed: bool, width_nm: i64) -> Option<Command> {
+/// Zones instead create nonconductive intent with their captured net target. An over-limit
+/// copper closure or incomplete zone returns None so the editable draft is retained.
+fn create_path(
+    source: ViewInput,
+    view: BoardView<'_>,
+    layer: &str,
+    points: &[Point],
+    closed: bool,
+    width_nm: i64,
+    target: Option<&pcbcraft_engine::nets::ClassTarget>,
+) -> Option<Command> {
+    if let Some(target) = target {
+        if !closed || points.len() < 3 {
+            return None;
+        }
+        return Some(command(source, pcbcraft_engine::board::zones::ADD_ZONE, json!({"layer":layer,"points":points,"target":target})));
+    }
     if view.layers().iter().any(|record| record.id.to_string() == layer && record.purpose == LayerPurpose::Copper) {
         if points.len() + usize::from(closed) > pcbcraft_engine::board::track::MAX_PATH_POINTS {
             return None;
@@ -207,7 +239,7 @@ pub(super) fn interact(
     let mut out = Interaction::default();
     state.committed = None;
     let rect = response.rect;
-    let all = view.drawings();
+    let all = state.geometry(view);
     let drawings: Vec<_> = all.into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
     if state.selected.as_ref().is_some_and(|id| !drawings.iter().any(|drawing| drawing.id.to_string() == *id)) {
         state.select(None);
@@ -216,12 +248,37 @@ pub(super) fn interact(
     if state.edit.as_ref().is_some_and(|edit| hidden.contains(&edit.drawing.layer.to_string())) {
         state.cancel();
     }
-    if !enabled || state.source().is_some_and(|old| Some(old) != source) || state.layer.as_deref() != active {
+    let primary_down = ui.input(|input| input.pointer.primary_down());
+    if state.blocked_press {
+        state.blocked_press = primary_down;
+        out.consumed = true;
+        return out;
+    }
+    let stale = state.source().or(state.press).is_some_and(|old| Some(old) != source);
+    if stale {
+        state.cancel();
+        state.layer = active.map(str::to_owned);
+        state.blocked_press = primary_down;
+        out.consumed = true;
+        return out;
+    }
+    if !enabled || state.layer.as_deref() != active {
         state.cancel();
         state.layer = active.map(str::to_owned);
     }
     let Some(source) = source.filter(|_| enabled) else { return out };
     let selected = drawings.iter().find(|drawing| state.selected.as_ref() == Some(&drawing.id.to_string()));
+    if response.contains_pointer()
+        && ui.input(|input| input.pointer.primary_pressed())
+        && (state.tool.is_some()
+            || ui.input(|input| input.pointer.press_origin()).is_some_and(|at| drawings.iter().any(|drawing| hit(at, camera, rect, drawing))))
+    {
+        state.press = Some(source);
+    }
+    if ui.input(|input| input.pointer.primary_released()) {
+        state.press = None;
+    }
+
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && (state.tool.is_some() || state.edit.is_some()) {
         state.escape();
         out.consumed = true;
@@ -230,14 +287,21 @@ pub(super) fn interact(
     if std::mem::take(&mut state.delete_requested)
         && let Some(drawing) = selected
     {
-        out.command = Some(command(source, pcbcraft_engine::DELETE_DRAWING, json!({"drawing":drawing.id})));
+        out.command = Some(if state.zone {
+            command(source, pcbcraft_engine::board::zones::DELETE_ZONES, json!({"zones":[drawing.id]}))
+        } else {
+            command(source, pcbcraft_engine::DELETE_DRAWING, json!({"drawing":drawing.id}))
+        });
         out.consumed = true;
         return out;
     }
     let pointer = ui.input(|input| input.pointer.hover_pos());
     if let Some(tool) = state.tool {
         out.consumed = true;
-        if !can_draw(view, active, hidden) {
+        if !can_draw(view, active, hidden)
+            || (state.zone
+                && !view.layers().iter().any(|layer| Some(layer.id.to_string()).as_deref() == active && layer.purpose == LayerPurpose::Copper))
+        {
             state.cancel();
             return out;
         }
@@ -252,7 +316,7 @@ pub(super) fn interact(
         }
         if std::mem::take(&mut state.finish_requested) {
             if let Some(draft) = state.draft.as_ref().filter(|draft| draft.points.len() >= 2) {
-                out.command = create_path(draft.source, view, &draft.layer, &draft.points, false, width_nm);
+                out.command = create_path(draft.source, view, &draft.layer, &draft.points, state.zone, width_nm, state.zone_target.as_ref());
                 if let Some(command) = &mut out.command {
                     command.retry = state.draft.take();
                 }
@@ -265,7 +329,7 @@ pub(super) fn interact(
             if let Some(draft) = &mut state.draft {
                 if tool == Tool::Rectangle {
                     if let Some(points) = rectangle(draft.points[0], at) {
-                        out.command = create_path(draft.source, view, &draft.layer, &points, true, width_nm);
+                        out.command = create_path(draft.source, view, &draft.layer, &points, true, width_nm, state.zone_target.as_ref());
                         if let Some(command) = &mut out.command {
                             command.retry = state.draft.take();
                         }
@@ -276,7 +340,8 @@ pub(super) fn interact(
                         draft.points.push(at);
                     }
                     if (close || response.double_clicked()) && draft.points.len() >= 2 {
-                        out.command = create_path(draft.source, view, &draft.layer, &draft.points, close, width_nm);
+                        out.command =
+                            create_path(draft.source, view, &draft.layer, &draft.points, close || state.zone, width_nm, state.zone_target.as_ref());
                         if let Some(command) = &mut out.command {
                             command.retry = state.draft.take();
                         }
@@ -341,8 +406,12 @@ pub(super) fn interact(
                 }
                 out.command = Some(command(
                     edit.source,
-                    pcbcraft_engine::SET_DRAWING,
-                    json!({"drawing":candidate.id,"points":candidate.points,"closed":candidate.closed}),
+                    if state.zone { pcbcraft_engine::board::zones::SET_ZONE } else { pcbcraft_engine::SET_DRAWING },
+                    if state.zone {
+                        json!({"zone":candidate.id,"points":candidate.points})
+                    } else {
+                        json!({"drawing":candidate.id,"points":candidate.points,"closed":candidate.closed})
+                    },
                 ));
                 state.committed = Some(candidate);
             }
@@ -374,13 +443,22 @@ pub(super) fn paint(
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
 ) {
-    for mut drawing in view.drawings().into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
+    for mut drawing in state.geometry(view).into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
         if let Some(edit) = state.edit.as_ref().filter(|edit| edit.drawing.id == drawing.id) {
             drawing = edit.drawing.clone();
         } else if let Some(committed) = state.committed.as_ref().filter(|committed| committed.id == drawing.id) {
             drawing = committed.clone();
         }
         let selected = state.selected.as_ref() == Some(&drawing.id.to_string()) || state.selected_many.contains(&drawing.id);
+        if state.zone {
+            let points: Vec<_> = drawing.points.iter().map(|point| camera.screen(*point, rect)).collect();
+            let color = view
+                .layers()
+                .iter()
+                .find(|l| l.id == drawing.layer)
+                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer));
+            pcbcraft_chrome::board::zone_hatch(painter, &points, color);
+        }
         pcbcraft_chrome::board::drawing(
             painter,
             drawing.points.iter().map(|point| camera.screen(*point, rect)).collect(),
@@ -397,7 +475,7 @@ pub(super) fn paint(
     if let Some(draft) = &state.draft
         && let Some(pointer) = painter.ctx().input(|input| input.pointer.hover_pos())
     {
-        let visible: Vec<_> = view.drawings().into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
+        let visible: Vec<_> = state.geometry(view).into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
         let at = snapped(pointer, camera, rect, &visible);
         let points = if state.tool == Some(Tool::Rectangle) {
             rectangle(draft.points[0], at).unwrap_or_else(|| vec![draft.points[0], at])

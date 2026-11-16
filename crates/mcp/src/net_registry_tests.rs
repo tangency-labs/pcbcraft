@@ -361,3 +361,64 @@ fn class_routing_queries_and_commits_have_live_headless_parity() {
         pcbcraft_engine::persistence::encode_documents(project).unwrap()
     );
 }
+
+/// Zone commands use the same live/headless catalog, authored transaction and stale/modal policy.
+#[test]
+fn zone_commands_share_live_and_headless_authority() {
+    use pcbcraft_engine::{
+        INITIALIZE_BOARD_SETUP,
+        board::{setup::LayerPurpose, zones},
+    };
+    let mut s = Session::default();
+    apply(&mut s, "project.new", json!({"create_board":true}));
+    for x in [0, 25_400_000] {
+        apply(&mut s, PLACE_RESISTOR, json!({"x_nm":x,"y_nm":0}));
+    }
+    apply(&mut s, CONNECT_PINS, json!({"from":{"symbol":"symbol-2","terminal":"1"},"to":{"symbol":"symbol-3","terminal":"1"}}));
+    apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true}));
+    let snapshot = s.snapshot().unwrap();
+    let nets = snapshot.inspect_net_registry().unwrap();
+    let board = snapshot.boards().next().unwrap();
+    let layer = board.setup().unwrap().layers().iter().find(|l| l.purpose == LayerPurpose::Copper).unwrap().id;
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot.clone());
+    let mut editor = OpenEditor { session: live, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    for command in [zones::ADD_ZONE, zones::SET_ZONE, zones::DELETE_ZONES] {
+        assert!(catalog.as_array().unwrap().iter().any(|entry| entry["id"] == command));
+    }
+    let add = json!({"command":zones::ADD_ZONE,"inspect":false,"params":{"layer":layer,"target":{"kind":"derived","anchor":nets["nets"][0]["anchor"]},"points":[{"x_nm":0,"y_nm":0},{"x_nm":10000000,"y_nm":0},{"x_nm":0,"y_nm":10000000}],"expected_revision":editor.session.revision()}});
+    editor.blocked = true;
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":add})).is_err());
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    editor.blocked = false;
+    let result = call_editor(&mut editor, &json!({"method":"engine.execute","params":add})).unwrap();
+    assert_eq!(result, headless.call("engine.execute", add.clone()).unwrap());
+    assert!(headless.call("engine.execute", add.clone()).is_err());
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":add})).is_err());
+    let live_id = editor.session.project().unwrap().boards().next().unwrap().zones()[0].id;
+    let inspect = headless.call("project.inspect", json!({})).unwrap();
+    let headless_id = inspect["project"]["boards"][0]["zones"][0]["id"].clone();
+    assert!(headless_id.is_string(), "{inspect}");
+    let options = zones::Options { priority: 9, ..Default::default() };
+    let revision = editor.session.revision();
+    for (backend_id, is_live) in [(json!(live_id), true), (headless_id.clone(), false)] {
+        let edit = json!({"command":zones::SET_ZONE,"inspect":false,"params":{"zone":backend_id,"options":options,"expected_revision":revision}});
+        if is_live {
+            call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap();
+        } else {
+            headless.call("engine.execute", edit).unwrap();
+        }
+    }
+    assert_eq!(editor.session.project().unwrap().boards().next().unwrap().zones()[0].options.priority, 9);
+    for (id, is_live) in [(json!(live_id), true), (headless_id, false)] {
+        let delete = json!({"command":zones::DELETE_ZONES,"inspect":false,"params":{"zones":[id],"expected_revision":revision+1}});
+        if is_live {
+            call_editor(&mut editor, &json!({"method":"engine.execute","params":delete})).unwrap();
+        } else {
+            headless.call("engine.execute", delete).unwrap();
+        }
+    }
+    assert!(editor.session.project().unwrap().boards().next().unwrap().zones().is_empty());
+}

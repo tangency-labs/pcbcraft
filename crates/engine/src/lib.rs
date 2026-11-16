@@ -141,6 +141,9 @@ enum ParamKind {
     Selection,
     BoardSetup,
     SilkscreenSettings,
+    ZoneOptions,
+    ZonePoints,
+    ZoneIds,
     DrawingPoints,
     DrawingId,
     TrackPath,
@@ -238,6 +241,15 @@ impl ParamKind {
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
                 json!({"type":"string","enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"]})
+            }
+            Self::ZoneOptions => board::zones::options_schema(),
+            Self::ZonePoints => {
+                let mut schema = board::drawing::geometry_schema();
+                schema["minItems"] = json!(3);
+                schema
+            }
+            Self::ZoneIds => {
+                json!({"type":"array","minItems":1,"maxItems":board::zones::MAX_ZONES,"uniqueItems":true,"items":Self::DrawingId.schema()})
             }
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
@@ -504,6 +516,24 @@ impl ParamKind {
             Self::ViaDrill if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM..board::track::MAX_VIA_DIAMETER_NM).contains(&n)) => {
                 Ok(())
             }
+            Self::ZonePoints => {
+                serde_json::from_value::<Vec<schematic::Point>>(value.clone()).map_err(|_| "must contain bounded zone vertices").and_then(|points| {
+                    board::zones::validate_outline(&points).map_err(|_| "must contain 3–256 distinct vertices forming a simple bounded polygon")
+                })
+            }
+            Self::ZoneIds => value
+                .as_array()
+                .filter(|ids| {
+                    !ids.is_empty()
+                        && ids.len() <= board::zones::MAX_ZONES
+                        && ids.iter().all(|id| Self::DrawingId.validate(id).is_ok())
+                        && ids.iter().filter_map(Value::as_str).collect::<std::collections::BTreeSet<_>>().len() == ids.len()
+                })
+                .map(|_| ())
+                .ok_or("must contain 1–256 unique non-nil zone UUIDs"),
+            Self::ZoneOptions => serde_json::from_value::<board::zones::Options>(value.clone())
+                .map_err(|_| "must contain complete zone options")
+                .and_then(|options| options.validate().map_err(|_| "zone option values are out of range")),
             Self::ClassRules => serde_json::from_value::<net_classes::Rules>(value.clone())
                 .map_err(|_| "must contain supported integer-nanometre class rules")
                 .and_then(|rules| net_classes::validate_rules(&rules).map_err(|_| "class dimensions are invalid or contradictory")),
@@ -1759,6 +1789,45 @@ const CATALOG: &[Command] = &[
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
+        id: board::zones::ADD_ZONE,
+        title: "Add Zone",
+        summary: "Add an authored copper-zone outline without fill; derived net promotion shares one undo step.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "layer", required: true, summary: "Copper layer UUID", kind: ParamKind::DrawingId },
+            Param { name: "points", required: true, summary: "3–256 simple polygon vertices; closure is implicit", kind: ParamKind::ZonePoints },
+            Param { name: "net", required: false, summary: "Registered net UUID; choose net or target", kind: ParamKind::DrawingId },
+            Param { name: "target", required: false, summary: "Scoped persistent net or current derived anchor", kind: ParamKind::ClassTarget },
+            Param { name: "options", required: false, summary: "Complete zone settings; omitted uses defaults", kind: ParamKind::ZoneOptions },
+        ],
+    },
+    Command {
+        id: board::zones::SET_ZONE,
+        title: "Edit Zone",
+        summary: "Edit one zone's authored outline, layer, net or complete settings. No fill is created.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "zone", required: true, summary: "Zone UUID from inspection", kind: ParamKind::DrawingId },
+            Param { name: "layer", required: false, summary: "Copper layer UUID", kind: ParamKind::DrawingId },
+            Param { name: "points", required: false, summary: "Replacement simple polygon vertices", kind: ParamKind::ZonePoints },
+            Param { name: "net", required: false, summary: "Registered net UUID", kind: ParamKind::DrawingId },
+            Param { name: "target", required: false, summary: "Scoped persistent net or current derived anchor", kind: ParamKind::ClassTarget },
+            Param { name: "options", required: false, summary: "Replace all zone settings; omitted retains settings", kind: ParamKind::ZoneOptions },
+        ],
+    },
+    Command {
+        id: board::zones::DELETE_ZONES,
+        title: "Delete Zones",
+        summary: "Remove distinct existing zone outlines in one undo step.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "zones", required: true, summary: "Nonempty list of existing zone UUIDs", kind: ParamKind::ZoneIds },
+        ],
+    },
+    Command {
         id: ADD_DRAWING,
         title: "Draw Board Graphic",
         summary: "Add a physical-width graphic on a non-copper layer. Copper linework uses pcb.add_tracks. Legacy Board Outline hairlines remain supported.",
@@ -2677,6 +2746,9 @@ impl Session {
             | SET_RULES
             | SET_PLACEMENT_ORIGIN
             | SET_SILKSCREEN
+            | board::zones::ADD_ZONE
+            | board::zones::SET_ZONE
+            | board::zones::DELETE_ZONES
             | ADD_DRAWING
             | SET_DRAWING
             | DELETE_DRAWING
@@ -2747,7 +2819,7 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2913,6 +2985,9 @@ impl Session {
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
                 | SET_SILKSCREEN
+                | board::zones::ADD_ZONE
+                | board::zones::SET_ZONE
+                | board::zones::DELETE_ZONES
                 | ADD_DRAWING
                 | SET_DRAWING
                 | DELETE_DRAWING
@@ -3168,6 +3243,7 @@ impl Session {
             SET_RULES => self.set_rules(params)?,
             SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
+            board::zones::ADD_ZONE | board::zones::SET_ZONE | board::zones::DELETE_ZONES => self.edit_zone(id, params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
@@ -3660,6 +3736,7 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
+        board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
         let project = self.retain_allocation_watermark(Arc::new(project));
         self.update_plan = None;
         self.undo.push(self.project.replace(project));

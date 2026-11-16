@@ -45,6 +45,7 @@ enum Kind {
     TrackSegment,
     Arc,
     Via,
+    Zone,
     Pour,
     Keepout,
     BoardDrawing,
@@ -59,7 +60,7 @@ enum Kind {
 }
 
 impl Kind {
-    const ALL: [Kind; 26] = [
+    const ALL: [Kind; 27] = [
         Kind::Component,
         Kind::SymbolUnit,
         Kind::Wire,
@@ -75,6 +76,7 @@ impl Kind {
         Kind::TrackSegment,
         Kind::Arc,
         Kind::Via,
+        Kind::Zone,
         Kind::Pour,
         Kind::Keepout,
         Kind::BoardDrawing,
@@ -108,6 +110,7 @@ impl Kind {
             Kind::FootprintInstance => Records(&["board.json:footprints[]"]),
             Kind::TrackSegment => Records(&["board.json:tracks[]"]),
             Kind::Via => Records(&["board.json:vias[]"]),
+            Kind::Zone => Records(&["board.json:zones[]"]),
             Kind::BoardDrawing => Records(&["board.json:graphics.items[]"]),
             Kind::Rule => Records(&["board.json:rules"]),
             Kind::Layer => Records(&["board.json:setup.layers[]"]),
@@ -199,6 +202,9 @@ const RECORDS: &[(&str, &[Form], &str)] = &[
     ("board.json:tracks[].end", &[Form::Owned], "track end point"),
     ("board.json:vias[]", &[Form::Uuid], "via"),
     ("board.json:vias[].at", &[Form::Owned], "via position"),
+    ("board.json:zones[]", &[Form::Uuid], "zone outline"),
+    ("board.json:zones[].points[]", &[Form::Owned], "zone outline vertex"),
+    ("board.json:zones[].options", &[Form::Owned], "zone fill intent"),
     ("board.json:footprints[]", &[Form::Counter], "footprint instance"),
     ("board.json:footprints[].mapping", &[Form::Owned], "footprint pad mapping"),
     ("board.json:footprints[].mapping.{id}", &[Form::Value], "footprint pad mapping entry"),
@@ -242,7 +248,7 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
     }
 }
 
-/// A routed board plus a track, via, drawing, rule set, net class and binding, power port, bent
+/// A routed board plus a track, via, zone, drawing, rule set, net class and binding, power port, bent
 /// wire, no-connect, net label, child sheet with a port, parameters and a page setting, built only
 /// through shared commands.
 fn fixture() -> Session {
@@ -281,6 +287,13 @@ fn fixture() -> Session {
         terminal: "1".into(),
     };
     apply(&mut s, nets::SET_CLASSES, json!({"target":ClassTarget::Derived{anchor},"classes":[class]}));
+
+    let net = s.project().unwrap().net_registry.records.iter().find(|r| matches!(r.state, nets::State::Active {})).unwrap().id;
+    apply(
+        &mut s,
+        board::zones::ADD_ZONE,
+        json!({"board":board_id,"net":net,"layer":copper[0],"points":[point(0,70_000_000),point(10_000_000,70_000_000),point(0,80_000_000)]}),
+    );
 
     let gnd = s.libraries.symbol("power", "gnd", 1).unwrap();
     let digest = library::sources::symbol_digest(&gnd).unwrap();

@@ -17,6 +17,7 @@ mod board_ratsnest;
 mod board_tracks;
 mod board_update;
 mod board_views;
+mod board_zones;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;
 mod display_units;

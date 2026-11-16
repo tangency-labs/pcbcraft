@@ -26,6 +26,7 @@ mod board_setup;
 mod board_tracks;
 mod board_update;
 mod board_workspace;
+mod board_zones;
 mod canvas_camera;
 mod clipboard;
 mod definition_graphics;
@@ -204,6 +205,7 @@ enum Dialog {
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
     LayerColor(board_appearance::Edit),
+    Zone(Box<board_zones::Edit>),
     /// Custom tool dimensions and optional reusable presets, independent of board setup.
     RoutingSize(board_presets::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
@@ -1944,6 +1946,7 @@ impl PcbApp {
                 && (!board_clipboard::busy(&self.views.active.board)
                     || (!self.views.active.board.measure.escape()
                         && !self.views.active.board.tracks.escape()
+                        && !self.views.active.board.zones.escape()
                         && !self.views.active.board.drawing.escape()
                         && self.views.active.board.draft.take().is_none()
                         && self.views.active.board.reference_drag.take().is_none()
@@ -1954,9 +1957,15 @@ impl PcbApp {
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
                 if !board_clipboard::busy(&self.views.active.board) {
-                    self.delete_board_items();
+                    if self.views.active.board.zones.selected.is_some() {
+                        self.views.active.board.zones.delete_requested = true;
+                    } else {
+                        self.delete_board_items();
+                    }
                 } else if !self.views.active.board.tracks.selected.is_empty() {
                     self.views.active.board.tracks.delete_requested = true;
+                } else if self.views.active.board.zones.selected.is_some() {
+                    self.views.active.board.zones.delete_requested = true;
                 } else if self.views.active.board.drawing.selected.is_some() {
                     self.views.active.board.drawing.delete_requested = true;
                 }
@@ -1981,6 +1990,10 @@ impl PcbApp {
                 tracks.backspace_requested = ctx.input_mut(|i| i.consume_key(route_keys, Key::Backspace));
                 tracks.posture_requested = ctx.input_mut(|i| i.consume_key(route_keys, Key::Slash));
                 tracks.via_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::V));
+            }
+            if self.views.active.board.zones.tool == Some(board_drawing::Tool::Lines) {
+                self.views.active.board.zones.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.board.zones.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
             }
             if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
                 self.views.active.board.drawing.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2158,6 +2171,7 @@ impl PcbApp {
             Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),
             #[cfg(not(target_arch = "wasm32"))]
             Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
+            Dialog::Zone(edit) => self.zone_dialog(ctx, *edit),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
