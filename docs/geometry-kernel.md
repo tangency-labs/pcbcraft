@@ -115,12 +115,14 @@ At SolidCraft revision `73bdb6c`:
 | Dependency closure of `pcbcraft-engine` | no `solidcore` crate |
 | Round trip of a synthetic block written by the kernel as AP242 and read back | bounding box within 1 µm, name kept |
 | Two bodies in one part | both read back by name, in the order written |
+| A surface model listing its closed shells out of entity order, beside an open shell | the shells read back in ascending entity-number order |
 | Body names with an apostrophe, a backslash, non-ASCII characters and leading or trailing spaces | read back unchanged |
 | An empty body name; part names `board.STEP`, `board.stp.STEP`, `board.step.stp`, `.step`, blank | the body reads back with its part's name; the part name loses its trailing `.step` suffixes and then its trailing `.stp` suffixes (any case), so `board.step.stp` becomes `board.step`; a part name left empty or blank is written as `Part` |
 | 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
 | Writing the same bodies twice | identical bytes |
 | The crate on `wasm32-wasip1` (no kernel) | making, reading and the crash test give `kernel_unavailable`; refused arguments keep `invalid_params` and `model_unreadable` |
 | Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
+| A kernel failure while making a body's STEP record (injected: no valid body fails there) | a caught kernel panic stays `kernel_internal`; a record the kernel refuses is `operation_failed` |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
 | A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
 | Non-positive sizes, coordinates out of range, names with control characters, nothing to write | `invalid_params` |
