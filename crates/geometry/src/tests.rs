@@ -98,10 +98,16 @@ fn a_kernel_panic_is_reported_as_kernel_internal() {
 /// Bytes that are not UTF-8, text that is not STEP and an empty input are `model_unreadable`.
 #[test]
 fn unreadable_bytes_are_model_unreadable() {
-    let inputs: [&[u8]; 3] = [b"\xff\xfe\x00", b"not a STEP file", b""];
-    for bytes in inputs {
+    // Each input fails one check only, and the message names that check.
+    let inputs: [(&[u8], &str); 3] = [
+        (b"\xff\xfe\x00", "STEP text is not UTF-8"),
+        (b"not a STEP file", "not a STEP file (no ISO-10303-21 header)"),
+        (b"", "STEP syntax error at line 1: expected a keyword"),
+    ];
+    for (bytes, reason) in inputs {
         let error = read_step(bytes).unwrap_err();
         assert_eq!(error.code(), ErrorCode::ModelUnreadable, "{bytes:?}: {error}");
+        assert!(error.message().contains(reason), "{bytes:?}: {error}");
     }
 }
 
@@ -129,12 +135,27 @@ fn an_unsupported_surface_refuses_only_its_solid() {
 /// Non-positive sizes, out-of-range corners and an empty write are `invalid_params`.
 #[test]
 fn bad_arguments_are_refused_before_the_kernel() {
-    for size in [[0, 1, 1], [1, -1, 1]] {
-        assert_eq!(Body::cuboid("x", [0; 3], size).unwrap_err().code(), ErrorCode::InvalidParams);
-    }
-    assert_eq!(Body::cuboid("x", [MAX_LENGTH_NM, 0, 0], [1, 1, 1]).unwrap_err().code(), ErrorCode::InvalidParams);
-    assert_eq!(Body::cuboid("x", [i64::MAX, 0, 0], [1, 1, 1]).unwrap_err().code(), ErrorCode::InvalidParams);
-    assert_eq!(write_step("fixture", &[]).unwrap_err().code(), ErrorCode::InvalidParams);
+    // Each call differs from an accepted one in one argument only, so only that argument's check
+    // can refuse it, and the message names which check did.
+    let mm = NM_PER_MM;
+    let refused_for = |result: Result<Body>, reason: &str| {
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+        assert!(error.message().contains(reason), "{error}");
+    };
+    assert!(Body::cuboid("x", [0; 3], [mm; 3]).is_ok());
+    refused_for(Body::cuboid("x", [0; 3], [0, mm, mm]), "every cuboid size must be positive");
+    refused_for(Body::cuboid("x", [0; 3], [mm, -mm, mm]), "every cuboid size must be positive");
+    // The least corner is in range; only the far corner, one nanometre past the end, is not.
+    assert!(Body::cuboid("x", [MAX_LENGTH_NM - mm, 0, 0], [mm; 3]).is_ok());
+    refused_for(Body::cuboid("x", [MAX_LENGTH_NM - mm + 1, 0, 0], [mm; 3]), "a coordinate lies outside the supported range");
+    refused_for(Body::cuboid("x", [i64::MAX, 0, 0], [mm; 3]), "cuboid corner overflows");
+
+    let (body, _) = block();
+    assert!(write_step("fixture", &[body]).is_ok());
+    let error = write_step("fixture", &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
+    assert!(error.message().contains("there are no bodies to write"), "{error}");
 }
 
 /// Millimetres convert to nanometres with one rounding, and non-finite or huge values are refused.
@@ -142,8 +163,11 @@ fn bad_arguments_are_refused_before_the_kernel() {
 fn millimetre_conversion_rounds_once_to_the_nanometre() {
     assert_eq!(point_nm(point_mm([1, -2_540_001, MAX_LENGTH_NM]).unwrap()).unwrap(), [1, -2_540_001, MAX_LENGTH_NM]);
     assert_eq!(point_nm([0.000_000_4, -0.000_000_6, 1.5]).unwrap(), [0, -1, 1_500_000]);
-    assert_eq!(point_nm([f64::NAN, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
-    assert_eq!(point_nm([2e6, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
+    for mm in [[f64::NAN, 0.0, 0.0], [2e6, 0.0, 0.0]] {
+        let error = point_nm(mm).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::OperationFailed, "{error}");
+        assert!(error.message().contains("the kernel gave a coordinate outside the supported range"), "{error}");
+    }
 }
 
 /// Blocks touching either end of the coordinate range are exact, and one nanometre past is refused.
@@ -157,14 +181,21 @@ fn both_ends_of_the_coordinate_range_are_accepted_and_one_past_is_refused() {
     assert_eq!(top.bounding_box().unwrap().max_nm[0], MAX_LENGTH_NM);
     assert_eq!(bottom.bounding_box().unwrap().min_nm[0], -MAX_LENGTH_NM);
 
-    assert_eq!(Body::cuboid("x", [MAX_LENGTH_NM, 0, 0], [1, 1, 1]).unwrap_err().code(), ErrorCode::InvalidParams);
-    assert_eq!(Body::cuboid("x", [-MAX_LENGTH_NM - 1, 0, 0], [1, 1, 1]).unwrap_err().code(), ErrorCode::InvalidParams);
+    let range = "a coordinate lies outside the supported range";
+    for (origin, size) in [([MAX_LENGTH_NM, 0, 0], [1, 1, 1]), ([-MAX_LENGTH_NM - 1, 0, 0], [1, 1, 1])] {
+        let error = Body::cuboid("x", origin, size).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+        assert!(error.message().contains(range), "{error}");
+    }
 
     let limit_mm = MAX_LENGTH_NM as f64 / NM_PER_MM as f64;
     let one_nm_mm = 1.0 / NM_PER_MM as f64;
     assert_eq!(point_nm([limit_mm, -limit_mm, 0.0]).unwrap(), [MAX_LENGTH_NM, -MAX_LENGTH_NM, 0]);
-    assert_eq!(point_nm([limit_mm + one_nm_mm, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
-    assert_eq!(point_nm([0.0, -limit_mm - one_nm_mm, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
+    for mm in [[limit_mm + one_nm_mm, 0.0, 0.0], [0.0, -limit_mm - one_nm_mm, 0.0]] {
+        let error = point_nm(mm).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::OperationFailed, "{error}");
+        assert!(error.message().contains("the kernel gave a coordinate outside the supported range"), "{error}");
+    }
 }
 
 /// The body names read back from one block named `body_name` in a part named `part_name`.
@@ -201,10 +232,17 @@ fn names_read_back_unchanged() {
 /// Names with ASCII control characters, which STEP strings cannot carry, are `invalid_params`.
 #[test]
 fn names_with_control_characters_are_refused() {
+    // The other arguments are valid, so only the name can be refused, and the message says so.
+    let mm = NM_PER_MM;
+    assert!(Body::cuboid("clean", [0; 3], [mm; 3]).is_ok());
     for name in ["tab\there", "line\nbreak", "nul\0", "delete\u{7f}"] {
-        assert_eq!(Body::cuboid(name, [0; 3], [1; 3]).unwrap_err().code(), ErrorCode::InvalidParams, "{name:?}");
+        let error = Body::cuboid(name, [0; 3], [mm; 3]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{name:?}");
+        assert!(error.message().contains("the body name has a control character"), "{name:?}: {error}");
         let (body, _) = block();
-        assert_eq!(write_step(name, &[body]).unwrap_err().code(), ErrorCode::InvalidParams, "{name:?}");
+        let error = write_step(name, &[body]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{name:?}");
+        assert!(error.message().contains("the part name has a control character"), "{name:?}: {error}");
     }
 }
 
