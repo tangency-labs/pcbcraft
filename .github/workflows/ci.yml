@@ -80,17 +80,31 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - name: Install Python schema dependency
         run: python -m pip install "jsonschema==4.23.0"
+      - name: Lint Rust workspace
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Run Rust workspace tests
+        if: ${{ !cancelled() }}
         run: cargo test --locked --workspace
+      - name: Lint opt-in performance harness
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
+      - name: Run opt-in performance harness tests
+        if: ${{ !cancelled() }}
+        run: 'cargo test --locked -p pcbcraft-app --features performance-harness performance::'
       - name: Run Python script tests
         if: ${{ !cancelled() }}
         run: python -B -m unittest discover -s scripts -p "test_*.py"
+      - name: Test performance diagnostic pages
+        if: ${{ !cancelled() }}
+        run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
 
   web:
     runs-on: ubuntu-latest
