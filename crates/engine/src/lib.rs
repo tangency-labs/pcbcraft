@@ -9,8 +9,10 @@
 mod allocation_tests;
 pub mod authoring;
 pub mod board;
+mod class_catalog;
 pub mod clipboard;
 pub mod clipboard_text;
+pub mod component_classes;
 pub mod hierarchy;
 pub mod instances;
 pub mod library;
@@ -2145,6 +2147,61 @@ const CATALOG: &[Command] = &[
             summary: "Optional scoped target; omit to list current identities and eligible derived anchors",
         }],
     },
+    Command {
+        id: component_classes::CREATE,
+        title: "Create Component Class",
+        summary: "Create a project-wide component class without assigning components or allocating a board.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name; identity is an independent UUID" },
+        ],
+    },
+    Command {
+        id: component_classes::UPDATE,
+        title: "Update Component Class",
+        summary: "Rename a component class, preserving its UUID and membership and incrementing its definition revision only on change.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable component-class UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable class name" },
+        ],
+    },
+    Command {
+        id: component_classes::REMOVE,
+        title: "Remove Component Class",
+        summary: "Remove a component class that no component belongs to; a class with members is refused and its members are listed.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "class", kind: ParamKind::ClassId, required: true, summary: "Stable component-class UUID from inspection" },
+        ],
+    },
+    Command {
+        id: component_classes::INSPECT,
+        title: "Inspect Component Classes",
+        summary: "Read the component-class catalog without reading membership or changing history.",
+        params: &[],
+    },
+    Command {
+        id: component_classes::SET_CLASSES,
+        title: "Set Component Classes",
+        summary: "Replace a component's complete class set in one undoable step. An empty set removes its memberships.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "component", kind: ParamKind::Text, required: true, summary: "Stable component ID from project inspection" },
+            Param { name: "classes", kind: ParamKind::ClassSet, required: true, summary: "Complete set of component-class UUIDs" },
+        ],
+    },
+    Command {
+        id: component_classes::INSPECT_CLASSES,
+        title: "Inspect Component Memberships",
+        summary: "Read one component's classes, or every classified component, without changing history.",
+        params: &[Param {
+            name: "component",
+            kind: ParamKind::Text,
+            required: false,
+            summary: "Optional component ID; omit to list every component that belongs to a class",
+        }],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -2222,6 +2279,10 @@ pub struct Project {
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
     parameters: Arc<parameters::Parameters>,
+    /// Authored component class definitions, independent of membership.
+    component_classes: Arc<component_classes::Catalog>,
+    /// Explicit component memberships, sorted by component and class; stored with the instances.
+    component_class_bindings: Arc<Vec<component_classes::Binding>>,
 }
 
 impl Project {
@@ -2614,6 +2675,12 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | component_classes::CREATE
+            | component_classes::UPDATE
+            | component_classes::REMOVE
+            | component_classes::INSPECT
+            | component_classes::SET_CLASSES
+            | component_classes::INSPECT_CLASSES
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2718,6 +2785,7 @@ impl Session {
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
+            if !p.component_classes.definitions.is_empty() { inspected["component_classes"] = json!(p.component_classes()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -2805,6 +2873,10 @@ impl Session {
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
+        }
+        if matches!(id, component_classes::INSPECT | component_classes::INSPECT_CLASSES) {
+            self.validate_project_command(id, params)?;
+            return self.component_class_query(id, params);
         }
         if matches!(id, parameters::LIST | parameters::RESOLVE) {
             self.validate_project_command(id, params)?;
@@ -2910,6 +2982,12 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | component_classes::CREATE
+                | component_classes::UPDATE
+                | component_classes::REMOVE
+                | component_classes::INSPECT
+                | component_classes::SET_CLASSES
+                | component_classes::INSPECT_CLASSES
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -2986,6 +3064,8 @@ impl Session {
                 net_registry: Arc::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
+                component_classes: Arc::default(),
+                component_class_bindings: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3007,6 +3087,11 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            component_classes::CREATE | component_classes::UPDATE | component_classes::REMOVE => self.edit_component_class(id, params)?,
+            component_classes::SET_CLASSES => self.set_component_classes(params)?,
+            component_classes::INSPECT | component_classes::INSPECT_CLASSES => {
+                self.component_class_query(id, params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
@@ -3545,6 +3630,7 @@ impl Session {
     /// Net allocation and reconciliation validate before any session/history state is changed.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
+        project.prune_component_class_bindings();
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }

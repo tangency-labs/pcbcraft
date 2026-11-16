@@ -13,6 +13,15 @@ canvas. The choice is remembered with your settings and available
 through `app.set_preferences`; each view keeps its saved dock side and floating
 positions, and project data and history are unchanged.
 
+Components can be grouped into named component classes shared by the schematic
+and the board. `component_classes.create`, `update`, `remove` and `inspect`
+manage the catalog, and `components.set_classes` and
+`components.inspect_classes` set and read a component's classes by its stable
+component ID, so annotation does not change membership. A class that still has
+members cannot be removed. Projects with component classes save as
+`pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
+exist); other projects keep their format and bytes.
+
 Nets share readable names across schematic browsing, Rules and PCB inspection.
 Unnamed signals use net-owned numbers such as `Net-0001`, which survive component
 reference edits and deletion on a surviving net. Split/merge reconciliation and

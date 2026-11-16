@@ -49,11 +49,13 @@ const CLASS_PROJECT_FORMAT: &str = "pcbcraft-project/20";
 const BINDING_PROJECT_FORMAT: &str = "pcbcraft-project/21";
 const PARAMETER_PROJECT_FORMAT: &str = "pcbcraft-project/22";
 const GENERATED_NET_PROJECT_FORMAT: &str = "pcbcraft-project/23";
+const COMPONENT_CLASS_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
 const BINDING_INSTANCES_FORMAT: &str = "pcbcraft-instances/3";
 const GENERATED_NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/4";
+const COMPONENT_CLASS_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -111,6 +113,8 @@ struct ProjectDocument {
     #[serde(default, deserialize_with = "present")]
     net_classes: Option<crate::net_classes::Catalog>,
     #[serde(default, deserialize_with = "present")]
+    component_classes: Option<crate::component_classes::Catalog>,
+    #[serde(default, deserialize_with = "present")]
     footprint_choices: Option<Vec<crate::board::assignment::Assignment>>,
     #[serde(default, deserialize_with = "present")]
     boards: Option<Vec<BoardReference>>,
@@ -135,6 +139,8 @@ struct InstancesDocument {
     sheet_occurrences: Vec<crate::instances::SheetOccurrence>,
     #[serde(default, deserialize_with = "present")]
     net_registry: Option<crate::nets::Registry>,
+    #[serde(default, deserialize_with = "crate::component_classes::stored_bindings")]
+    component_class_bindings: Option<Vec<crate::component_classes::Binding>>,
 }
 
 /// Storage-version-specific board registrations never become independent physical identities.
@@ -166,9 +172,10 @@ impl ProjectDocument {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | COMPONENT_CLASS_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22 or 23"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -247,6 +254,7 @@ pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | COMPONENT_CLASS_PROJECT_FORMAT
     ) {
         return Ok(None);
     }
@@ -367,28 +375,49 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | COMPONENT_CLASS_PROJECT_FORMAT
     );
     let net_format = project.format == NET_PROJECT_FORMAT;
     let binding_format = project.format == BINDING_PROJECT_FORMAT;
     let generated_net_format = project.format == GENERATED_NET_PROJECT_FORMAT;
+    // Project/24 is a superset of project/23: it requires a nonempty component-class catalog,
+    // and every record project/23 accepts is optional, including generated net numbers.
+    let component_format = project.format == COMPONENT_CLASS_PROJECT_FORMAT;
+    let superset_format = generated_net_format || component_format;
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
     let no_connect_format = matches!(
         project.format.as_str(),
-        NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT | PARAMETER_PROJECT_FORMAT | GENERATED_NET_PROJECT_FORMAT
+        NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
+            | GENERATED_NET_PROJECT_FORMAT
+            | COMPONENT_CLASS_PROJECT_FORMAT
     );
-    if !parameter_format && !generated_net_format && class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20, 21, 22 or 23, which requires a nonempty catalog.".into());
+    if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
+        return Err("Net-class catalog requires project format 20, 21, 22, 23 or 24, which requires a nonempty catalog.".into());
     }
-    if (!generated_net_format && parameter_format != project.parameters.is_some())
-        || (generated_net_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
+    if (!superset_format && parameter_format != project.parameters.is_some())
+        || (superset_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
     {
-        return Err("Project parameters require project format 22 or 23, with a nonempty list.".into());
+        return Err("Project parameters require project format 22, 23 or 24, with a nonempty list.".into());
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
         return Err("Empty project parameter lists must be omitted.".into());
     }
     crate::parameters::check(&project_parameters, crate::parameters::Scope::Project).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    if component_format != project.component_classes.is_some() {
+        return Err("Component-class catalog requires project format 24, which requires a nonempty catalog.".into());
+    }
+    let mut component_classes = project.component_classes.take();
+    if let Some(catalog) = &mut component_classes {
+        catalog.validate()?;
+        if catalog.definitions.is_empty() {
+            return Err("Empty component-class catalogs must be omitted.".into());
+        }
+        catalog.definitions.sort_by_key(|class| class.id);
+    }
     let mut net_classes = project.net_classes.take();
     if let Some(catalog) = &mut net_classes {
         catalog.validate()?;
@@ -410,6 +439,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | COMPONENT_CLASS_PROJECT_FORMAT
     );
     let foldered = project.layout_root.is_some();
     if !part_format
@@ -418,7 +448,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22 or 23.".into());
+        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23 or 24.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -451,24 +481,27 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | COMPONENT_CLASS_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22 or 23".into());
+        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23 or 24".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23, no board and a nonempty bounded list".into());
+        return Err(
+            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24, no board and a nonempty bounded list".into()
+        );
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22 or 23.".into());
+        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23 or 24.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24".into());
     }
     if matches!(
         project.format.as_str(),
@@ -486,9 +519,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | COMPONENT_CLASS_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23"));
+        return Err(format!(
+            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24"
+        ));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -504,9 +540,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let optional_bindings = (parameter_format || generated_net_format)
-                    && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
-                let expected = if generated_net_format {
+                let optional_bindings =
+                    (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
+                let numbered = component_format && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
+                let expected = if component_format && instance.component_class_bindings.is_some() {
+                    COMPONENT_CLASS_INSTANCES_FORMAT
+                } else if generated_net_format || numbered {
                     GENERATED_NET_INSTANCES_FORMAT
                 } else if binding_format || optional_bindings {
                     BINDING_INSTANCES_FORMAT
@@ -523,7 +562,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     circuit_uses: instance.circuit_uses,
                     sheet_occurrences: instance.sheet_occurrences,
                     net_registry: instance.net_registry,
+                    component_class_bindings: instance.component_class_bindings,
                 })
+            }
+            (None, Some(records)) if !component_format && records.component_class_bindings.is_some() => {
+                return Err("Component class bindings require project format 24.".into());
             }
             (None, Some(records)) => Some(records),
             _ => return Err("Instance records require exactly one schematic or registered-board storage home.".into()),
@@ -533,19 +576,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
     let has_bindings =
         instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings);
-    if (!parameter_format && !generated_net_format && binding_format != has_bindings)
-        || ((parameter_format || generated_net_format) && has_bindings && net_classes.is_none())
+    if (!parameter_format && !superset_format && binding_format != has_bindings)
+        || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
     {
         return Err("Net class assignments require project format 21 and instances format 3 when board-owned; the new envelope requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if generated_net_format != stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers)
-        || (generated_net_format && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
+    if (!component_format && generated_net_format != stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers))
+        || (superset_format
+            && stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers)
+            && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
         return Err("Generated net numbers require project format 23 and instances format 4 when board-owned, with a number on every record.".into());
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err("Net registry records require project format 17, 19, 20, 21, 22 or 23 and the corresponding instance vocabulary.".into());
+        return Err("Net registry records require project format 17, 19, 20, 21, 22, 23 or 24 and the corresponding instance vocabulary.".into());
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -674,6 +719,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
+        component_classes: Arc::default(),
+        component_class_bindings: Arc::default(),
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -1055,7 +1102,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             selections.insert(component.id, reader.selection(record, symbol, documents, &mut used)?);
         }
     }
-    if (!class_format && !parameter_format && !generated_net_format && no_connect_format != (marker_count != 0))
+    if (!class_format && !parameter_format && !superset_format && no_connect_format != (marker_count != 0))
         || marker_count > crate::no_connect::MAX_MARKERS
     {
         return Err("Project format 19 requires nonempty bounded no-connect intent.".into());
@@ -1171,6 +1218,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(catalog) = net_classes {
         project_data.net_classes = Arc::new(catalog);
     }
+    if let Some(catalog) = component_classes {
+        project_data.component_classes = Arc::new(catalog);
+    }
     project_data.parameters = Arc::new(project_parameters);
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
@@ -1245,6 +1295,14 @@ pub fn encode_documents(project: Arc<Project>) -> Result<Documents, String> {
             return Ok(documents);
         }
     }
+}
+
+/// The last list written into an instance home, which decides its closing bytes.
+#[derive(Clone, Copy)]
+enum InstanceTail {
+    Occurrences,
+    Registry,
+    Bindings,
 }
 
 /// Incremental split-document writer. Each step bounds work by editable records so browser
@@ -1356,10 +1414,26 @@ impl DocumentsEncoder {
                     if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Project parameters require adopted storage/occurrence metadata.".into());
                     }
-                    let format = if p.net_registry.has_generated_numbers() {
-                        if p.net_registry.records.iter().any(|record| record.generated_number.is_none()) {
-                            return Err("Numbered net registries require a number on every record.".into());
+                    p.component_classes.validate()?;
+                    let has_component_classes = !p.component_classes.definitions.is_empty();
+                    if has_component_classes && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
+                        return Err("Component classes require adopted storage/occurrence metadata.".into());
+                    }
+                    if !p.component_class_bindings.is_empty() {
+                        if !has_component_classes {
+                            return Err("Component class assignments require their class catalog.".into());
                         }
+                        p.validate_component_class_bindings(&p.component_class_bindings)?;
+                    }
+                    if p.net_registry.has_generated_numbers() && p.net_registry.records.iter().any(|record| record.generated_number.is_none()) {
+                        return Err("Numbered net registries require a number on every record.".into());
+                    }
+                    let format = if has_component_classes {
+                        if p.net_registry.has_generated_numbers() || has_bindings {
+                            p.net_registry.validate(p)?;
+                        }
+                        COMPONENT_CLASS_PROJECT_FORMAT
+                    } else if p.net_registry.has_generated_numbers() {
                         p.net_registry.validate(p)?;
                         GENERATED_NET_PROJECT_FORMAT
                     } else if has_parameters {
@@ -1417,6 +1491,20 @@ impl DocumentsEncoder {
                         self.bytes.extend_from_slice(b"  \"net_classes\": {\n    \"format\": \"pcbcraft-net-classes/1\",\n    \"definitions\": [\n");
                         for (index, class) in p.net_classes.definitions.iter().enumerate() {
                             let comma = if index + 1 == p.net_classes.definitions.len() { "" } else { "," };
+                            writeln!(self.bytes, "      {}{comma}", json(class)?).map_err(|e| e.to_string())?;
+                        }
+                        self.bytes.extend_from_slice(b"    ]\n  },\n");
+                    }
+                    if has_component_classes {
+                        // Same bounded one-definition-per-line layout as the net-class catalog.
+                        writeln!(
+                            self.bytes,
+                            "  \"component_classes\": {{\n    \"format\": \"{}\",\n    \"definitions\": [",
+                            crate::component_classes::FORMAT
+                        )
+                        .map_err(|e| e.to_string())?;
+                        for (index, class) in p.component_classes.definitions.iter().enumerate() {
+                            let comma = if index + 1 == p.component_classes.definitions.len() { "" } else { "," };
                             writeln!(self.bytes, "      {}{comma}", json(class)?).map_err(|e| e.to_string())?;
                         }
                         self.bytes.extend_from_slice(b"    ]\n  },\n");
@@ -1490,8 +1578,10 @@ impl DocumentsEncoder {
                             self.cursor = 0;
                             self.first = true;
                             self.phase = 16;
+                        } else if records.component_class_bindings.is_some() {
+                            self.start_component_class_bindings(b"  ],\n");
                         } else {
-                            self.finish_instance_document(false)?;
+                            self.finish_instance_document(InstanceTail::Occurrences)?;
                         }
                     }
                 }
@@ -1501,8 +1591,23 @@ impl DocumentsEncoder {
                     if let Some(net) = registry.records.get(self.cursor as usize) {
                         record(&mut self.bytes, &mut self.first, net)?;
                         self.cursor += 1;
+                    } else if self.instance_records.as_ref().is_some_and(|records| records.component_class_bindings.is_some()) {
+                        self.start_component_class_bindings(b"    ]\n  },\n");
                     } else {
-                        self.finish_instance_document(true)?;
+                        self.finish_instance_document(InstanceTail::Registry)?;
+                    }
+                }
+                19 => {
+                    let bindings = self
+                        .instance_records
+                        .as_ref()
+                        .and_then(|records| records.component_class_bindings.as_ref())
+                        .ok_or("Missing component-class binding encoding state.")?;
+                    if let Some(binding) = bindings.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, binding)?;
+                        self.cursor += 1;
+                    } else {
+                        self.finish_instance_document(InstanceTail::Bindings)?;
                     }
                 }
                 12 => {
@@ -1706,7 +1811,9 @@ impl DocumentsEncoder {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                let format = if self.project.net_registry.has_generated_numbers() {
+                let format = if !self.project.component_class_bindings.is_empty() {
+                    COMPONENT_CLASS_INSTANCES_FORMAT
+                } else if self.project.net_registry.has_generated_numbers() {
                     GENERATED_NET_INSTANCES_FORMAT
                 } else if self.project.net_registry.has_class_bindings() {
                     BINDING_INSTANCES_FORMAT
@@ -1733,15 +1840,27 @@ impl DocumentsEncoder {
         Ok(())
     }
 
-    /// Close the selected instance home, preserving original bytes when the registry is absent.
-    /// Registry records consume individual incremental batches before sheet encoding resumes.
-    fn finish_instance_document(&mut self, registry: bool) -> Result<(), String> {
+    /// Close the occurrence or registry list and open the membership list, one binding per line.
+    fn start_component_class_bindings(&mut self, close: &[u8]) {
+        self.bytes.extend_from_slice(close);
+        self.bytes.extend_from_slice(b"  \"component_class_bindings\": [\n");
+        self.cursor = 0;
+        self.first = true;
+        self.phase = 19;
+    }
+
+    /// Close the selected instance home after its last list, preserving original bytes when the
+    /// optional registry and memberships are absent. Records consume individual incremental
+    /// batches before sheet encoding resumes.
+    fn finish_instance_document(&mut self, tail: InstanceTail) -> Result<(), String> {
         let path = self.project.instances_document_path();
-        self.bytes.extend_from_slice(match (path.is_some(), registry) {
-            (true, false) => b"  ]\n}\n",
-            (false, false) => b"    ]\n  }\n}\n",
-            (true, true) => b"    ]\n  }\n}\n",
-            (false, true) => b"    ]\n  }\n  }\n}\n",
+        self.bytes.extend_from_slice(match (path.is_some(), tail) {
+            (true, InstanceTail::Occurrences) => b"  ]\n}\n",
+            (false, InstanceTail::Occurrences) => b"    ]\n  }\n}\n",
+            (true, InstanceTail::Registry) => b"    ]\n  }\n}\n",
+            (false, InstanceTail::Registry) => b"    ]\n  }\n  }\n}\n",
+            (true, InstanceTail::Bindings) => b"  ]\n}\n",
+            (false, InstanceTail::Bindings) => b"  ]\n  }\n}\n",
         });
         if self.bytes.len() > MAX_DOCUMENT_BYTES {
             return Err("Encoded instance document exceeds its size limit.".into());

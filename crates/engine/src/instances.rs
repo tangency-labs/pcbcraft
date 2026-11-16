@@ -44,6 +44,9 @@ pub struct Instances {
     /// Sparse persistent identities, absent until the first record is authored.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "registry_value")]
     pub net_registry: Option<crate::nets::Registry>,
+    /// Explicit component-class memberships, absent until the first membership is authored.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::component_classes::stored_bindings")]
+    pub component_class_bindings: Option<Vec<crate::component_classes::Binding>>,
 }
 
 /// A present registry must be an object; explicit null is not an older-format omission.
@@ -95,10 +98,12 @@ impl Project {
 
     /// Inspect single-use identities without changing revision, dirty state or saved bytes.
     /// Parent/slot relationships come from authored hierarchy and never independently retarget it.
-    /// Include an existing sparse net registry without promoting any derived network.
+    /// Include an existing sparse net registry without promoting any derived network, and any
+    /// explicit component-class memberships.
     pub fn sheet_instances(&self) -> Instances {
         let mut records = self.occurrence_instances();
         records.net_registry = (!self.net_registry.records.is_empty()).then(|| (*self.net_registry).clone());
+        records.component_class_bindings = (!self.component_class_bindings.is_empty()).then(|| (*self.component_class_bindings).clone());
         records
     }
 
@@ -124,7 +129,7 @@ impl Project {
             })
             .collect();
         sheet_occurrences.sort_by_key(|record| record.id);
-        Instances { circuit_uses: vec![CircuitUse { id: circuit_use }], sheet_occurrences, net_registry: None }
+        Instances { circuit_uses: vec![CircuitUse { id: circuit_use }], sheet_occurrences, net_registry: None, component_class_bindings: None }
     }
 
     /// Return a sheet's stored ID or its deterministic compatibility ID before first Save.
@@ -191,6 +196,10 @@ impl Project {
             }
             self.net_registry = Arc::new(registry);
             self.net_registry.validate(self)?;
+        }
+        if let Some(bindings) = records.component_class_bindings {
+            self.validate_component_class_bindings(&bindings)?;
+            self.component_class_bindings = Arc::new(bindings);
         }
         Ok(())
     }

@@ -18,6 +18,8 @@ in the entry point; only projects with authored classes select that version.
 Project/22 adds [project parameters](#parameter-records); projects with stored
 project values and no generated net numbers select it. Projects with generated
 net numbers use project/23, which can also store project parameters.
+Project/24 adds the [component-class catalog](component-classes.md); its
+memberships live in the instance home and use instances/5 when board-owned.
 
 Project/23 adds persistent generated net numbers to the same instance registry,
 using instances/4 when board-owned. A stored record's positive `generated_number`
@@ -468,6 +470,21 @@ parameters. Both formats require adopted storage and occurrence metadata;
 setting the first project value adopts them in the same undo step.
 Removing the last project value returns the entry point to the version its other
 content needs. The diagnostic single-file encoding refuses parameters.
+
+### Component-class records
+
+A project/24 entry point requires a nonempty `component_classes` catalog
+(`pcbcraft-component-classes/1`) directly after any `net_classes` record.
+Project/24 is a superset of project/23: generated net numbers, net classes and
+their assignments, project parameters and no-connect intent are optional, each
+with its existing rules, and it requires adopted storage and occurrence metadata.
+Explicit memberships are stored as `component_class_bindings`, after the sheet
+occurrences and any net registry in the instance home: `schematic_instances`
+without a board, or the board's `instances.json`, which selects
+`pcbcraft-instances/5` exactly when memberships exist. Records are
+`{"component":N,"class":UUID}`, sorted by component and class, unique and one per
+line. Empty lists, null, dangling records and these records under older headers
+are rejected; see [component classes](component-classes.md).
 
 ### Named net records
 

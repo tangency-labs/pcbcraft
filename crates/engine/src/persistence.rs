@@ -500,6 +500,9 @@ impl Encoder {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
         }
+        if !project.component_classes.definitions.is_empty() {
+            return Err("Component classes require split documents or a packed archive.".into());
+        }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
         }
@@ -1044,6 +1047,8 @@ fn validate_with_hierarchy(
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
+        component_classes: Arc::default(),
+        component_class_bindings: Arc::default(),
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;

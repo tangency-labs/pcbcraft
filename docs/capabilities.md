@@ -72,6 +72,10 @@ merge conflicts and protected class removal. [Class-aware routing, clearance
 queries and DRC](net-class-consumers.md) consume those bindings with effective
 dimensions and per-object provenance. [Editor controls](net-class-editor.md) use the same commands and scoped identities. Zones,
 repeated instances and system registries remain separate work.
+[Component classes](component-classes.md) group components by stable component
+ID through shared headless/live MCP commands, with a project-wide catalog,
+explicit membership, protected removal, undo and save/reopen; rules that consume
+them are later work.
 
 The boardless PCB workspace explains setup, footprint updates and routing, with
 explicit Create board and Open schematic actions. Create board opens a disposable

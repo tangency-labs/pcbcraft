@@ -201,12 +201,18 @@ pub(crate) fn validate_rules(rules: &Rules) -> Result<(), String> {
     Ok(())
 }
 
-/// Names are presentation only, but blank, untrimmed and control-containing names are invalid.
-pub(crate) fn validate_name(name: &str) -> Result<(), String> {
-    if name.trim() != name || name.is_empty() || name.chars().count() > 200 || name.chars().any(char::is_control) {
-        return Err("Class name must contain 1–200 trimmed characters without control characters.".into());
+pub(crate) use crate::class_catalog::validate_name;
+
+impl crate::class_catalog::Entry for Definition {
+    fn id(&self) -> Uuid {
+        self.id
     }
-    Ok(())
+    fn revision(&self) -> u32 {
+        self.revision
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// Validate a disposable class draft with the same name, sparse range and relationship rules
@@ -219,22 +225,13 @@ pub fn validate_draft(name: &str, rules: &Rules) -> Result<(), String> {
 impl Catalog {
     /// Validate the complete bounded catalog before adoption. Duplicate IDs never overwrite records.
     pub fn validate(&self) -> Result<(), String> {
-        if self.format != "pcbcraft-net-classes/1" || self.definitions.len() > MAX_CLASSES {
-            return Err("Unsupported net-class format or class limit exceeded.".into());
-        }
-        let mut ids = BTreeSet::new();
-        for class in &self.definitions {
-            if class.id.is_nil() || !ids.insert(class.id) || class.revision == 0 {
-                return Err("Class IDs must be unique non-nil UUIDs with positive revisions.".into());
-            }
-            validate_draft(&class.name, &class.rules)?;
-        }
-        Ok(())
+        crate::class_catalog::validate(&self.format, "pcbcraft-net-classes/1", "net-class", &self.definitions)?;
+        self.definitions.iter().try_for_each(|class| validate_rules(&class.rules))
     }
 
     /// Resolve an exact class identity. Names and vector positions are never lookup authority.
     pub fn get(&self, id: Uuid) -> Option<&Definition> {
-        self.definitions.iter().find(|class| class.id == id)
+        crate::class_catalog::get(&self.definitions, id)
     }
 }
 

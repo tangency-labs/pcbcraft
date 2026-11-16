@@ -152,3 +152,5 @@ use this resolver with snapshot validity and explicit conflicts; #303 adds the
 [shared editor workflow](net-class-editor.md). Definitions alone do not assign
 classes to nets: consumers use persistent assignments rather than inferring
 bindings from class names.
+[Component classes](component-classes.md) use the same identity rules for
+components, with their own catalog record and membership commands.
