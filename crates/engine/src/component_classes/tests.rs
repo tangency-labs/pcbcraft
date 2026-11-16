@@ -510,3 +510,24 @@ fn reversed_catalog_definitions_decode_sorted() {
     assert_eq!(reopened.component_classes(), s.project().unwrap().component_classes());
     assert_eq!(encode_documents(reopened).unwrap(), docs);
 }
+
+/// Edits that keep the component map, such as moving a symbol, skip the membership scan and
+/// leave the stored memberships untouched; deleting a component still prunes them.
+#[test]
+fn geometry_edits_leave_memberships_untouched() {
+    let (mut s, components) = parts(2, true);
+    let class = create(&mut s, "Power");
+    for component in &components {
+        apply(&mut s, SET_CLASSES, json!({"component":component,"classes":[class]}));
+    }
+    let before = s.snapshot().unwrap();
+    let symbol = before.symbols()[0].id();
+    let revision = s.revision();
+    apply(&mut s, crate::MOVE_SYMBOL, json!({"symbol":symbol,"x_nm":0,"y_nm":25_400_000}));
+    assert!(s.revision() > revision);
+    let after = s.snapshot().unwrap();
+    assert!(Arc::ptr_eq(&before.components, &after.components));
+    assert!(Arc::ptr_eq(&before.component_class_bindings, &after.component_class_bindings));
+    assert_eq!(memberships(&after), memberships(&before));
+    round_trip(&s);
+}

@@ -581,7 +581,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (!parameter_format && !superset_format && binding_format != has_bindings)
         || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
     {
-        return Err("Net class assignments require project format 21 and instances format 3 when board-owned; the new envelope requires nonempty assignments.".into());
+        return Err("Net class assignments require project format 21 and instances format 3 when board-owned, or a later project format with a net-class catalog; the new envelope requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
     if (!component_format && generated_net_format != stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers))
@@ -589,7 +589,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             && stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers)
             && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
-        return Err("Generated net numbers require project format 23 and instances format 4 when board-owned, with a number on every record.".into());
+        return Err(
+            "Generated net numbers require project format 23 or 24 and instances format 4 or 5 when board-owned, with a number on every record."
+                .into(),
+        );
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
         return Err("Net registry records require project format 17, 19, 20, 21, 22, 23 or 24 and the corresponding instance vocabulary.".into());

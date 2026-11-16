@@ -16,7 +16,8 @@ another feature requires a newer envelope. [Class bindings](net-class-assignment
 select project/21 and board-owned instances/3 in the same registry home when
 numbered names are absent. Net-owned generated numbers select **project/23** and
 board-owned **instances/4** instead, with optional class catalogs, assignments and
-no-connect intent in that envelope. Every stored record then has a positive
+no-connect intent in that envelope. Project/24 and board-owned instances/5 carry the
+same records beside [component classes](component-classes.md). Every stored record then has a positive
 `generated_number`; duplicate numbers, explicit nulls, missing numbers and use
 under older headers are rejected. Active, ambiguous and retired records reserve
 their numbers, which are never inferred from component references.
