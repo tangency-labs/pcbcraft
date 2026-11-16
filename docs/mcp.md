@@ -361,9 +361,9 @@ an outline-attached origin has no outline yet.
 
 Fabrication outputs shift every coordinate to this origin and write Y up, as seen
 from the top; rotations are unchanged. The export result's `fabrication.origin` names
-the `anchor`, its `source` (`builtin` or the board origin's UUID), the resolved `at`
-point in board coordinates, and `axes: "x_right_y_up"`. Without a saved origin the
-outputs are the same bytes as before origins existed.
+the `anchor`, its `source` (`{"kind":"builtin"}` without a saved origin, otherwise
+`{"kind":"board","origin":"<uuid>"}`), the resolved `at` point in board coordinates, and `axes: "x_right_y_up"`. Without a saved origin, outputs
+are measured from board zero.
 
 ## Saved board defaults
 
