@@ -30,6 +30,7 @@ pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
+pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
@@ -148,6 +149,7 @@ enum ParamKind {
     BoardSide,
     RuleLength,
     BoardRules,
+    PlacementOrigin,
     ClassRules,
     ClassSet,
     ClassId,
@@ -244,6 +246,7 @@ impl ParamKind {
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
+            Self::PlacementOrigin => board::origin::schema(),
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
@@ -512,6 +515,8 @@ impl ParamKind {
                 .ok_or("must identify a class by non-nil UUID"),
             Self::BoardRules if value.is_null() || serde_json::from_value::<board::rules::Values>(value.clone()).is_ok() => Ok(()),
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
+            Self::PlacementOrigin if board::origin::parse(value).is_ok() => Ok(()),
+            Self::PlacementOrigin => Err("must be a board_zero, outline_lower_left or in-range point origin, or null to reset"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
@@ -1920,6 +1925,21 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_PLACEMENT_ORIGIN,
+        title: "Set Placement Origin",
+        summary: "Choose the origin that fabrication and placement outputs are measured from, in one undo step; null restores board zero. Outputs are written with Y up.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param {
+                name: "origin",
+                required: true,
+                summary: "{\"kind\":\"board_zero\"}, {\"kind\":\"outline_lower_left\"} or {\"kind\":\"point\",\"x_nm\":..,\"y_nm\":..} in board coordinates, or null",
+                kind: ParamKind::PlacementOrigin,
+            },
+        ],
+    },
+    Command {
         id: board::class_rules::ROUTE_RULES,
         title: "Inspect Routing Rules",
         summary: "Inspect scoped net-class routing defaults, hard limits, origins and conflicts at a current copper contact without editing.",
@@ -2640,6 +2660,7 @@ impl Session {
             | SET_FOOTPRINT_REFERENCE_TEXT
             | DELETE_FOOTPRINTS
             | SET_RULES
+            | SET_PLACEMENT_ORIGIN
             | SET_SILKSCREEN
             | ADD_DRAWING
             | SET_DRAWING
@@ -2705,11 +2726,13 @@ impl Session {
     /// A nonempty `net_registry` reports current IDs and decisions separately, without promotion.
     /// Each board's `rules` contains nullable saved `authored` intent and `effective` values
     /// with per-property provenance; inspecting these fields never authors defaults.
+    /// Each board's `placement_origin` reports the saved origin and the resolved one outputs
+    /// use, or null when an outline-attached origin has no outline to attach to.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2869,6 +2892,7 @@ impl Session {
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
                 | SET_RULES
+                | SET_PLACEMENT_ORIGIN
                 | SET_SILKSCREEN
                 | ADD_DRAWING
                 | SET_DRAWING
@@ -2936,6 +2960,7 @@ impl Session {
                 | SET_FOOTPRINT_REFERENCE_TEXT
                 | DELETE_FOOTPRINTS
                 | SET_RULES
+                | SET_PLACEMENT_ORIGIN
                 | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
@@ -3118,6 +3143,7 @@ impl Session {
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_RULES => self.set_rules(params)?,
+            SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
