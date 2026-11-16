@@ -19,6 +19,7 @@ pub mod geometry;
 pub mod identity;
 mod library_migration;
 pub mod materials;
+pub mod origin;
 pub mod outline;
 pub mod ratsnest;
 pub mod reference;
@@ -292,6 +293,8 @@ pub(crate) struct Board {
     pub(crate) setup: Option<setup::BoardSetup>,
     pub(crate) silkscreen: Option<silkscreen::Settings>,
     pub(crate) rules: Option<rules::Settings>,
+    /// The named origin outputs are measured from; absent boards use board zero.
+    pub(crate) placement_origin: Option<origin::Origin>,
     /// Copper segments in stable ID order; empty boards keep their earlier saved format.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.

@@ -189,7 +189,7 @@ record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
-thickness use `pcbcraft-board/20`, chosen only when one of them is present.
+thickness use `pcbcraft-board/23` when one of them is present.
 
 Version 3 does not introduce a reusable material library, thermal expansion,
 manufacturing qualification, rule requirements, flex regions or an impedance
