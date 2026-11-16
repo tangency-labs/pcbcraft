@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 /// Most blocking obstacles (or merged clusters) one walk goes round.
 const MAX_BLOCKS: usize = 24;
+/// Most times a blocked walk returns to an earlier obstacle to go round its other side.
+const MAX_RETRIES: usize = 8;
 /// Most obstacles merged into one hull while following it.
 const MAX_MERGES: usize = 6;
 /// Corners one shortcut may skip.
@@ -56,6 +58,15 @@ struct Detour {
     path: Vec<Point>,
     flip: bool,
     cost: f64,
+}
+
+/// The other way round an earlier obstacle: the walked points before it, the points that go
+/// round it and the elbow's flip after it. A walk that blocks further on resumes from here.
+struct Branch {
+    points: Vec<Point>,
+    round: Vec<Point>,
+    flip: bool,
+    blocks: usize,
 }
 
 /// Where a walk got to; `blocker` names the first copper that stopped a blocked walk.
@@ -242,61 +253,99 @@ impl<'a> Walker<'a> {
     }
 
     /// Walk from `from` toward `to`, going round blocking hulls, then shorten and re-confirm.
+    /// Each obstacle is gone round on the preferred side first. Should the walk then block,
+    /// it resumes from the most recent obstacle's other side, at most [`MAX_RETRIES`] times;
+    /// when every try blocks, the first try's legal prefix and blocker are reported.
     fn walk(&mut self, from: Point, to: Point, flipped: bool) -> Result<Walked, Stop> {
         let mut points = vec![from];
         let (mut cur, mut flip, mut reached, mut blocker) = (from, flipped, false, None);
-        for _ in 0..MAX_BLOCKS {
-            let legs = elbow(cur, to, self.posture, flip);
-            if legs.len() < 2 {
-                reached = true;
-                break;
-            }
-            let mut failing = None;
-            for (i, leg) in legs.windows(2).enumerate() {
-                let verdict = self.check(leg[0], leg[1])?;
-                if !verdict.legal {
-                    failing = Some((i, verdict.blockers));
+        let (mut blocks, mut retries) = (0, 0);
+        let mut branches: Vec<Branch> = Vec::new();
+        let mut first_block: Option<(Vec<Point>, Option<usize>)> = None;
+        loop {
+            let ended = if blocks >= MAX_BLOCKS {
+                true
+            } else {
+                blocks += 1;
+                let legs = elbow(cur, to, self.posture, flip);
+                if legs.len() < 2 {
+                    reached = true;
                     break;
                 }
-            }
-            let Some((leg, blockers)) = failing else {
-                points.extend(legs.iter().skip(1));
-                reached = true;
-                break;
-            };
-            blocker = blockers.first().map(|b| b.0).or(blocker);
-            let (a, b) = (legs[leg], legs[leg + 1]);
-            // The blocking hull the leg enters first; ties keep the lower source index.
-            let first = blockers
-                .iter()
-                .filter_map(|&(index, clearance)| {
-                    let hull = self.hull(index, clearance)?;
-                    let (t, _, _) = hull.inside(a, b)?;
-                    Some((t, index, hull))
-                })
-                .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
-            let Some((_, index, hull)) = first else {
-                // A wall (the board edge) or a short with no way round: go as far as is legal.
-                points.extend(legs[1..=leg].iter().copied());
-                points.push(self.reach(a, b)?);
-                break;
-            };
-            let mut detours = Vec::new();
-            for ccw in [true, false] {
-                if let Some(detour) = self.detour(&legs, hull.clone(), index, to, ccw, flip)? {
-                    detours.push(detour);
+                let mut failing = None;
+                for (i, leg) in legs.windows(2).enumerate() {
+                    let verdict = self.check(leg[0], leg[1])?;
+                    if !verdict.legal {
+                        failing = Some((i, verdict.blockers));
+                        break;
+                    }
                 }
-            }
-            let Some(detour) = self.choose(detours) else {
-                points.extend(legs[1..=leg].iter().copied());
-                points.push(self.reach(a, b)?);
-                break;
+                let Some((leg, blockers)) = failing else {
+                    points.extend(legs.iter().skip(1));
+                    reached = true;
+                    break;
+                };
+                blocker = blockers.first().map(|b| b.0).or(blocker);
+                let (a, b) = (legs[leg], legs[leg + 1]);
+                // The blocking hull the leg enters first; ties keep the lower source index.
+                let first = blockers
+                    .iter()
+                    .filter_map(|&(index, clearance)| {
+                        let hull = self.hull(index, clearance)?;
+                        let (t, _, _) = hull.inside(a, b)?;
+                        Some((t, index, hull))
+                    })
+                    .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+                let mut detours = Vec::new();
+                if let Some((_, index, hull)) = first {
+                    for ccw in [true, false] {
+                        if let Some(detour) = self.detour(&legs, hull.clone(), index, to, ccw, flip)? {
+                            detours.push(detour);
+                        }
+                    }
+                }
+                let mut ordered = self.order(detours).into_iter().map(|detour| {
+                    let mut round = legs[1..=detour.leg].to_vec();
+                    round.push(detour.entry);
+                    round.extend(detour.path.iter().copied());
+                    (round, detour.flip)
+                });
+                match ordered.next() {
+                    Some((round, exit)) => {
+                        if let Some((other, other_flip)) = ordered.next() {
+                            branches.push(Branch { points: points.clone(), round: other, flip: other_flip, blocks });
+                        }
+                        points.extend(round);
+                        cur = points.last().copied().unwrap_or(cur);
+                        flip = exit;
+                        false
+                    }
+                    None => {
+                        // A wall (the board edge), a short or copper with no way round: go as
+                        // far as is legal.
+                        points.extend(legs[1..=leg].iter().copied());
+                        points.push(self.reach(a, b)?);
+                        true
+                    }
+                }
             };
-            points.extend(legs[1..=detour.leg].iter().copied());
-            points.push(detour.entry);
-            points.extend(detour.path.iter().copied());
+            if !ended {
+                continue;
+            }
+            if first_block.is_none() {
+                first_block = Some((points.clone(), blocker));
+            }
+            let Some(branch) = branches.pop().filter(|_| retries < MAX_RETRIES) else { break };
+            retries += 1;
+            points = branch.points;
+            points.extend(branch.round);
             cur = points.last().copied().unwrap_or(cur);
-            flip = detour.flip;
+            flip = branch.flip;
+            blocks = branch.blocks;
+        }
+        if !reached && let Some((first, first_blocker)) = first_block {
+            points = first;
+            blocker = first_blocker;
         }
         let mut points = simplify(&points);
         if reached {
@@ -318,9 +367,9 @@ impl<'a> Walker<'a> {
         Ok(Walked { points, reached, blocker: if reached { None } else { blocker } })
     }
 
-    /// Prefer the detour on the previous result's side unless the other is markedly shorter;
-    /// otherwise the shorter, counter-clockwise first on equal cost.
-    fn choose(&self, detours: Vec<Detour>) -> Option<Detour> {
+    /// Order the detours to try: the one on the previous result's side first unless the other
+    /// is markedly shorter; otherwise the shorter, counter-clockwise first on equal cost.
+    fn order(&self, mut detours: Vec<Detour>) -> Vec<Detour> {
         let shortest = detours.iter().map(|d| d.cost).fold(f64::INFINITY, f64::min);
         let preferred = self.prefer_side.and_then(|side| {
             detours.iter().position(|d| {
@@ -329,8 +378,11 @@ impl<'a> Walker<'a> {
                 self.side(&path) == Some(side) && d.cost <= shortest * (1. + HYSTERESIS)
             })
         });
-        let index = preferred.or_else(|| detours.iter().position(|d| d.cost <= shortest))?;
-        detours.into_iter().nth(index)
+        if let Some(index) = preferred.or_else(|| detours.iter().position(|d| d.cost <= shortest)) {
+            let chosen = detours.remove(index);
+            detours.insert(0, chosen);
+        }
+        detours
     }
 
     /// The side of the head-to-target line a path runs on, by its summed signed offsets.

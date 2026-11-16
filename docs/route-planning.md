@@ -13,8 +13,10 @@ leg and one exact diagonal) or the 90° posture (horizontal and vertical legs).
 Where a leg would break clearance, the head follows the blocking copper's hull,
 an octagon (or rectangle for 90°) grown by the copper's radius, half the route
 width and the pair's clearance, round the cheaper side until the elbow to the
-target is clear. Copper met while following a hull joins it. A final pass
-replaces runs of corners with elbows where they are legal. All coordinates stay
+target is clear. Copper met while following a hull joins it. When the walk blocks
+further on, it returns to the most recent obstacle and goes round its other side;
+a route that blocks either way reports its first try. A final pass replaces runs of
+corners with elbows where they are legal. All coordinates stay
 whole nanometres and every leg stays in the posture.
 
 Every kept leg is confirmed with the captured [snapshot copper query](copper-clearance-query.md):
@@ -48,7 +50,8 @@ change.
 The search is deterministic: the same board, request and budget give the same
 plan. Its work is bounded by a probe budget (default 4,096, at most 65,536 exact
 probes; a leg already confirmed costs nothing), at most 24 blocking obstacles per
-walk, six merges per hull and 256 points. `probes` reports the work charged and
+walk, eight returns to an earlier obstacle's other side, six merges per hull and
+256 points. `probes` reports the work charged and
 never exceeds the budget. A caller passing `previous`, the last plan of the same
 gesture, keeps that plan unchanged while it is still legal and has the same
 ends; otherwise the walk prefers the previous side of the head-to-target line

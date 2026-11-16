@@ -162,6 +162,31 @@ fn a_narrow_channel_admits_a_fitting_route_and_blocks_a_wider_one() {
     }
 }
 
+/// When the cheaper side of an obstacle leads into a dead end, the walk goes back and round
+/// its other side instead of reporting the route blocked.
+#[test]
+fn a_dead_end_on_the_cheaper_side_is_walked_round_the_other_way() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    add(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    let outline_layer = view(&s).layers().into_iter().find(|l| l.purpose == crate::board::setup::LayerPurpose::Outline).unwrap().id;
+    add(
+        &mut s,
+        crate::ADD_DRAWING,
+        json!({"layer":outline_layer,"closed":true,"points":[p(0, 0),p(20_000_000, 0),p(20_000_000, 10_000_000),p(0, 10_000_000)]}),
+    );
+    let layer = copper_layers(&s)[0];
+    // A large via whose track runs straight to the top edge. Going over the via is cheaper to a
+    // target just above the head's line, but the track closes that way at the board edge.
+    add(&mut s, ADD_VIA, json!({"at":p(10_000_000, 5_000_000),"via_diameter_nm":1_700_000,"via_drill_nm":800_000}));
+    add(&mut s, ADD_TRACKS, json!({"layer":layer,"width_nm":200_000,"points":[p(10_000_000, 5_000_000),p(10_000_000, 0)]}));
+    let plan = plan(&s, &request(&s, p(2_000_000, 5_000_000), p(18_000_000, 4_600_000)));
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert!(plan.points.iter().any(|p| p.y_nm > 5_600_000), "goes under the via: {plan:?}");
+    assert_posture(&plan, Posture::Diagonal);
+    commit_and_agree(&mut s, &plan, layer, WIDTH);
+}
+
 /// A target enclosed by other copper is a dead end: the route is blocked at a legal point and
 /// the legal prefix commits cleanly.
 #[test]
