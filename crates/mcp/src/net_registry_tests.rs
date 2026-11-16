@@ -325,8 +325,9 @@ fn assignment_discovery_promotes_derived_targets_in_one_shared_transaction() {
     );
 }
 
-/// Scoped routing inspection and class-aware edits use the same live/headless transaction path,
-/// retain read results with inspection disabled and reject stale or weakened dimensions atomically.
+/// Scoped routing inspection, route planning and class-aware edits use the same live/headless
+/// transaction path, retain read results with inspection disabled and reject stale or weakened
+/// dimensions atomically.
 #[test]
 fn class_routing_queries_and_commits_have_live_headless_parity() {
     use pcbcraft_engine::{
@@ -373,6 +374,10 @@ fn class_routing_queries_and_commits_have_live_headless_parity() {
     let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
     assert_eq!(report, headless.call("engine.execute", query.clone()).unwrap());
     assert_eq!(report["route_rules"]["applied"]["resolution"]["values"]["preferred_track_width_nm"], 500000);
+    let plan = json!({"command":pcbcraft_engine::board::route::PLAN_ROUTE,"inspect":false,"params":{"board":board.board,"from":at,"to":{"x_nm":at.x_nm,"y_nm":at.y_nm+2000000},"layer":layer}});
+    let planned = call_editor(&mut live, &json!({"method":"engine.execute","params":plan})).unwrap();
+    assert_eq!(planned, headless.call("engine.execute", plan).unwrap());
+    assert_eq!((planned["route_plan"]["width_nm"].as_i64(), planned["route_plan"]["outcome"]["kind"].as_str()), (Some(500000), Some("reached")));
     assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
     assert_eq!(live.session.revision(), revision);
     let edit = json!({"command":pcbcraft_engine::ADD_TRACKS,"inspect":false,"params":{"board":board.board,"layer":layer,"points":[at,{"x_nm":at.x_nm,"y_nm":at.y_nm+2000000}],"expected_revision":revision}});

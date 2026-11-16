@@ -523,6 +523,13 @@ revision per commit and stale-source rejection. The ordinary replay remains the
 matched before/after measure for pointer reversals, layer transitions, cancellation
 and concurrent MCP edits; these diagnostics do not establish presentation latency.
 
+The #246 walkaround solver adds `board_perf walkaround ARTIFACT ENVIRONMENT ITERATIONS REPORT`.
+Its separate `pcbcraft-walkaround-performance/1` report times complete plans over a
+captured query and requires identical plans on every iteration; first plans are
+committed through `pcb.add_tracks` against the exhaustive pair reference. See
+[walkaround route planning](route-planning.md#measurement). It measures solver
+service cost only; route-tool preview and commit latency need the tool integration.
+
 Copper preparation uses the same two-worker process limit and incremental browser
 logic as checking. Each view retains one running job, one coalesced desired input,
 one ready candidate and one immutable source context. Pad projection survives

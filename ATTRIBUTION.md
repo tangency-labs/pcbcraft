@@ -1694,3 +1694,21 @@ The mixed-board M follow-up composes PCBcraft's existing physical pad-contact
 policy, immutable previews and revision-checked transactions. Its selection-wide
 translation is original PCBcraft code, introduced after @travle1 reproduced the
 missing group pickup while testing #231. It adds no dependency or artwork.
+
+
+## Walkaround route planning
+
+The walkaround in `crates/engine/src/board/route/` (`walkaround.rs`, `hull.rs` and
+`posture.rs`) is adapted from Sparksmith
+(https://github.com/DAmesberger/sparksmith, `crates/editor-core/src/layout/router/walk.rs`,
+`hull.rs` and `crates/editor-core/src/layout/posture.rs`, with
+`docs/push-and-shove.md`) at revision `cdecce837f0f2651f418a32ae5281afad6e67294`,
+MIT OR Apache-2.0. The approach carried over is the walk itself: follow the colliding
+obstacle's fixed-direction hull round in the cheaper sense until the posture elbow to
+the target leaves it, merge copper met on the way, stop at the last legal point,
+then shortcut corner runs. PCBcraft's version was rewritten against its own
+interfaces: whole-nanometre integer hulls with even diagonal supports so corners and
+45° legs stay exact, every kept leg confirmed by the captured `ClearanceQuery` probe
+and the DRC outline predicates, head-island and membership rules from the snapshot
+query, a probe budget with incomplete, canceled and stale outcomes, and previous-plan
+continuity. No Sparksmith world model, shove, dependency or file format was imported.

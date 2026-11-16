@@ -68,6 +68,10 @@ impl Authority {
     pub fn class_rules(&self) -> Option<&super::class_rules::Context> {
         self.class_rules.as_deref()
     }
+    /// The captured board, for engine consumers that need more of the same snapshot than copper.
+    pub(crate) fn view(&self) -> Option<BoardView<'_>> {
+        self.snapshot.board_view(self.target)
+    }
     /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
     /// Rule overrides are immutable inputs: a different override requires a new query.
     pub fn is_current(&self, session: &Session) -> bool {

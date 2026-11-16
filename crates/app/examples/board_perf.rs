@@ -16,6 +16,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
             std::io::Write::write_all(&mut file, &serde_json::to_vec_pretty(&report)?)?;
         }
+        [command, artifact, metadata, iterations, output] if command == "walkaround" => {
+            let environment: Environment = serde_json::from_slice(&std::fs::read(metadata)?)?;
+            let report = pcbcraft_app::performance::walkaround::run(&std::fs::read_to_string(artifact)?, environment, iterations.parse()?)?;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+            std::io::Write::write_all(&mut file, &serde_json::to_vec_pretty(&report)?)?;
+        }
         [command, artifact, metadata, iterations, output] if command == "checks" => {
             let environment: Environment = serde_json::from_slice(&std::fs::read(metadata)?)?;
             let report = pcbcraft_app::performance::checker::run(&std::fs::read_to_string(artifact)?, environment, iterations.parse()?)?;
@@ -30,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: board_perf generate RECIPE GENERATOR_REV ARTIFACT | (run|checks|routes) ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT".into()
+                "usage: board_perf generate RECIPE GENERATOR_REV ARTIFACT | (run|checks|routes|walkaround) ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT".into()
             );
         }
     }

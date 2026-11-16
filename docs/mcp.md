@@ -283,6 +283,15 @@ Copper connects where it overlaps on a shared layer, a via joins the copper it o
 on every layer, and the board ratsnest drops airwires between terminals already joined
 by tracks. Routing does not check clearance; use `pcb.check_design` for that.
 
+`pcb.plan_route` plans a route without editing: `from`, `to` and a copper `layer`, with
+optional `width_nm`, `posture` (`diagonal` or `orthogonal`), `flipped`, `previous`,
+`budget` and `expected_revision`. `execute` returns `route_plan` with the resolved
+width, `points`, an `outcome` (`reached`, `blocked` with `last_legal`, `incomplete`,
+`canceled` or `stale`), any `blocker` and the `probes` charged, also with
+`inspect: false`. The points go round existing copper with the effective width,
+pair clearances and board-edge clearance, and feed `pcb.add_tracks` with the same
+`layer` and `width_nm`. See [walkaround route planning](route-planning.md).
+
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
 `view.set_board_flipped` takes `view` and `flipped` and shows that board view from below
