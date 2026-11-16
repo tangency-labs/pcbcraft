@@ -218,15 +218,19 @@ kept whole). The engine and app tests compare the described commands with it
 and label every difference:
 
 - compatible, when every call the old schema accepted is still accepted: a
-  command added, an optional parameter added, a required parameter made
+  command added, an optional parameter added to an object that refuses
+  unknown names (`additionalProperties: false` and no `patternProperties`,
+  as every command's top-level parameters are), a required parameter made
   optional, enum values added, a type widened (`integer` to `number`
-  included), a bound loosened, a `pattern`, `format`, `const`, `multipleOf`,
-  `default` or `uniqueItems` dropped, `additionalProperties` or `items`
-  loosened, `anyOf` alternatives appended, `examples` changed;
+  included), a bound loosened, a `pattern`, `format`, `const`, `multipleOf`
+  or `uniqueItems` dropped, `additionalProperties` or `items` loosened,
+  `anyOf` alternatives appended, `examples` changed;
 - breaking otherwise: a command or parameter removed, a parameter newly
   required, enum values removed, a type narrowed or added, a bound tightened or
-  added, a `pattern`, `format`, `const`, `multipleOf` or `default` added or
-  changed (also a default added to an existing parameter), any `oneOf` change
+  added, a `pattern`, `format`, `const` or `multipleOf` added or changed, a
+  `default` added, changed or dropped, a property added to an object that
+  accepted unknown names (a call may already pass that name with another
+  value), any `oneOf` change
   (a value may then match two alternatives), and any change under a keyword
   without a rule (`allOf`, `not`, `$ref`, the dependency maps and others).
 

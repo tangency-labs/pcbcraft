@@ -133,17 +133,19 @@ const LOWER_BOUNDS: &[&str] = &["minimum", "exclusiveMinimum", "minLength", "min
 /// Upper bounds: a higher or dropped value accepts more.
 const UPPER_BOUNDS: &[&str] = &["maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"];
 /// Restrictions: dropping one accepts more; adding or changing one may refuse a valid call.
-/// `default` is here too: a changed, added or dropped default may change what an omitted
-/// parameter means.
-const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf", "default"];
+const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 
 /// Every difference between the `old` and `new` contract of the command `id`, labelled.
 ///
 /// A difference is compatible when every call valid under `old` stays valid with the same meaning
 /// as far as the schema can tell; otherwise it is breaking. By keyword, at every depth:
-/// - `properties`: an added parameter is compatible (whether it is required is `required`'s
-///   business), a removed one breaking; common ones are compared in turn. `$defs` and
-///   `definitions` the same way.
+/// - `properties`: an added parameter is compatible only when the old object refused unknown
+///   names (`additionalProperties: false` and no `patternProperties`), since otherwise a call
+///   could already pass that name with any value; whether it is required is `required`'s
+///   business. A removed parameter is breaking; common ones are compared in turn. In `$defs` and
+///   `definitions` an added name is compatible, a removed one breaking.
+/// - `default`: added, changed or dropped is breaking, since it may change what an omitted
+///   parameter means (a new parameter's default is part of the parameter added).
 /// - `required`: a newly required name is breaking; a name no longer required is compatible.
 /// - `type`: compatible when every old type is still allowed (`integer` within `number`) or the
 ///   keyword is dropped; narrowed or added is breaking.
@@ -152,8 +154,8 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf", "def
 /// - lower and upper bounds (`minimum` .. `maxProperties`): loosened or dropped is compatible,
 ///   tightened or added is breaking.
 /// - `uniqueItems`: dropped or set false is compatible, otherwise breaking.
-/// - `pattern`, `format`, `const`, `multipleOf`, `default`: dropped is compatible; added or
-///   changed is breaking (a default added to an existing parameter included).
+/// - `pattern`, `format`, `const`, `multipleOf`: dropped is compatible; added or changed is
+///   breaking.
 /// - `items`, `additionalProperties`: a schema or `true`/`false`; loosened (from `false`, or to
 ///   accept anything) is compatible, tightened breaking, schemas compared in turn.
 /// - `anyOf`: alternatives appended is compatible, removed breaking; common ones are compared.
@@ -221,19 +223,22 @@ fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
         walk.push(!loosened, path, format!("changed from {old} to {new}"));
         return;
     };
+    let closed = old_object.get("additionalProperties") == Some(&Value::Bool(false)) && !old_object.contains_key("patternProperties");
     for key in old_object.keys().chain(new_object.keys()).collect::<BTreeSet<_>>() {
         let (before, after) = (old_object.get(key), new_object.get(key));
         if before != after {
-            keyword(walk, &format!("{path}.{key}"), key, before, after);
+            keyword(walk, &format!("{path}.{key}"), key, before, after, closed);
         }
     }
 }
 
 /// Classify one keyword that differs between two schemas; see [`compare`] for the rules.
-fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after: Option<&Value>) {
+/// `closed` says whether the old schema refused names it does not list.
+fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after: Option<&Value>, closed: bool) {
     let change = format!("changed from {} to {}", shown(before), shown(after));
     match key {
-        "properties" | "$defs" | "definitions" => named(walk, path, before, after),
+        "properties" => named(walk, path, before, after, closed),
+        "$defs" | "definitions" => named(walk, path, before, after, true),
         "required" => required(walk, path, before, after),
         "type" => {
             let compatible = match (types(before), types(after)) {
@@ -266,6 +271,7 @@ fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after
         }
         "uniqueItems" => walk.push(!matches!(after, None | Some(Value::Bool(false))), path, change),
         restriction if RESTRICTIONS.contains(&restriction) => walk.push(after.is_some(), path, change),
+        "default" => walk.push(true, path, change),
         "examples" => walk.push(false, path, change),
         "items" | "additionalProperties" => match (before, after) {
             (Some(old @ Value::Object(_)), Some(new @ Value::Object(_))) => schema(walk, path, old, new),
@@ -289,8 +295,9 @@ fn types(value: Option<&Value>) -> Option<BTreeSet<&str>> {
 }
 
 /// Compare two maps of named schemas (`properties`, `$defs`, `definitions`): a name added is
-/// compatible, a name removed breaking, common names compared as schemas.
-fn named(walk: &mut Walk, path: &str, before: Option<&Value>, after: Option<&Value>) {
+/// compatible when `added_is_compatible` (else the old schema already accepted that name with any
+/// value, so it is breaking), a name removed breaking, common names compared as schemas.
+fn named(walk: &mut Walk, path: &str, before: Option<&Value>, after: Option<&Value>, added_is_compatible: bool) {
     let empty = Map::new();
     let old = before.and_then(Value::as_object).unwrap_or(&empty);
     let new = after.and_then(Value::as_object).unwrap_or(&empty);
@@ -298,7 +305,8 @@ fn named(walk: &mut Walk, path: &str, before: Option<&Value>, after: Option<&Val
         let inner = format!("{path}.{name}");
         match (old.get(name), new.get(name)) {
             (Some(a), Some(b)) => schema(walk, &inner, a, b),
-            (None, Some(_)) => walk.push(false, &inner, "added".to_owned()),
+            (None, Some(_)) if added_is_compatible => walk.push(false, &inner, "added".to_owned()),
+            (None, Some(_)) => walk.push(true, &inner, "added where the old schema accepted any name".to_owned()),
             (Some(_), None) => walk.push(true, &inner, "removed".to_owned()),
             (None, None) => {}
         }

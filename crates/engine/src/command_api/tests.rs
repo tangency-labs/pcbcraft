@@ -158,7 +158,6 @@ fn compatible_changes_are_labelled_compatible() {
         (p(json!({"maxItems": 8})), p(json!({})), "params.properties.p.maxItems: changed from 8 to absent"),
         (p(json!({"pattern": "^a$"})), p(json!({})), "params.properties.p.pattern: changed from \"^a$\" to absent"),
         (p(json!({"multipleOf": 2})), p(json!({})), "params.properties.p.multipleOf: changed from 2 to absent"),
-        (p(json!({"default": 1})), p(json!({})), "params.properties.p.default: changed from 1 to absent"),
         (p(json!({"uniqueItems": true})), p(json!({"uniqueItems": false})), "params.properties.p.uniqueItems: changed from true to false"),
         (p(json!({"examples": [1]})), p(json!({"examples": [2]})), "params.properties.p.examples: changed from [1] to [2]"),
         (
@@ -178,13 +177,20 @@ fn compatible_changes_are_labelled_compatible() {
             "params.properties.p.required: no longer requires `q`",
         ),
         (nested(json!({"maximum": 3})), nested(json!({"maximum": 4})), "params.properties.p.properties.q.maximum: changed from 3 to 4"),
+        (
+            p(json!({"type": "object", "properties": {}, "additionalProperties": false})),
+            p(json!({"type": "object", "properties": {"q": {"type": "integer", "default": 0}}, "additionalProperties": false})),
+            "params.properties.p.properties.q: added",
+        ),
     ] {
         assert_eq!(differences(old, new), [format!("compatible: `schematic.synthetic` {expected}")]);
     }
 }
 
 /// Each change that may refuse a call the old schema accepted, or change its meaning, is labelled
-/// breaking with its path, at the top of the parameters, nested, and inside alternatives.
+/// breaking with its path, at the top of the parameters, nested, and inside alternatives. A
+/// property added to an object that accepted unknown names (open, a schema for them, or pattern
+/// names) is breaking, since a call may already pass that name with another value.
 #[test]
 fn breaking_changes_are_labelled_breaking() {
     let p = |schema: Value| json!({"type": "object", "properties": {"p": schema}, "required": [], "additionalProperties": false});
@@ -213,6 +219,22 @@ fn breaking_changes_are_labelled_breaking() {
         (p(json!({"multipleOf": 2})), p(json!({"multipleOf": 4})), "params.properties.p.multipleOf: changed from 2 to 4"),
         (p(json!({"default": 1})), p(json!({"default": 2})), "params.properties.p.default: changed from 1 to 2"),
         (p(json!({})), p(json!({"default": 1})), "params.properties.p.default: changed from absent to 1"),
+        (p(json!({"default": 1})), p(json!({})), "params.properties.p.default: changed from 1 to absent"),
+        (
+            p(json!({"type": "object", "properties": {}})),
+            p(json!({"type": "object", "properties": {"q": {"type": "integer"}}})),
+            "params.properties.p.properties.q: added where the old schema accepted any name",
+        ),
+        (
+            p(json!({"type": "object", "properties": {}, "additionalProperties": {"type": "string"}})),
+            p(json!({"type": "object", "properties": {"q": {"type": "integer"}}, "additionalProperties": {"type": "string"}})),
+            "params.properties.p.properties.q: added where the old schema accepted any name",
+        ),
+        (
+            p(json!({"type": "object", "properties": {}, "patternProperties": {"^x": {}}, "additionalProperties": false})),
+            p(json!({"type": "object", "properties": {"q": {"type": "integer"}}, "patternProperties": {"^x": {}}, "additionalProperties": false})),
+            "params.properties.p.properties.q: added where the old schema accepted any name",
+        ),
         (p(json!({})), p(json!({"uniqueItems": true})), "params.properties.p.uniqueItems: changed from absent to true"),
         (
             p(json!({"type": "object"})),
@@ -296,6 +318,7 @@ fn every_keyword_of_the_catalog_has_a_rule() {
         "type",
         "enum",
         "uniqueItems",
+        "default",
         "examples",
         "items",
         "additionalProperties",
