@@ -288,7 +288,7 @@ fn rotation_is_folded_into_one_turn() {
     }
 }
 
-/// Both convention names read back, and an unknown name is refused.
+/// Both convention names read back, and an unknown name is refused because it is not one of the two.
 #[test]
 fn bottom_side_names_round_trip() {
     for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
@@ -297,7 +297,9 @@ fn bottom_side_names_round_trip() {
     }
     assert_eq!(serde_json::from_value::<BottomSide>(json!("viewed_from_top")).unwrap(), BottomSide::ViewedFromTop);
     assert_eq!(serde_json::from_value::<BottomSide>(json!("viewed_from_bottom")).unwrap(), BottomSide::ViewedFromBottom);
-    assert!(serde_json::from_value::<BottomSide>(json!("viewed_from_below")).is_err());
+    let refused = serde_json::from_value::<BottomSide>(json!("viewed_from_below")).unwrap_err().to_string();
+    assert!(refused.contains("unknown variant `viewed_from_below`"), "{refused}");
+    assert!(refused.contains("`viewed_from_top`") && refused.contains("`viewed_from_bottom`"), "{refused}");
 }
 
 /// The last in-range coordinates are accepted on both sides and one step beyond is refused.
