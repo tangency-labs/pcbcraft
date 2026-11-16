@@ -51,6 +51,7 @@ If Trunk reports `invalid value '1' for '--no-color'`, the shell has supplied
 | `crates/engine` | Project model, validation, commands, immutable snapshots and undo/redo; no UI |
 | `crates/app` | Desktop/browser composition, canvas tools, preferences and project-file lifecycle |
 | `crates/chrome` | Shared colors, sizes, icons, menus, cards and other presentation primitives |
+| `crates/geometry` | Solid bodies and STEP exchange behind a kernel-neutral API; the only crate that links the solid kernel |
 | `crates/units` | Shared physical quantity/unit definitions, exact decimal parsing/display, and geometry length conversion/edit formatting |
 | `crates/mcp` | Tool discovery and dispatch over the engine; a restricted live adapter and a separate headless session |
 | `crates/craft-control` | Bounded framing and authenticated local transport |

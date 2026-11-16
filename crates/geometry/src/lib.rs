@@ -12,8 +12,9 @@
 //! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
 //! replies.
 //!
-//! The kernel is built for native targets only. On `wasm32` the same API compiles and every
-//! operation answers [`ErrorCode::KernelUnavailable`].
+//! The kernel is built for native targets only. On `wasm32` the same API compiles, no [`Body`]
+//! can be made, and every operation that reaches the kernel answers
+//! [`ErrorCode::KernelUnavailable`]; arguments refused before the kernel keep their own codes.
 //!
 //! `docs/geometry-kernel.md` records the kernel choice, its qualification and its known limits.
 #![forbid(unsafe_code)]
@@ -300,7 +301,8 @@ impl StepRead {
     ///
     /// # Errors
     ///
-    /// The failures of [`Body::transformed`].
+    /// [`ErrorCode::InvalidParams`] when a placement names no body of this read; otherwise the
+    /// failures of [`Body::transformed`].
     pub fn placed_bodies(&self) -> Result<Vec<Body>> {
         self.placements.iter().map(|p| self.placed(p)).collect()
     }
@@ -311,7 +313,8 @@ impl StepRead {
     ///
     /// # Errors
     ///
-    /// The failures of [`Body::transformed`] and [`Body::bounding_box`].
+    /// [`ErrorCode::InvalidParams`] when a placement names no body of this read; otherwise the
+    /// failures of [`Body::transformed`] and [`Body::bounding_box`].
     pub fn bounding_box(&self) -> Result<Option<BoundingBox>> {
         let mut out: Option<BoundingBox> = None;
         for placement in &self.placements {
@@ -446,5 +449,7 @@ fn point_nm(mm: [f64; 3]) -> Result<[i64; 3]> {
     Ok(out)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests;

@@ -68,8 +68,10 @@ could later move into an engine module if that proves simpler.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
   outside tests.
 - **Native only.** The kernel crates are target dependencies for
-  non-`wasm32` builds. On `wasm32` the crate compiles without them and every
-  operation returns `kernel_unavailable`.
+  non-`wasm32` builds. On `wasm32` the crate compiles without them, no body can
+  be made, and every operation that reaches the kernel returns
+  `kernel_unavailable`; arguments refused before the kernel keep their codes. CI
+  runs these tests on `wasm32-wasip1`.
 - **No kernel data in projects.** A stored 3D model is its original STEP bytes by
   content hash, as the [3D model storage](library-sources.md#3d-model-storage)
   design proposes, or the dimensions a simple body was built from. Bodies, boxes
@@ -117,6 +119,7 @@ At SolidCraft revision `73bdb6c`:
 | An empty body name; part names `board.STEP`, `board.stp.STEP`, `board.step.stp`, `.step`, blank | the body reads back with its part's name; the part name loses its trailing `.step` suffixes and then its trailing `.stp` suffixes (any case), so `board.step.stp` becomes `board.step`; a part name left empty or blank is written as `Part` |
 | 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
 | Writing the same bodies twice | identical bytes |
+| The crate on `wasm32-wasip1` (no kernel) | making, reading and the crash test give `kernel_unavailable`; refused arguments keep `invalid_params` and `model_unreadable` |
 | Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
 | A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
@@ -207,8 +210,11 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
 - **Browser.** `solidcore` itself checks for `wasm32-unknown-unknown`, but
   `solidcore-step` has not been built for it, and the kernel README asks for a
   wasm stack larger than the default 1 MB. Until that is qualified, every operation
-  of the crate on `wasm32` returns `kernel_unavailable`, and a browser 3D view
-  would use meshes.
+  of the crate on `wasm32` that reaches the kernel returns `kernel_unavailable`,
+  and a browser 3D view would use meshes.
+- **Input size.** `read_step` takes the whole STEP text in memory and has no size
+  limit; its bodies and refusals grow with the file. The caller (the later STEP
+  import command) bounds the input.
 - **Size.** A probe outside this workspace measured about 9.5 MB added to a
   native release binary for a full kernel round trip. The browser size is not
   measured; the kernel should load there only when a 3D view or STEP action
