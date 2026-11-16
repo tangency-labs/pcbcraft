@@ -49,7 +49,8 @@ in `crates/engine/src/parameters.rs` are ported from Coline
 keeps only the project, sheet and instance scopes, adds standard sheet values that
 default to the project's, refuses writes to built-ins, matches names without case
 when editing, and stores JSON in project/22 and sheet/9. The Properties table is
-original PCBcraft work built on the shared form fields.
+original PCBcraft work built on the shared form fields, including the pinned
+Craft text field's inherited-value hint, context menu and focus behavior.
 
 ## Layer-aware spatial queries
 
