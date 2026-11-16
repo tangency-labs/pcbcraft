@@ -44,6 +44,7 @@ pub struct Netlist {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectRef {
+    #[serde(deserialize_with = "hyphenated")]
     pub id: Uuid,
     pub name: String,
 }
@@ -98,8 +99,10 @@ pub struct Unit {
     /// The placement's symbol ID, such as `symbol-4`.
     pub symbol: String,
     /// The sheet the unit is drawn on.
+    #[serde(deserialize_with = "hyphenated")]
     pub sheet: Uuid,
     /// Sheet occurrence IDs from the root sheet down to the unit's own sheet.
+    #[serde(deserialize_with = "hyphenated_list")]
     pub occurrence: Vec<Uuid>,
 }
 
@@ -119,7 +122,7 @@ pub struct TerminalInfo {
 #[serde(deny_unknown_fields)]
 pub struct Net {
     /// Persistent registry UUID, or explicit null for a net the registry does not identify.
-    #[serde(deserialize_with = "nullable")]
+    #[serde(deserialize_with = "nullable_hyphenated")]
     pub id: Option<Uuid>,
     /// The name the Net Inspector shows.
     pub name: String,
@@ -141,6 +144,37 @@ pub struct TerminalRef {
 /// omitting the field, so a missing field is an error instead of a silent `None`.
 fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Option<T>, D::Error> {
     Option::deserialize(de)
+}
+
+/// A UUID in the schema's `uuid` format: the 36-character hyphenated form only. The simple,
+/// braced and `urn:uuid:` spellings other UUID readers accept are refused.
+struct Hyphenated(Uuid);
+
+impl<'de> Deserialize<'de> for Hyphenated {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(de)?;
+        parse_hyphenated(&text).map(Hyphenated).ok_or_else(|| serde::de::Error::custom(format!("`{text}` is not a hyphenated UUID")))
+    }
+}
+
+/// Parse the 36-character hyphenated UUID form, returning `None` for any other text.
+pub(crate) fn parse_hyphenated(text: &str) -> Option<Uuid> {
+    if text.len() == 36 { Uuid::try_parse(text).ok() } else { None }
+}
+
+/// Read a required UUID in hyphenated form.
+fn hyphenated<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Uuid, D::Error> {
+    Hyphenated::deserialize(de).map(|id| id.0)
+}
+
+/// Read a list of UUIDs, each in hyphenated form.
+fn hyphenated_list<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<Uuid>, D::Error> {
+    Vec::<Hyphenated>::deserialize(de).map(|ids| ids.into_iter().map(|id| id.0).collect())
+}
+
+/// Read a UUID that must be present but may be null, in hyphenated form when given.
+fn nullable_hyphenated<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<Uuid>, D::Error> {
+    Option::<Hyphenated>::deserialize(de).map(|id| id.map(|id| id.0))
 }
 
 impl Netlist {
@@ -171,11 +205,13 @@ pub struct Export {
 impl Project {
     /// Build the netlist from the complete electrical connectivity of every sheet.
     /// Repeated appearances of a terminal on several units collapse to one logical terminal.
-    /// Fails only when the net registry cannot be resolved against the current hierarchy.
+    /// Fails when the net registry cannot be resolved against the current hierarchy.
     pub fn netlist(&self) -> Result<Export, String> {
         let electrical = self.electrical_connectivity();
         let ids = self.persistent_net_ids()?;
         let occurrences = self.occurrence_instances().sheet_occurrences;
+        // Each sheet has at most one occurrence today, because repeated sheet instances are
+        // refused, so the first occurrence of a sheet is its only one.
         let path = |sheet: Uuid| {
             let mut path = Vec::new();
             let mut next = occurrences.iter().find(|record| record.definition == sheet);

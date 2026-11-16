@@ -311,10 +311,11 @@ fn parse_rejects_foreign_documents() {
     assert!(check(&schema(), &schema(), &value, "$").is_err());
 }
 
-/// A net ID or terminal name may be null but never omitted, and a definition revision must fit
-/// the reader's 32-bit field; the reader and the schema agree on each case.
+/// The reader and the schema agree at each field edge: a net ID or terminal name may be null
+/// but not omitted, UUIDs use the hyphenated form in either case, and a definition revision
+/// must fit the reader's 32-bit field.
 #[test]
-fn nullable_fields_are_required_and_revisions_are_bounded() {
+fn reader_and_schema_agree_on_field_edges() {
     let Fixture { session, .. } = fixture();
     let text = session.export_netlist().unwrap().0.contents;
     let original: Value = serde_json::from_str(&text).unwrap();
@@ -332,6 +333,33 @@ fn nullable_fields_are_required_and_revisions_are_bounded() {
         let mut omitted = original.clone();
         omitted.pointer_mut(pointer).unwrap().as_object_mut().unwrap().remove(field);
         agree(&omitted, false);
+    }
+    // Every object kind in the document is closed on both sides.
+    assert!(!original["unconnected"].as_array().unwrap().is_empty());
+    for pointer in [
+        "",
+        "/project",
+        "/components/0",
+        "/components/0/definition",
+        "/components/0/units/0",
+        "/components/0/terminals/0",
+        "/nets/0",
+        "/nets/0/terminals/0",
+        "/unconnected/0",
+    ] {
+        let mut value = original.clone();
+        value.pointer_mut(pointer).unwrap().as_object_mut().unwrap().insert("extra".into(), json!(1));
+        agree(&value, false);
+    }
+    let id = original["project"]["id"].as_str().unwrap().to_owned();
+    let simple = id.replace('-', "");
+    for spelling in [simple.clone(), format!("{{{id}}}"), format!("urn:uuid:{id}"), id.to_uppercase()] {
+        let accepted = spelling == id.to_uppercase();
+        for pointer in ["/project/id", "/components/0/units/0/sheet", "/components/0/units/0/occurrence/0", "/nets/0/id"] {
+            let mut value = original.clone();
+            *value.pointer_mut(pointer).unwrap() = json!(spelling);
+            agree(&value, accepted);
+        }
     }
     for (revision, accepted) in [(json!(u32::MAX), true), (json!(u64::from(u32::MAX) + 1), false), (json!(-1), false)] {
         let mut value = original.clone();
@@ -406,7 +434,7 @@ fn check(root: &Value, schema: &Value, value: &Value, at: &str) -> Result<(), St
             "maximum" => {}
             "format" if rule == "uuid" => {
                 if let Some(text) = value.as_str() {
-                    Uuid::parse_str(text).map_err(|_| format!("{at}: not a UUID"))?;
+                    super::parse_hyphenated(text).ok_or_else(|| format!("{at}: not a hyphenated UUID"))?;
                 }
             }
             "required" => {
@@ -447,4 +475,31 @@ fn check(root: &Value, schema: &Value, value: &Value, at: &str) -> Result<(), St
         }
     }
     Ok(())
+}
+
+/// A terminal drawn on two units is one logical terminal: wiring its second appearance joins
+/// that net to the first appearance's net, so the terminal still appears in only one net.
+#[test]
+fn shared_terminal_wired_on_two_units_stays_on_one_net() {
+    let Fixture { mut session, sheets, r1, r2, u1, .. } = fixture();
+    let child = sheets[1];
+    let unit_b = last_symbol(&session, child);
+    let (from, to) = (terminal(&session, child, &unit_b, "3"), terminal(&session, child, &unit_b, "4"));
+    wire(&mut session, child, from, to);
+    let Export { netlist, findings } = session.project().unwrap().netlist().unwrap();
+    let reference = BTreeMap::from([(u1, "U1".to_owned()), (r1, "R1".to_owned()), (r2, "R2".to_owned())]);
+    let joined: Vec<_> = netlist.nets.iter().map(|net| named(&reference, net)).collect();
+    assert_eq!(
+        joined,
+        vec![
+            BTreeSet::from([("U1", "1"), ("U1", "5")]),
+            BTreeSet::from([("U1", "2"), ("R1", "1")]),
+            BTreeSet::from([("U1", "3"), ("U1", "4"), ("R1", "2")]),
+            BTreeSet::from([("U1", "6"), ("R2", "1")]),
+        ]
+    );
+    let open: Vec<_> = netlist.unconnected.iter().map(|t| (reference[&t.part].as_str(), t.terminal.as_str())).collect();
+    assert_eq!(open, vec![("R2", "2")]);
+    assert_eq!(findings, Vec::<Value>::new());
+    validate(&serde_json::from_str(&netlist.to_text().unwrap()).unwrap());
 }

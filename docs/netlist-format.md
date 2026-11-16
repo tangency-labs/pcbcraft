@@ -1,8 +1,10 @@
 # Netlist export format
 
 `project.export_netlist` writes the open project's connectivity as one JSON
-document, `<project name>-netlist.json`, for other tools to read. The machine-readable
-contract is [`schemas/netlist-v1.schema.json`](schemas/netlist-v1.schema.json); this
+document, `<project name>-netlist.json`, for other tools to read. The project name is
+made portable the same way as for the fabrication files: ASCII letters, digits and `-`
+stay, every other character becomes `_`, and a name with nothing else left becomes
+`board`. The machine-readable contract is [`schemas/netlist-v1.schema.json`](schemas/netlist-v1.schema.json); this
 page explains what the fields mean and which guarantees a reader can rely on.
 
 ## Source of the connections
@@ -25,6 +27,8 @@ always `schematic` in format 1. Board copper is not consulted.
 | `unconnected` | Terminals of placed units that are on no net. |
 
 Every object is closed: a reader may reject unknown fields.
+UUIDs are written in the lowercase 36-character hyphenated form, and the reader
+accepts only that hyphenated form.
 
 ### Components
 
@@ -75,3 +79,7 @@ undo history.
 
 Footprint pads per terminal, a board-side netlist after a board update, and other
 formats are not part of format 1.
+
+Each sheet appears in the hierarchy once, because the editor refuses repeated sheet
+instances, so each unit has one `occurrence` path. When repeated instances arrive, a
+unit drawn on a reused sheet will need one entry per occurrence.

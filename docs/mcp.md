@@ -231,7 +231,8 @@ including case-insensitive collisions with fixed-purpose output names. One
 exportability without changing the project or revision.
 
 `project.export_netlist` generates the project's netlist without editing it;
-`execute` returns `netlist.files`, one `<project name>-netlist.json` with its `name`
+`execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
+fabrication files) with its `name`
 and text `contents`, and `netlist.findings` for unplaced units and nets without a
 persistent ID. `dry_run: true` returns only the file name and the findings. The
 document lists every component with its logical terminals and every net across all
