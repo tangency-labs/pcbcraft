@@ -1292,6 +1292,48 @@ fn fabrication_files_survive_suppressed_project_inspection() {
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 
+/// The placement origin is set through the shared dispatcher, and the fabrication result names
+/// the origin its coordinates are measured from.
+#[test]
+fn fabrication_result_names_the_placement_origin_it_used() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let project = setup.project().unwrap();
+    let board = project.board_target().unwrap();
+    let layer = project
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+        .unwrap()
+        .id;
+    setup.apply(pcbcraft_engine::ADD_DRAWING, &json!({"board":board.board,"layer":layer,"closed":true,"points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},{"x_nm":10_000_000,"y_nm":10_000_000},{"x_nm":0,"y_nm":10_000_000}],"expected_revision":setup.revision()})).unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let description = call(&mut server, "describe_command", json!({"command":pcbcraft_engine::SET_PLACEMENT_ORIGIN}));
+    assert_ne!(description["isError"], true, "{description}");
+    let export = |server: &mut Server| {
+        let response = call(server, "execute", json!({"command":pcbcraft_engine::EXPORT_FABRICATION,"params":{"board":board.board},"inspect":false}));
+        assert_ne!(response["isError"], true, "{response}");
+        body(&response)["fabrication"]["origin"].clone()
+    };
+    assert_eq!(export(&mut server)["source"], json!({"kind":"builtin"}));
+    let revision = body(&call(&mut server, "inspect_project", json!({})))["revision"].clone();
+    let response = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::SET_PLACEMENT_ORIGIN,"params":{"board":board.board,"expected_revision":revision,"origin":{"kind":"outline_lower_left"}}}),
+    );
+    assert_ne!(response["isError"], true, "{response}");
+    let authored = &body(&response)["project"]["boards"][0]["placement_origin"]["authored"];
+    let origin = export(&mut server);
+    assert_eq!(origin["anchor"], json!({"kind":"outline_lower_left"}));
+    assert_eq!(origin["source"], json!({"kind":"board","origin":authored["id"]}));
+    assert_eq!(origin["at"], json!({"x_nm":0,"y_nm":10_000_000}));
+    assert_eq!(origin["axes"], "x_right_y_up");
+}
+
 /// A netlist export with inspect:false still returns its file and leaves the project unchanged.
 #[test]
 fn netlist_file_survives_suppressed_project_inspection() {
