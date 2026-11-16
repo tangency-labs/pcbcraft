@@ -394,10 +394,11 @@ fn board_package_total_is_bounded() {
     assert!(decode_documents(&over).is_err(), "a saved board beyond the total is refused");
 }
 
-/// The largest board the limits allow (every house, every offset, the longest names and ids and
-/// the widest values) serializes far below the board document limit.
+/// The largest house list the limits allow (every house, every offset, the longest names, ids and
+/// the widest values) serializes to less than 2 MiB, an eighth of the 16 MiB
+/// board document limit. Only the houses are measured, not the rest of the board.
 #[test]
-fn largest_allowed_houses_fit_one_board_document() {
+fn largest_allowed_house_list_serializes_under_two_mebibytes() {
     let long_id = |n: usize| format!("{n:05}{}", "x".repeat(59));
     let per_house = MAX_BOARD_PACKAGES / MAX_HOUSES;
     let houses = (0..MAX_HOUSES)

@@ -25,8 +25,9 @@ pub const MAX_HOUSES: usize = 64;
 /// Package offsets one profile may carry.
 pub const MAX_PACKAGES: usize = 4096;
 /// Package offsets all profiles of one board may carry together. With 64-byte ids and the
-/// longest names, 64 houses holding this many entries serialize to well under 2 MiB, so a
-/// board that passes [`validate_all`] stays within the 16 MiB board document limit.
+/// longest names, 64 houses holding this many entries serialize to well under 2 MiB, so the
+/// house profiles add at most that much to the 16 MiB board document; this bound says nothing
+/// about the rest of the board.
 pub const MAX_BOARD_PACKAGES: usize = 4096;
 /// Longest house name, in characters.
 pub const MAX_NAME_CHARS: usize = 64;
