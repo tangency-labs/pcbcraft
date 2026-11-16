@@ -130,10 +130,22 @@ pub(crate) fn read(text: &str) -> Result<Read> {
 /// Every use of a read body in the world frame: the product structure's, then each body it does
 /// not place, by the identity. A refused item's placements are dropped with it. The expansion is
 /// counted before it runs and refused past [`MAX_PLACEMENTS`] or [`MAX_EXPANSION_WORK`].
+///
+/// Which bodies a body item gives is worked out once for each item: `topology::items` reads a
+/// surface model's whole shell list on every call, so calling it for each use would cost the
+/// list's length again each time the item is placed.
 fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<u64, usize>, count: usize) -> Result<Vec<(usize, [[f64; 4]; 4])>> {
     let unreadable = |e: String| GeometryError::new(ErrorCode::ModelUnreadable, format!("assembly structure: {e}"));
     let structure = solidcore_record::step::product::read(exchange).map_err(unreadable)?;
-    let bodies_of = |entity: u64| solidcore_step::topology::items(exchange, entity).iter().filter(|i| body_of_item.contains_key(i)).count() as u64;
+    let mut bodies: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    for representation in &structure.representations {
+        for item in representation.items.iter().filter(|i| matches!(i.kind, ItemKind::Body(_))) {
+            bodies.entry(item.entity).or_insert_with(|| {
+                solidcore_step::topology::items(exchange, item.entity).iter().filter_map(|i| body_of_item.get(i).copied()).collect()
+            });
+        }
+    }
+    let bodies_of = |entity: u64| bodies.get(&entity).map_or(0, |list| list.len() as u64);
     let cost = Expansion::new(&structure, &bodies_of).total().map_err(unreadable)?;
     if cost.placements > MAX_PLACEMENTS {
         return Err(unreadable(format!("the assembly places more than {MAX_PLACEMENTS} bodies")));
@@ -147,12 +159,10 @@ fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<
     for p in placed {
         // A surface model holding closed shells beside open ones is read as one body per closed
         // shell and one for the rest; the model's placement places them all.
-        for item in solidcore_step::topology::items(exchange, p.entity) {
-            if let Some(&body) = body_of_item.get(&item) {
-                out.push((body, p.transform));
-                if let Some(s) = seen.get_mut(body) {
-                    *s = true;
-                }
+        for &body in bodies.get(&p.entity).into_iter().flatten() {
+            out.push((body, p.transform));
+            if let Some(s) = seen.get_mut(body) {
+                *s = true;
             }
         }
     }
@@ -212,6 +222,10 @@ struct Expansion<'a> {
 }
 
 impl<'a> Expansion<'a> {
+    /// A count of `structure` not started yet, with each representation's relationships without
+    /// a transformation and each definition's children gathered once. An occurrence whose parent
+    /// is out of range is skipped, as the walk skips it; a relationship to a representation out
+    /// of range is still listed under its other end, so the count reports it as the walk does.
     fn new(structure: &'a ProductStructure, bodies_of: &'a dyn Fn(u64) -> u64) -> Expansion<'a> {
         let mut related = vec![Vec::new(); structure.representations.len()];
         for link in structure.links.iter().filter(|l| l.transformation.is_none()) {

@@ -123,6 +123,7 @@ fn an_assembly_that_contains_itself_is_model_unreadable() {
     assert_ne!(cycle, text);
     let error = read_step(cycle.as_bytes()).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains("assembly cycle"), "{error}");
 }
 
 /// `assembly.step` with the part placed `x_mm` along x instead of 45 mm.
@@ -145,6 +146,7 @@ fn a_placement_one_kilometre_out_reads_and_one_step_further_is_model_unreadable(
 
     let error = read_step(&assembly_with_part_at("1000000.000001")).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains("outside the supported range"), "{error}");
 }
 
 /// `assembly.step` with both parts made surface models that share the board's closed shell, each
@@ -230,13 +232,15 @@ fn mapped_tree(factors: &[usize], extra: bool, pad: (usize, usize)) -> Vec<u8> {
 }
 
 /// The mapped-item expansion is bounded before it runs: a few hundred bytes that would place the
-/// block 2^20 times are refused, 100,000 placements read, and one more is refused.
+/// block 2^20 times are refused, 100,000 placements read, and one more is refused. Both refusals
+/// are the pre-count's (its message), not the walk's own instance limit.
 #[test]
 fn a_mapped_item_expansion_past_100000_placements_is_model_unreadable() {
     let huge = mapped_tree(&[2; 20], false, (0, 0));
     assert!(huge.len() < 20_000);
     let error = read_step(&huge).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains("the assembly places more than 100000 bodies"), "{error}");
 
     let limit = [5, 5, 5, 5, 5, 2, 2, 2, 2, 2];
     let read = read_step(&mapped_tree(&limit, false, (0, 0))).unwrap();
@@ -244,6 +248,7 @@ fn a_mapped_item_expansion_past_100000_placements_is_model_unreadable() {
 
     let error = read_step(&mapped_tree(&limit, true, (0, 0))).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains("the assembly places more than 100000 bodies"), "{error}");
 }
 
 /// `tree` with `count` relationships between two representations nothing places, before the end
@@ -277,7 +282,7 @@ fn an_expansion_of_more_than_1000000_steps_is_model_unreadable() {
     assert_eq!(read.placements.len(), 65_536);
     let error = read_step(&mapped_tree(&[2; 16], false, (8, 16_962))).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
-    assert!(error.to_string().contains("1000000 steps"), "{error}");
+    assert!(error.to_string().contains("the assembly takes more than 1000000 steps to expand"), "{error}");
 }
 
 /// Relationships the walk scans for each mapped item count in the bound: 2^16 placements under
@@ -291,12 +296,40 @@ fn relationships_scanned_for_each_mapped_item_count_in_the_bound() {
     assert_eq!(read_step(&tree).unwrap().placements.len(), 65_536);
     let error = read_step(&with_unrelated_links(tree, 10_000)).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
-    assert!(error.to_string().contains("1000000 steps"), "{error}");
+    assert!(error.to_string().contains("the assembly takes more than 1000000 steps to expand"), "{error}");
 
     assert_eq!(steps(6, (0, 63), 7_870), 1_000_000);
     let read = read_step(&with_unrelated_links(mapped_tree(&[2; 6], false, (0, 63)), 7_870)).unwrap();
     assert_eq!(read.placements.len(), 64);
     let error = read_step(&with_unrelated_links(mapped_tree(&[2; 6], false, (0, 64)), 7_870)).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
-    assert!(error.to_string().contains("1000000 steps"), "{error}");
+    assert!(error.to_string().contains("the assembly takes more than 1000000 steps to expand"), "{error}");
+}
+
+/// A surface model of many shells placed many times is read in time that does not grow with
+/// shells × uses: which bodies the model gives is worked out once, not at each placement. The
+/// block's representation also lists a model of 20,000 empty closed shells (refused), and the
+/// tree places both 32,768 times; working the bodies out at each use would read the shell list
+/// about 6.5·10^8 times, which takes minutes in a debug build.
+#[test]
+fn a_surface_model_of_many_shells_placed_many_times_reads_in_under_30_s() {
+    const SHELLS: usize = 20_000;
+    let tree = String::from_utf8(mapped_tree(&[2; 15], false, (0, 0))).unwrap();
+    let shells: Vec<String> = (0..SHELLS).map(|i| format!("#{}", 600_001 + i)).collect();
+    let mut lines = vec![format!("#600000=SHELL_BASED_SURFACE_MODEL('',({}));", shells.join(","))];
+    lines.extend(shells.iter().map(|shell| format!("{shell}=CLOSED_SHELL('',());")));
+    let text = tree.replacen("('box',(#159,#167", "('box',(#159,#600000,#167", 1).replacen(
+        "ENDSEC;\nEND-ISO-10303-21;",
+        &format!("{}\nENDSEC;\nEND-ISO-10303-21;", lines.join("\n")),
+        1,
+    );
+    assert!(text.contains("#600000,#167") && text.contains("#600001=CLOSED_SHELL"));
+
+    let start = std::time::Instant::now();
+    let read = read_step(text.as_bytes()).unwrap();
+    let seconds = start.elapsed().as_secs_f64();
+    assert_eq!(read.bodies.len(), 1);
+    assert_eq!(read.placements.len(), 32_768);
+    assert!(read.refused.iter().any(|r| r.entity == 600_000), "{:?}", read.refused);
+    assert!(seconds < 30.0, "read in {seconds:.1} s");
 }

@@ -135,6 +135,7 @@ At SolidCraft revision `73bdb6c`:
 | A few hundred bytes of mapped items that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | An expansion of exactly 1,000,000 steps, and of one more | read; `model_unreadable` |
 | 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 64 placements and 7,870 relationships at exactly 1,000,000 steps, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
+| A surface model of 20,000 empty closed shells beside the block, both placed 32,768 times through mapped items | read in under 30 s: one body, 32,768 placements, the model refused |
 | A board of 500 components of 16 pins, each component its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
@@ -213,7 +214,9 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   relationship then). The reader counts the expansion from the product graph
   before it expands anything, so a small file that would place a body millions
   of times through mapped items, or make the expansion scan thousands of
-  relationships for each of them, is refused without being expanded. A large
+  relationships for each of them, is refused without being expanded. Which
+  bodies an item gives (a surface model can give one per closed shell) is
+  worked out once for each item, not again at each of its placements. A large
   board exported with one body for each pin can come near the 100,000-body
   figure. Memory grows with the bodies: the measured board needed about 110 KiB
   for each placed body (944 MiB for 8,500), so a file near the limit can need

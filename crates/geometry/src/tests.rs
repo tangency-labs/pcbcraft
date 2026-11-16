@@ -132,6 +132,7 @@ fn an_unsupported_surface_refuses_only_its_solid() {
     let read = read_step(edited.as_bytes()).unwrap();
     assert_eq!(read.refused.len(), 1);
     assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
+    assert!(read.refused[0].message.contains("UNKNOWN_SURFACE"), "{}", read.refused[0].message);
     assert!(read.refused[0].entity > 0);
     assert_eq!(read.bodies.len(), 1);
     assert_eq!(read.bodies[0].name(), "Block", "the solid left whole is the one read");
@@ -187,12 +188,17 @@ fn a_transformed_copy_moves_and_leaves_the_original() {
     assert!(body.bounding_box().unwrap().max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM);
 
     let flat = Transform { axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]], translation_nm: [0; 3] };
-    assert_eq!(body.transformed(&flat).unwrap_err().code(), ErrorCode::InvalidParams);
+    let refused = |transform: Transform, reason: &str| {
+        let error = body.transformed(&transform).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+        assert!(error.to_string().contains(reason), "{reason}: {error}");
+    };
+    refused(flat, "transform: the kernel refused an argument");
     let not_finite = Transform { axes: [[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [0; 3] };
-    assert_eq!(body.transformed(&not_finite).unwrap_err().code(), ErrorCode::InvalidParams);
+    refused(not_finite, "a transform axis is not finite");
     assert!(body.transformed(&Transform::translation([-MAX_LENGTH_NM, 0, MAX_LENGTH_NM])).is_ok());
-    assert_eq!(body.transformed(&Transform::translation([MAX_LENGTH_NM + 1, 0, 0])).unwrap_err().code(), ErrorCode::InvalidParams);
-    assert_eq!(body.transformed(&Transform::translation([0, -MAX_LENGTH_NM - 1, 0])).unwrap_err().code(), ErrorCode::InvalidParams);
+    refused(Transform::translation([MAX_LENGTH_NM + 1, 0, 0]), "a coordinate lies outside the supported range");
+    refused(Transform::translation([0, -MAX_LENGTH_NM - 1, 0]), "a coordinate lies outside the supported range");
 }
 
 /// A placement naming a body the read does not hold is `invalid_params` for the placed bodies
@@ -202,8 +208,10 @@ fn a_placement_of_a_missing_body_is_refused() {
     let (body, _) = block();
     let mut read = read_step(&write_step("fixture", &[body]).unwrap()).unwrap();
     read.placements.push(Placement { body: 1, transform: Transform::IDENTITY });
-    assert_eq!(read.placed_bodies().unwrap_err().code(), ErrorCode::InvalidParams);
-    assert_eq!(read.bounding_box().unwrap_err().code(), ErrorCode::InvalidParams);
+    for error in [read.placed_bodies().unwrap_err(), read.bounding_box().unwrap_err()] {
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+        assert!(error.to_string().contains("placement of body 1 out of range"), "{error}");
+    }
     read.placements.truncate(1);
     assert_eq!(read.placed_bodies().unwrap().len(), 1);
 }
