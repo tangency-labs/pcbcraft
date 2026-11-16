@@ -119,13 +119,14 @@ pub struct House {
 }
 
 /// One saved package entry. The command accepts an explicit zero rotation and drops it, but a
-/// saved file never contains one, so the reader refuses it to keep a no-op save byte-identical.
+/// saved file never contains one (nor a `null`), so the reader refuses both to keep a no-op save
+/// byte-identical.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedOffset {
     library: String,
     definition: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::reference::present")]
     rotation: Option<u16>,
     #[serde(default, deserialize_with = "super::reference::present")]
     centroid: Option<Point>,

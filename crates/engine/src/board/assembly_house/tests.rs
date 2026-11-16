@@ -409,6 +409,7 @@ fn house_format_round_trips_and_reset_restores_previous_bytes() {
     assert!(refused("\"rotation\":270", "\"rotation\":360"));
     assert!(refused("\"rotation\":270", "\"rotation\":0"), "an entry that changes nothing");
     assert!(refused("\"rotation\":180,", "\"rotation\":0,"), "an explicit zero is never written");
+    assert!(refused("\"rotation\":180,", "\"rotation\":null,"), "a null rotation is never written");
     let reel_id = house(&s, "Reel").to_string();
     assert!(refused(&reel_id, &Uuid::nil().to_string()), "nil identities are refused");
     assert!(refused(&reel_id, &house(&s, "Plain").to_string()), "identities must stay unique");
