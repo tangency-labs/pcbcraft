@@ -118,12 +118,13 @@ impl PcbApp {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let ctx = ui.ctx().clone();
         let main = self.views.host == self.views.main;
+        // Assistant focus only withholds editing keys, so Ctrl+, below stays available.
         #[cfg(not(target_arch = "wasm32"))]
-        let assistant_keys = main && self.assistant_shortcuts(&ctx);
+        if main {
+            self.assistant_shortcuts(&ctx);
+        }
         #[cfg(target_arch = "wasm32")]
         let _ = main;
-        #[cfg(target_arch = "wasm32")]
-        let assistant_keys = false;
         let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
         let home = std::cell::Cell::new(false);
         let mut picked = crate::Utilities::default();
@@ -150,7 +151,7 @@ impl PcbApp {
             self.show_home();
         }
         self.apply_utilities(&ctx, picked);
-        if enabled && !assistant_keys && !ctx.egui_wants_keyboard_input() && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
+        if enabled && !ctx.egui_wants_keyboard_input() && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
             self.open_preferences();
         }
         ui.add_enabled_ui(enabled, |ui| {

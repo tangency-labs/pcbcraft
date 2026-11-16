@@ -1102,6 +1102,32 @@ mod tests {
         assert!(matches!(harness.state().dialog, crate::Dialog::Preferences(_)));
         Ok(())
     }
+
+    /// #336: in the library workspaces, Assistant focus also leaves Preferences on Ctrl+,.
+    #[test]
+    fn library_assistant_focus_keeps_preferences_available() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({"name": "Library shortcut fixture"}))?;
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.run();
+        for workspace in ["Symbol Editor", "Parts Library"] {
+            click(&mut harness, "Choose workspace");
+            click(&mut harness, workspace);
+            click(&mut harness, "Assistant");
+            let point = harness.state().assistant.panel_rect.ok_or("Assistant panel is missing")?.center();
+            harness.drag_at(point);
+            harness.run();
+            harness.drop_at(point);
+            harness.run();
+            assert!(harness.state().assistant.keyboard_active, "{workspace}");
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+            harness.run();
+            assert!(matches!(harness.state().dialog, crate::Dialog::Preferences(_)), "{workspace}");
+            harness.state_mut().dialog = crate::Dialog::None;
+            click(&mut harness, "Close Assistant");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -705,10 +705,11 @@ impl PcbApp {
             |ui, width| picked = crate::utilities(ui, width, assistant),
         );
         self.apply_utilities(&ctx, picked);
+        // Like the project workspaces, Assistant focus withholds editing keys but not Preferences.
+        if enabled && !ctx.egui_wants_keyboard_input() && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
+            self.open_preferences();
+        }
         if enabled && !assistant_keys && !ctx.egui_wants_keyboard_input() {
-            if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
-                self.open_preferences();
-            }
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_S)) {
                 intents.borrow_mut().push(if IN_BROWSER { Intent::Save(false) } else { Intent::Publish });
             }
