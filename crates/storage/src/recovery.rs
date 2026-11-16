@@ -109,10 +109,14 @@ pub fn new_entry_id(project: &Project) -> String {
     format!("{}-{:x}-{stamp:x}", project.id(), std::process::id())
 }
 
-/// Entry ids are file stems: ASCII letters, digits and hyphens only, so no id can name a path
-/// outside the recovery folder.
+/// Entry ids are file stems: lower-case ASCII letters, digits and hyphens only, so no id can name
+/// a path outside the recovery folder, and two ids never name the same files on a file system
+/// that ignores case. Windows device names (`con`, `nul`, `com1`, ...) are refused, since Windows
+/// opens the device for `nul.pc` and the like.
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= MAX_ID_LEN && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    const DEVICES: [&str; 4] = ["con", "prn", "aux", "nul"];
+    let device = DEVICES.contains(&id) || (id.len() == 4 && (id.starts_with("com") || id.starts_with("lpt")) && id.as_bytes()[3].is_ascii_digit());
+    !id.is_empty() && id.len() <= MAX_ID_LEN && !device && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// The entry's file with extension `ext`.
@@ -293,12 +297,12 @@ pub struct EditJournal {
     id: String,
     /// Kept open and locked; released when the journal is dropped or the process ends.
     _lock: File,
-    file: File,
+    /// The journal, open for appending. `None` after an append failed part-way or a new
+    /// snapshot was published without its journal; the next edit then starts a new snapshot
+    /// instead of appending.
+    file: Option<File>,
     documents: Documents,
     sha256: String,
-    /// Set when an append failed part-way, or a new snapshot was published without its journal;
-    /// the next edit starts a new snapshot instead of appending.
-    broken: bool,
     /// Bytes in the journal file, header included.
     journal_bytes: u64,
     /// Journal size above which the next recorded edit starts a new snapshot.
@@ -325,10 +329,9 @@ impl EditJournal {
             dir: dir.to_path_buf(),
             id: id.to_owned(),
             _lock: lock,
-            file,
+            file: Some(file),
             documents: base,
             sha256,
-            broken: false,
             journal_bytes,
             rebase_after: rebase_limit(snapshot_bytes, REBASE_FLOOR_BYTES),
             floor: REBASE_FLOOR_BYTES,
@@ -351,16 +354,18 @@ impl EditJournal {
     ///
     /// If the snapshot cannot be written, nothing on disk changes and the old snapshot and
     /// journal stay valid; the size count is kept, so the next edit tries again. If only the new
-    /// journal cannot be written, the new snapshot already holds `base` and the next edit starts
-    /// another snapshot.
+    /// journal cannot be written, the new snapshot already holds `base`, no journal is open and
+    /// the next edit starts another snapshot.
+    ///
+    /// The old journal is closed before the new one is renamed over it, because Windows refuses
+    /// to replace a file that is open.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
         let snapshot_bytes = publish_snapshot(&self.dir, &self.id, &base)?;
         self.sha256 = documents_sha256(&base);
         self.documents = base;
-        self.broken = true;
+        drop(self.file.take());
         let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &self.sha256)?;
-        self.file = file;
-        self.broken = false;
+        self.file = Some(file);
         self.journal_bytes = journal_bytes;
         self.rebase_after = rebase_limit(snapshot_bytes, self.floor);
         Ok(())
@@ -372,17 +377,19 @@ impl EditJournal {
     /// Once the journal passes its size limit, the recorded state becomes a new snapshot; if that
     /// fails the edit stays recorded in the old journal and the error is returned.
     pub fn append(&mut self, edit: &CommittedEdit, documents: Documents) -> Result<(), String> {
-        if self.broken {
+        let Some(file) = self.file.as_mut() else {
             return self.rebase(documents);
-        }
+        };
         let sha256 = documents_sha256(&documents);
         if sha256 == self.sha256 {
             return Ok(());
         }
         let bytes = frame(&encode_record(edit, &self.documents, &self.sha256, &documents, &sha256)?)?;
-        self.broken = true;
-        self.file.write_all(&bytes).and_then(|()| self.file.sync_data()).map_err(|e| e.to_string())?;
-        self.broken = false;
+        if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
+            // The journal may now end in a torn record; close it so nothing is appended past it.
+            self.file = None;
+            return Err(error.to_string());
+        }
         self.journal_bytes = self.journal_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         self.documents = documents;
         self.sha256 = sha256;
@@ -479,12 +486,12 @@ fn record(dir: &Path, id: &str, receiver: &mpsc::Receiver<Message>) {
                 if result.is_err()
                     && let Some(journal) = &mut journal
                 {
-                    journal.broken = true;
+                    journal.file = None;
                 }
                 result
             }
             // An edit that cannot be encoded is folded into the next record, which starts from
-            // the last state written; the journal marks itself broken after a failed write.
+            // the last state written; the journal closes itself after a failed write.
             Message::Committed(edit) => {
                 encode_documents(edit.project.clone()).and_then(|documents| write(&mut journal, dir, id, Some(&edit), documents))
             }

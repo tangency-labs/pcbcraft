@@ -978,6 +978,11 @@ because the snapshot is published first and already holds its edits. A newer
 format line is refused, for the caller to offer for discard. The store's layout
 and record encoding are private to PCBCraft and carry no compatibility promise
 beyond that refusal. Directory flushes have the same Unix-only limit as saves.
+Windows refuses to rename a file over one that is open, so the writer closes its
+journal before publishing the next one. While another process has the snapshot
+or journal open, for example while reading the entry, publishing over it fails
+there; the old snapshot and journal stay valid, or the new snapshot already
+holds every edit, and the writer starts a new snapshot at the next edit.
 
 The journal has a size limit. When it grows past twice the size of its snapshot,
 or past 1 MiB if that is larger, the state after the edit that crossed the limit

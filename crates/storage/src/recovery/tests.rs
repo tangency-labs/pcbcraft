@@ -184,8 +184,9 @@ fn a_record_from_another_state_stops_replay() {
         CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: 99, project: decode_documents(&states[0]).unwrap() };
     let foreign =
         frame(&encode_record(&edit, &states[0], &documents_sha256(&states[0]), &states[1], &documents_sha256(&states[1])).unwrap()).unwrap();
-    journal.file.seek(SeekFrom::End(0)).unwrap();
-    journal.file.write_all(&foreign).unwrap();
+    let file = journal.file.as_mut().unwrap();
+    file.seek(SeekFrom::End(0)).unwrap();
+    file.write_all(&foreign).unwrap();
     drop(journal);
     let recovered = recover(dir.path(), "entry").unwrap();
     assert_eq!(recovered.documents, states[2]);
@@ -196,8 +197,9 @@ fn a_record_from_another_state_stops_replay() {
 fn recover_with_appended(extra: impl FnOnce(&[Documents]) -> Vec<u8>) -> (Recovered, Vec<Documents>) {
     let dir = tempfile::tempdir().unwrap();
     let (mut journal, states) = journal_with(dir.path(), 2);
-    journal.file.seek(SeekFrom::End(0)).unwrap();
-    journal.file.write_all(&extra(&states)).unwrap();
+    let file = journal.file.as_mut().unwrap();
+    file.seek(SeekFrom::End(0)).unwrap();
+    file.write_all(&extra(&states)).unwrap();
     drop(journal);
     (recover(dir.path(), "entry").unwrap(), states)
 }
@@ -280,11 +282,12 @@ fn an_entry_has_one_writer() {
     assert!(EditJournal::create(dir.path(), "entry", states[0].clone()).is_ok());
 }
 
-/// Ids that could name a path outside the recovery folder are refused before any I/O.
+/// Ids that could name a path outside the recovery folder, differ from another only in case, or
+/// name a Windows device are refused before any I/O.
 #[test]
 fn entry_ids_are_plain_file_stems() {
     let dir = tempfile::tempdir().unwrap();
-    for id in ["", "../escape", "a/b", "a.b", &"x".repeat(65)] {
+    for id in ["", "../escape", "a/b", "a.b", "a\\b", "Entry", "con", "nul", "com1", "lpt9", &"x".repeat(65)] {
         assert!(EditJournal::create(dir.path(), id, Documents::new()).is_err());
         assert!(recover(dir.path(), id).is_err());
     }
@@ -294,6 +297,7 @@ fn entry_ids_are_plain_file_stems() {
     let longest = "x".repeat(MAX_ID_LEN);
     drop(EditJournal::create(dir.path(), &longest, encode_documents(session.snapshot().unwrap()).unwrap()).unwrap());
     assert!(recover(dir.path(), &longest).unwrap().stop.is_none());
+    assert!(valid_id("console") && valid_id("com") && valid_id("com10"));
     let project = session.project().unwrap();
     let (first, second) = (new_entry_id(project), new_entry_id(project));
     assert_ne!(first, second);
