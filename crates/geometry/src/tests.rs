@@ -84,6 +84,7 @@ fn writing_the_same_bodies_twice_gives_the_same_bytes() {
 fn a_kernel_panic_is_reported_as_kernel_internal() {
     let error = kernel_crash_test().unwrap_err();
     assert_eq!(error.code(), ErrorCode::KernelInternal);
+    assert!(error.message().starts_with("crash test: "), "{error}");
 
     // A panic outside solidcore's own session guard, as in the STEP reader, is caught here.
     let error = guard("probe", || -> Result<()> { panic!("probe failure") }).unwrap_err();
@@ -124,11 +125,15 @@ fn a_file_without_solids_reads_as_empty() {
 fn an_unsupported_surface_refuses_only_its_solid() {
     let (body, _) = block();
     let bytes = write_step("fixture", &[body]).unwrap();
+    // The same file with its planes intact reads, so only the unknown surface refuses the solid.
+    let intact = read_step(&bytes).unwrap();
+    assert_eq!((intact.bodies.len(), intact.refused.len()), (1, 0));
     let text = String::from_utf8(bytes).unwrap().replace("=PLANE(", "=UNKNOWN_SURFACE(");
     let read = read_step(text.as_bytes()).unwrap();
     assert!(read.bodies.is_empty());
     assert_eq!(read.refused.len(), 1);
     assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
+    assert!(read.refused[0].message.contains("not supported yet"), "{}", read.refused[0].message);
     assert!(read.refused[0].entity > 0);
 }
 
@@ -253,12 +258,18 @@ fn a_body_record_the_kernel_cannot_make_keeps_its_code() {
     // A valid body cannot be made to fail its record here, so the record step is replaced.
     let bodies = [("Block", ())];
     let emit = |_: &[(&str, ())]| -> Result<String> { Ok(String::new()) };
-    let caught = kernel::write_with(&bodies, |_| Err(solidcore_ops::Error::Internal("probe".into())), emit);
-    assert_eq!(caught.unwrap_err().code(), ErrorCode::KernelInternal);
-    let panicked = kernel::write_with(&bodies, |_| -> solidcore_ops::Result<()> { panic!("probe") }, emit);
-    assert_eq!(panicked.unwrap_err().code(), ErrorCode::KernelInternal);
-    let refused = kernel::write_with(&bodies, |_| Err(solidcore_ops::Error::Unsupported("probe")), emit);
-    assert_eq!(refused.unwrap_err().code(), ErrorCode::OperationFailed);
+    // With a record that can be made the write succeeds, so only the record step refuses below,
+    // and each message carries its own probe text.
+    assert!(kernel::write_with(&bodies, |_| Ok(()), emit).is_ok());
+    let caught = kernel::write_with(&bodies, |_| Err(solidcore_ops::Error::Internal("caught probe".into())), emit).unwrap_err();
+    assert_eq!(caught.code(), ErrorCode::KernelInternal);
+    assert_eq!(caught.message(), "STEP write: caught probe");
+    let panicked = kernel::write_with(&bodies, |_| -> solidcore_ops::Result<()> { panic!("panic probe") }, emit).unwrap_err();
+    assert_eq!(panicked.code(), ErrorCode::KernelInternal);
+    assert_eq!(panicked.message(), "STEP write: panic probe");
+    let refused = kernel::write_with(&bodies, |_| Err(solidcore_ops::Error::Unsupported("unsupported probe")), emit).unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::OperationFailed);
+    assert!(refused.message().starts_with("STEP write: ") && refused.message().contains("unsupported probe"), "{refused}");
 }
 
 /// Each `#id=MANIFOLD_SOLID_BREP('name',#shell);` line of a STEP text: id, shell, name.
