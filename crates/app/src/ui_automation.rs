@@ -644,7 +644,7 @@ impl Action {
     }
 }
 
-/// Discover the live automation contract beside the existing project/window command catalog.
+/// Discover the live automation contract, with each command's contract version, beside the project/window command catalog.
 pub(super) fn catalog() -> Vec<Value> {
     let point = json!({"oneOf":[{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},
         {"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}]});
@@ -663,7 +663,8 @@ pub(super) fn catalog() -> Vec<Value> {
         ("scroll","Scroll at a named target or logical point",json!({"target":point,"delta_x":{"type":"number"},"delta_y":{"type":"number"},"modifiers":keys}),vec!["target","delta_x","delta_y"]),
     ].into_iter().map(|(name,title,mut properties,mut required)| {
         if !matches!(name,"inspect"|"cancel"|"handles"|"at") { properties["window"]=json!({"type":"integer"});properties["layout"]=json!({"type":"integer"});required.push("window"); }
-        json!({"id":format!("ui.{name}"),"title":title,"summary":format!("{title}. Native live editor only. Input returns a ticket; poll ui.inspect until completed before sending more input. Coordinates are window-local logical points."),
+        let id = format!("ui.{name}");
+        json!({"version":pcbcraft_engine::command_versions::version(&id),"id":id,"title":title,"summary":format!("{title}. Native live editor only. Input returns a ticket; poll ui.inspect until completed before sending more input. Coordinates are window-local logical points."),
             "scope":"window","params":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     }).collect()
 }

@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+MCP discovery gives every command an integer contract `version`, and
+`list_commands` adds the `catalog_version` and the optional protocol features
+the build offers, so an agent can tell when a command it was written for has
+changed. Existing replies keep their fields; see
+[command versions](docs/mcp.md#command-versions).
+
 Preferences → Appearance → **Panel style** switches the workspace shell
 between **Floating** cards and a **Compact** layout, following SolidCraft. In
 Compact the ribbon, workspace tile, Browser, Net Inspector, docked panels and

@@ -179,6 +179,38 @@ for named targets, window-local coordinates, completion tickets and cancellation
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
 
+## Command versions
+
+Every command that `list_commands`, `describe_command` and the
+`pcbcraft://commands` resource describe carries an integer `version`, starting
+at 1. Project, window and `ui.` commands are versioned alike, in live and
+headless sessions. A command's version rises when its parameters or its result
+change, and only that command's version rises; a new optional parameter is
+also a change. Reworded titles, summaries and parameter descriptions are not.
+Versions never fall.
+
+`list_commands` keeps returning the command array as its first text part. A
+second text part, also given as the result's `structuredContent`, reads
+`{"catalog_version": 1, "capabilities": ["command_versions"]}`.
+`catalog_version` rises whenever any command's version rises, so a client can
+tell from one number that a contract it relied on may have changed.
+`capabilities` names the optional protocol features this build offers; a
+feature added later is appended and none is removed. These versions describe
+PCBCraft's commands. They are separate from the MCP `protocolVersion`
+negotiated by `initialize` and from `serverInfo.version`, the build's version.
+Command versions are not saved in projects.
+
+[`docs/schemas/commands-v1.json`](schemas/commands-v1.json) records each
+command's version and a SHA-256 digest of its description with object keys
+sorted, leaving out `version`, `title`, `summary` and `description`. The engine
+and app tests fail when a described parameter schema changes while its version
+stays, when a version falls, or when a version rises without `CATALOG_VERSION`
+in `crates/engine/src/command_versions.rs`. To change a command's contract,
+raise its entry in that file's version table and `CATALOG_VERSION`, then copy
+the section the failing test prints into the lock. Adding or removing a command
+only needs the lock refreshed the same way. Results are not described, so a
+changed result needs the same bump without a failing test to prompt it.
+
 ## Headless MCP
 
 `nets.promote` and `nets.resolve_ambiguity` use the shared revision-checked

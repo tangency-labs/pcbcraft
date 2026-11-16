@@ -317,7 +317,7 @@ mod live {
     }
 
     impl WindowCommand {
-        /// Describe the command like an engine command, marked as acting on the window.
+        /// Describe the command like an engine command, with its contract version, marked as acting on the window.
         fn to_json(self) -> Value {
             let properties: Map<String, Value> = self
                 .params
@@ -331,6 +331,7 @@ mod live {
             let required: Vec<&str> = self.params.iter().filter(|param| param.required).map(|param| param.name).collect();
             json!({
                 "id": self.id,
+                "version": pcbcraft_engine::command_versions::version(self.id),
                 "title": self.title,
                 "summary": self.summary,
                 "scope": "window",
@@ -1773,6 +1774,27 @@ mod live {
                 assert!(command.params.iter().all(|param| !param.summary.is_empty()));
             }
             assert!(!pcbcraft_engine::catalog().iter().any(|command| pcbcraft_mcp::is_window_command(command.id)));
+        }
+
+        /// Window and UI input commands are versioned like engine commands and locked beside
+        /// them, so a changed contract that kept its version fails here.
+        #[test]
+        fn window_commands_match_the_committed_lock() {
+            use pcbcraft_engine::command_versions::{CATALOG_VERSION, LockMismatch, check_lock, version};
+            let lock: Value = serde_json::from_str(include_str!("../../../docs/schemas/commands-v1.json")).unwrap();
+            let mut described = window_catalog();
+            described.extend(crate::ui_automation::catalog());
+            for command in &described {
+                assert_eq!(command["version"], json!(version(command["id"].as_str().unwrap())), "{command}");
+            }
+            match check_lock(&lock, "window_commands", &described, CATALOG_VERSION) {
+                Ok(()) => {}
+                Err(LockMismatch::Version(problems)) => panic!("{}", problems.join("\n")),
+                Err(LockMismatch::Stale { problems, section }) => panic!(
+                    "{}\nthe \"window_commands\" section of docs/schemas/commands-v1.json should read:\n  \"window_commands\": {section}",
+                    problems.join("\n")
+                ),
+            }
         }
 
         /// GUI and live discovery preferences share typed validation; refusal changes no state.

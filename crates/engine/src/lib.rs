@@ -11,6 +11,7 @@ pub mod authoring;
 pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
+pub mod command_versions;
 pub mod hierarchy;
 pub mod instances;
 pub mod library;
@@ -697,7 +698,7 @@ pub struct Command {
 }
 
 impl Command {
-    /// Describe the command and its required inputs for discovery by MCP clients.
+    /// Describe the command, its contract version and its required inputs for discovery by MCP clients.
     pub fn to_json(&self) -> Value {
         let mut params: Map<String, Value> = self
             .params
@@ -714,6 +715,7 @@ impl Command {
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         json!({
             "id": self.id,
+            "version": command_versions::version(self.id),
             "title": self.title,
             "summary": self.summary,
             "params": {"type": "object", "properties": params, "required": required, "additionalProperties": false},

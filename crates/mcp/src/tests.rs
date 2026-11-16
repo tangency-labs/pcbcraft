@@ -650,6 +650,35 @@ fn list_commands_filters() {
     let all = body(&result);
     assert_eq!(all.as_array().unwrap().len(), 1);
     assert_eq!(all[0]["id"], "edit.undo");
+    assert_eq!(all[0]["version"], 1);
+}
+
+/// Discovery gives every command its contract version and the list its catalog version, the
+/// same through `list_commands`, `describe_command` and the catalog resource, and the listed
+/// contracts match the committed lock.
+#[test]
+fn discovery_reports_command_and_catalog_versions() {
+    use pcbcraft_engine::command_versions::{CAPABILITIES, CATALOG_VERSION, check_lock};
+    let mut s = server();
+    body(&call(&mut s, "execute", json!({"command": "project.new"})));
+    let listed = call(&mut s, "list_commands", json!({}));
+    let commands = body(&listed);
+    let about: Value = serde_json::from_str(listed["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(about, listed["structuredContent"]);
+    assert_eq!(about, json!({"catalog_version": CATALOG_VERSION, "capabilities": CAPABILITIES}));
+    assert!(about["capabilities"].as_array().unwrap().contains(&json!("command_versions")));
+    for command in commands.as_array().unwrap() {
+        assert_eq!(command["version"], pcbcraft_engine::command_versions::version(command["id"].as_str().unwrap()), "{command}");
+        assert_eq!(&body(&call(&mut s, "describe_command", json!({"command": command["id"]}))), command);
+    }
+    let lock: Value = serde_json::from_str(include_str!("../../../docs/schemas/commands-v1.json")).unwrap();
+    assert_eq!(check_lock(&lock, "commands", commands.as_array().unwrap(), CATALOG_VERSION), Ok(()));
+    let reply = rpc(&mut s, "resources/read", json!({"uri": "pcbcraft://commands"}));
+    let resource: Value = serde_json::from_str(reply["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(resource, commands);
+    let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
+    assert_eq!(failed["isError"], true);
+    assert!(failed.get("structuredContent").is_none());
 }
 
 #[test]
