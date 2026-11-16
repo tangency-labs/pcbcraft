@@ -343,3 +343,27 @@ fn board_format_24_carries_stack_fields_and_rules() {
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved(&s, "pcbcraft-board/19"), ruled);
 }
+
+/// Locked copper also travels in format 24 without any format 20 stack field, and dropping the
+/// reports returns to format 18 byte for byte.
+#[test]
+fn board_format_24_carries_locked_copper() {
+    use crate::board::track::{ADD_VIA, SET_COPPER_LOCKED};
+    let mut s = crate::board::track::tests::routed_fixture();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    apply(&mut s, ADD_VIA, json!({"board":board,"at":{"x_nm":0,"y_nm":40_000_000}}));
+    let via = s.project().unwrap().board.vias[0].id;
+    apply(&mut s, SET_COPPER_LOCKED, json!({"board":board,"vias":[via],"locked":true}));
+    let locked = saved(&s, "pcbcraft-board/18");
+    let mut c = setup(&s);
+    let mut material = json!({"id":Uuid::from_u128(302),"revision":1,"name":"Synthetic insulation"});
+    material["cti"] = reports()["cti"].clone();
+    c["materials"] = json!([material]);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
+    let documents = saved(&s, "pcbcraft-board/24");
+    let reopened = persistence::decode_documents(&documents).unwrap();
+    assert!(reopened.board.vias.iter().any(|via| via.locked));
+    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/18")).is_err());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved(&s, "pcbcraft-board/18"), locked);
+}
