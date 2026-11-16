@@ -108,6 +108,8 @@ pub struct Unit {
 #[serde(deny_unknown_fields)]
 pub struct TerminalInfo {
     pub terminal: String,
+    /// The terminal's name, or explicit null when it has none.
+    #[serde(deserialize_with = "nullable")]
     pub name: Option<String>,
     pub electrical_type: ElectricalType,
 }
@@ -116,7 +118,8 @@ pub struct TerminalInfo {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Net {
-    /// Persistent registry UUID, or null for a net the registry does not identify.
+    /// Persistent registry UUID, or explicit null for a net the registry does not identify.
+    #[serde(deserialize_with = "nullable")]
     pub id: Option<Uuid>,
     /// The name the Net Inspector shows.
     pub name: String,
@@ -132,6 +135,12 @@ pub struct Net {
 pub struct TerminalRef {
     pub part: String,
     pub terminal: String,
+}
+
+/// Read an optional value that must still be present: the format writes null rather than
+/// omitting the field, so a missing field is an error instead of a silent `None`.
+fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Option<T>, D::Error> {
+    Option::deserialize(de)
 }
 
 impl Netlist {

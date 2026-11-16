@@ -228,6 +228,8 @@ fn export_is_byte_identical_and_edits_nothing() {
     let dry = session.execute(EXPORT_NETLIST, &json!({"dry_run":true})).unwrap();
     assert_eq!(dry["netlist"]["files"], json!([{"name":first.name}]));
     assert_eq!(dry["netlist"]["findings"], result["netlist"]["findings"]);
+    let full = session.execute(EXPORT_NETLIST, &json!({"dry_run":false})).unwrap();
+    assert_eq!(full["netlist"], result["netlist"], "dry_run false is the same as omitting it");
     assert_eq!(session.apply(EXPORT_NETLIST, &json!({})).unwrap(), revision);
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), revision);
@@ -244,7 +246,7 @@ fn rejected_exports_change_nothing() {
     assert!(empty.apply(EXPORT_NETLIST, &json!({})).is_err());
     let mut s = session();
     let before = s.snapshot().unwrap();
-    for params in [json!({"unknown":true}), json!({"dry_run":"yes"})] {
+    for params in [json!({"unknown":true}), json!({"dry_run":"yes"}), json!({"dry_run":1}), json!({"dry_run":null})] {
         let applied = s.apply(EXPORT_NETLIST, &params).unwrap_err().to_string();
         assert_eq!(s.execute(EXPORT_NETLIST, &params).unwrap_err().to_string(), applied);
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
@@ -296,6 +298,10 @@ fn parse_rejects_foreign_documents() {
     value["format"] = json!("pcbcraft-netlist/2");
     assert!(Netlist::parse(&value.to_string()).unwrap_err().contains("unsupported"));
     let mut value: Value = serde_json::from_str(&text).unwrap();
+    value.as_object_mut().unwrap().remove("format");
+    assert!(Netlist::parse(&value.to_string()).is_err());
+    assert!(check(&schema(), &schema(), &value, "$").is_err());
+    let mut value: Value = serde_json::from_str(&text).unwrap();
     value["nets"][0]["extra"] = json!(1);
     assert!(Netlist::parse(&value.to_string()).is_err());
     assert!(check(&schema(), &schema(), &value, "$").is_err());
@@ -303,6 +309,35 @@ fn parse_rejects_foreign_documents() {
     value["components"][0]["terminals"][0]["electrical_type"] = json!("analog");
     assert!(Netlist::parse(&value.to_string()).is_err());
     assert!(check(&schema(), &schema(), &value, "$").is_err());
+}
+
+/// A net ID or terminal name may be null but never omitted, and a definition revision must fit
+/// the reader's 32-bit field; the reader and the schema agree on each case.
+#[test]
+fn nullable_fields_are_required_and_revisions_are_bounded() {
+    let Fixture { session, .. } = fixture();
+    let text = session.export_netlist().unwrap().0.contents;
+    let original: Value = serde_json::from_str(&text).unwrap();
+    let agree = |value: &Value, accepted: bool| {
+        assert_eq!(Netlist::parse(&value.to_string()).is_ok(), accepted, "reader: {value}");
+        assert_eq!(check(&schema(), &schema(), value, "$").is_ok(), accepted, "schema: {value}");
+    };
+    agree(&original, true);
+    assert!(original["components"].as_array().unwrap().iter().flat_map(|part| part["terminals"].as_array().unwrap()).any(|t| t["name"].is_null()));
+    for pointer in ["/nets/0", "/components/0/terminals/0"] {
+        let field = if pointer.starts_with("/nets") { "id" } else { "name" };
+        let mut null = original.clone();
+        null.pointer_mut(pointer).unwrap()[field] = Value::Null;
+        agree(&null, true);
+        let mut omitted = original.clone();
+        omitted.pointer_mut(pointer).unwrap().as_object_mut().unwrap().remove(field);
+        agree(&omitted, false);
+    }
+    for (revision, accepted) in [(json!(u32::MAX), true), (json!(u64::from(u32::MAX) + 1), false), (json!(-1), false)] {
+        let mut value = original.clone();
+        value["components"][0]["definition"]["revision"] = revision;
+        agree(&value, accepted);
+    }
 }
 
 /// The schema's closed vocabularies are exactly the ones the code writes.
@@ -324,10 +359,12 @@ fn named<'a>(reference: &'a BTreeMap<String, String>, net: &'a Net) -> BTreeSet<
     net.terminals.iter().map(|t| (reference[&t.part].as_str(), t.terminal.as_str())).collect()
 }
 
+/// The published schema as JSON.
 fn schema() -> Value {
     serde_json::from_str(SCHEMA).unwrap()
 }
 
+/// Panic unless the document satisfies the published schema.
 fn validate(value: &Value) {
     let schema = schema();
     check(&schema, &schema, value, "$").unwrap();
@@ -365,6 +402,8 @@ fn check(root: &Value, schema: &Value, value: &Value, at: &str) -> Result<(), St
             "enum" => {}
             "minimum" if value.as_f64().is_some_and(|n| n < rule.as_f64().unwrap()) => return Err(format!("{at}: below {rule}")),
             "minimum" => {}
+            "maximum" if value.as_f64().is_some_and(|n| n > rule.as_f64().unwrap()) => return Err(format!("{at}: above {rule}")),
+            "maximum" => {}
             "format" if rule == "uuid" => {
                 if let Some(text) = value.as_str() {
                     Uuid::parse_str(text).map_err(|_| format!("{at}: not a UUID"))?;
