@@ -179,53 +179,71 @@ for named targets, window-local coordinates, completion tickets and cancellation
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
 
-## Command versions
-
-Every command that `list_commands`, `describe_command` and the
-`pcbcraft://commands` resource describe carries an integer `version`, starting
-at 1. Project, window and `ui.` commands are versioned alike, in live and
-headless sessions. A command's version rises when its parameters or its result
-change, and only that command's version rises; a new optional parameter is
-also a change. Reworded titles, summaries and parameter descriptions are not.
-Versions never fall, and neither does `catalog_version`; a removed command's
-id never comes back at a lower version, as the same kind of command or another.
+## Command API version
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"catalog_version": 1, "capabilities": ["command_versions"]}`.
-`catalog_version` rises whenever any command's version rises, so a client can
-tell from one number that a contract it relied on may have changed.
-`capabilities` names the optional protocol features this build offers; a
-feature added later is appended and none is removed. These versions describe
-PCBCraft's commands. They are separate from the MCP `protocolVersion`
-negotiated by `initialize` and from `serverInfo.version`, the build's version.
-Command versions are not saved in projects.
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api"]}`.
+These are three separate things:
 
-[`docs/schemas/commands-v1.json`](schemas/commands-v1.json) records each
-command's version and a SHA-256 digest of its description with object keys
-sorted, leaving out `version` and the `title`, `summary` and `description` of
-the command and its schemas (values of `const`, `default`, `enum` and
-`examples` are kept whole). The engine
-and app tests compare the code with the lock in the same commit. They fail
-when a described parameter schema no longer matches its locked digest at the
-same version, when a version or `CATALOG_VERSION` falls below the lock's, or
-when a version rises without `CATALOG_VERSION` in
-`crates/engine/src/command_versions.rs`. A change that also rewrites the lock
-passes them, so a review must read every change to `commands-v1.json`: a
-changed digest at an unchanged version is a contract change without a bump.
-Comparing with the lock on the merge base in CI would catch that case too. To change a command's contract,
-raise its entry in that file's version table and `CATALOG_VERSION`, then copy
-the section the failing test prints into the lock. Adding or removing a command
-changes no version and not `CATALOG_VERSION`: no contract that a client used
-has changed, since a new id was not there before and a removed id is gone from
-`list_commands` and refused as unknown. Copy the printed section into the lock
-the same way; a removed command stays in the lock, marked `"removed": true`
-with its last version, and the tests refuse its id coming back at a lower
-version in any section. Every version in the lock,
-`catalog_version` included, must be a whole number of at least 1 (`3`, not
-`3.0` or `"3"`); any other value fails the tests. The tests see only the described schemas: a
-changed result, or a stricter check that the parameter schema does not express,
-needs the same bump without a failing test to prompt it.
+- `command_api_version` is one number for the whole public command contract,
+  `COMMAND_API_VERSION` in `crates/engine/src/command_api.rs`. It rises only
+  when a published change breaks existing callers, by an explicit decision, and
+  never falls. There is no version per command.
+- `catalog_revision` is the SHA-256 of every command this session describes,
+  sorted by id, with object keys sorted and titles, summaries and descriptions
+  included. It changes whenever a command is added or removed or a description
+  changes, so a client can drop cached discovery data; a new revision alone
+  does not mean existing callers are incompatible. It covers the whole catalog
+  whatever `filter` keeps. A live editor (project, window and `ui.` commands)
+  and a headless session (project commands) describe different catalogs, and
+  builds differ, so each reports its own revision; it is computed when asked,
+  not stored.
+- `capabilities` names the optional protocol features this build offers; a
+  feature added later is appended and none is removed. Command schemas from
+  `list_commands` and `describe_command` say which commands and parameters the
+  running build supports.
+
+None of them is the MCP `protocolVersion` negotiated by `initialize`,
+`serverInfo.version` (the build's version) or a native file-format version,
+and none is saved in projects.
+
+[`docs/schemas/command-contracts.json`](schemas/command-contracts.json) is a
+snapshot of every command's contract: `command_api_version`, then one line per
+command in `commands` (project commands) and `window_commands` (window and
+`ui.` commands), each the description without its `id` and without the
+`title`, `summary` and `description` of the command and its schemas, with
+object keys sorted (values of `const`, `default`, `enum` and `examples` are
+kept whole). The engine and app tests compare the described commands with it
+and label every difference:
+
+- compatible, when every call the old schema accepted is still accepted: a
+  command added, an optional parameter added, a required parameter made
+  optional, enum values added, a type widened (`integer` to `number`
+  included), a bound loosened, a `pattern`, `format`, `const`, `multipleOf`,
+  `default` or `uniqueItems` dropped, `additionalProperties` or `items`
+  loosened, `anyOf` alternatives appended, `examples` changed;
+- breaking otherwise: a command or parameter removed, a parameter newly
+  required, enum values removed, a type narrowed or added, a bound tightened or
+  added, a `pattern`, `format`, `const`, `multipleOf` or `default` added or
+  changed (also a default added to an existing parameter), any `oneOf` change
+  (a value may then match two alternatives), and any change under a keyword
+  without a rule (`allOf`, `not`, `$ref`, the dependency maps and others).
+
+The rules apply at every depth of a schema. A breaking difference fails the
+tests until `COMMAND_API_VERSION` is raised; then, as for any compatible
+difference, the failing test prints the section to copy into the snapshot.
+The snapshot drops a removed command; an id that comes back later is an
+addition.
+
+The tests see only the described parameter schemas. Changed units, a changed
+result or meaning, and a stricter check the schema does not express need the
+same explicit decision with no failing test to prompt it; and they cannot tell
+whether a new default keeps the old behaviour. They also compare the code with
+the snapshot in the same commit, so a breaking change committed together with
+a rewritten snapshot passes them: a review must read every change to
+`command-contracts.json`. Comparing the snapshot on the merge base with the new
+one in CI, with the same classifier, would catch that case.
 
 ## Headless MCP
 

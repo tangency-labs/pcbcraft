@@ -317,7 +317,7 @@ mod live {
     }
 
     impl WindowCommand {
-        /// Describe the command like an engine command, with its contract version, marked as acting on the window.
+        /// Describe the command like an engine command, marked as acting on the window.
         fn to_json(self) -> Value {
             let properties: Map<String, Value> = self
                 .params
@@ -331,7 +331,6 @@ mod live {
             let required: Vec<&str> = self.params.iter().filter(|param| param.required).map(|param| param.name).collect();
             json!({
                 "id": self.id,
-                "version": pcbcraft_engine::command_versions::version(self.id),
                 "title": self.title,
                 "summary": self.summary,
                 "scope": "window",
@@ -1776,24 +1775,21 @@ mod live {
             assert!(!pcbcraft_engine::catalog().iter().any(|command| pcbcraft_mcp::is_window_command(command.id)));
         }
 
-        /// Window and UI input commands are versioned like engine commands and locked beside
-        /// them, so a changed contract that kept its version fails here unless the same change
-        /// rewrote its digest in the lock.
+        /// Window and UI input commands are snapshotted beside engine commands, so a breaking
+        /// change to one fails here until the command API version is raised, and any other
+        /// change until the snapshot is refreshed.
         #[test]
-        fn window_commands_match_the_committed_lock() {
-            use pcbcraft_engine::command_versions::{CATALOG_VERSION, LockMismatch, check_lock, version};
-            let lock: Value = serde_json::from_str(include_str!("../../../docs/schemas/commands-v1.json")).unwrap();
+        fn window_commands_match_the_committed_snapshot() {
+            use pcbcraft_engine::command_api::{COMMAND_API_VERSION, SnapshotMismatch, check_snapshot};
+            let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
             let mut described = window_catalog();
             described.extend(crate::ui_automation::catalog());
-            for command in &described {
-                assert_eq!(command["version"], json!(version(command["id"].as_str().unwrap())), "{command}");
-            }
-            match check_lock(&lock, "window_commands", &described, CATALOG_VERSION) {
+            match check_snapshot(&snapshot, "window_commands", &described, COMMAND_API_VERSION) {
                 Ok(()) => {}
-                Err(LockMismatch::Version(problems)) => panic!("{}", problems.join("\n")),
-                Err(LockMismatch::Stale { problems, section }) => panic!(
-                    "{}\nthe \"window_commands\" section of docs/schemas/commands-v1.json should read:\n  \"window_commands\": {section}",
-                    problems.join("\n")
+                Err(SnapshotMismatch::Breaking(problems)) => panic!("{}", problems.join("\n")),
+                Err(SnapshotMismatch::Stale { changes, section, api_version }) => panic!(
+                    "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
+                    changes.join("\n")
                 ),
             }
         }
