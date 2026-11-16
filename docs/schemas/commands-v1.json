@@ -1,5 +1,5 @@
 {
-  "description": "Contract version and digest of every command that discovery describes. Tests compare it with the code; see docs/mcp.md#command-versions.",
+  "description": "Contract version and digest of every command that discovery describes; removed commands stay, marked removed, with their last version. Tests compare it with the code; see docs/mcp.md#command-versions.",
   "catalog_version": 1,
   "commands": {
     "edit.redo": {"contract":"0573fa5926ce3955604cd986f3953a52875fccaa424556f9c139656837d37a29","version":1},

@@ -9,7 +9,11 @@ fn described() -> Vec<Value> {
 }
 
 fn lock_of(described: &[Value], catalog_version: u32) -> Value {
-    serde_json::from_str(&format!("{{\"catalog_version\":{catalog_version},\"commands\":{}}}", lock_section(described))).unwrap()
+    serde_json::from_str(&format!("{{\"catalog_version\":{catalog_version},\"commands\":{}}}", lock_section(described, &Map::new()))).unwrap()
+}
+
+fn lock_from(section: &str, catalog_version: u32) -> Value {
+    serde_json::from_str(&format!("{{\"catalog_version\":{catalog_version},\"commands\":{section}}}")).unwrap()
 }
 
 /// Discovery publishes an integer version for every command, taken from the version table.
@@ -75,6 +79,47 @@ fn versions_never_fall() {
     assert_eq!(problems, [format!("`{id}` is version 1, below its locked version 2; versions never fall")]);
 }
 
+/// A lowered catalog version is refused, not offered as a lock refresh.
+#[test]
+fn the_catalog_version_never_falls() {
+    let commands = described();
+    let lock = lock_of(&commands, 3);
+    let Err(LockMismatch::Version(problems)) = check_lock(&lock, "commands", &commands, 2) else { panic!("a falling catalog version passed") };
+    assert_eq!(problems, ["CATALOG_VERSION is 2, below the lock's 3; the catalog version never falls"]);
+}
+
+/// A removed command stays in the lock with its last version, so its id cannot come back lower.
+#[test]
+fn a_removed_command_keeps_its_version() {
+    let mut commands = described();
+    commands[0]["version"] = json!(3);
+    let id = commands[0]["id"].as_str().unwrap().to_owned();
+    let lock = lock_of(&commands, 3);
+    let removed = commands.remove(0);
+
+    let Err(LockMismatch::Stale { problems, section }) = check_lock(&lock, "commands", &commands, 3) else { panic!("a removal passed") };
+    assert_eq!(problems, [format!("`{id}` is no longer described; keep it in the lock as removed")]);
+    assert!(section.contains(&format!("\"{id}\": {{\"contract\":\"{}\",\"removed\":true,\"version\":3}}", contract_digest(&removed))));
+    let refreshed = lock_from(&section, 3);
+    assert_eq!(check_lock(&refreshed, "commands", &commands, 3), Ok(()));
+
+    let mut lower = removed.clone();
+    lower["version"] = json!(1);
+    commands.push(lower);
+    let Err(LockMismatch::Version(problems)) = check_lock(&refreshed, "commands", &commands, 3) else {
+        panic!("a re-added id went below its version")
+    };
+    assert_eq!(problems, [format!("`{id}` is version 1, below its version when it was removed 3; versions never fall")]);
+
+    commands.pop();
+    commands.push(removed);
+    let Err(LockMismatch::Stale { problems, section }) = check_lock(&refreshed, "commands", &commands, 3) else {
+        panic!("a re-added id kept its removed mark")
+    };
+    assert_eq!(problems, [format!("`{id}` was removed and is described again")]);
+    assert_eq!(check_lock(&lock_from(&section, 3), "commands", &commands, 3), Ok(()));
+}
+
 /// Added and removed commands and description key order leave versions alone but keep the lock
 /// current.
 #[test]
@@ -90,7 +135,7 @@ fn added_and_removed_commands_only_refresh_the_lock() {
         problems,
         [
             "`schematic.synthetic_example` is not in the lock".to_owned(),
-            format!("`{}` is in the lock but no longer described", removed["id"].as_str().unwrap())
+            format!("`{}` is no longer described; keep it in the lock as removed", removed["id"].as_str().unwrap())
         ]
     );
 

@@ -4,7 +4,8 @@
 //! command's parameters or result change meaning, so a client written against an older contract
 //! can tell instead of silently getting a different result. Versions live in code, never in saved
 //! projects. `docs/schemas/commands-v1.json` locks each command's version to a digest of its
-//! described contract; [`check_lock`] refuses a changed contract whose version did not rise.
+//! described contract and keeps removed commands with their last version; [`check_lock`]
+//! refuses a changed contract whose version did not rise and any version that falls.
 //! Titles, summaries and descriptions are prose for people and may change freely.
 
 use std::collections::BTreeMap;
@@ -91,8 +92,8 @@ fn contract(value: &Value, level: Level) -> Value {
 /// Why described commands do not match their lock.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LockMismatch {
-    /// A contract changed, a version fell, or versions rose without the catalog version: the
-    /// command versions in code must change before the lock may.
+    /// A contract changed, a version or the catalog version fell, or versions rose without the
+    /// catalog version: the versions in code must change before the lock may.
     Version(Vec<String>),
     /// Versions are consistent but the lock is out of date; `section` is what it should read.
     Stale { problems: Vec<String>, section: String },
@@ -101,12 +102,16 @@ pub enum LockMismatch {
 /// Compare `described` commands (as discovery returns them, each with `id` and `version`) with
 /// the `section` of a lock, given the catalog version in code. The lock is not changed.
 ///
+/// A removed command stays in the lock marked `"removed": true` with its last version, so an id
+/// that comes back never returns below it.
+///
 /// # Errors
 ///
-/// [`LockMismatch::Version`] when a contract changed without a version bump, a version fell, or
-/// a version rose while `catalog_version` stayed at the lock's. Otherwise
-/// [`LockMismatch::Stale`] when a command is added, removed or re-versioned, or the lock's
-/// catalog version differs, with the section text to commit.
+/// [`LockMismatch::Version`] when a contract changed without a version bump, a version fell
+/// (also for a removed id that comes back), `catalog_version` fell below the lock's, or a version
+/// rose while `catalog_version` stayed at the lock's. Otherwise [`LockMismatch::Stale`] when a
+/// command is added, removed, re-added or re-versioned, or the lock's catalog version differs,
+/// with the section text to commit.
 pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_version: u32) -> Result<(), LockMismatch> {
     let empty = Map::new();
     let locked = lock[section].as_object().unwrap_or(&empty);
@@ -122,40 +127,56 @@ pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_vers
             continue;
         };
         let locked_version = entry["version"].as_u64().unwrap_or(0);
+        let removed = is_removed(entry);
         if version < locked_version {
-            version_problems.push(format!("`{id}` is version {version}, below its locked version {locked_version}; versions never fall"));
+            let was = if removed { "its version when it was removed" } else { "its locked version" };
+            version_problems.push(format!("`{id}` is version {version}, below {was} {locked_version}; versions never fall"));
         } else if version == locked_version && entry["contract"].as_str() != Some(contract_digest(command).as_str()) {
             version_problems.push(format!("the contract of `{id}` changed; bump the version of `{id}` above {locked_version}"));
         } else if version > locked_version {
             raised.push(id);
+        } else if removed {
+            stale.push(format!("`{id}` was removed and is described again"));
         }
     }
-    if !raised.is_empty() && u64::from(catalog_version) <= locked_catalog {
+    if u64::from(catalog_version) < locked_catalog {
+        version_problems.push(format!("CATALOG_VERSION is {catalog_version}, below the lock's {locked_catalog}; the catalog version never falls"));
+    } else if !raised.is_empty() && u64::from(catalog_version) == locked_catalog {
         version_problems.push(format!("{} raised its version; raise CATALOG_VERSION above {locked_catalog}", raised.join(", ")));
     }
     if !version_problems.is_empty() {
         return Err(LockMismatch::Version(version_problems));
     }
     stale.extend(raised.iter().map(|id| format!("`{id}` has a new version")));
-    for id in locked.keys().filter(|id| !described.iter().any(|command| command["id"] == id.as_str())) {
-        stale.push(format!("`{id}` is in the lock but no longer described"));
+    for (id, _) in locked.iter().filter(|(id, entry)| !is_removed(entry) && !described.iter().any(|command| command["id"] == id.as_str())) {
+        stale.push(format!("`{id}` is no longer described; keep it in the lock as removed"));
     }
     if u64::from(catalog_version) != locked_catalog {
         stale.push(format!("the lock's catalog version is {locked_catalog}, not {catalog_version}"));
     }
-    if stale.is_empty() { Ok(()) } else { Err(LockMismatch::Stale { problems: stale, section: lock_section(described) }) }
+    if stale.is_empty() { Ok(()) } else { Err(LockMismatch::Stale { problems: stale, section: lock_section(described, locked) }) }
 }
 
-/// The lock section for `described` commands: one line per command, sorted by id, so a change
-/// shows as a one-line diff.
-pub fn lock_section(described: &[Value]) -> String {
-    let entries: BTreeMap<&str, String> = described
+/// Whether a lock entry records a command that is no longer described.
+fn is_removed(entry: &Value) -> bool {
+    entry["removed"] == Value::Bool(true)
+}
+
+/// The lock section for `described` commands, keeping every command of the `locked` section
+/// that is no longer described as removed with its last version and contract. One line per
+/// command, sorted by id, so a change shows as a one-line diff.
+pub fn lock_section(described: &[Value], locked: &Map<String, Value>) -> String {
+    let mut entries: BTreeMap<&str, String> = locked
         .iter()
-        .map(|command| {
-            let entry = json!({"version": command["version"], "contract": contract_digest(command)});
-            (command["id"].as_str().unwrap_or_default(), entry.to_string())
+        .map(|(id, entry)| {
+            let removed = json!({"version": entry["version"], "contract": entry["contract"], "removed": true});
+            (id.as_str(), removed.to_string())
         })
         .collect();
+    for command in described {
+        let entry = json!({"version": command["version"], "contract": contract_digest(command)});
+        entries.insert(command["id"].as_str().unwrap_or_default(), entry.to_string());
+    }
     let lines: Vec<String> = entries.iter().map(|(id, entry)| format!("    {}: {entry}", json!(id))).collect();
     format!("{{\n{}\n  }}", lines.join(",\n"))
 }
