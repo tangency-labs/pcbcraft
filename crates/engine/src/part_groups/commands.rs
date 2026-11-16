@@ -106,11 +106,8 @@ impl Session {
             return Ok(());
         }
         let mut candidate = original.group_candidate()?;
-        let memberships = Arc::make_mut(&mut candidate.part_group_memberships);
-        memberships.retain(|membership| membership.part_instance != part_instance);
-        memberships.extend(groups.into_iter().map(|group| Membership { part_instance, group }));
-        memberships.sort();
-        candidate.validate_part_group_memberships(&candidate.part_group_memberships).map_err(CommandError::InvalidParams)?;
+        Arc::make_mut(&mut candidate.part_group_memberships).replace(part_instance, &groups);
+        candidate.validate_part_group_memberships(candidate.part_group_memberships.iter()).map_err(CommandError::InvalidParams)?;
         self.change(candidate)
     }
 
@@ -128,8 +125,7 @@ impl Session {
             }
             vec![membership(project, part_instance)]
         } else {
-            let part_instances: BTreeSet<_> = project.part_group_memberships.iter().map(|membership| membership.part_instance).collect();
-            part_instances.into_iter().map(|part_instance| membership(project, part_instance)).collect()
+            project.part_group_memberships.part_instances().map(|part_instance| membership(project, part_instance)).collect()
         };
         Ok(json!({"revision":self.revision(),"part_instance_memberships":memberships}))
     }

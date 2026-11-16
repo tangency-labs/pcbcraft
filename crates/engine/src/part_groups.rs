@@ -7,7 +7,7 @@ mod tests;
 
 use crate::Project;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
 /// Create a part group with a fresh stable identity.
@@ -117,19 +117,104 @@ pub(crate) fn stored_memberships<'de, D: serde::Deserializer<'de>>(de: D) -> Res
 /// group. Each distinct part instance and each distinct group is looked up once, however many
 /// memberships share it; callers rely on that to keep validation linear in the membership count.
 fn check_memberships(
-    memberships: &[Membership],
+    memberships: impl IntoIterator<Item = Membership>,
     part_instance_exists: impl Fn(PartInstanceKey) -> bool,
     group_exists: impl Fn(Uuid) -> bool,
 ) -> Result<(), String> {
-    if memberships.len() > MAX_MEMBERSHIPS || memberships.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err("Part-group memberships must be bounded, unique and sorted by part instance and group.".into());
+    let (mut count, mut previous) = (0, None);
+    let (mut part_instances, mut groups) = (BTreeSet::new(), BTreeSet::new());
+    for membership in memberships {
+        count += 1;
+        if count > MAX_MEMBERSHIPS || previous.is_some_and(|previous| previous >= membership) {
+            return Err("Part-group memberships must be bounded, unique and sorted by part instance and group.".into());
+        }
+        previous = Some(membership);
+        part_instances.insert(membership.part_instance);
+        groups.insert(membership.group);
     }
-    let part_instances: BTreeSet<_> = memberships.iter().map(|membership| membership.part_instance).collect();
-    let groups: BTreeSet<_> = memberships.iter().map(|membership| membership.group).collect();
     if !part_instances.into_iter().all(part_instance_exists) || !groups.into_iter().all(group_exists) {
         return Err("Part-group memberships must name existing part instances and groups.".into());
     }
     Ok(())
+}
+
+/// Explicit memberships held per part instance, sorted by key. Each part instance's group set
+/// (sorted, unique, never empty) is its own shared allocation, so an edit to one part instance
+/// copies this index (one key and one pointer per grouped part instance) and builds only that
+/// instance's set; every other set stays shared with the previous snapshot. Undo history
+/// therefore keeps the changed data of each step, not a copy of every membership.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Memberships {
+    by_part_instance: Vec<(PartInstanceKey, Arc<[Uuid]>)>,
+}
+
+impl Memberships {
+    /// Group saved records, which the caller has checked to be sorted and unique.
+    pub(crate) fn from_records(records: &[Membership]) -> Self {
+        let by_part_instance = records
+            .chunk_by(|left, right| left.part_instance == right.part_instance)
+            .map(|chunk| (chunk[0].part_instance, chunk.iter().map(|membership| membership.group).collect()))
+            .collect();
+        Self { by_part_instance }
+    }
+
+    /// The saved records, sorted by part instance and then group.
+    pub(crate) fn to_records(&self) -> Vec<Membership> {
+        self.iter().collect()
+    }
+
+    /// Every membership, sorted by part instance and then group.
+    pub fn iter(&self) -> impl Iterator<Item = Membership> + '_ {
+        self.by_part_instance
+            .iter()
+            .flat_map(|(part_instance, groups)| groups.iter().map(|group| Membership { part_instance: *part_instance, group: *group }))
+    }
+
+    /// The number of memberships.
+    pub fn len(&self) -> usize {
+        self.by_part_instance.iter().map(|(_, groups)| groups.len()).sum()
+    }
+
+    /// Whether no part instance belongs to any group.
+    pub fn is_empty(&self) -> bool {
+        self.by_part_instance.is_empty()
+    }
+
+    /// Every grouped part instance, in key order.
+    pub fn part_instances(&self) -> impl Iterator<Item = PartInstanceKey> + '_ {
+        self.by_part_instance.iter().map(|(part_instance, _)| *part_instance)
+    }
+
+    /// One part instance's groups in UUID order; none when it is not grouped.
+    pub fn groups_of(&self, part_instance: PartInstanceKey) -> &[Uuid] {
+        match self.position(part_instance) {
+            Ok(index) => &self.by_part_instance[index].1,
+            Err(_) => &[],
+        }
+    }
+
+    /// The shared set of one part instance, if it is grouped.
+    #[cfg(test)]
+    fn shared_set(&self, part_instance: PartInstanceKey) -> Option<&Arc<[Uuid]>> {
+        self.position(part_instance).ok().map(|index| &self.by_part_instance[index].1)
+    }
+
+    /// Find a part instance's index entry, or where it would be inserted.
+    fn position(&self, part_instance: PartInstanceKey) -> Result<usize, usize> {
+        self.by_part_instance.binary_search_by_key(&part_instance, |(key, _)| *key)
+    }
+
+    /// Replace one part instance's set with sorted, unique groups; an empty set removes it.
+    fn replace(&mut self, part_instance: PartInstanceKey, groups: &BTreeSet<Uuid>) {
+        match (self.position(part_instance), groups.is_empty()) {
+            (Ok(index), true) => {
+                self.by_part_instance.remove(index);
+            }
+            (Ok(index), false) => self.by_part_instance[index].1 = groups.iter().copied().collect(),
+            (Err(_), true) => {}
+            (Err(index), false) => self.by_part_instance.insert(index, (part_instance, groups.iter().copied().collect())),
+        }
+    }
 }
 
 impl Project {
@@ -138,18 +223,14 @@ impl Project {
         &self.part_groups
     }
 
-    /// Every explicit part-group membership, sorted by part-instance key and then group UUID.
-    pub fn part_group_memberships(&self) -> &[Membership] {
+    /// Every explicit part-group membership, held per part instance.
+    pub fn part_group_memberships(&self) -> &Memberships {
         &self.part_group_memberships
     }
 
     /// The groups a part instance belongs to, in UUID order. Unknown part instances belong to none.
     pub fn groups_of_part_instance(&self, part_instance: PartInstanceKey) -> impl Iterator<Item = Uuid> + '_ {
-        let start = self.part_group_memberships.partition_point(|membership| membership.part_instance < part_instance);
-        self.part_group_memberships[start..]
-            .iter()
-            .take_while(move |membership| membership.part_instance == part_instance)
-            .map(|membership| membership.group)
+        self.part_group_memberships.groups_of(part_instance).iter().copied()
     }
 
     /// The project's part instances by key. The project map keeps its existing field name,
@@ -178,7 +259,7 @@ impl Project {
     /// membership names a live part instance and a group in this project's catalog. The
     /// catalog's identities are collected into a set once per call, so the cost grows with the
     /// number of memberships and groups, not with their product.
-    pub(crate) fn validate_part_group_memberships(&self, memberships: &[Membership]) -> Result<(), String> {
+    pub(crate) fn validate_part_group_memberships(&self, memberships: impl IntoIterator<Item = Membership>) -> Result<(), String> {
         let groups: BTreeSet<Uuid> = self.part_groups.groups.iter().map(|group| group.id).collect();
         check_memberships(memberships, |key| self.has_part_instance(key), |group| groups.contains(&group))
     }
@@ -186,10 +267,9 @@ impl Project {
     /// Drop memberships of part instances this snapshot no longer holds, so a deleted part
     /// instance takes its memberships with it in the same history step. Undo restores both.
     pub(crate) fn prune_part_group_memberships(&mut self) {
-        if self.part_group_memberships.iter().any(|membership| !self.has_part_instance(membership.part_instance)) {
-            let live: BTreeSet<_> =
-                self.part_group_memberships.iter().map(|membership| membership.part_instance).filter(|key| self.has_part_instance(*key)).collect();
-            std::sync::Arc::make_mut(&mut self.part_group_memberships).retain(|membership| live.contains(&membership.part_instance));
+        if self.part_group_memberships.part_instances().any(|key| !self.has_part_instance(key)) {
+            let part_instances = Arc::clone(self.part_instance_map());
+            Arc::make_mut(&mut self.part_group_memberships).by_part_instance.retain(|(key, _)| part_instances.contains_key(key));
         }
     }
 }

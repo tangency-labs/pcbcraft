@@ -2282,7 +2282,7 @@ pub struct Project {
     /// Authored part groups, independent of membership.
     part_groups: Arc<part_groups::Catalog>,
     /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
-    part_group_memberships: Arc<Vec<part_groups::Membership>>,
+    part_group_memberships: Arc<part_groups::Memberships>,
 }
 
 impl Project {

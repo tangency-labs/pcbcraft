@@ -617,11 +617,11 @@ fn membership_validation_looks_up_each_group_once() {
     assert_eq!(stored.len(), part_instances.len() * MAX_GROUPS);
     let (group_lookups, part_instance_lookups) = (Cell::new(0), Cell::new(0));
     let known: BTreeSet<Uuid> = groups.iter().copied().collect();
-    let counted = |dangling: &[Membership]| {
+    let counted = |records: &[Membership]| {
         group_lookups.set(0);
         part_instance_lookups.set(0);
         check_memberships(
-            dangling,
+            records.iter().copied(),
             |_| {
                 part_instance_lookups.set(part_instance_lookups.get() + 1);
                 true
@@ -632,15 +632,51 @@ fn membership_validation_looks_up_each_group_once() {
             },
         )
     };
-    counted(stored).unwrap();
+    counted(&stored.to_records()).unwrap();
     assert_eq!((group_lookups.get(), part_instance_lookups.get()), (MAX_GROUPS, part_instances.len()));
-    let mut dangling = stored.to_vec();
+    let mut dangling = stored.to_records();
     dangling.last_mut().unwrap().group = Uuid::from_u128(u128::MAX);
     dangling.sort();
     let refusal = counted(&dangling).unwrap_err();
     assert!(refusal.contains("existing part instances and groups"), "{refusal}");
     assert!(group_lookups.get() <= MAX_GROUPS + 1);
-    project.validate_part_group_memberships(stored).unwrap();
+    project.validate_part_group_memberships(stored.iter()).unwrap();
     let docs = round_trip(&s);
     assert_eq!(decode_documents(&docs).unwrap().part_group_memberships().len(), stored.len());
+}
+
+/// Undo history keeps only what each membership edit changed. Setting one part instance's groups
+/// builds that instance's set and shares every other set with the previous snapshot, which Undo
+/// retains, so the whole history holds one set per edit; undo returns the earlier shared sets.
+#[test]
+fn membership_edits_share_untouched_sets_with_history() {
+    let (mut s, part_instances) = parts(3, false);
+    let (power, signal) = (create(&mut s, "Power"), create(&mut s, "Signal"));
+    for part_instance in &part_instances {
+        apply(&mut s, SET_GROUPS, json!({"part_instance":part_instance,"groups":[power, signal]}));
+    }
+    let keys: Vec<_> = part_instances.iter().map(|address| part_instance_key(address).unwrap()).collect();
+    let before = s.snapshot().unwrap();
+    apply(&mut s, SET_GROUPS, json!({"part_instance":part_instances[0],"groups":[power]}));
+    let after = s.snapshot().unwrap();
+    let set = |project: &Project, key| Arc::clone(project.part_group_memberships.shared_set(key).unwrap());
+    assert!(!Arc::ptr_eq(&set(&before, keys[0]), &set(&after, keys[0])));
+    for key in &keys[1..] {
+        assert!(Arc::ptr_eq(&set(&before, *key), &set(&after, *key)));
+    }
+    assert_eq!(after.groups_of_part_instance(keys[0]).collect::<Vec<_>>(), vec![power]);
+    let held: BTreeSet<*const Uuid> = s
+        .undo
+        .iter()
+        .flatten()
+        .chain([&after])
+        .flat_map(|project| keys.iter().filter_map(|key| project.part_group_memberships.shared_set(*key)).map(|set| set.as_ptr()))
+        .collect();
+    assert_eq!(held.len(), keys.len() + 1, "one set per membership edit across the whole history");
+    apply(&mut s, "edit.undo", json!({}));
+    let undone = s.snapshot().unwrap();
+    for key in &keys {
+        assert!(Arc::ptr_eq(&set(&before, *key), &set(&undone, *key)));
+    }
+    assert_eq!(memberships(&undone), memberships(&before));
 }

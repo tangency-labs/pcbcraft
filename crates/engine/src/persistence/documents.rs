@@ -1428,7 +1428,7 @@ impl DocumentsEncoder {
                         if !has_part_groups {
                             return Err("Part-group memberships require their group catalog.".into());
                         }
-                        p.validate_part_group_memberships(&p.part_group_memberships)?;
+                        p.validate_part_group_memberships(p.part_group_memberships.iter())?;
                     }
                     if p.net_registry.has_generated_numbers() && p.net_registry.records.iter().any(|record| record.generated_number.is_none()) {
                         return Err("Numbered net registries require a number on every record.".into());

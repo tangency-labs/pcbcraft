@@ -103,7 +103,7 @@ impl Project {
     pub fn sheet_instances(&self) -> Instances {
         let mut records = self.occurrence_instances();
         records.net_registry = (!self.net_registry.records.is_empty()).then(|| (*self.net_registry).clone());
-        records.part_group_memberships = (!self.part_group_memberships.is_empty()).then(|| (*self.part_group_memberships).clone());
+        records.part_group_memberships = (!self.part_group_memberships.is_empty()).then(|| self.part_group_memberships.to_records());
         records
     }
 
@@ -199,8 +199,8 @@ impl Project {
             self.net_registry.validate(self)?;
         }
         if let Some(memberships) = records.part_group_memberships {
-            self.validate_part_group_memberships(&memberships)?;
-            self.part_group_memberships = Arc::new(memberships);
+            self.validate_part_group_memberships(memberships.iter().copied())?;
+            self.part_group_memberships = Arc::new(crate::part_groups::Memberships::from_records(&memberships));
         }
         Ok(())
     }
