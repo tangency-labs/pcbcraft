@@ -6,3 +6,8 @@
 tools/performance/fixtures/*.json linguist-generated=true
 tools/performance/baselines/native-*.json linguist-generated=true
 tools/performance/baselines/browser-*.json linguist-generated=true
+
+# Retained evidence is checked against recorded SHA-256 digests, so its text logs keep exact
+# bytes: no CRLF conversion on Windows checkouts with core.autocrlf.
+tools/performance/baselines/extended/*.log -text
+tools/performance/baselines/extended/*.txt -text
