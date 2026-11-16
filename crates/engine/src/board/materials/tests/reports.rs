@@ -26,7 +26,7 @@ fn with_header(documents: &persistence::Documents, from: &str, to: &str) -> pers
     changed
 }
 
-/// One report of each kind, as the done test states them, each with its own source.
+/// One report of each kind, each with its own source.
 fn reports() -> Value {
     let source = |document: &str| json!({"document":document,"revision":"B","locator":"synthetic table 2"});
     json!({
@@ -54,7 +54,7 @@ fn reported(s: &Session) -> Value {
 /// dielectric strength (40 kV at 1.0 mm) and CTI (175 V, group IIIa), each with a source, to a
 /// new revision of a pinned material is one undoable edit that reads back with its unit, axis and
 /// source and saves losslessly in board format 24. The Tg and Dk/Df reports and the earlier pins
-/// stay unchanged, older headers refuse the new reports, and undo restores the format-3 bytes.
+/// stay unchanged, older headers refuse these reports, and undo restores the format-3 bytes.
 ///
 /// 175 V lies in group IIIa because IEC 60664-1:2007 clause 4.8.1.3 places IIIa from 175 V up to
 /// below 400 V. The other values are synthetic.
@@ -230,16 +230,22 @@ fn report_bounds_and_contradictions() {
         ("/cte", vec![Value::Null]),
         ("/cte/0/cte_ppb_per_k", vec![json!(-1_000_001), json!(10_000_001), json!(50.5), Value::Null]),
         ("/cte/0/region", vec![json!("at_tg"), json!("below"), Value::Null]),
+        ("/cte/0/axis", vec![json!("isotropic"), Value::Null]),
+        ("/cte/0/method", vec![json!(" "), Value::Null]),
+        ("/cte/0/basis", vec![json!("guaranteed"), Value::Null]),
         ("/cte/0/from_milli_c", vec![json!(110_000), json!(120_000), json!(-273_150), Value::Null]),
         ("/cte/0/to_milli_c", vec![json!(50_000), json!(1_000_001), Value::Null]),
         ("/dielectric_strength", vec![Value::Null]),
         ("/dielectric_strength/0/breakdown_v", vec![json!(0), json!(10_000_001), json!(-1), json!("40 kV"), Value::Null]),
         ("/dielectric_strength/0/specimen_thickness_nm", vec![json!(0), json!(100_000_001), Value::Null]),
-        ("/dielectric_strength/0/axis", vec![json!("parallel")]),
+        ("/dielectric_strength/0/axis", vec![json!("parallel"), Value::Null]),
+        ("/dielectric_strength/0/method", vec![json!(" "), Value::Null]),
+        ("/dielectric_strength/0/basis", vec![json!("guaranteed"), Value::Null]),
         ("/cti", vec![Value::Null]),
         ("/cti/0/cti_v", vec![json!(0), json!(1001), json!(174), json!(400), Value::Null]),
         ("/cti/0/material_group", vec![json!("IV"), json!("iiia"), json!("3a"), json!("IIIb"), Value::Null]),
-        ("/cti/0/method", vec![json!("")]),
+        ("/cti/0/method", vec![json!(""), Value::Null]),
+        ("/cti/0/basis", vec![json!("guaranteed"), Value::Null]),
     ];
     for (path, values) in refused {
         for value in values {
