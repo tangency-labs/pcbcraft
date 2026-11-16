@@ -137,8 +137,9 @@ impl Frame {
         Point { x_nm: point.x_nm - self.origin.x_nm, y_nm: self.origin.y_nm - point.y_nm }
     }
 
-    /// Express a footprint placement in output terms. Top-side placements always keep the
-    /// output X and the board rotation; `convention` decides how bottom-side rows are written.
+    /// Express a footprint placement in output terms. Top-side placements keep the output X
+    /// and the board rotation under both conventions; `convention` decides how bottom-side rows
+    /// are written.
     /// Any rotation is reduced to 0 through 359. Exact for points within the board coordinate
     /// range, which every placement and origin is.
     pub fn place(self, at: Point, rotation: u16, on_bottom: bool, convention: BottomSide) -> Placed {

@@ -241,8 +241,8 @@ specifies for bottom-side parts. Read from below, the X axis is reversed and the
 part is its unmirrored library footprint at the stated rotation. For example, a
 bottom part at board X 40 mm and 30 degrees, with the origin at X 10 mm, is
 written as X 30 mm at 30 degrees from the top and X -30 mm at 330 degrees from
-below. Y is the same in both. Both conventions are exact for every whole-degree
-rotation.
+below. Y is the same in both. Any rotation is reduced to 0 through 359, and both
+conventions are exact within the board coordinate range.
 
 Generic rows use `viewed_from_top`. An [assembly house](mcp.md#assembly-houses)
 profile names its own convention and may carry offsets per footprint definition,
