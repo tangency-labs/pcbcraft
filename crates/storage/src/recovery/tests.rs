@@ -288,8 +288,9 @@ fn an_entry_has_one_writer() {
 fn entry_ids_are_plain_file_stems() {
     let dir = tempfile::tempdir().unwrap();
     for id in ["", "../escape", "a/b", "a.b", "a\\b", "Entry", "con", "nul", "com1", "lpt9", &"x".repeat(65)] {
-        assert!(EditJournal::create(dir.path(), id, Documents::new()).is_err());
-        assert!(recover(dir.path(), id).is_err());
+        let refusal = format!("`{id}` is not a recovery entry id.");
+        assert_eq!(EditJournal::create(dir.path(), id, Documents::new()).unwrap_err(), refusal);
+        assert_eq!(recover(dir.path(), id).unwrap_err(), refusal);
     }
     assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
     let mut session = Session::default();
