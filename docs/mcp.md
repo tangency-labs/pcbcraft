@@ -222,7 +222,8 @@ maximums downward. The report includes per-property `sources`. Kinds are `short`
 `no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
 
 `pcb.export_fabrication` generates the addressed board's fabrication files without
-editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`:
+editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
+and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask and paste top and bottom, top silkscreen and the outline,
 and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
 File names are deterministic and unique after portable-name sanitization,
@@ -355,6 +356,25 @@ Schematic inspection reports `available_units` and `display_reference`; the
 base `reference` stays shared by the part. The library authoring transaction
 accepts `select_unit` and `add_unit` actions. See the
 [multi-unit contract](symbol-schema.md#multiple-schematic-units).
+
+## Placement origin
+
+`pcb.set_placement_origin` requires an explicit `board`, `expected_revision` and
+`origin`: `{"kind":"board_zero"}`, `{"kind":"outline_lower_left"}` (the lower-left
+corner of the Board Outline's bounds, following later outline edits), or
+`{"kind":"point","x_nm":...,"y_nm":...}` in board coordinates. `null` removes the saved
+origin. It is one undo step, keeps the origin's UUID while its anchor changes, and
+ignores a repeat of the current value. Board inspection reports `placement_origin`
+with the `authored` record and the `effective` origin outputs use, which is null when
+an outline-attached origin has no outline yet.
+
+Fabrication outputs shift every coordinate to this origin and write Y up, as seen
+from the top; rotations are unchanged. The export result's `fabrication.origin` names
+the `anchor`, its `source` (`{"kind":"builtin"}` without a saved origin, otherwise
+`{"kind":"board","origin":"<uuid>"}`), the resolved `at` point in board coordinates, and `axes: "x_right_y_up"`. Without a saved origin, outputs
+are measured from board zero. Gerber writes exact nanometres; Excellon rounds each
+millimetre value to three decimals from integer nanometres with halves going up, so
+moving the origin by whole micrometres shifts every written value by exactly that amount.
 
 ## Saved board defaults
 
