@@ -211,7 +211,16 @@ pub(crate) fn paint_preview_transformed(
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
-    paint_symbol(painter, definition.default_unit(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
+    paint_symbol(
+        painter,
+        definition.default_unit(),
+        center,
+        step,
+        0,
+        false,
+        Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color),
+        Tokens::get().canvas,
+    );
 }
 
 /// What a wire's context menu asks for.
@@ -278,8 +287,8 @@ pub(crate) enum SymbolAction {
 /// matching held group dragging. Both preserve contacts within the selected group.
 /// Symbol move previews also include their pending quarter turns; painted wire contacts use
 /// that transformed snapshot, and cancellation discards both position and orientation.
-/// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
-/// where points snap. The camera's snap spacing sets both the drawn grid and every snapped point;
+/// `display` sets paper appearance and how the grid is drawn: its strength and whether it continues outside
+/// the paper. It never changes where points snap. The camera's snap spacing sets both the drawn grid and every snapped point;
 /// pins and junctions are picked by distance, so they stay reachable at any spacing.
 /// `label` distinguishes simultaneously visible canvases in accessibility output.
 /// `highlighted` marks counterparts selected in another view. It affects paint only; hit
@@ -306,7 +315,7 @@ pub(crate) fn show(
     input_enabled: bool,
     navigation_enabled: bool,
     navigation: Navigation,
-    grid_opacity: u8,
+    display: Display,
     auto_heal: bool,
     repeat: bool,
     unit: pcbcraft_chrome::units::Unit,
@@ -433,9 +442,8 @@ pub(crate) fn show(
     let tokens = Tokens::get();
     let overlap_index = overlap_cache.get(project, revision, &painter, camera.unit_step());
     let screen = |point| camera.screen(point, rect);
-    let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let unit_step = camera.unit_step();
-    canvas_grid::paint(&painter, rect, origin, camera.snap_step(), grid_opacity);
+    painter.extend(backdrop(project, camera, rect, rect, display));
     let mut whole_wires = selected.wires.clone();
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
@@ -484,6 +492,7 @@ pub(crate) fn show(
                 symbol.turns(),
                 symbol.is_mirrored(),
                 Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
+                surface_at(project, symbol.position, display.appearance),
             );
         }
     }
@@ -498,7 +507,7 @@ pub(crate) fn show(
         && matches!(tool, None | Some(Tool::Reshape { .. }))
         && let Some(wire) = selected.single_wire()
     {
-        wires::paint_handles(&painter, rect, project, camera, wire);
+        wires::paint_handles(&painter, rect, project, camera, wire, display.appearance);
     }
 
     // A placement commits on press. Own the rest of that press/release even if one-shot
@@ -526,7 +535,7 @@ pub(crate) fn show(
                 && let Some(preview) =
                     SymbolPlacement::preview_unit(definition.clone(), unit, *turns, definition.defaults.clone().unwrap_or_default().field_layout)
             {
-                paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent);
+                paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent, surface_at(project, at, display.appearance));
                 overlap_index.preview(ui, camera, rect, drawing, *turns, false, at);
             }
         }
@@ -551,7 +560,17 @@ pub(crate) fn show(
     {
         let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
-            paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
+            let defaults = drag.placement.definition.defaults.clone().unwrap_or_default();
+            let preview = SymbolPlacement::preview(drag.placement.definition.clone(), 0, defaults.field_layout);
+            paint_unit_template(
+                &painter,
+                &preview,
+                &drag.placement.value,
+                screen(point),
+                unit_step,
+                tokens.accent,
+                surface_at(project, point, display.appearance),
+            );
             overlap_index.preview(ui, camera, rect, drag.placement.definition.default_unit(), 0, false, point);
         }
     }
@@ -1047,10 +1066,23 @@ pub(crate) fn show(
         return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
     }
     match tool? {
-        Tool::PlaceSymbol { definition, unit, value, turns, .. } => {
-            placement_preview(ui, rect, response, camera, tokens, &definition, &unit, &value, turns, project, draft, revision, &overlap_index)
-                .map(Click::Place)
-        }
+        Tool::PlaceSymbol { definition, unit, value, turns, .. } => placement_preview(
+            ui,
+            rect,
+            response,
+            camera,
+            tokens,
+            &definition,
+            &unit,
+            &value,
+            turns,
+            project,
+            draft,
+            revision,
+            &overlap_index,
+            display.appearance,
+        )
+        .map(Click::Place),
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
         Tool::NoConnect { .. }
@@ -1178,6 +1210,7 @@ fn placement_preview(
     draft: &Draft,
     revision: u64,
     overlaps: &overlaps::Index,
+    paper: pcbcraft_chrome::paper::Appearance,
 ) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
@@ -1186,7 +1219,7 @@ fn placement_preview(
         return None;
     }
     let preview = SymbolPlacement::preview_unit(definition.clone(), unit, turns, definition.defaults.clone().unwrap_or_default().field_layout)?;
-    paint_unit_template(&ui.painter_at(rect), &preview, value, screen(point), camera.unit_step(), tokens.accent);
+    paint_unit_template(&ui.painter_at(rect), &preview, value, screen(point), camera.unit_step(), tokens.accent, surface_at(project, point, paper));
     overlaps.preview(ui, camera, rect, preview.unit_definition(), turns, false, point);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
@@ -1196,15 +1229,17 @@ fn placement_preview(
     pressed.then_some(point)
 }
 
-/// Preview ordinary drawing and instance fields from the same native defaults as placement.
-fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: &str, center: Pos2, step: f32, turns: u8, color: egui::Color32) {
-    let defaults = definition.defaults.clone().unwrap_or_default();
-    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout);
-    paint_unit_template(painter, &symbol, value, center, step, color);
-}
-
 /// Preview the selected drawing with the same fields and geometry as its committed placement.
-fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str, center: Pos2, step: f32, color: egui::Color32) {
+/// `background` is the surface under the preview, as for [`paint_symbol`].
+fn paint_unit_template(
+    painter: &Painter,
+    symbol: &SymbolPlacement,
+    value: &str,
+    center: Pos2,
+    step: f32,
+    color: egui::Color32,
+    background: egui::Color32,
+) {
     paint_symbol(
         painter,
         symbol.unit_definition(),
@@ -1213,9 +1248,54 @@ fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str,
         symbol.turns(),
         symbol.is_mirrored(),
         Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
+        background,
     );
     let defaults = symbol.definition.defaults.clone().unwrap_or_default();
     fields::paint_labels(painter, symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
+}
+
+/// The colour of the surface under `point` on the sheet: the paper inside the sheet's page,
+/// the canvas around it or on a sheet without paper. Background-filled drawing uses it so a
+/// filled body matches what it sits on.
+pub(crate) fn surface_at(project: &Project, point: Point, paper: pcbcraft_chrome::paper::Appearance) -> egui::Color32 {
+    let on_paper = project.page().is_some_and(|page| {
+        let [min, max] = page.corners();
+        (min.x_nm..=max.x_nm).contains(&point.x_nm) && (min.y_nm..=max.y_nm).contains(&point.y_nm)
+    });
+    if on_paper { paper.fill() } else { paper.canvas }
+}
+
+/// Schematic paper and grid presentation, resolved from personal preferences. Snapping
+/// follows the camera's spacing whatever this says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Display {
+    /// Grid strength in percent; 0 hides the grid.
+    pub opacity: u8,
+    /// Whether the grid continues on the canvas outside the sheet's paper.
+    pub outside_paper: bool,
+    /// Paper fill and shadow, independent of the grid and page geometry.
+    pub appearance: pcbcraft_chrome::paper::Appearance,
+}
+
+/// The sheet's backdrop over `area` of a canvas whose viewport is `canvas`: the paper with its
+/// border, or the grid everywhere on a sheet without paper. The paper marks the export area, not
+/// an editing boundary, so the canvas around it keeps the theme's colour wherever the drawing lies.
+pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: Rect, display: Display) -> Vec<egui::Shape> {
+    let screen = |point| camera.screen(point, canvas);
+    let paper = project.page().map(|page| {
+        let ([min, max], [inner_min, inner_max]) = (page.corners(), page.border_corners());
+        pcbcraft_chrome::paper::Paper {
+            sheet: Rect::from_two_pos(screen(min), screen(max)),
+            border: Rect::from_two_pos(screen(inner_min), screen(inner_max)),
+        }
+    });
+    let grid = pcbcraft_chrome::paper::Grid {
+        origin: screen(Point { x_nm: 0, y_nm: 0 }),
+        step: camera.snap_step(),
+        opacity: display.opacity,
+        outside_paper: display.outside_paper,
+    };
+    pcbcraft_chrome::paper::backdrop(area, paper, grid, display.appearance)
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.
@@ -1300,8 +1380,10 @@ fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored
 }
 
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
-/// turned with the symbol.
+/// turned with the symbol. `background` is the colour of the surface under the symbol, which
+/// background-filled library graphics take: see [`surface_at`].
 /// Part instance fields are drawn separately so their layout never changes the body or pins.
+#[allow(clippy::too_many_arguments)]
 fn paint_symbol(
     painter: &Painter,
     definition: &pcbcraft_engine::schematic::SymbolUnit,
@@ -1310,6 +1392,7 @@ fn paint_symbol(
     turns: u8,
     mirrored: bool,
     stroke: Stroke,
+    background: egui::Color32,
 ) {
     let color = stroke.color;
     let xy = |point: &Point| {
@@ -1331,10 +1414,10 @@ fn paint_symbol(
                         |p| center + vec2(p.x_nm as f32, p.y_nm as f32) * (step / GRID),
                         step / GRID,
                         color,
-                        Tokens::get().canvas,
+                        background,
                     );
                 } else {
-                    crate::definition_graphics::paint(painter, graphic, |p| xy(&p), step / GRID, color, Tokens::get().canvas);
+                    crate::definition_graphics::paint(painter, graphic, |p| xy(&p), step / GRID, color, background);
                 }
             }
             Shape::Line(from, to) => {
@@ -1372,7 +1455,8 @@ pub(crate) fn paint_part_preview(
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
-    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, pcbcraft_chrome::Tokens::get().canvas_ink));
+    let t = pcbcraft_chrome::Tokens::get();
+    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
     if let Some(pin) = terminal.and_then(|terminal| unit.pins().iter().find(|pin| pin.number == terminal)) {
         let at = center + egui::vec2(pin.offset.x_nm as f32, pin.offset.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
         painter.circle_stroke(at, 6., Stroke::new(2., pcbcraft_chrome::Tokens::get().accent));

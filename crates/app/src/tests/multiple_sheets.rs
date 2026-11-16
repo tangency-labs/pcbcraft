@@ -246,3 +246,186 @@ fn reopened_arrangement_keeps_sheet_targets_and_board_return_navigation() {
     assert_eq!(app.views.active.target(), Some(DocumentTarget::Sheet(power)));
     assert_eq!(encode_documents(app.session.snapshot().unwrap()).unwrap(), documents);
 }
+
+/// A sheet's Paper submenu shows its current size and orientation, applies a choice as one undo
+/// step through `sheet.set_page`, and keeps everything on the sheet in place.
+#[test]
+fn browser_paper_menu_sets_the_sheet_paper() {
+    use pcbcraft_engine::sheets::page::{Orientation, Paper};
+    let mut h = sheet_harness(1400.0);
+    let before = h.state().session.snapshot().unwrap();
+    let page = |h: &Harness<'_, PcbApp>| {
+        let page = h.state().session.project().unwrap().page().unwrap();
+        (page.paper(), page.orientation())
+    };
+    assert_eq!(page(&h), (Paper::A4, Orientation::Landscape));
+    menu(&mut h, "Main");
+    click(&mut h, "Paper");
+    assert_eq!(h.get_by_role_and_label(egui::Role::RadioButton, "A4").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    click(&mut h, "A3");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Landscape));
+    menu(&mut h, "Main");
+    click(&mut h, "Paper");
+    click(&mut h, "Portrait");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Portrait));
+    let after = h.state().session.project().unwrap();
+    assert_eq!(after.page().unwrap().at(), before.page().unwrap().at(), "the paper's corner stays put");
+    assert_eq!(after.symbols(), before.symbols());
+    h.state_mut().run("edit.undo", &Value::Null);
+    h.state_mut().run("edit.undo", &Value::Null);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Reducing paper around existing drawing leaves that drawing editable outside the paper: the
+/// canvas keeps the theme's background and heading, the grid continues there unless the person
+/// turns it off, and Fit includes it.
+#[test]
+fn off_paper_drawing_keeps_the_theme_background_and_grid() {
+    for dark in [true, false] {
+        let mut h = sheet_harness(1400.);
+        h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
+        let apply = |h: &mut Harness<'_, PcbApp>, command: &str, mut params: Value| {
+            params["expected_revision"] = json!(h.state().session.revision());
+            h.state_mut().session.apply(command, &params).unwrap();
+        };
+        apply(&mut h, PLACE_RESISTOR, json!({"x_nm":250_000_000,"y_nm":0}));
+        let sheet = h.state().session.project().unwrap().sheet_target().id();
+        apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a3","orientation":"landscape","at":{"x_nm":-100_000_000,"y_nm":-100_000_000}}));
+        h.run();
+        click(&mut h, "Fit schematic");
+        // The painted surround, and whether any grid dot lies outside the paper.
+        let painted = |h: &Harness<'_, PcbApp>| {
+            let t = pcbcraft_chrome::Tokens::get();
+            let canvas = h.get_by_label("Schematic canvas").rect();
+            let [min, max] = h.state().session.project().unwrap().page().unwrap().corners();
+            let camera = &h.state().views.active.camera;
+            let paper = egui::Rect::from_two_pos(camera.screen(min, canvas), camera.screen(max, canvas));
+            let shapes = &h.output().shapes;
+            let surround = shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == canvas && r.fill == t.canvas));
+            let outside = shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.radius == pcbcraft_chrome::theme::SCHEMATIC_GRID_DOT_RADIUS && canvas.contains(c.center) && !paper.expand(1.0).contains(c.center)));
+            (surround, outside)
+        };
+        let assert_heading = |h: &Harness<'_, PcbApp>| {
+            let t = pcbcraft_chrome::Tokens::get();
+            let title = h.state().views.active.sheet_path(&h.state().session).unwrap();
+            for (label, ink) in [(title.as_str(), t.text), ("1 / 1", t.text_dim)] {
+                assert!(
+                    h.output()
+                        .shapes
+                        .iter()
+                        .any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label && text.fallback_color == ink)),
+                    "heading {label} keeps the theme's ink"
+                );
+            }
+        };
+        assert_eq!(painted(&h), (true, true));
+        assert_heading(&h);
+        let symbols = h.state().session.project().unwrap().symbols().to_vec();
+        apply(&mut h, "sheet.set_page", json!({"sheet":sheet,"paper":"a4","orientation":"landscape"}));
+        h.run();
+        assert_eq!(painted(&h), (true, true), "drawing outside the paper doesn't change the background");
+        assert_heading(&h);
+        assert_eq!(h.state().session.project().unwrap().symbols(), symbols);
+        let revision = h.state().session.revision();
+        click(&mut h, "Fit schematic");
+        assert_eq!(painted(&h), (true, true), "the grid continues around off-paper drawing");
+        h.state_mut().preferences.schematic_grid_outside_paper = false;
+        h.run();
+        assert_eq!(painted(&h), (true, false), "the grid stays on the paper when the preference is off");
+        let project = h.state().session.project().unwrap();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let camera = &h.state().views.active.camera;
+        for [low, high] in [project.page().unwrap().corners(), project.drawing_bounds().unwrap()] {
+            assert!(canvas.contains_rect(egui::Rect::from_two_pos(camera.screen(low, canvas), camera.screen(high, canvas))));
+        }
+        assert_eq!(h.state().session.revision(), revision, "the grid preference is not a project edit");
+    }
+}
+
+/// A catalog drag paints background-filled artwork against its current surface before drop,
+/// both inside and outside paper, without editing the project.
+#[test]
+fn catalog_drag_background_follows_paper_before_drop() {
+    use pcbcraft_engine::{
+        authoring::{Item, Kind, Primitive},
+        library_graphics::{Fill, Geometry, Graphic},
+        schematic::{GRID_NM, Point},
+    };
+    let mut item = Item::new(Kind::Symbol).unwrap();
+    item.objects.insert(
+        2,
+        Primitive::Graphic {
+            graphic: Graphic {
+                geometry: Geometry::Rectangle {
+                    min: Point { x_nm: -2 * GRID_NM, y_nm: -2 * GRID_NM },
+                    max: Point { x_nm: 2 * GRID_NM, y_nm: 2 * GRID_NM },
+                },
+                stroke_nm: 150_000,
+                fill: Fill::Background,
+            },
+        },
+    );
+    let definition = item.symbol().unwrap();
+    for dark in [true, false] {
+        let mut h = sheet_harness(1400.);
+        h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
+        h.run();
+        click(&mut h, "Fit schematic");
+        let before = h.state().session.snapshot().unwrap();
+        h.state_mut().preferences.schematic_paper_background = crate::preferences::PaperBackground::Shaded;
+        h.run();
+        let source = h.state().views.active.input(&h.state().session).unwrap();
+        egui::DragAndDrop::set_payload(&h.ctx, crate::PartDrag { placement: crate::parts_browser::Placement::new(definition.clone()), source });
+        let t = pcbcraft_chrome::Tokens::get();
+        let [_, max] = before.page().unwrap().corners();
+        for (point, expected) in [
+            (Point { x_nm: 40 * GRID_NM, y_nm: 10 * GRID_NM }, t.schematic_paper),
+            (Point { x_nm: max.x_nm + 8 * GRID_NM, y_nm: 10 * GRID_NM }, t.canvas),
+        ] {
+            let canvas = h.get_by_label("Schematic canvas").rect();
+            let screen = h.state().views.active.camera.screen(point, canvas);
+            assert!(canvas.contains(screen));
+            h.hover_at(screen);
+            h.run();
+            assert!(
+                h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path)
+                    if path.closed && path.fill == expected && egui::Rect::from_points(&path.points).contains(screen))),
+                "catalog preview should match its surface before drop: dark={dark}, point={point:?}"
+            );
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
+/// Paper appearance is live personal state: the colour controls follow the selected mode,
+/// while Cancel restores the initial appearance without editing the schematic.
+#[test]
+fn paper_preferences_are_optional_and_cancelable() {
+    use crate::preferences::PaperBackground;
+    for dark in [true, false] {
+        let mut h = sheet_harness(1400.);
+        h.state_mut().preferences.theme = if dark { crate::preferences::ThemeChoice::Dark } else { crate::preferences::ThemeChoice::Light };
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        assert_eq!(h.state().preferences.schematic_paper_background, PaperBackground::Uniform);
+        click(&mut h, "Preferences");
+        assert!(h.get_by_role_and_label(egui::Role::ColorWell, "Sheet color").accesskit_node().is_disabled());
+        assert!(!h.get_by_role_and_label(egui::Role::ColorWell, "Canvas color").accesskit_node().is_disabled());
+        click(&mut h, "Shaded");
+        assert_eq!(h.state().preferences.schematic_paper_background, PaperBackground::Shaded);
+        click(&mut h, "Custom");
+        assert!(!h.get_by_role_and_label(egui::Role::ColorWell, "Sheet color").accesskit_node().is_disabled());
+        h.get_by_role_and_label(egui::Role::ColorWell, "Canvas color").click();
+        h.run();
+        assert!(egui::Popup::is_any_open(&h.ctx), "the canvas colour picker opens");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::Preferences(_)), "Escape closes the colour picker before Preferences");
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().preferences.schematic_paper_background, PaperBackground::Uniform);
+        assert!(h.state().preferences.schematic_canvas_color_dark.is_none() && h.state().preferences.schematic_canvas_color_light.is_none());
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}

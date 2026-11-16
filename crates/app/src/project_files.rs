@@ -82,6 +82,8 @@ struct Saved {
     snapshot: Arc<Project>,
     /// Worker-prepared opening upgrade; snapshot remains the original on-disk save baseline.
     opened: Option<Arc<Project>>,
+    /// What preparing `opened` changed, for the open notice.
+    upgrades: Upgrades,
     #[cfg(not(target_arch = "wasm32"))]
     target: native::Target,
     #[cfg(target_arch = "wasm32")]
@@ -99,9 +101,34 @@ impl Saved {
     /// Keeping the original snapshot makes the next Save encode changed references and preserves
     /// raw-byte comparison for unrelated documents and external-change detection.
     fn prepare_open(mut self) -> Result<Self, String> {
-        let opened = pcbcraft_engine::persistence::migrate_bundled_libraries(self.snapshot.clone())?;
+        let migrated = pcbcraft_engine::persistence::migrate_bundled_libraries(self.snapshot.clone())?;
+        let opened = pcbcraft_engine::persistence::adopt_paper(migrated.clone());
+        self.upgrades = Upgrades { libraries: !Arc::ptr_eq(&migrated, &self.snapshot), paper: !Arc::ptr_eq(&opened, &migrated) };
         self.opened = (!Arc::ptr_eq(&opened, &self.snapshot)).then_some(opened);
         Ok(self)
+    }
+}
+
+/// Changes prepared in memory when a project opens, written by the next Save or Download.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Upgrades {
+    /// Bundled library references moved to their current addresses.
+    libraries: bool,
+    /// Sheets from before paper got paper around their drawing.
+    paper: bool,
+}
+
+impl Upgrades {
+    /// The open notice for these changes, or `None` when nothing changed.
+    fn notice(self) -> Option<String> {
+        let save = if crate::IN_BROWSER { "Download" } else { "Save" };
+        let what = match (self.libraries, self.paper) {
+            (false, false) => return None,
+            (true, false) => "migrate bundled library references",
+            (false, true) => "add paper to older sheets",
+            (true, true) => "migrate bundled library references and add paper to older sheets",
+        };
+        Some(format!("Project opened · {save} will {what}"))
     }
 }
 
@@ -282,13 +309,8 @@ impl ProjectFiles {
 
     /// Describe migration or manifest generation where it affects the next save.
     pub(super) fn open_notice(&self) -> String {
-        if self.saved.as_ref().is_some_and(|saved| saved.opened.is_some()) {
-            return if crate::IN_BROWSER {
-                "Project opened · Download will migrate bundled library references"
-            } else {
-                "Project opened · Save will migrate bundled library references"
-            }
-            .into();
+        if let Some(notice) = self.saved.as_ref().filter(|saved| saved.opened.is_some()).and_then(|saved| saved.upgrades.notice()) {
+            return notice;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {

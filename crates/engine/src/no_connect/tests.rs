@@ -155,7 +155,7 @@ fn no_connect_intent_follows_mirrors_and_reopens_with_its_placement() {
                 assert_eq!(entry["format"], "pcbcraft-project/19");
                 let sheet = docs.iter().find(|(path, _)| path.starts_with("sheets/")).unwrap().1;
                 let sheet: Value = serde_json::from_slice(sheet).unwrap();
-                assert_eq!(sheet["format"], "pcbcraft-sheet/6");
+                assert_eq!(sheet["format"], "pcbcraft-sheet/9");
                 let folder = persistence::decode_documents(&docs).unwrap();
                 let packed = persistence::encode_packed(mirrored).unwrap();
                 let archive = persistence::decode_packed(&packed).unwrap().project;

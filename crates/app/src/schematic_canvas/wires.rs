@@ -243,7 +243,14 @@ pub(super) fn handle_at(project: &Project, camera: &Camera, rect: Rect, pointer:
 
 /// Draw the handles of the selected wire: a square on each interior corner, and an outlined
 /// square on each free end or junction it ends on. Terminal ends have none; pins stay on parts.
-pub(super) fn paint_handles(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, wire: &str) {
+pub(super) fn paint_handles(
+    painter: &Painter,
+    rect: Rect,
+    project: &Project,
+    camera: &Camera,
+    wire: &str,
+    paper: pcbcraft_chrome::paper::Appearance,
+) {
     let tokens = Tokens::get();
     let Some(found) = project.wires().iter().find(|candidate| candidate.id() == wire) else {
         return;
@@ -257,7 +264,7 @@ pub(super) fn paint_handles(painter: &Painter, rect: Rect, project: &Project, ca
         if let WireEndpoint::Junction(_) = end
             && let Some(point) = project.endpoint_position(end)
         {
-            painter.rect_filled(square(point), 0.0, tokens.canvas);
+            painter.rect_filled(square(point), 0.0, super::surface_at(project, point, paper));
             painter.rect_stroke(square(point), 0.0, Stroke::new(1.5, tokens.accent), egui::StrokeKind::Middle);
         }
     }

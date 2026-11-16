@@ -10,7 +10,7 @@ use pcbcraft_engine::{
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use super::{Outcome, Saved, download};
+use super::{Outcome, Saved, Upgrades, download};
 
 #[wasm_bindgen(inline_js = "
 export function pickProject(zipLimit) {
@@ -92,7 +92,7 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
     }
     let packed = decode_packed(&bytes)?;
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
-    Saved { snapshot, opened: None, bytes, encoding, needs_manifest, documents }.prepare_open().map(Outcome::Opened)
+    Saved { snapshot, opened: None, upgrades: Upgrades::default(), bytes, encoding, needs_manifest, documents }.prepare_open().map(Outcome::Opened)
 }
 
 pub(super) struct Download {

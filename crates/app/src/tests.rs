@@ -193,9 +193,12 @@ fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
     click(harness, "Place");
 }
 
-/// Create an Untitled project through the File menu; it opens without a naming dialog.
+/// Create through the File menu, then give editing fixtures their fixed zoom and origin.
+/// Startup tests use the Home card directly to exercise the shipped initial framing.
 fn new_project(harness: &mut Harness<'_, PcbApp>) {
     choose(harness, "File", "New Project");
+    harness.state_mut().views.active.camera = canvas_camera::Camera::default();
+    harness.run();
 }
 
 /// Home's schematic start card, distinct from the New Project navigation row.
@@ -256,6 +259,27 @@ fn startup_new_project_enters_the_workspace() {
     assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     assert!(!harness.state().home);
     harness.get_by_label("Unsaved changes");
+}
+
+/// New schematics frame their paper without a Fit action, using the settled editor viewport.
+/// Initial framing remains presentation state rather than an extra authored edit.
+#[test]
+fn startup_new_schematic_fits_its_paper() {
+    for (size, theme) in [(egui::vec2(1000.0, 700.0), preferences::ThemeChoice::Dark), (egui::vec2(1400.0, 900.0), preferences::ThemeChoice::Light)] {
+        let mut h = startup_harness();
+        h.set_size(size);
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        new_project_tile(&h).click();
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let [min, max] = h.state().session().project().unwrap().page().unwrap().corners();
+        let camera = &h.state().views.active.camera;
+        let paper = egui::Rect::from_two_pos(camera.screen(min, canvas), camera.screen(max, canvas));
+        assert!(canvas.contains_rect(paper), "{paper:?} inside {canvas:?}");
+        assert!(paper.width() > canvas.width() / 2.0 || paper.height() > canvas.height() / 2.0);
+        assert_eq!(h.state().session().revision(), 1);
+    }
 }
 
 /// The inspector never reserves space for the empty workspace, even after undoing project creation.
@@ -1306,9 +1330,11 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     assert_eq!(schematic.symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
 }
 
-/// The Fit action restores the default canvas origin without advancing the project revision.
+/// Fit frames an empty sheet's whole paper, painted in the theme's paper colour, without
+/// advancing the project revision. Grid dots continue outside the paper by default and stay on
+/// it when the person turns that off.
 #[test]
-fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
+fn zoom_to_fit_on_an_empty_sheet_frames_its_paper() {
     let mut harness = harness();
     new_project(&mut harness);
     harness.hover_at(egui::pos2(600.0, 400.0));
@@ -1317,10 +1343,35 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     harness.run();
     click(&mut harness, "Fit schematic");
     assert_eq!(harness.state().session().revision(), 1);
-    click(&mut harness, "Add symbol (A)");
-    select_symbol(&mut harness, "Resistor");
-    click_canvas(&mut harness);
-    assert_eq!(harness.state().session().project().unwrap().symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
+    let canvas = harness.get_by_label("Schematic canvas").rect();
+    let [min, max] = harness.state().session().project().unwrap().page().unwrap().corners();
+    let camera = &harness.state().views.active.camera;
+    let paper = egui::Rect::from_two_pos(camera.screen(min, canvas), camera.screen(max, canvas));
+    assert!(canvas.contains_rect(paper), "{paper:?} inside {canvas:?}");
+    assert!(paper.width() > canvas.width() / 2.0 || paper.height() > canvas.height() / 2.0, "Fit zooms to the paper");
+    let shapes = &harness.output().shapes;
+    assert!(
+        shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == harness.state().preferences.paper().fill() && r.rect == paper))
+    );
+    let dots = |harness: &Harness<'_, PcbApp>| -> Vec<egui::Pos2> {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Circle(dot) if canvas.contains(dot.center) && dot.radius == pcbcraft_chrome::theme::SCHEMATIC_GRID_DOT_RADIUS => {
+                    Some(dot.center)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(dots(&harness).iter().any(|dot| !paper.contains(*dot)), "grid dots continue outside the paper by default");
+    harness.state_mut().preferences.schematic_grid_outside_paper = false;
+    harness.run();
+    let on_paper = dots(&harness);
+    assert!(!on_paper.is_empty() && on_paper.iter().all(|dot| paper.contains(*dot)), "grid dots only on the paper when turned off");
+    assert_eq!(harness.state().session().revision(), 1);
 }
 
 /// Resolve the actual library pin through the canvas camera so fixture geometry can evolve.

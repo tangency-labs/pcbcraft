@@ -12,7 +12,7 @@ use pcbcraft_engine::{
     persistence::{Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_documents, encode_packed_documents, read_bytes},
 };
 
-use super::{Outcome, SaveFormat, Saved, file_name_for};
+use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for};
 use pcbcraft_storage as folder;
 
 #[derive(Clone, Debug)]
@@ -87,8 +87,13 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     }
     let packed = decode_packed(&bytes)?;
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
-    Saved { snapshot, opened: None, target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, added_manifest: false } }
-        .prepare_open()
+    Saved {
+        snapshot,
+        opened: None,
+        upgrades: Upgrades::default(),
+        target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, added_manifest: false },
+    }
+    .prepare_open()
 }
 
 /// Read and cross-validate all folder documents before returning an adoptable snapshot.
@@ -98,6 +103,7 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
     Saved {
         snapshot,
         opened: None,
+        upgrades: Upgrades::default(),
         target: Target {
             path: root.to_owned(),
             bytes: Arc::from([]),
@@ -178,7 +184,7 @@ pub(super) fn save_new(
         folder::save(&target.path, None, &documents, &mut |_| Ok(()))?;
     }
     target.documents = Some(Arc::new(documents));
-    Ok(Outcome::Saved(Saved { snapshot, opened: None, target }, renamed))
+    Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, renamed))
 }
 
 /// Strip a project extension from a folder or archive file name.
@@ -253,7 +259,7 @@ fn save_target(
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
         target.documents = Some(Arc::new(documents));
     }
-    Ok(Outcome::Saved(Saved { snapshot, opened: None, target }, adopted))
+    Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, adopted))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.

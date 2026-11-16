@@ -500,7 +500,8 @@ impl PcbApp {
     }
 
     /// Create through the shared command, then explicitly target the new project's sheet or
-    /// board in the focused pane. A failed command preserves Home and the existing view target.
+    /// board in the focused pane. New schematics request Fit once the canvas has its viewport;
+    /// a failed command preserves Home and the existing view target.
     fn start_new_project_in(&mut self, workspace: Workspace) {
         self.checkpoint_arrangements();
         let params = if workspace == Workspace::Board { serde_json::json!({"create_board":true}) } else { Value::Null };
@@ -514,6 +515,9 @@ impl PcbApp {
                         .map_or_else(|| editor_view::DocumentTarget::BoardWorkspace(project.id()), editor_view::DocumentTarget::Board),
                 };
                 self.views.active.open_document(target, &self.session);
+                if workspace == Workspace::Schematic {
+                    self.views.active.camera.request_fit();
+                }
             }
             self.home = false;
         }
@@ -1163,11 +1167,17 @@ impl PcbApp {
             self.message = self.begin_board_update(source).err();
             return;
         }
+        if let Action::SetPage { sheet, paper, orientation } = action {
+            let params =
+                json!({"sheet":sheet.id(),"paper":paper.as_str(),"orientation":orientation.as_str(),"expected_revision":self.session.revision()});
+            self.run(pcbcraft_engine::sheets::page::SET_PAGE, &params);
+            return;
+        }
         let Some(project) = self.session.project() else {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::UpdatePcb => false,
+            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Schematic { sheet, pick } => project.for_sheet(*sheet).is_some_and(|project| {
                 if pick.wire {
@@ -1188,7 +1198,7 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
@@ -1523,7 +1533,7 @@ impl PcbApp {
                             input_enabled,
                             input_enabled,
                             self.preferences.navigation,
-                            self.preferences.grid_opacity(false),
+                            self.preferences.schematic_display(),
                             self.preferences.auto_heal_wires,
                             self.parts.repeats(),
                             self.preferences.units,

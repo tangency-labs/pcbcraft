@@ -161,6 +161,10 @@ enum ParamKind {
     HierarchyId,
     Direction,
     SheetExtent,
+    /// An ISO paper size spelling, such as `a4`.
+    Paper,
+    /// `landscape` or `portrait`.
+    Orientation,
 }
 
 impl ParamKind {
@@ -244,6 +248,8 @@ impl ParamKind {
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
+            Self::Paper => json!({"type":"string", "enum":sheets::page::Paper::ALL.map(sheets::page::Paper::as_str)}),
+            Self::Orientation => json!({"type":"string", "enum":sheets::page::Orientation::ALL.map(sheets::page::Orientation::as_str)}),
             Self::BoardSetup => board::setup::BoardSetup::schema(),
             Self::SilkscreenSettings => json!({"type":"object","properties": {
                 "text_height_nm":{"type":"integer","minimum":1,"maximum":10_000_000},
@@ -527,6 +533,8 @@ impl ParamKind {
             }
             Self::SheetExtent if value.as_i64().is_some_and(|n| (1..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
+            Self::Paper if value.as_str().and_then(sheets::page::Paper::parse).is_some() => Ok(()),
+            Self::Orientation if value.as_str().and_then(sheets::page::Orientation::parse).is_some() => Ok(()),
             Self::BoardId | Self::SheetId | Self::NetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::NetTarget
                 if WireEndpoint::parse(value).is_some_and(|end| !matches!(end, WireEndpoint::Junction(_)))
@@ -587,6 +595,8 @@ impl ParamKind {
             Self::HierarchyId => Err("must identify a sheet symbol or hierarchical label"),
             Self::SheetExtent => Err("must be a positive extent within schematic bounds"),
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
+            Self::Paper => Err("must be a4, a3, a2, a1 or a0"),
+            Self::Orientation => Err("must be landscape or portrait"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
             Self::NetId => Err("must identify a persistent net by UUID"),
@@ -1120,6 +1130,12 @@ const CATALOG: &[Command] = &[
         title: "Rename Sheet",
         summary: "Rename an explicitly addressed sheet. Undoable.",
         params: &[sheets::SHEET, sheets::SHEET_NAME, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheets::page::SET_PAGE,
+        title: "Page Setup",
+        summary: "Set a sheet's paper size and orientation. The paper's top-left corner stays put unless `at` moves it; nothing on the sheet moves. Undoable.",
+        params: &[sheets::SHEET, sheets::page::PAPER, sheets::page::ORIENTATION, sheets::page::AT, EXPECTED_REVISION],
     },
     Command {
         id: sheets::DELETE_SHEET,
@@ -2525,6 +2541,7 @@ impl Session {
             | hierarchy::EDIT_LABEL
             | hierarchy::DELETE_LABEL
             | sheets::RENAME_SHEET
+            | sheets::page::SET_PAGE
             | "project.rename"
             | no_connect::SET
             | no_connect::CHECK
@@ -2631,7 +2648,7 @@ impl Session {
             let mut inspected = json!({
                 "name": p.name,
                 "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}})).collect::<Vec<_>>(),
-                "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
+                "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
                 "sheet_instances": p.occurrence_instances(),
@@ -2799,6 +2816,7 @@ impl Session {
             return Err(CommandError::Unavailable(match id {
                 sheets::CREATE_SHEET
                 | sheets::RENAME_SHEET
+                | sheets::page::SET_PAGE
                 | sheets::DELETE_SHEET
                 | "project.rename"
                 | no_connect::SET
@@ -2870,6 +2888,7 @@ impl Session {
                 numeric_id_high_water: Some(0),
                 sheets: Arc::new(vec![sheets::SchematicSheet {
                     occurrence_id: Some(fresh_id()?),
+                    page: Some(sheets::page::Page::new_sheet()),
                     ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
                 }]),
                 sheet_index: 0,
@@ -2909,6 +2928,7 @@ impl Session {
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
+            sheets::page::SET_PAGE => self.set_page(params)?,
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET

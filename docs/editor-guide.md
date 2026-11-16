@@ -66,7 +66,7 @@ marks fade near density changes while the coarser marks remain visible.
 
 The app bar shows the project name and an unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, units), Navigation (whether the wheel
+pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, schematic grid outside paper, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
@@ -74,7 +74,20 @@ The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
 between sessions and leaves snapping unchanged. **Grid opacity** fades visible grids
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
 same points. The opacity applies across views and windows and is kept with your
-preferences, not in the project.
+preferences, not in the project. Schematic sheets sit on paper, and parts can still
+be placed on the canvas around it. **Show grid
+outside paper** (on by default) continues the schematic grid there; turn it off
+for a clean surround. A new schematic starts with its whole sheet fitted into
+the editor viewport.
+
+Under **Appearance → Schematic canvas**, **Paper background** defaults to
+**Uniform**, with the same canvas colour on both sides of the page outline and
+no paper shadow. **Shaded** uses
+the theme's paper fill; **Custom** enables the **Sheet color** picker. **Canvas
+color** changes the schematic editing surface. Both colours follow the active
+theme until overridden, with separate light/dark choices. **Use theme** clears
+an override. These preferences do not change page geometry, snapping, project
+files or Undo.
 
 In PCB layout, wheel and pinch zoom go up to 64× for close inspection of copper
 and clearances. **Fit board** returns to the whole board.

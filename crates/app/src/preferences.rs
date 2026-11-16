@@ -92,6 +92,17 @@ pub enum SelectionFollow {
     PrimaryFollowsSecondary,
 }
 
+/// How paper is distinguished from the surrounding editing canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaperBackground {
+    Shaded,
+    Custom,
+    #[default]
+    #[serde(other)]
+    Uniform,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -103,6 +114,19 @@ pub struct Preferences {
     pub grid_opacity_percent: u8,
     /// Schematic grid visibility is independent of PCB grid visibility and snapping.
     pub schematic_grid_visible: bool,
+    /// Whether the schematic grid continues on the canvas outside the sheet's paper. On by
+    /// default, so parts can still be arranged on a grid off the paper; off leaves a clean
+    /// surround. Drawing only: snapping is the same either way.
+    pub schematic_grid_outside_paper: bool,
+    /// Paper appearance is personal presentation, never project data or a placement boundary.
+    pub schematic_paper_background: PaperBackground,
+    /// Opaque custom paper colours are remembered separately for each theme; None follows
+    /// the theme's shaded-paper colour. They remain saved while another background mode is used.
+    pub schematic_paper_color_light: Option<[u8; 3]>,
+    pub schematic_paper_color_dark: Option<[u8; 3]>,
+    /// Canvas overrides also follow their active theme until a colour is explicitly chosen.
+    pub schematic_canvas_color_light: Option<[u8; 3]>,
+    pub schematic_canvas_color_dark: Option<[u8; 3]>,
     /// PCB grid visibility preserves the selected dot or line style when hidden.
     pub board_grid_visible: bool,
     /// Display style for every PCB view. Off is the default, including for older saved settings.
@@ -140,6 +164,12 @@ impl Default for Preferences {
             navigation: Navigation::default(),
             grid_opacity_percent: grid::OPACITY_DEFAULT,
             schematic_grid_visible: true,
+            schematic_grid_outside_paper: true,
+            schematic_paper_background: PaperBackground::Uniform,
+            schematic_paper_color_light: None,
+            schematic_paper_color_dark: None,
+            schematic_canvas_color_light: None,
+            schematic_canvas_color_dark: None,
             board_grid_visible: true,
             board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
@@ -157,6 +187,33 @@ impl Preferences {
     pub(crate) fn grid_opacity(self, board: bool) -> u8 {
         let visible = if board { self.board_grid_visible } else { self.schematic_grid_visible };
         if visible { self.grid_opacity_percent } else { 0 }
+    }
+
+    /// Resolve paper/canvas colours and effective grid visibility for a schematic view.
+    /// These inputs affect painting only, never snapping or project geometry.
+    pub(crate) fn schematic_display(self) -> crate::schematic_canvas::Display {
+        crate::schematic_canvas::Display {
+            opacity: self.grid_opacity(false),
+            outside_paper: self.schematic_grid_outside_paper,
+            appearance: self.paper(),
+        }
+    }
+
+    /// Resolve canvas and paper colours from the current palette, including System theme changes.
+    /// Missing overrides follow the theme. Uniform mode uses the canvas for the whole drawing area.
+    pub(crate) fn paper(self) -> pcbcraft_chrome::paper::Appearance {
+        let t = pcbcraft_chrome::Tokens::get();
+        let dark = pcbcraft_chrome::theme::is_dark();
+        let color = |rgb: Option<[u8; 3]>| rgb.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b));
+        let canvas = color(if dark { self.schematic_canvas_color_dark } else { self.schematic_canvas_color_light }).unwrap_or(t.canvas);
+        let paper = match self.schematic_paper_background {
+            PaperBackground::Uniform => None,
+            PaperBackground::Shaded => Some(t.schematic_paper),
+            PaperBackground::Custom => {
+                Some(color(if dark { self.schematic_paper_color_dark } else { self.schematic_paper_color_light }).unwrap_or(t.schematic_paper))
+            }
+        };
+        pcbcraft_chrome::paper::Appearance { canvas, paper }
     }
 
     /// Whether the workspace currently draws a grid, including legacy opacity-zero and PCB-Off settings.
@@ -392,6 +449,12 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.scale_percent = defaults.scale_percent;
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
             preferences.schematic_grid_visible = defaults.schematic_grid_visible;
+            preferences.schematic_grid_outside_paper = defaults.schematic_grid_outside_paper;
+            preferences.schematic_paper_background = defaults.schematic_paper_background;
+            preferences.schematic_paper_color_light = defaults.schematic_paper_color_light;
+            preferences.schematic_paper_color_dark = defaults.schematic_paper_color_dark;
+            preferences.schematic_canvas_color_light = defaults.schematic_canvas_color_light;
+            preferences.schematic_canvas_color_dark = defaults.schematic_canvas_color_dark;
             preferences.board_grid_visible = defaults.board_grid_visible;
             preferences.board_grid_style = defaults.board_grid_style;
             preferences.units = defaults.units;
@@ -418,7 +481,20 @@ fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
     });
 }
 
-/// Theme, interface scale, PCB grid display, shared grid opacity and display units.
+/// Edit one opaque colour override. An untouched picker or reset keeps the value absent so
+/// subsequent theme changes still use the theme palette.
+fn paper_color(ui: &mut Ui, name: &str, saved: &mut Option<[u8; 3]>, theme_color: egui::Color32) {
+    let [r, g, b, _] = theme_color.to_array();
+    let mut rgb = saved.unwrap_or([r, g, b]);
+    if settings::color(ui, name, &mut rgb).changed() {
+        *saved = Some(rgb);
+    }
+    if ui.add_enabled(saved.is_some(), settings::action_button("Use theme", false)).clicked() {
+        *saved = None;
+    }
+}
+
+/// Theme, scale, panel style, grid display, schematic paper/canvas colours and units.
 /// The PCB style reflects effective visibility; choosing dots or lines restores a hidden grid.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Appearance", "How PCBCraft looks. Cancel restores your previous settings.");
@@ -432,6 +508,30 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
             );
         });
         settings::hint(ui, "System follows your desktop or browser.");
+    });
+    settings::section(ui, "Schematic canvas", |ui| {
+        settings::row_with_keywords(ui, "Paper background", &["sheet", "shade", "uniform", "color", "colour"], |ui| {
+            settings::segmented(
+                ui,
+                &mut preferences.schematic_paper_background,
+                &[(PaperBackground::Uniform, "Uniform"), (PaperBackground::Shaded, "Shaded"), (PaperBackground::Custom, "Custom")],
+            );
+        });
+        let t = pcbcraft_chrome::Tokens::get();
+        let dark = pcbcraft_chrome::theme::is_dark();
+        settings::row_with_keywords(ui, "Canvas color", &["background", "schematic", "theme", "colour"], |ui| {
+            let saved = if dark { &mut preferences.schematic_canvas_color_dark } else { &mut preferences.schematic_canvas_color_light };
+            paper_color(ui, "Canvas color", saved, t.canvas);
+        });
+        settings::row_with_keywords(ui, "Sheet color", &["paper", "background", "custom", "colour"], |ui| {
+            ui.add_enabled_ui(preferences.schematic_paper_background == PaperBackground::Custom, |ui| {
+                let saved = if dark { &mut preferences.schematic_paper_color_dark } else { &mut preferences.schematic_paper_color_light };
+                paper_color(ui, "Sheet color", saved, t.schematic_paper);
+            });
+        });
+        settings::row_with_keywords(ui, "Show grid outside paper", &["schematic", "sheet", "page", "surround", "off-paper"], |ui| {
+            settings::checkbox(ui, "Enabled", "Show grid outside paper", &mut preferences.schematic_grid_outside_paper);
+        });
     });
     settings::section(ui, "Scale", |ui| {
         settings::row(ui, "Interface scale", |ui| {
@@ -635,6 +735,12 @@ mod tests {
             },
             grid_opacity_percent: 35,
             schematic_grid_visible: false,
+            schematic_grid_outside_paper: false,
+            schematic_paper_background: PaperBackground::Custom,
+            schematic_paper_color_light: Some([245, 240, 230]),
+            schematic_paper_color_dark: Some([30, 40, 50]),
+            schematic_canvas_color_light: Some([240, 242, 245]),
+            schematic_canvas_color_dark: Some([35, 40, 50]),
             board_grid_visible: true,
             board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
@@ -650,8 +756,46 @@ mod tests {
         }
         // Settings saved before units existed show mils, as the grid did then.
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":40}").units, Unit::Mil);
+        // Settings saved before paper keep the grid outside it, as the canvas did then.
+        assert!(Preferences::parse("{\"grid_opacity_percent\":40}").schematic_grid_outside_paper);
+        assert_eq!(Preferences::parse("{\"grid_opacity_percent\":40}").schematic_paper_background, PaperBackground::Uniform);
         let hidden = Preferences { grid_opacity_percent: 0, ..Preferences::default() };
         assert_eq!(Preferences::parse(&hidden.to_text()), hidden);
+    }
+
+    /// Theme defaults stay dynamic until explicitly overridden, and custom values remain
+    /// separate across theme changes and a round trip through personal storage.
+    #[test]
+    fn paper_and_canvas_defaults_follow_the_active_theme() {
+        let ctx = egui::Context::default();
+        let defaults = Preferences::parse("{}");
+        let custom = Preferences {
+            schematic_paper_background: PaperBackground::Custom,
+            schematic_canvas_color_light: Some([240, 242, 245]),
+            schematic_canvas_color_dark: Some([25, 30, 40]),
+            schematic_paper_color_light: Some([250, 245, 230]),
+            schematic_paper_color_dark: Some([35, 45, 55]),
+            ..defaults
+        };
+        let custom = Preferences::parse(&custom.to_text());
+        for dark in [true, false] {
+            pcbcraft_chrome::theme::apply(&ctx, dark);
+            let t = pcbcraft_chrome::Tokens::get();
+            assert_eq!(defaults.paper(), pcbcraft_chrome::paper::Appearance { canvas: t.canvas, paper: None });
+            let rgb = |rgb: [u8; 3]| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+            assert_eq!(custom.paper().canvas, rgb(if dark { [25, 30, 40] } else { [240, 242, 245] }));
+            assert_eq!(custom.paper().fill(), rgb(if dark { [35, 45, 55] } else { [250, 245, 230] }));
+            let follow = Preferences {
+                schematic_canvas_color_light: None,
+                schematic_canvas_color_dark: None,
+                schematic_paper_color_light: None,
+                schematic_paper_color_dark: None,
+                ..custom
+            };
+            assert_eq!(follow.paper().canvas, t.canvas);
+            assert_eq!(follow.paper().fill(), t.schematic_paper);
+            assert_eq!(Preferences { schematic_paper_background: PaperBackground::Uniform, ..custom }.paper().fill(), custom.paper().canvas);
+        }
     }
 
     #[test]
@@ -713,6 +857,12 @@ mod tests {
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
             schematic_grid_visible: false,
+            schematic_grid_outside_paper: false,
+            schematic_paper_background: PaperBackground::Custom,
+            schematic_paper_color_light: Some([245, 240, 230]),
+            schematic_paper_color_dark: Some([30, 40, 50]),
+            schematic_canvas_color_light: Some([240, 242, 245]),
+            schematic_canvas_color_dark: Some([35, 40, 50]),
             board_grid_visible: false,
             board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,

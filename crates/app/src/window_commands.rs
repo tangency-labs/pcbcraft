@@ -120,7 +120,7 @@ mod live {
         canvas_camera::MAX_ZOOM,
         editor_layout::HostId,
         editor_windows::ViewAction,
-        preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
+        preferences::{PaperBackground, Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
         schematic_canvas::Tool,
     };
     use pcbcraft_chrome::workspace::PanelStyle;
@@ -369,6 +369,7 @@ mod live {
     const FOLLOW: &[&str] = &["off", "both", "secondary_follows_primary", "primary_follows_secondary"];
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
+    const PAPER_BACKGROUNDS: &[&str] = &["uniform", "shaded", "custom"];
     const PANEL_STYLES: &[&str] = &["floating", "compact"];
     const PANELS: &[&str] = &["browser", "parts", "nets", "properties", "selection_filters"];
     const CATALOG_MODES: &[&str] = &["expanded", "compact"];
@@ -1001,6 +1002,12 @@ mod live {
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
                 setting("grid_opacity_percent", "How strongly the grid shows; 0 hides it", Kind::Integer { min: 0, max: 100, step: 5 }),
                 setting("schematic_grid_visible", "Show the schematic grid; true restores zero opacity", Kind::Bool),
+                setting("schematic_grid_outside_paper", "Continue the schematic grid on the canvas outside the sheet's paper", Kind::Bool),
+                setting("schematic_paper_background", "Uniform canvas, shaded paper, or a custom sheet color", Kind::Choice(PAPER_BACKGROUNDS)),
+                setting("schematic_canvas_color_light", "Light-theme schematic canvas: opaque #RRGGBB or null to follow the theme", Kind::Color),
+                setting("schematic_canvas_color_dark", "Dark-theme schematic canvas: opaque #RRGGBB or null to follow the theme", Kind::Color),
+                setting("schematic_paper_color_light", "Light-theme custom sheet color: opaque #RRGGBB or null to follow the theme", Kind::Color),
+                setting("schematic_paper_color_dark", "Dark-theme custom sheet color: opaque #RRGGBB or null to follow the theme", Kind::Color),
                 setting("board_grid_visible", "Show the PCB grid; true overrides Off and zero opacity", Kind::Bool),
                 setting("board_grid_style", "How PCB views draw their grid", Kind::Choice(BOARD_GRIDS)),
                 setting("selection_follow", "Which views pan to reveal another view's selection", Kind::Choice(FOLLOW)),
@@ -1059,6 +1066,12 @@ mod live {
             "units": preferences.units.symbol(),
             "grid_opacity_percent": preferences.grid_opacity_percent,
             "schematic_grid_visible": preferences.schematic_grid_visible,
+            "schematic_grid_outside_paper": preferences.schematic_grid_outside_paper,
+            "schematic_paper_background": match preferences.schematic_paper_background { PaperBackground::Uniform => "uniform", PaperBackground::Shaded => "shaded", PaperBackground::Custom => "custom" },
+            "schematic_canvas_color_light": preferences.schematic_canvas_color_light.map(|[r,g,b]|crate::board_appearance::hex(egui::Color32::from_rgb(r,g,b))),
+            "schematic_canvas_color_dark": preferences.schematic_canvas_color_dark.map(|[r,g,b]|crate::board_appearance::hex(egui::Color32::from_rgb(r,g,b))),
+            "schematic_paper_color_light": preferences.schematic_paper_color_light.map(|[r,g,b]|crate::board_appearance::hex(egui::Color32::from_rgb(r,g,b))),
+            "schematic_paper_color_dark": preferences.schematic_paper_color_dark.map(|[r,g,b]|crate::board_appearance::hex(egui::Color32::from_rgb(r,g,b))),
             "board_grid_visible": preferences.board_grid_visible,
             "board_grid_style": match preferences.board_grid_style {
                 grid::Style::Off => "off",
@@ -1104,6 +1117,26 @@ mod live {
                 "lines" => grid::Style::Lines,
                 _ => grid::Style::Off,
             };
+        }
+        if let Some(outside) = params.get("schematic_grid_outside_paper").and_then(Value::as_bool) {
+            preferences.schematic_grid_outside_paper = outside;
+        }
+        if let Some(mode) = text("schematic_paper_background") {
+            preferences.schematic_paper_background = match mode {
+                "shaded" => PaperBackground::Shaded,
+                "custom" => PaperBackground::Custom,
+                _ => PaperBackground::Uniform,
+            };
+        }
+        for (key, slot) in [
+            ("schematic_canvas_color_light", &mut preferences.schematic_canvas_color_light),
+            ("schematic_canvas_color_dark", &mut preferences.schematic_canvas_color_dark),
+            ("schematic_paper_color_light", &mut preferences.schematic_paper_color_light),
+            ("schematic_paper_color_dark", &mut preferences.schematic_paper_color_dark),
+        ] {
+            if let Some(value) = params.get(key) {
+                *slot = value.as_str().and_then(|color| crate::board_appearance::parse_color(color).ok());
+            }
         }
         for (key, board) in [("board_grid_visible", true), ("schematic_grid_visible", false)] {
             if let Some(visible) = params.get(key).and_then(Value::as_bool) {
@@ -1823,14 +1856,23 @@ mod live {
         fn preferences_round_trip_through_their_command_names() {
             let changed = updated_preferences(
                 Preferences::default(),
-                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots", "panel_style": "compact"}),
+                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "middle_drag_zoom": true, "right_drag_pan": true, "grid_opacity_percent": 40, "board_grid_style": "dots", "panel_style": "compact", "schematic_grid_outside_paper": false, "schematic_paper_background":"custom", "schematic_canvas_color_dark":"#202832", "schematic_canvas_color_light":"#F0F3F7", "schematic_paper_color_dark":"#303840", "schematic_paper_color_light":"#FFFDF0"}),
             );
             assert_eq!(changed.panel_style, PanelStyle::Compact);
+            assert!(!changed.schematic_grid_outside_paper);
             assert!(changed.navigation.middle_drag_zoom && changed.navigation.right_drag_pan);
             let inspected = inspect_preferences(&changed);
             assert_eq!(inspected["panel_style"], "compact");
             assert_eq!(inspected["middle_drag_zoom"], true);
             assert_eq!(inspected["right_drag_pan"], true);
+            assert_eq!(inspected["schematic_grid_outside_paper"], false);
+            assert_eq!(inspected["schematic_paper_background"], "custom");
+            assert_eq!(inspected["schematic_canvas_color_dark"], "#202832");
+            assert_eq!(inspected["schematic_paper_color_light"], "#FFFDF0");
+            let reset = updated_preferences(changed, &json!({"schematic_canvas_color_dark":null,"schematic_paper_color_light":null}));
+            assert!(reset.schematic_canvas_color_dark.is_none() && reset.schematic_paper_color_light.is_none());
+            assert_eq!(reset.schematic_paper_color_dark, changed.schematic_paper_color_dark);
+
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);
             assert_eq!(updated_preferences(changed, &json!({})), changed);
             assert_eq!(changed.scale_percent, Preferences::default().scale_percent);

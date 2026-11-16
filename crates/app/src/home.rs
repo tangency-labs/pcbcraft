@@ -141,7 +141,7 @@ impl PcbApp {
                 let card = home::RecentCard { title: &entry.name, path: &path, enabled: !self.files.busy(), preview: state };
                 let picked = home::recent_card(ui, &path, width, card, |painter, rect| {
                     if let Some(Some(preview)) = preview {
-                        preview.paint(painter, rect);
+                        preview.paint(painter, rect, self.preferences.paper());
                     }
                 });
                 if picked.open {

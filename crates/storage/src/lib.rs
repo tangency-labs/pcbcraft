@@ -76,7 +76,7 @@ pub fn preview(path: &Path) -> Result<Arc<Project>, String> {
 
 /// Share bounded format detection and decoding while the caller selects recovery or read-only I/O.
 fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persistence::Documents, String>) -> Result<Arc<Project>, String> {
-    pcbcraft_engine::persistence::migrate_bundled_libraries(read_project_with(path, folder)?)
+    pcbcraft_engine::persistence::prepare_opened(read_project_with(path, folder)?)
 }
 
 /// Keep raw document validation separate from opening upgrades and disk publication.

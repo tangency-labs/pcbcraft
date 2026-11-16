@@ -118,6 +118,9 @@ For a project with several sheets, pass its inspected sheet UUID as `sheet` to
 schematic commands and footprint placement. Omission remains compatible with
 single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`,
 `sheet.rename` and `sheet.delete` use the same project-wide undo history as edits.
+`sheet.set_page` sets a sheet's `paper` (`a4` to `a0`) and `orientation`
+(`landscape` or `portrait`), keeping the paper's top-left corner unless `at` moves
+it; each inspected sheet reports its `page`.
 Inspection includes each sheet's own schematic, while the legacy top-level
 `schematic` is available only for single-sheet projects.
 
@@ -154,7 +157,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
-| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
 
 Closing the last window and choosing where to save an Untitled project stay in

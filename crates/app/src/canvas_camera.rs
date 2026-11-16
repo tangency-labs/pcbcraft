@@ -523,11 +523,15 @@ impl Camera {
         self.offset = self.offset.clamp(-limit, limit);
     }
 
-    /// Center symbol and wire bounds, including free routes and a margin for labels, in the part
-    /// of the canvas left uncovered by all visible floating cards.
+    /// Center the sheet's paper together with symbol and wire bounds, including free routes and a
+    /// margin for labels, in the part of the canvas left uncovered by all visible floating cards.
+    /// Drawing that lies off the paper stays in view too.
     fn fit(&mut self, project: &Project, rect: Rect) {
         *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
         let mut bounds = Rect::NOTHING;
+        if let Some([min, max]) = project.page().map(|page| page.corners()) {
+            bounds = Rect::from_two_pos(self.screen(min, rect), self.screen(max, rect)).translate(-rect.center().to_vec2());
+        }
         for symbol in project.symbols() {
             let center = self.screen(symbol.position, rect) - rect.center();
             let extent = grid_bounds(symbol.unit_definition(), symbol.turns(), symbol.is_mirrored());

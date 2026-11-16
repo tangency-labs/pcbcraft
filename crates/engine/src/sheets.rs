@@ -4,6 +4,8 @@ use super::*;
 use std::collections::BTreeSet;
 use std::ops::Deref;
 
+pub mod page;
+
 /// Bound metadata and navigation as well as per-sheet geometry.
 pub const MAX_SHEETS: usize = 64;
 /// Create a named empty flat sheet as one project undo step.
@@ -41,11 +43,15 @@ pub struct SchematicSheet {
     pub(crate) generated_legs: Arc<Vec<crate::wire::GeneratedLeg>>,
     /// Explicit no-connect intent on project-unique wire-end junction identities.
     pub(crate) no_connect_ends: Arc<BTreeSet<u64>>,
+    /// The sheet's paper. Decoding a format older than sheet/9 leaves it `None` until
+    /// [`page::adopt`] places paper around the drawing on open.
+    pub(crate) page: Option<page::Page>,
 }
 
 impl SchematicSheet {
-    /// Create an empty sheet after identity/name validation by the owning command or codec.
-    /// Occurrence adoption is separate; new authored sheets use `Project::new_sheet_record`.
+    /// Create an empty sheet without paper after identity/name validation by the owning command
+    /// or codec. Occurrence and paper adoption are separate; new authored sheets use
+    /// `Project::new_sheet_record`, which gives them paper.
     pub(crate) fn empty(sheet_id: uuid::Uuid, sheet_name: String) -> Self {
         Self {
             sheet_id,
@@ -60,6 +66,7 @@ impl SchematicSheet {
             connectivity: Arc::default(),
             generated_legs: Arc::default(),
             no_connect_ends: Arc::default(),
+            page: None,
         }
     }
 

@@ -35,6 +35,22 @@ pub use power_migration::migrate_power_markers;
 pub fn migrate_bundled_libraries(project: Arc<Project>) -> Result<Arc<Project>, String> {
     crate::library::compatibility::migration::project(project)
 }
+
+/// Prepare a decoded native project for editing: migrate bundled library addresses, then give
+/// every sheet without paper the smallest paper around its drawing. Like the library migration
+/// this records no history and touches no source bytes; hosts keep the decoded snapshot as the
+/// save baseline, so the next Save writes the adopted sheets. Returns the input `Arc` when
+/// nothing needs adopting.
+pub fn prepare_opened(project: Arc<Project>) -> Result<Arc<Project>, String> {
+    Ok(adopt_paper(migrate_bundled_libraries(project)?))
+}
+
+/// Give every sheet without paper (decoded from before sheet/9) the smallest paper around its
+/// drawing, centered on it. Nothing moves and no history is recorded. Returns the input `Arc`
+/// when every sheet already has paper.
+pub fn adopt_paper(project: Arc<Project>) -> Arc<Project> {
+    crate::sheets::page::adopt(project)
+}
 #[cfg(test)]
 mod split_tests;
 
@@ -444,7 +460,7 @@ impl From<WireEndpoint> for Endpoint<'static> {
 
 /// Encode deterministic single-document JSON for migration fixtures and diagnostic tools.
 /// Legacy snapshots retain format 4; adopted allocation metadata requires format 8.
-/// Configured boards and adopted occurrence IDs are refused. Normal saves use
+/// Configured boards, adopted occurrence IDs and sheet paper are refused. Normal saves use
 /// [`encode_documents`] or [`encode_packed`].
 pub fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
     let mut encoder = Encoder::new(project)?;
@@ -478,7 +494,8 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation and occurrence IDs require split documents or an archive; refuse loss.
+    /// drawings, rotation, occurrence IDs and sheet paper require split documents or an archive;
+    /// refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
@@ -523,6 +540,9 @@ impl Encoder {
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
         if project.has_sheet_occurrences() {
             return Err("legacy diagnostic encoding cannot represent sheet occurrence identities; use split documents or a packed archive".into());
+        }
+        if project.sheets.iter().any(|sheet| sheet.page.is_some()) {
+            return Err("legacy diagnostic encoding cannot represent sheet paper; use split documents or a packed archive".into());
         }
         let mut bytes = Vec::new();
         let registrations = project.board.ownership.records();
@@ -1001,6 +1021,7 @@ fn validate_with_hierarchy(
             connectivity: Arc::default(),
             generated_legs: Arc::default(),
             no_connect_ends: Arc::default(),
+            page: None,
         }]),
         sheet_index: 0,
         name,
@@ -1055,6 +1076,7 @@ pub(crate) fn diagnostic_snapshot(project: Arc<Project>) -> Arc<Project> {
     diagnostic.circuit_use = None;
     for sheet in Arc::make_mut(&mut diagnostic.sheets) {
         sheet.occurrence_id = None;
+        sheet.page = None;
     }
     Arc::new(diagnostic)
 }
@@ -1071,6 +1093,9 @@ mod tests {
     /// independently from board `file` paths, which are covered by the split-layout tests.
     fn without_storage_paths(mut project: serde_json::Value) -> serde_json::Value {
         project.as_object_mut().unwrap().remove("sheet_instances");
+        for sheet in project["sheets"].as_array_mut().unwrap() {
+            sheet.as_object_mut().unwrap().remove("page");
+        }
         for board in project["boards"].as_array_mut().unwrap() {
             board.as_object_mut().unwrap().remove("file");
         }

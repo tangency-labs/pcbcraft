@@ -793,7 +793,8 @@ impl PcbApp {
     }
 
     /// Paint exposed chrome margins with the addressed view's canvas palette and settled grid.
-    /// Missing/library views retain a plain canvas background; no input or model state changes.
+    /// A schematic view extends its sheet's paper backdrop. Missing/library views retain a plain
+    /// canvas background; no input or model state changes.
     fn view_background_shapes(&self, id: ViewId, area: Rect) -> Vec<egui::Shape> {
         let t = pcbcraft_chrome::Tokens::get();
         let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
@@ -807,6 +808,10 @@ impl PcbApp {
             (camera, fill, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
         } else if view.workspace == Workspace::Board {
             (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
+        } else if let Some(canvas) = view.camera.schematic_rect()
+            && let Some(project) = view.snapshot(&self.session)
+        {
+            return crate::schematic_canvas::backdrop(&project, &view.camera, canvas, area, self.preferences.schematic_display());
         } else {
             (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
         };
@@ -1129,7 +1134,7 @@ impl PcbApp {
                                     false,
                                     false,
                                     self.preferences.navigation,
-                                    self.preferences.grid_opacity(false),
+                                    self.preferences.schematic_display(),
                                     self.preferences.auto_heal_wires,
                                     self.parts.repeats(),
                                     self.preferences.units,

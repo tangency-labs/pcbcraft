@@ -14,6 +14,12 @@ thread_local! {
     static DARK: Cell<bool> = const { Cell::new(true) };
 }
 
+/// Width of the plain border drawn inside the paper, in logical points.
+pub const SCHEMATIC_PAPER_BORDER: f32 = 1.0;
+/// Offset and opacity of the soft shadow that lifts the paper off the canvas.
+pub const SCHEMATIC_PAPER_SHADOW: egui::Vec2 = egui::vec2(2.0, 3.0);
+pub const SCHEMATIC_PAPER_SHADOW_ALPHA: u8 = 40;
+
 /// Default schematic zoom and drawing weights, in logical points.
 pub const SCHEMATIC_GRID_SPACING: f32 = 10.16;
 pub const SCHEMATIC_GRID_DOT_RADIUS: f32 = 0.75;
@@ -72,6 +78,9 @@ pub struct Tokens {
     pub canvas: Color32,
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
+    /// Optional shaded-paper fill: white in light and darker than the canvas in dark.
+    /// Uniform presentation uses the resolved canvas colour instead.
+    pub schematic_paper: Color32,
     pub schematic_wire: Color32,
     /// Intentional no-connect geometry is distinct from electrical wire ink.
     pub schematic_no_connect: Color32,
@@ -214,6 +223,7 @@ impl Tokens {
             canvas: Color32::from_rgb(240, 243, 247),
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(135, 148, 166),
+            schematic_paper: Color32::WHITE,
             schematic_wire: Color32::from_rgb(20, 112, 75),
             schematic_no_connect: Color32::from_rgb(30, 90, 190),
             schematic_highlight: Color32::from_rgb(145, 88, 12),
@@ -327,6 +337,7 @@ impl Tokens {
         t.canvas = Color32::from_rgb(46, 52, 64);
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
+        t.schematic_paper = Color32::from_rgb(32, 36, 45);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
         t.schematic_no_connect = Color32::from_rgb(110, 175, 255);
         t.schematic_highlight = Color32::from_rgb(240, 192, 106);
@@ -475,6 +486,12 @@ mod tests {
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
             assert!(contrast(t.board_grid, t.board_canvas) >= 3.0);
             assert!(contrast(t.schematic_highlight, t.canvas) >= 4.5);
+            // The same schematic ink reads on the paper and on the canvas around it.
+            for surface in [t.canvas, t.schematic_paper] {
+                assert!(contrast(t.canvas_ink, surface) >= 3.0);
+                assert!(contrast(t.schematic_highlight, surface) >= 4.5);
+            }
+            assert_ne!(t.schematic_paper, t.canvas, "optional shaded paper stays distinct");
             assert!(contrast(t.error, t.panel) >= 4.5);
         }
     }
