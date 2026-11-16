@@ -7,10 +7,33 @@ persistent UUID. It describes the current engine; it does not change the format.
 
 The inventory is enforced by `crates/engine/src/identity_tests.rs`. The test builds
 a project through the shared commands, encodes it with the production document
-encoder and classifies every saved record by its `id` field. A record that the
+encoder and classifies each record it saves by its `id` field. A record that the
 test cannot classify, a declared record that the fixture no longer saves, or a
 kind whose identity no longer matches the gap list below fails the test.
 When a kind moves to UUIDs, remove it from `EXPECTED_GAPS` in the same change.
+
+The test registers the places in a saved document where an object of some kind
+can be stored:
+- every JSON object, however deeply nested and whether or not it has an `id`;
+- every element of a list, including plain values such as the wire ends in a
+  sheet's no-connect list;
+- every value under a key that is an id;
+- the element path of every empty list.
+
+Each registered path must be declared in the test's `RECORDS` table, including
+plain owned content such as positions, rule values and page settings. A list that
+is empty in the fixture is declared with no forms, so the first element saved
+there has to be classified. Only a named scalar field is left out: it holds one
+value of its owner, not a collection of objects. Library definitions are
+versioned as a whole, so only their document root is registered.
+
+The test lists owned content path by path rather than recognising it by shape,
+for example "any object with only coordinates is a point". A shape rule would let
+a new kind with that shape in, unseen. Declaring every path costs one line per
+new field, and that line is where the field's identity is decided. A separate
+test adds a nested object without an id, lists of objects, plain values and
+nothing, values under id keys and a new document, and checks that each is
+reported.
 
 ## Identity forms
 
@@ -73,7 +96,8 @@ every command that names those objects, so it needs a project format step with a
 migration that keeps older files loading.
 
 Kinds that are not stored yet must be classified when their first record is
-added; the audit fails on the new record until it is. The fixture does not
-produce every optional record the encoder can write, such as net lineage after a
-split or generated named-contact legs, so those records are not checked by the
-audit until a fixture saves them.
+added. The audit fails on such a record, unclassified, once the fixture saves
+it. The fixture does not produce every optional record the encoder can write,
+such as net lineage after a split or generated named-contact legs. Those records
+are not checked by the audit until a fixture saves them; the empty lineage list
+is declared, so its first entry will be.

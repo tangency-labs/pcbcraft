@@ -1,4 +1,5 @@
-//! Every saved object kind carries a persistent UUID, an owner token, or is a listed gap.
+//! Each object kind of the identity scheme carries a persistent UUID or an owner token, or is a
+//! listed gap, and each record a command-built project saves is classified.
 //!
 //! The audit reads the production documents of a command-built project rather than a list of
 //! types, so a newly persisted record without a classification fails here. The record and kind
@@ -22,6 +23,8 @@ enum Form {
     Name,
     /// No `id` field; the record is content of its owner.
     Owned,
+    /// A plain value saved as a list element or under an id key, such as a wire end in a list.
+    Value,
 }
 
 /// The object kinds that the identity scheme addresses.
@@ -129,41 +132,88 @@ enum Address {
 }
 
 /// Every record path the fixture saves, the identity forms it is expected to show, and what it is.
+/// Owned and value paths are listed too, so content cannot hide a new kind; see `Seen::walk`. A
+/// list that is empty in the fixture is declared with no forms, so the first element a fixture
+/// saves there has to be classified.
 const RECORDS: &[(&str, &[Form], &str)] = &[
     ("project.json:", &[Form::Uuid], "project"),
     ("project.json:boards[]", &[Form::Uuid], "board registration"),
     ("project.json:sheets[]", &[Form::Uuid], "sheet reference"),
     ("project.json:components[]", &[Form::Counter], "component"),
+    ("project.json:components[].metadata", &[Form::Owned], "component metadata"),
+    ("project.json:components[].metadata.attributes", &[Form::Owned], "component attributes"),
+    ("project.json:components[].metadata.fields", &[Form::Owned], "component fields"),
+    ("project.json:net_classes", &[Form::Owned], "net class catalog"),
     ("project.json:net_classes.definitions[]", &[Form::Uuid], "net class"),
+    ("project.json:net_classes.definitions[].rules", &[Form::Owned], "net class rule values"),
+    ("project.json:parameters", &[Form::Owned], "project parameters"),
     ("sheets/*:", &[Form::Uuid], "sheet document"),
+    ("sheets/*:page", &[Form::Owned], "sheet page"),
+    ("sheets/*:page.at_nm[]", &[Form::Value], "page origin coordinate"),
+    ("sheets/*:page.template", &[Form::Owned], "sheet page template"),
+    ("sheets/*:parameters", &[Form::Owned], "sheet parameters"),
     ("sheets/*:symbols[]", &[Form::Counter], "placed symbol unit"),
+    ("sheets/*:symbols[].field_layout", &[Form::Owned], "symbol field layout"),
+    ("sheets/*:symbols[].field_layout.reference", &[Form::Owned], "reference field placement"),
+    ("sheets/*:symbols[].field_layout.value", &[Form::Owned], "value field placement"),
+    ("sheets/*:symbols[].field_layout.value.offset", &[Form::Owned], "value field offset"),
     ("sheets/*:wires[]", &[Form::Counter], "wire"),
+    ("sheets/*:wires[].from", &[Form::Owned], "wire start"),
+    ("sheets/*:wires[].to", &[Form::Owned], "wire end"),
     ("sheets/*:wires[].bends[]", &[Form::Owned], "wire bend point"),
+    ("sheets/*:no_connect_ends[]", &[Form::Value], "no-connect intent on a wire end"),
     ("sheets/*:junctions[]", &[Form::Counter], "junction"),
     ("sheets/*:net_labels[]", &[Form::Counter], "net label"),
+    ("sheets/*:net_labels[].at", &[Form::Owned], "net label position"),
     ("sheets/*:labels[]", &[Form::Counter], "hierarchical label (port)"),
+    ("sheets/*:labels[].at", &[Form::Owned], "hierarchical label position"),
     ("sheets/*:subsheets[]", &[Form::Counter], "sheet symbol"),
+    ("sheets/*:subsheets[].at", &[Form::Owned], "sheet symbol position"),
     ("board.json:", &[Form::Owned], "board document; the board's id is its registration"),
+    ("board.json:setup", &[Form::Owned], "board setup"),
     ("board.json:setup.layers[]", &[Form::Uuid], "layer"),
     ("board.json:setup.stackup", &[Form::Uuid], "stackup"),
     ("board.json:setup.stackup.strata[]", &[Form::Uuid, Form::Owned], "stratum; copper strata are addressed by their layer"),
     ("board.json:rules", &[Form::Uuid], "board rule set"),
+    ("board.json:rules.values", &[Form::Owned], "board rule values"),
+    ("board.json:baseline", &[Form::Owned], "accepted schematic baseline"),
+    ("board.json:baseline.source", &[Form::Owned], "baseline source revision"),
+    ("board.json:baseline.components", &[Form::Owned], "accepted components, keyed by component"),
+    ("board.json:baseline.components.{id}", &[Form::Owned], "accepted component"),
+    ("board.json:baseline.components.{id}.terminals[]", &[Form::Value], "accepted component terminal"),
+    ("board.json:baseline.components.{id}.package", &[Form::Owned], "accepted package choice"),
+    ("board.json:baseline.components.{id}.package.mapping", &[Form::Owned], "accepted pad mapping"),
+    ("board.json:baseline.components.{id}.package.mapping.{id}", &[Form::Value], "accepted pad mapping entry"),
     ("board.json:baseline.nets[]", &[Form::Owned], "accepted connection"),
+    ("board.json:baseline.nets[].names[]", &[Form::Value], "accepted connection name"),
     ("board.json:baseline.nets[].terminals[]", &[Form::Owned], "accepted connection terminal"),
     ("board.json:assignments[]", &[Form::Owned], "package choice, keyed by component"),
+    ("board.json:assignments[].mapping", &[Form::Owned], "package pad mapping"),
+    ("board.json:assignments[].mapping.{id}", &[Form::Value], "package pad mapping entry"),
+    ("board.json:graphics", &[Form::Owned], "board drawing collection"),
+    ("board.json:graphics.layers[]", &[], "board drawing layer list, empty in the fixture"),
     ("board.json:graphics.items[]", &[Form::Uuid], "board drawing"),
     ("board.json:graphics.items[].points[]", &[Form::Owned], "board drawing vertex"),
     ("board.json:tracks[]", &[Form::Uuid], "track segment"),
+    ("board.json:tracks[].start", &[Form::Owned], "track start point"),
+    ("board.json:tracks[].end", &[Form::Owned], "track end point"),
     ("board.json:vias[]", &[Form::Uuid], "via"),
+    ("board.json:vias[].at", &[Form::Owned], "via position"),
     ("board.json:footprints[]", &[Form::Counter], "footprint instance"),
+    ("board.json:footprints[].mapping", &[Form::Owned], "footprint pad mapping"),
+    ("board.json:footprints[].mapping.{id}", &[Form::Value], "footprint pad mapping entry"),
     ("instances.json:", &[Form::Owned], "instance document of the registered board"),
     ("instances.json:circuit_uses[]", &[Form::Uuid], "circuit use"),
     ("instances.json:sheet_occurrences[]", &[Form::Uuid], "sheet occurrence"),
+    ("instances.json:net_registry", &[Form::Owned], "net registry"),
     ("instances.json:net_registry.records[]", &[Form::Uuid], "net"),
-    ("instances.json:net_registry.records[].fallbacks[]", &[Form::Owned], "net fallback anchor"),
+    ("instances.json:net_registry.records[].state", &[Form::Owned], "net state"),
+    ("instances.json:net_registry.records[].primary", &[Form::Owned], "net primary anchor"),
     ("instances.json:net_registry.records[].primary.scope", &[Form::Uuid], "scope reference in a net anchor"),
+    ("instances.json:net_registry.records[].fallbacks[]", &[Form::Owned], "net fallback anchor"),
     ("instances.json:net_registry.records[].fallbacks[].scope", &[Form::Uuid], "scope reference in a net anchor"),
     ("instances.json:net_registry.records[].class_bindings[]", &[Form::Owned], "net class binding"),
+    ("instances.json:net_registry.records[].lineage[]", &[], "net lineage, empty in the fixture"),
     ("library/symbols/*:", &[Form::Name], "symbol definition"),
     ("library/footprints/*:", &[Form::Name], "footprint definition"),
 ];
@@ -192,7 +242,9 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
     }
 }
 
-/// A routed board plus one of every other saved record, built only through shared commands.
+/// A routed board plus a track, via, drawing, rule set, net class and binding, power port, bent
+/// wire, no-connect, net label, child sheet with a port, parameters and a page setting, built only
+/// through shared commands.
 fn fixture() -> Session {
     let mut s = tracks::routed_fixture();
     let project = s.project().unwrap().clone();
@@ -292,38 +344,51 @@ struct Seen {
 }
 
 impl Seen {
-    /// Record each document root, array element object and singleton object with an `id`. Library
-    /// definitions are versioned as a whole, so only their root is an addressed record.
+    /// Record one stored document. Library definitions are versioned as a whole, so only their
+    /// root is an addressed record and their content is not walked.
     fn document(&mut self, path: &str, bytes: &[u8]) {
         let value: Value = serde_json::from_slice(bytes).unwrap();
         let role = document_role(path);
         let library = role.starts_with("library/");
-        self.walk(&format!("{role}:"), &value, true, !library);
+        self.walk(&format!("{role}:"), &value, false, !library);
     }
 
-    /// Visit one JSON value. Map keys that are ids fold to `{id}` so paths name roles, not objects.
-    fn walk(&mut self, path: &str, value: &Value, record: bool, descend: bool) {
+    /// Visit one JSON value and register it under its path when it could hold an object of some
+    /// kind: every JSON object, wherever it is nested, and every value that is an element of a
+    /// list or sits under an id key. An empty list registers its element path with no forms, so a
+    /// list that the fixture leaves empty is still declared. Only named scalar fields are left out,
+    /// because a field holds one value of its owner rather than a collection of objects. Map keys
+    /// that are ids fold to `{id}` so paths name roles, not objects.
+    fn walk(&mut self, path: &str, value: &Value, element: bool, descend: bool) {
         match value {
             Value::Object(object) => {
-                if record || object.contains_key("id") {
-                    self.forms.entry(path.into()).or_default().insert(form(object));
-                    if let Some(id) = object.get("id") {
-                        let id = id.as_str().map_or_else(|| id.to_string(), str::to_owned);
-                        self.ids.entry(path.into()).or_default().insert(id);
-                    }
+                self.forms.entry(path.into()).or_default().insert(form(object));
+                if let Some(id) = object.get("id") {
+                    let id = id.as_str().map_or_else(|| id.to_string(), str::to_owned);
+                    self.ids.entry(path.into()).or_default().insert(id);
                 }
                 if descend {
                     for (key, child) in object {
-                        let key = if uuid::Uuid::parse_str(key).is_ok() || key.bytes().all(|b| b.is_ascii_digit()) { "{id}" } else { key };
+                        let keyed = uuid::Uuid::parse_str(key).is_ok() || key.bytes().all(|b| b.is_ascii_digit());
+                        let key = if keyed { "{id}" } else { key };
                         let separator = if path.ends_with(':') { "" } else { "." };
-                        self.walk(&format!("{path}{separator}{key}"), child, false, true);
+                        self.walk(&format!("{path}{separator}{key}"), child, keyed, true);
                     }
                 }
             }
             Value::Array(items) => {
+                if element {
+                    self.forms.entry(path.into()).or_default().insert(Form::Value);
+                }
+                if items.is_empty() {
+                    self.forms.entry(format!("{path}[]")).or_default();
+                }
                 for item in items {
                     self.walk(&format!("{path}[]"), item, true, true);
                 }
+            }
+            _ if element => {
+                self.forms.entry(path.into()).or_default().insert(Form::Value);
             }
             _ => {}
         }
@@ -351,14 +416,13 @@ fn gaps(forms: &BTreeMap<&str, &[Form]>) -> BTreeSet<Kind> {
     gaps
 }
 
-/// Every saved record is classified, every kind has an address, and the kinds without a
-/// persistent UUID are exactly the listed gaps.
-#[test]
-fn every_saved_object_kind_has_a_stable_identity_or_is_a_listed_gap() {
-    let session = fixture();
-    let documents: Documents = encode_documents(session.snapshot().unwrap()).unwrap();
+/// The inventory problems in a set of saved documents, followed by the registered paths and their
+/// forms for the failure message. An empty problem list means every registered path is declared
+/// with the forms it shows, every declared path is saved, every kind has a declared address and
+/// the kinds without a persistent UUID are exactly the listed gaps.
+fn inventory_problems(documents: &Documents) -> (Vec<String>, String) {
     let mut seen = Seen::default();
-    for (path, bytes) in &documents {
+    for (path, bytes) in documents {
         seen.document(path, bytes);
     }
 
@@ -392,7 +456,44 @@ fn every_saved_object_kind_has_a_stable_identity_or_is_a_listed_gap() {
         problems.push(format!("{kind:?} now has a persistent UUID; remove it from the gap list"));
     }
     let saved = seen.forms.iter().map(|(path, forms)| format!("  {path}: {forms:?}")).collect::<Vec<_>>().join("\n");
+    (problems, saved)
+}
+
+/// Every record the fixture saves is classified, every kind has an address, and the kinds without
+/// a persistent UUID are exactly the listed gaps.
+#[test]
+fn every_saved_object_kind_has_a_stable_identity_or_is_a_listed_gap() {
+    let documents: Documents = encode_documents(fixture().snapshot().unwrap()).unwrap();
+    let (problems, saved) = inventory_problems(&documents);
     assert!(problems.is_empty(), "{}\nsaved records:\n{saved}", problems.join("\n"));
+}
+
+/// A new kind is reported whatever shape it is saved in: a nested object without an id, a list of
+/// objects, a list of plain values, an empty list, plain values under id keys, or a new document.
+#[test]
+fn an_unclassified_record_of_any_shape_is_reported() {
+    let documents: Documents = encode_documents(fixture().snapshot().unwrap()).unwrap();
+    let cases = [
+        ("board.json", "text", json!({"content":"R1","at":{"x_nm":0,"y_nm":0}}), "board.json:text"),
+        ("board.json", "texts", json!([{"content":"R1"}]), "board.json:texts[]"),
+        ("board.json", "marks", json!(["wire-1:from"]), "board.json:marks[]"),
+        ("board.json", "dimensions", json!([]), "board.json:dimensions[]"),
+        ("board.json", "notes", json!({"00000000-0000-4000-8000-000000000001":"R1"}), "board.json:notes.{id}"),
+    ];
+    for (document, key, value, path) in cases {
+        let mut changed = documents.clone();
+        let name = changed.keys().find(|name| name.rsplit('/').next() == Some(document)).unwrap().clone();
+        let mut root: Value = serde_json::from_slice(&changed[&name]).unwrap();
+        root[key] = value;
+        changed.insert(name, serde_json::to_vec(&root).unwrap());
+        let (problems, _) = inventory_problems(&changed);
+        assert!(problems.iter().any(|problem| problem.starts_with(&format!("unclassified record {path}:"))), "{path}: {problems:?}");
+    }
+
+    let mut changed = documents;
+    changed.insert("dimensions.json".into(), br#"{"items":[]}"#.to_vec());
+    let (problems, _) = inventory_problems(&changed);
+    assert!(problems.iter().any(|problem| problem.starts_with("unclassified record dimensions.json::")), "{problems:?}");
 }
 
 /// Pin and pad tokens round-trip through the shared command vocabulary and name a saved owner.
