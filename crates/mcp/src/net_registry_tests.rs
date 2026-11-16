@@ -85,7 +85,7 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
     session.apply(command, &params).unwrap();
 }
 
-/// Build a meaningful unnamed network without persistent records.
+/// Build a meaningful unnamed network through the ordinary numbered authoring path.
 fn circuit(count: usize) -> Session {
     let mut session = Session::default();
     apply(&mut session, "project.new", json!({}));
@@ -94,6 +94,34 @@ fn circuit(count: usize) -> Session {
     }
     apply(&mut session, CONNECT_PINS, json!({"from":{"symbol":"symbol-2","terminal":"1"},"to":{"symbol":"symbol-3","terminal":"1"}}));
     session
+}
+
+/// Load a production historical fixture without persistent net IDs. This keeps the legacy
+/// promotion paths exercised after newly authored networks began owning numbered identities.
+fn legacy_circuit() -> Arc<pcbcraft_engine::Project> {
+    let project = pcbcraft_engine::persistence::decode(include_bytes!("../../app/tests/fixtures/two-resistors.pc")).unwrap();
+    Arc::new(project.with_board_folders(".").unwrap().with_sheet_occurrences().unwrap())
+}
+
+/// Live and headless clients keep the same saved number and UUID when a representative
+/// component is deleted from a surviving net; querying cannot substitute another pad name.
+#[test]
+fn numbered_net_deletion_keeps_live_and_headless_identity_and_name() {
+    let mut setup = circuit(3);
+    apply(&mut setup, CONNECT_PINS, json!({"from":{"symbol":"symbol-3","terminal":"1"},"to":{"symbol":"symbol-4","terminal":"1"}}));
+    let project = setup.snapshot().unwrap();
+    let original = setup.inspect()["project"]["net_registry"]["records"][0].clone();
+    let mut headless = Headless::with_project(project.clone());
+    let mut session = Session::default();
+    session.open_snapshot(project);
+    let mut editor = OpenEditor { session, blocked: false };
+    let edit = json!({"command":pcbcraft_engine::DELETE_SYMBOL,"params":{"symbol":"symbol-2","expected_revision":editor.session.revision()}});
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap();
+    let remote = headless.call("engine.execute", edit).unwrap();
+    assert_eq!(live, remote);
+    assert_eq!(live["project"]["net_registry"]["records"][0]["id"], original["id"]);
+    assert_eq!(live["project"]["net_registry"]["records"][0]["generated_number"], original["generated_number"]);
+    assert_eq!(live["project"]["schematic"]["netlist"]["nets"][0]["name"], "Net-0001");
 }
 
 /// Retain only active identity records when comparing independently captured resolution history.
@@ -105,8 +133,7 @@ fn active(report: &Value, id: &Value) -> Value {
 /// inspect without allocation. Undo uses the same authored history rather than a separate API.
 #[test]
 fn promotion_is_discoverable_and_shared_by_headless_and_live_clients() {
-    let setup = circuit(2);
-    let snapshot = setup.snapshot().unwrap();
+    let snapshot = legacy_circuit();
     let mut headless = Headless::with_project(snapshot.clone());
     let mut session = Session::default();
     session.open_snapshot(snapshot);
@@ -120,7 +147,7 @@ fn promotion_is_discoverable_and_shared_by_headless_and_live_clients() {
     let inspect = headless.call("project.inspect", json!({})).unwrap();
     assert!(inspect["project"].get("net_registry").is_none());
     let revision = inspect["revision"].clone();
-    let params = json!({"command":nets::PROMOTE,"params":{"anchor":{"symbol":"symbol-2","terminal":"1"},"expected_revision":revision}});
+    let params = json!({"command":nets::PROMOTE,"params":{"anchor":{"symbol":"symbol-2","terminal":"2"},"expected_revision":revision}});
     editor.blocked = true;
     assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap_err().contains("dialog"));
     assert!(Arc::ptr_eq(&before, &editor.session.snapshot().unwrap()));
@@ -221,7 +248,8 @@ fn class_assignments_share_live_headless_targets_queries_and_rejection() {
 /// hosts then promote and bind in one transaction, without a separate promotion history step.
 #[test]
 fn assignment_discovery_promotes_derived_targets_in_one_shared_transaction() {
-    let mut setup = circuit(2);
+    let mut setup = Session::default();
+    setup.open_snapshot(legacy_circuit());
     apply(&mut setup, pcbcraft_engine::net_classes::CREATE, json!({"name":"Power","rules":{}}));
     let p = setup.snapshot().unwrap();
     let class = p.net_classes().definitions[0].id;

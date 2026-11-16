@@ -18,7 +18,7 @@ stable class identity in one undoable transaction.
 
 Select a schematic wire or net label, or PCB tracks/vias, and use **Net rules…**
 in Properties to open **Effective net rules**. Alternatively, search the chooser for a
-current supported net. Display names help browsing; typed component, occurrence
+current supported net. [Shared readable names](net-labels.md#generated-names-and-copper-labels) help browsing; typed component, occurrence
 and net identities determine the target. Select the complete set of classes and
 choose **Assign classes**. Clearing all boxes removes the assignment. A previously
 derived net is promoted only when a nonempty assignment is saved.

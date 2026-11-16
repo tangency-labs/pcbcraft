@@ -32,6 +32,10 @@ impl Registry {
         if ids.len() != self.records.len() || ids.contains(&uuid::Uuid::nil()) || self.records.windows(2).any(|p| p[0].id >= p[1].id) {
             return Err("Net records require unique non-nil UUIDs in canonical order.".into());
         }
+        let mut numbers = BTreeSet::new();
+        if self.records.iter().filter_map(|record| record.generated_number).any(|number| number == 0 || !numbers.insert(number)) {
+            return Err("Generated net numbers must be positive and unique, including historical records.".into());
+        }
         let graph = Graph::build(project)?;
         let mut assigned = BTreeSet::new();
         for record in &self.records {
@@ -96,6 +100,7 @@ impl Registry {
                 snapshot.validate()?;
             }
         }
+        super::numbering::plan(self, &graph.networks)?;
         if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_REGISTRY_BYTES {
             return Err("Net registry exceeds its byte limit.".into());
         }
@@ -108,19 +113,38 @@ impl Project {
     /// Derived membership remains in the ordinary netlist; each row here supplies a typed key.
     pub fn inspect_net_registry(&self) -> Result<serde_json::Value, String> {
         let graph = Graph::build(self)?;
+        let electrical = self.electrical_connectivity();
+        let mut active_ids = vec![None; graph.networks.len()];
+        for record in &self.net_registry.records {
+            if matches!(record.state, State::Active {})
+                && let Some(index) = graph.network(&record.primary)
+            {
+                active_ids[index].get_or_insert(record.id);
+            }
+        }
         let nets: Vec<_> = graph
             .networks
             .iter()
             .enumerate()
             .filter(|(_, n)| n.meaningful())
             .map(|(index, network)| {
-                let id = self
-                    .net_registry
-                    .records
+                let id = active_ids[index];
+                let display_name = network
+                    .anchors
                     .iter()
-                    .find(|r| matches!(r.state, State::Active {}) && graph.network(&r.primary) == Some(index))
-                    .map(|r| r.id);
-                serde_json::json!({"id":id,"anchor":network.anchors.first(),"names":network.names})
+                    .find_map(|anchor| {
+                        let endpoint = match anchor.kind {
+                            super::AnchorKind::Terminal => {
+                                self.component_terminal(anchor.object, &anchor.terminal).map(crate::WireEndpoint::Terminal)
+                            }
+                            super::AnchorKind::Label => Some(crate::WireEndpoint::NetLabel(anchor.object)),
+                            super::AnchorKind::Port => Some(crate::WireEndpoint::Label(anchor.object)),
+                            super::AnchorKind::Junction => None,
+                        }?;
+                        electrical.net_index_for_endpoint(endpoint).map(|index| electrical.net_name(index))
+                    })
+                    .unwrap_or_else(|| "Unresolved net".into());
+                serde_json::json!({"id":id,"anchor":network.anchors.first(),"names":network.names,"name":display_name})
             })
             .collect();
         Ok(serde_json::json!({"scope":self.net_scope(),"records":self.net_registry.records,"nets":nets}))

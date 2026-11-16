@@ -1,11 +1,13 @@
-//! Sparse persistent electrical identities; the authored schematic remains the connectivity authority.
+//! Persistent electrical identities and net-owned presentation numbers; the authored schematic remains the connectivity authority.
 
 mod anchor;
 mod classes;
 mod commands;
 pub(crate) use classes::target_schema as class_target_schema;
 pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
+pub mod display;
 mod graph;
+mod numbering;
 mod reconcile;
 mod selection;
 mod validation;
@@ -82,6 +84,10 @@ pub enum State {
 pub struct Record {
     /// Independently allocated net UUID, never derived from a name, anchor or graph membership.
     pub id: Uuid,
+    /// Net-owned presentation number, retained through continuation and retired with its ID.
+    /// Older records adopt their read-only projected number in the next topology transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "numbering::stored_number")]
+    pub generated_number: Option<u32>,
     /// Primary live anchor, or explicitly historical evidence for inactive states.
     pub primary: Anchor,
     /// At most three distinct ordered fallback anchors.
@@ -102,7 +108,7 @@ impl Record {
     }
 }
 
-/// Optional instance-owned identity registry, sorted by UUID and absent until first promotion.
+/// Instance-owned identity registry sorted by UUID; untouched legacy projects may omit it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registry {
@@ -111,6 +117,11 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Numbered identities select the newer native envelope; old unnumbered files stay exact.
+    pub(crate) fn has_generated_numbers(&self) -> bool {
+        self.records.iter().any(|record| record.generated_number.is_some())
+    }
+
     /// Reserve numeric identities referenced by live or historical anchors, even after deletion.
     pub(crate) fn highest_object_id(&self) -> u64 {
         self.records

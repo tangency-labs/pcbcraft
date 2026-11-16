@@ -256,6 +256,8 @@ impl Selection {
     /// unselected routes fixed and contacts within the selection intact. Connected grabs retain
     /// the existing stretching behavior. Zero displacement never detaches or allocates IDs.
     /// Validation, attachment checks and optional healing finish before a candidate is returned.
+    /// This disposable geometric candidate retains source identity records; publication through
+    /// the shared session command reconciles net identities and numbers as one transaction.
     pub fn transformed(&self, project: &Project, delta: Point, disconnect: bool, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
         self.validate(project)?;
         self.validate_marker_owners(project)?;

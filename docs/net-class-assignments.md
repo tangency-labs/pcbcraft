@@ -1,7 +1,9 @@
 # Persistent net-class assignments
 
 Issue [#301](https://github.com/tangency-labs/pcbcraft/issues/301) attaches sets of
-[project class IDs](net-classes.md) to the existing [sparse net registry](net-registry-storage.md).
+[project class IDs](net-classes.md) to the existing [net registry](net-registry-storage.md).
+Newly authored meaningful nets already own an identity and generated number;
+older files may still expose derived targets until their next topology edit.
 Naming a net does not assign a class. Assignments belong to the current schematic
 or board instance registry, with no saved endpoint membership graph and no lookup
 by net or class name. This slice supports single-use sheet occurrences; repeated
@@ -74,10 +76,11 @@ bindings, origins and identities.
 
 ## Storage and consumer boundary
 
-Nonempty bindings select `pcbcraft-project/21`, retaining the required nonempty
+Without generated numbers, nonempty bindings select `pcbcraft-project/21`, retaining the required nonempty
 class catalog. Schematic-only bindings remain under
 `schematic_instances.net_registry`; board-owned bindings use
-`pcbcraft-instances/3` in the existing board folder. First-board creation moves
+`pcbcraft-instances/3` in the existing board folder. Numbered registries instead
+use project/23 and board-owned instances/4, with bindings optional in that envelope. First-board creation moves
 the live registry and requalifies its anchors without changing net IDs or
 binding origins. Physical `board.json` bytes, accepted connectivity baselines and
 pending board updates remain independent of classification edits.
@@ -85,9 +88,9 @@ pending board updates remain independent of classification edits.
 Each record permits at most 4,096 binding pairs, with the existing 4,096-record
 and 8 MiB registry limits still enforced. Missing classes/origins, duplicate or
 unsorted bindings, empty/null stored arrays, old headers carrying bindings and
-new headers without bindings are refused. Projects without bindings retain their
+assignment-only headers without bindings are refused. Projects without bindings retain their
 existing encoding; removing the last live binding only lowers the version when
-no historical binding remains. Native folder/archive reopen and interrupted
+no historical binding or generated-number metadata remains. Native folder/archive reopen and interrupted
 forward/inverse publication preserve the same authority.
 
 [Class-aware routing, geometry queries and DRC](net-class-consumers.md) consume

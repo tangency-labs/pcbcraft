@@ -209,7 +209,7 @@ fn retained_primary_quantity_codec_rejects_invalid_or_legacy_metadata() {
         invalid["components"][&id]["primary_quantity"] = bad;
         assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err(), "{invalid}");
     }
-    for version in ["pcbcraft-board-baseline/1", "pcbcraft-board-baseline/2", "pcbcraft-board-baseline/4"] {
+    for version in ["pcbcraft-board-baseline/1", "pcbcraft-board-baseline/2", "pcbcraft-board-baseline/5"] {
         let mut invalid = original.clone();
         invalid["format"] = json!(version);
         assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());

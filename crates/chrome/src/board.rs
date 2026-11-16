@@ -252,6 +252,20 @@ fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32)
         std::mem::swap(&mut width, &mut height);
         axis = corners[3] - corners[0];
     }
+    // Fit in an inscribed rectangle, including curved corners rather than just the land's
+    // bounding box. This keeps the two-line annotation out of adjacent clearance gaps.
+    match pad.contour {
+        PadContour::Circle | PadContour::Oval => {
+            width *= std::f32::consts::FRAC_1_SQRT_2;
+            height *= std::f32::consts::FRAC_1_SQRT_2;
+        }
+        PadContour::RoundedRectangle { radius } => {
+            let inset = 2. * radius.min(width.min(height) / 2.) * (1. - std::f32::consts::FRAC_1_SQRT_2);
+            width -= inset;
+            height -= inset;
+        }
+        PadContour::Rectangle => {}
+    }
     if width < 12. || height < 12. {
         return;
     }
@@ -545,3 +559,117 @@ pub fn canvas(p: &Painter, rect: Rect, origin: Pos2, step: f32, opacity: u8, sty
     };
     crate::grid::paint_style(p, rect, origin, step, color, style);
 }
+
+/// Keep domain annotation ink legible against either a dark or a bright copper swatch.
+fn copper_label_ink(copper: Color32) -> Color32 {
+    let [r, g, b, _] = copper.to_normalized_gamma_f32();
+    if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65 { Tokens::get().board_canvas } else { Color32::WHITE }
+}
+
+/// Paint repeated upright names wholly within a visible track's copper. Clipping the centerline
+/// first bounds text preparation for long off-screen segments; sub-legible widths show no text.
+pub fn track_net_label(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, copper: Color32) {
+    track_net_labels(p, ends, width, name, copper, |shape| {
+        p.add(shape);
+    });
+}
+
+/// Lay out sparse upright labels in the visible span; the caller controls overlap and painting.
+fn track_net_labels(p: &Painter, ends: [Pos2; 2], width: f32, name: &str, copper: Color32, mut emit: impl FnMut(egui::epaint::TextShape)) {
+    let size = (width - 4.).min(14.);
+    if size < 7. {
+        return;
+    }
+    let delta = ends[1] - ends[0];
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let axis = delta / length;
+    let clip = p.clip_rect().shrink(width / 2.);
+    let (mut lo, mut hi) = (0.0_f32, length);
+    for (origin, step, min, max) in [(ends[0].x, axis.x, clip.min.x, clip.max.x), (ends[0].y, axis.y, clip.min.y, clip.max.y)] {
+        if step.abs() <= f32::EPSILON {
+            if origin < min || origin > max {
+                return;
+            }
+        } else {
+            let a = (min - origin) / step;
+            let b = (max - origin) / step;
+            lo = lo.max(a.min(b));
+            hi = hi.min(a.max(b));
+        }
+    }
+    if lo >= hi {
+        return;
+    }
+    let ink = copper_label_ink(copper);
+    let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(size), ink, egui::Align::Center);
+    if galley.size().y > width - 2. || galley.size().x + 16. > hi - lo {
+        return;
+    }
+    let mut angle = axis.y.atan2(axis.x);
+    if angle > std::f32::consts::FRAC_PI_2 {
+        angle -= std::f32::consts::PI;
+    }
+    if angle < -std::f32::consts::FRAC_PI_2 {
+        angle += std::f32::consts::PI;
+    }
+    let count = ((hi - lo) / (galley.size().x + 120.).max(400.)).floor().max(1.) as usize;
+    for i in 0..count {
+        let center = ends[0] + axis * (lo + (hi - lo) * (i as f32 + 0.5) / count as f32);
+        let pos = center - galley.rect.center().to_vec2();
+        emit(egui::epaint::TextShape::new(pos, galley.clone(), ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+    }
+}
+
+mod track_labels;
+pub use track_labels::TrackLabels;
+
+/// Center a readable name across the via's full diameter, independently of its drill size.
+/// A fine glyph halo maintains contrast across both ring and hole. Hide names
+/// that cannot fit inside the circular outline at 11 pt or would be clipped by the viewport.
+pub fn via_net_label(p: &Painter, center: Pos2, diameter: f32, name: &str) {
+    if let Some(shape) = via_net_label_shape(p, center, diameter, name) {
+        p.add(shape);
+    }
+}
+
+/// Group foreground and halo into one removable annotation, rejecting unreadable or clipped text.
+fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> Option<egui::Shape> {
+    if name.is_empty() || !diameter.is_finite() || diameter <= 10. || !p.clip_rect().contains(center) {
+        return None;
+    }
+    let halo = Tokens::get().board_canvas;
+    let ink = copper_label_ink(halo);
+    let galley = crate::canvas_text::layout(p, name.to_owned(), FontId::monospace(14.), ink, egui::Align::Center);
+    let extent = galley.mesh_bounds.size().length();
+    if !extent.is_finite() || extent <= f32::EPSILON {
+        return None;
+    }
+    // Reserving ten points on the diagonal keeps the text and its fine outline inside
+    // the circle, including its corners, with at least two points clear of the outer edge.
+    let scale = ((diameter - 10.) / extent).min(1.);
+    if 14. * scale < 11. {
+        return None;
+    }
+    let mut text = egui::epaint::TextShape::new(Pos2::ZERO, galley, ink);
+    text.transform(egui::emath::TSTransform::from_scaling(scale));
+    text.pos = center - text.galley.mesh_bounds.center().to_vec2();
+    let offset = 0.75;
+    let bounds = text.visual_bounding_rect().expand(offset);
+    if !p.clip_rect().contains_rect(bounds) {
+        return None;
+    }
+    let mut shapes = Vec::with_capacity(5);
+    for shift in [vec2(-offset, 0.), vec2(offset, 0.), vec2(0., -offset), vec2(0., offset)] {
+        let mut outline = text.clone().with_override_text_color(halo);
+        outline.pos += shift;
+        shapes.push(egui::Shape::Text(outline));
+    }
+    shapes.push(egui::Shape::Text(text));
+    Some(egui::Shape::Vec(shapes))
+}
+
+#[cfg(test)]
+mod net_label_tests;

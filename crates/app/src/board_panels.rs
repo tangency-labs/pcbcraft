@@ -49,6 +49,7 @@ impl PcbApp {
         let compact = self.preferences.panel_style == workspace::PanelStyle::Compact;
         let can_isolate = state.active_layer.is_some();
         let mut ratsnest_visible = !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY);
+        let mut net_names_visible = !state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY);
         let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show_with_toolbar(
             ui,
             host.with("layers"),
@@ -59,7 +60,10 @@ impl PcbApp {
             workspace::panels::card_width(area, false),
             pcbcraft_chrome::board_setup::layer_actions_height(),
             |ui| {
-                setup_open = pcbcraft_chrome::board_setup::open_button(ui, settings_enabled).clicked();
+                ui.horizontal(|ui| {
+                    setup_open = pcbcraft_chrome::board_setup::open_button(ui, settings_enabled).clicked();
+                    pcbcraft_chrome::controls::checkbox(ui, &mut net_names_visible, "Net names");
+                });
                 ui.horizontal(|ui| {
                     show_all = pcbcraft_chrome::controls::small_button(ui, "Show all").clicked();
                     isolate = ui.add_enabled_ui(can_isolate, |ui| pcbcraft_chrome::controls::small_button(ui, "Isolate active")).inner.clicked();
@@ -76,9 +80,12 @@ impl PcbApp {
             state.layers_collapsed = !state.layers_collapsed;
         }
         state.set_ratsnest_visibility(ratsnest_visible);
+        state.set_net_names_visibility(net_names_visible);
         if show_all || isolate {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
+        let net_presentation = state.copper_connectivity(target, input);
+        let names_pending = net_presentation.names_pending;
         let unit = self.preferences.units;
         let revision = self.session.revision();
         // The ratsnest for this revision, through the same per-input cache the canvas reads.
@@ -120,6 +127,10 @@ impl PcbApp {
                             reference_pick = Some(footprint.id.clone());
                         }
                         ui.end_row();
+                        let nets = footprint.pads.iter().filter_map(|pad| pad.net.as_deref()).collect::<std::collections::BTreeSet<_>>();
+                        if !nets.is_empty() {
+                            property(ui, "Nets", &nets.into_iter().collect::<Vec<_>>().join(", "));
+                        }
                         copper_edit = footprint_transform(ui, footprint, unit, view_id, revision);
                         property(
                             ui,
@@ -130,6 +141,11 @@ impl PcbApp {
                     [] if !state.tracks.selected.is_empty() => {
                         if state.tracks.committing() {
                             ui.disable();
+                        }
+                        let nets =
+                            state.tracks.selected.iter().filter_map(|id| net_presentation.nets.get(id)).collect::<std::collections::BTreeSet<_>>();
+                        if !nets.is_empty() {
+                            property(ui, "Nets", &nets.into_iter().map(String::as_str).collect::<Vec<_>>().join(", "));
                         }
                         copper_edit = copper_properties(ui, target, &state.tracks.selected, unit, view_id, revision);
                     }
@@ -159,6 +175,9 @@ impl PcbApp {
                     }
                     items => property(ui, "Selected footprints", &items.len().to_string()),
                 });
+                if names_pending {
+                    property(ui, "Net names", "Schematic update pending");
+                }
                 if !state.tracks.selected.is_empty() {
                     net_rules = ui
                         .add_enabled_ui(settings_enabled && !state.tracks.committing(), |ui| pcbcraft_chrome::controls::button(ui, "Net rules…"))

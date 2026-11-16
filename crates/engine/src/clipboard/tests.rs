@@ -246,7 +246,7 @@ fn marked_paste_adopts_legacy_destination_before_validation() {
         assert!(after.has_sheet_occurrences());
         assert_eq!(after.no_connect_count(), if kind == "both" { 2 } else { 1 });
         let saved = persistence::encode_documents(after.clone()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&saved["project.json"]).unwrap()["format"], "pcbcraft-project/19");
+        assert_eq!(serde_json::from_slice::<Value>(&saved["project.json"]).unwrap()["format"], "pcbcraft-project/23");
         assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
         target.apply("edit.undo", &Value::Null).unwrap();
         crate::assert_same_content(&before, &target.snapshot().unwrap());

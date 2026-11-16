@@ -822,6 +822,12 @@ mod live {
             params: &[VIEW, Param { name: "visible", summary: "Show accepted connections", required: true, kind: Kind::Bool }],
         },
         WindowCommand {
+            id: "view.set_net_names_visibility",
+            title: "Show Net Names",
+            summary: "Show pad, via and track net names in this PCB view without changing document history.",
+            params: &[VIEW, Param { name: "visible", summary: "Show copper net names", required: true, kind: Kind::Bool }],
+        },
+        WindowCommand {
             id: "view.set_board_flipped",
             title: "Flip Board View",
             summary: "View the board from below or above in this PCB view, as Design › Flip view does. Keeps the centered point and zoom; changes no project data or undo history.",
@@ -1252,6 +1258,7 @@ mod live {
                         "selection": view.board.selection,
                         "reference_selection": view.board.reference.selected,
                         "hidden_layers": view.board.hidden_layers,
+                        "net_names_visible": !view.board.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY),
                         "ratsnest_visible": view.board.target.and_then(|target| app.session.project().and_then(|project| project.board_view(target)))
                             .filter(|board| board.has_accepted_connectivity()).map(|_| !view.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)),
                         "active_layer": view.board.active_layer,
@@ -1523,6 +1530,11 @@ mod live {
                         .ok_or("The addressed view closed")?
                         .board
                         .set_ratsnest_visibility(params["visible"].as_bool() == Some(true));
+                }
+                ("view.set_net_names_visibility", Some((view, _)), _) => {
+                    let state =
+                        self.views.view_mut(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+                    state.board.set_net_names_visibility(params["visible"].as_bool() == Some(true));
                 }
                 ("view.set_board_flipped", Some((view, _)), _) => {
                     let state =

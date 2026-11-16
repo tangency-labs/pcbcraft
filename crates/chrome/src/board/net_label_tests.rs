@@ -1,0 +1,229 @@
+use super::*;
+use egui::pos2;
+
+/// Capture actual text geometry through egui's font/layout path, without mocking fit decisions.
+fn text_shapes(paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
+    text_shapes_in(vec2(800., 600.), paint)
+}
+
+/// Capture a chosen viewport so repetition can be checked independently of off-screen copper.
+fn text_shapes_in(size: egui::Vec2, paint: impl Fn(&Painter)) -> Vec<egui::epaint::TextShape> {
+    shapes_in(size, paint)
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Text(text) => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Retain non-text shapes when checking that an annotation leaves the physical via visible.
+fn shapes_in(size: egui::Vec2, paint: impl Fn(&Painter)) -> Vec<egui::Shape> {
+    let ctx = egui::Context::default();
+    crate::install(&ctx);
+    let mut out =
+        ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() }, |ui| paint(ui.painter()));
+    out.textures_delta.clear();
+    let mut flat = Vec::new();
+    for shape in out.shapes {
+        flatten(shape.shape, &mut flat);
+    }
+    flat
+}
+
+/// Inspect nested annotation groups through the same shapes submitted to the painter.
+fn flatten(shape: egui::Shape, flat: &mut Vec<egui::Shape>) {
+    match shape {
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                flatten(shape, flat);
+            }
+        }
+        shape => flat.push(shape),
+    }
+}
+
+/// A wide viewport needs a few well-separated names, regardless of the zoomed copper width.
+#[test]
+fn track_names_repeat_sparsely_at_readable_zooms() {
+    for width in [24., 32., 55., 120.] {
+        let text = text_shapes_in(vec2(1400., 600.), |p| track_net_label(p, [pos2(40., 300.), pos2(1360., 300.)], width, "+3V3", Color32::RED));
+        assert_eq!(text.len(), 3);
+        for pair in text.windows(2) {
+            assert!(pair[1].pos.x - pair[0].pos.x >= 400.);
+        }
+    }
+}
+
+/// A later T junction, crossing, via or pad removes a covered word in full while leaving the
+/// two other repetitions readable. Shapes follow the same paint order as the board canvas.
+#[test]
+fn later_copper_never_leaves_a_partial_track_name() {
+    for cover in 0..5 {
+        let text = text_shapes_in(vec2(1400., 600.), |p| {
+            let mut labels = TrackLabels::new(p.clone());
+            let ends = [pos2(40., 300.), pos2(1360., 300.)];
+            track(p, ends, 55., Color32::RED, false, false);
+            labels.track(ends, 55., "+3V3", Color32::RED);
+            match cover {
+                0..=2 => {
+                    let ends = match cover {
+                        0 => [pos2(700., 50.), pos2(700., 300.)],
+                        1 => [pos2(700., 50.), pos2(700., 550.)],
+                        _ => [pos2(450., 50.), pos2(950., 550.)],
+                    };
+                    labels.cover_track(ends, 55.);
+                    track(p, ends, 55., Color32::BLUE, false, false);
+                }
+                3 => {
+                    labels.cover_disc(pos2(700., 300.), 40.);
+                    p.circle_filled(pos2(700., 300.), 40., Color32::YELLOW);
+                }
+                _ => {
+                    let bounds = Rect::from_center_size(pos2(700., 300.), vec2(80., 60.));
+                    labels.cover_rect(bounds);
+                    p.rect_filled(bounds, 0., Color32::YELLOW);
+                }
+            }
+        });
+        assert_eq!(text.len(), 2, "cover case {cover}");
+        for label in text {
+            assert_eq!(label.galley.job.text, "+3V3");
+            assert!(!label.visual_bounding_rect().intersects(Rect::from_center_size(pos2(700., 300.), vec2(80., 60.))));
+        }
+    }
+}
+
+/// A diagonal's bounding box must not erase text far from its actual projected copper.
+#[test]
+fn nearby_copper_preserves_uncovered_names() {
+    let text = text_shapes(|p| {
+        let mut labels = TrackLabels::new(p.clone());
+        labels.track([pos2(80., 80.), pos2(700., 80.)], 24., "COL_A", Color32::BLUE);
+        labels.cover_track([pos2(100., 100.), pos2(700., 500.)], 24.);
+        labels.cover_disc(pos2(400., 150.), 15.);
+        labels.cover_rect(Rect::from_min_max(pos2(500., 150.), pos2(600., 200.)));
+    });
+    assert_eq!(text.len(), 1);
+}
+
+/// Labels disappear before they become smaller than readable text or exceed segment copper;
+/// rotated/reversed tracks stay upright and long visible segments repeat bounded labels.
+#[test]
+fn track_names_fit_visible_copper_and_remain_upright() {
+    for ends in [
+        [pos2(80., 80.), pos2(700., 80.)],
+        [pos2(700., 80.), pos2(80., 80.)],
+        [pos2(80., 80.), pos2(600., 500.)],
+        [pos2(400., 500.), pos2(400., 80.)],
+    ] {
+        let text = text_shapes(|p| track_net_label(p, ends, 24., "U3.OUT", Color32::RED));
+        assert!(!text.is_empty());
+        for label in text {
+            assert!(label.angle.abs() <= std::f32::consts::FRAC_PI_2);
+            assert!(label.galley.size().y < 24.);
+        }
+    }
+    for (ends, width) in
+        [([pos2(80., 80.), pos2(85., 80.)], 24.), ([pos2(80., 80.), pos2(700., 80.)], 5.), ([pos2(-500., -80.), pos2(-100., -80.)], 24.)]
+    {
+        assert!(text_shapes(|p| track_net_label(p, ends, width, "U3.OUT", Color32::RED)).is_empty());
+    }
+    let text = text_shapes(|p| track_net_label(p, [pos2(-10000., 80.), pos2(10000., 80.)], 24., "U3.OUT", Color32::RED));
+    assert!(!text.is_empty() && text.len() < 8, "preparation is bounded by the visible span");
+}
+
+/// Short via names become readable at working zoom, while long names need more space. Both
+/// the name and its halo stay inside the via outline and centered across the hole.
+#[test]
+fn via_names_use_the_full_diameter() {
+    let center = pos2(200., 200.);
+    assert!(text_shapes(|p| via_net_label(p, center, 16., "GND")).is_empty());
+    assert!(text_shapes(|p| via_net_label(p, center, 36., "ALERT_N")).is_empty());
+    assert!(text_shapes(|p| via_net_label(p, center, 48., "ALERT_N")).is_empty());
+    for (diameter, name) in [(36., "GND"), (60., "ALERT_N"), (180., "U3.OUT")] {
+        let text = text_shapes(|p| via_net_label(p, center, diameter, name));
+        let foreground: Vec<_> = text.iter().filter(|text| text.override_text_color.is_none()).collect();
+        assert_eq!(foreground.len(), 1, "{name} at {diameter}");
+        let bounds = foreground[0].visual_bounding_rect();
+        assert!(bounds.center().distance(center) < 0.01);
+        for text in &text {
+            let bounds = text.visual_bounding_rect();
+            for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
+                assert!(corner.distance(center) < diameter / 2. - 2.);
+            }
+        }
+    }
+}
+
+/// Via overlays use consistent contrast across hole and copper in either theme, and disappear
+/// as a whole at viewport edges rather than leaving fragments of the name.
+#[test]
+fn via_names_keep_contrast_and_avoid_viewport_clipping() {
+    for light in [false, true] {
+        let shapes = shapes_in(vec2(800., 600.), |p| {
+            crate::theme::apply(p.ctx(), !light);
+            via(p, pos2(200., 200.), 30., 18., false, false, None);
+            via_net_label(p, pos2(200., 200.), 60., "GND");
+            via_net_label(p, pos2(2., 200.), 60., "GND");
+            via_net_label(p, pos2(200., 2.), 60., "GND");
+            via_net_label(p, pos2(200., 200.), 60., "");
+        });
+        assert!(!shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(_))), "via text must not paint a background plate");
+        let labels: Vec<_> = shapes.iter().filter_map(|shape| if let egui::Shape::Text(text) = shape { Some(text) } else { None }).collect();
+        let foreground: Vec<_> = labels.iter().filter(|text| text.override_text_color.is_none()).collect();
+        assert_eq!(foreground.len(), 1);
+        let foreground = foreground[0];
+        assert_eq!(foreground.fallback_color, copper_label_ink(Tokens::get().board_canvas));
+        let outline: Vec<_> = labels.iter().filter(|text| text.override_text_color.is_some()).collect();
+        assert!(!outline.is_empty());
+        for text in outline {
+            assert_eq!(text.override_text_color, Some(Tokens::get().board_canvas));
+            assert!(text.pos.distance(foreground.pos) <= 1., "the halo must stay fine");
+        }
+    }
+}
+
+/// Both lines stay inside the actual circular copper, rather than merely its bounding box.
+#[test]
+fn circular_pad_names_stay_inside_the_land() {
+    let center = pos2(200., 200.);
+    let corners = [pos2(160., 160.), pos2(240., 160.), pos2(240., 240.), pos2(160., 240.)];
+    let pad = PadDrawing {
+        number: "2".into(),
+        center,
+        copper: Some(corners),
+        color: None,
+        contour: PadContour::Circle,
+        drill_radius: Some(10.),
+        through_hole: true,
+        net: Some("R1.2".into()),
+    };
+    let labels = text_shapes(|p| pad_label(p, &pad, corners, Color32::RED));
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].galley.job.text, "2\nR1.2");
+    let bounds = labels[0].galley.rect.translate(labels[0].pos.to_vec2());
+    for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
+        assert!(corner.distance(center) < 40.);
+    }
+}
+
+/// Later copper removes both the via name and every halo glyph, preserving uncovered names.
+#[test]
+fn later_copper_removes_the_entire_via_annotation() {
+    for cover in 0..4 {
+        let text = text_shapes(|p| {
+            let mut labels = TrackLabels::new(p.clone());
+            labels.via(pos2(200., 200.), 100., "ALERT_N");
+            labels.via(pos2(400., 200.), 100., "GND");
+            match cover {
+                0 => labels.cover_disc(pos2(225., 200.), 10.),
+                1 => labels.cover_rect(Rect::from_min_max(pos2(222., 190.), pos2(235., 210.))),
+                2 => labels.cover_track([pos2(225., 170.), pos2(225., 230.)], 8.),
+                _ => labels.cover_disc(pos2(280., 200.), 10.),
+            }
+        });
+        assert_eq!(text.iter().filter(|text| text.galley.job.text == "GND").count(), 5);
+        assert_eq!(text.iter().filter(|text| text.galley.job.text == "ALERT_N").count(), if cover == 3 { 5 } else { 0 });
+    }
+}

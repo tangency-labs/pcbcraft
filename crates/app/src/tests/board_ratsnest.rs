@@ -1,5 +1,6 @@
 //! Accepted connections remain a presentation overlay over the actual physical board.
 use super::*;
+use pcbcraft_engine::schematic::Point;
 use pcbcraft_engine::{
     CONNECT_PINS, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_FOOTPRINT_TRANSFORM, board::update::INITIALIZE_BASELINE, persistence::encode_documents,
 };
@@ -441,4 +442,80 @@ fn reference_properties_align_controls_and_keep_actions_visible_in_short_hosts()
         assert!(rect.top() > height.bottom() && rect.bottom() < 500., "{label}: {rect:?}");
     }
     assert!(h.query_all_by_label("Override text size").next().is_none());
+}
+
+/// Copper labels are view-owned presentation. GUI, live commands and restored split views
+/// use one visibility handler without touching bytes, revisions or the other view's choice.
+#[test]
+fn net_names_visibility_is_local_restorable_and_survives_layer_actions() {
+    let mut h = board(true);
+    let before = h.state().session.inspect();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Net names");
+    assert!(h.state().views.active.board.hidden_layers.contains("net_names"));
+    for action in ["Isolate active", "Show all"] {
+        click(&mut h, action);
+        assert!(h.state().views.active.board.hidden_layers.contains("net_names"));
+    }
+    let saved = h.state().views.active.saved_state(&h.state().session).unwrap();
+    let mut restored = crate::editor_view::EditorView::from_state(ViewId(99), &saved, &h.state().session);
+    restored.sync(&h.state().session);
+    assert!(restored.board.hidden_layers.contains("net_names"));
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    h.state_mut().run_window_command(&ctx, "view.set_net_names_visibility", &json!({"view":view,"visible":true})).unwrap();
+    h.run();
+    assert!(!h.state().views.active.board.hidden_layers.contains("net_names"));
+    assert!(restored.board.hidden_layers.contains("net_names"));
+    assert!(h.state_mut().run_window_command(&ctx, "view.set_net_names_visibility", &json!({"view":999,"visible":false})).is_err());
+    h.set_size(egui::vec2(760., 560.));
+    h.run();
+    assert!(h.get_by_label("Net names").rect().bottom() < 540.);
+    assert!(h.get_by_label("Net names").rect().bottom() <= h.get_by_label("Show all").rect().top());
+    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// The normal footprint and cursor placement share the view-local Net names preference.
+/// Hiding it removes only the second pad line and does not edit the accepted board or preview.
+#[test]
+fn placement_preview_respects_net_name_visibility() {
+    let mut h = board(true);
+    h.state_mut().browser.open = false;
+    h.state_mut().views.active.camera.set_zoom(40.);
+    let project = h.state().session.snapshot().unwrap();
+    let component = project.components().next().unwrap().id();
+    let source = h.state().views.active.input(&h.state().session).unwrap();
+    h.state_mut().views.active.board.placement = Some(crate::board_canvas::Placement {
+        source,
+        components: vec![component],
+        candidate: project.clone(),
+        handoff: false,
+        position: Point { x_nm: 0, y_nm: 0 },
+        rotation: 0,
+    });
+    h.remove_cursor();
+    let canvas = h.get_by_label("PCB canvas").rect();
+    h.state_mut().views.active.camera.center_on(Point { x_nm: 0, y_nm: 0 });
+    h.run();
+    let pad_labels = |h: &Harness<'_, PcbApp>| {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if shape.clip_rect == canvas && text.galley.job.text.contains("Net-") => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let visible = pad_labels(&h);
+    assert!(visible.len() >= 2, "normal and preview labels must both be exercised: {visible:?}");
+    h.state_mut().views.active.board.hidden_layers.insert(crate::editor_view::NET_NAMES_KEY.into());
+    h.run();
+    assert!(pad_labels(&h).is_empty());
+    assert!(h.state().views.active.board.placement.is_some());
+    assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+    h.state_mut().views.active.board.hidden_layers.remove(crate::editor_view::NET_NAMES_KEY);
+    h.run();
+    assert_eq!(pad_labels(&h), visible);
 }

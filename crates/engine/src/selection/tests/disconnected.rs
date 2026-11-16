@@ -12,10 +12,14 @@ fn run(s: &mut Session, command: &str, mut params: Value) {
 fn commit(s: &mut Session, items: &Selection, delta: Point, auto_heal: bool) -> Arc<Project> {
     let before = s.snapshot().unwrap();
     let revision = s.revision();
-    let preview = items.transformed(&before, delta, true, revision, auto_heal).unwrap();
+    let mut preview = items.transformed(&before, delta, true, revision, auto_heal).unwrap();
     run(s, MOVE_ITEMS, json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"disconnect":true,"auto_heal":auto_heal}));
     let after = s.snapshot().unwrap();
     assert!(s.revision() > revision);
+    // The disposable preview owns geometry; the shared transaction owns persistent identity
+    // transitions. Validate that authority separately before comparing the authored geometry.
+    after.net_registry.validate(&after).unwrap();
+    preview.net_registry = after.net_registry.clone();
     crate::assert_same_content(&Arc::new(preview), &after);
     let docs = persistence::encode_documents(after.clone()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&docs).unwrap()).unwrap(), docs);

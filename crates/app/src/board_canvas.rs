@@ -451,8 +451,11 @@ pub(super) fn show(
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     let ratsnest = state.ratsnest(project, source);
     let requested = std::mem::take(&mut state.net_highlight_requested);
-    let connectivity =
-        (requested || state.highlight_net.is_some() || state.tracks.route_contact().is_some()).then(|| state.copper_connectivity(project, source));
+    let connectivity = (!state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY)
+        || requested
+        || state.highlight_net.is_some()
+        || state.tracks.route_contact().is_some())
+    .then(|| state.copper_connectivity(project, source));
     if requested && let Some(connectivity) = &connectivity {
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
@@ -466,7 +469,7 @@ pub(super) fn show(
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
     let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
-    crate::board_tracks::paint(
+    let mut track_labels = crate::board_tracks::paint(
         ui,
         rect,
         camera,
@@ -477,6 +480,7 @@ pub(super) fn show(
         appearance,
         focus,
         &carried,
+        connectivity.as_ref().filter(|_| !state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY)).map(|data| &data.nets),
     );
     let selected_reference = out.reference_pick.clone().or_else(|| out.selection.is_none().then(|| state.reference.selected.clone()).flatten());
     if (!state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) || selected_reference.is_some())
@@ -535,6 +539,11 @@ pub(super) fn show(
                 pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
             }
         }
+        if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
+            for pad in &mut pads {
+                pad.net = None;
+            }
+        }
         let reference_bounds = reference_bounds(&p, camera, rect, project, state, &footprint, bounds, appearance);
         let selected = selected_reference.as_ref() == Some(&footprint.id);
         let reference_color = graphics
@@ -543,6 +552,11 @@ pub(super) fn show(
             .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |graphic| graphic.color.unwrap_or_else(|| board::graphic_color(graphic.style)));
         if selected {
             board::reference_owner_link(&p, reference_bounds, center, reference_color);
+        }
+        for pad in &pads {
+            if let Some(corners) = pad.copper {
+                track_labels.cover_rect(Rect::from_points(&corners));
+            }
         }
         board::footprint(
             &p,
@@ -696,7 +710,12 @@ fn place_group(
             }
             footprint.position = transform(footprint.position);
             footprint.rotation = placement.rotation;
-            let (pads, graphics) = drawing(&footprint, camera, response.rect, visible, &colors);
+            let (mut pads, graphics) = drawing(&footprint, camera, response.rect, visible, &colors);
+            if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
+                for pad in &mut pads {
+                    pad.net = None;
+                }
+            }
             pcbcraft_chrome::board::footprint(
                 ui.painter(),
                 &pads,

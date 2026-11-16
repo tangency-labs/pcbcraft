@@ -125,8 +125,8 @@ impl Project {
         }
         Ok(())
     }
-    /// Resolve names and hierarchy project-wide before projecting back to a sheet. Global
-    /// names take display priority, while all aliases remain visible in inspection.
+    /// Resolve names and hierarchy project-wide before projecting back to a sheet. All
+    /// aliases remain visible; display primary uses UTF-8 byte ordering.
     pub(crate) fn named_connectivity(&self, whole_project: bool) -> Connectivity {
         let mut graph = self.named_graph.get_or_init(|| self.build_named_graph()).clone();
         if !whole_project {
@@ -147,6 +147,11 @@ impl Project {
     fn build_named_graph(&self) -> Connectivity {
         let symbols: Vec<_> = self.all_symbols().cloned().collect();
         let wires: Vec<_> = self.sheets.iter().flat_map(|s| s.wires.iter().cloned()).collect();
+        if !self.requires_project_graph() {
+            let mut graph = Connectivity::build(&symbols, &wires);
+            crate::nets::display::assign(self, &mut graph);
+            return graph;
+        }
         let mut links = Vec::new();
         let mut names = BTreeMap::new();
         let mut globals = BTreeMap::new();
@@ -167,6 +172,7 @@ impl Project {
             let mut local = BTreeMap::new();
             for label in project.hierarchical_labels() {
                 let end = WireEndpoint::Label(label.id);
+                links.push([end, end]);
                 names.insert(end, (1, label.name.clone()));
                 local.insert(label.name.clone(), end);
             }
@@ -201,6 +207,7 @@ impl Project {
         }
         let mut graph = Connectivity::build_linked(&symbols, &wires, links);
         graph.assign_names(&names);
+        crate::nets::display::assign(self, &mut graph);
 
         graph
     }

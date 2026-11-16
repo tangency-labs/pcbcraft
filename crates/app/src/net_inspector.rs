@@ -23,6 +23,7 @@ impl Default for NetInspector {
 #[derive(Debug)]
 struct Net {
     name: String,
+    aliases: Vec<String>,
     pins: Vec<String>,
 }
 #[derive(Debug)]
@@ -46,17 +47,23 @@ impl Snapshot {
         };
         let graph = project.connectivity();
         Self {
-            nets: graph.nets.iter().enumerate().map(|(i, net)| Net { name: graph.net_name(i), pins: pins(net) }).collect(),
+            nets: graph
+                .nets
+                .iter()
+                .enumerate()
+                .map(|(i, net)| Net { name: graph.net_name(i), aliases: graph.net_names(i).to_vec(), pins: pins(net) })
+                .collect(),
             unconnected: pins(&graph.unconnected),
         }
     }
 }
 /// Tree rows use the Browser's actual metrics, disclosure control and typography.
 fn row(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, label: &str, depth: usize, open: Option<bool>, tip: &str) -> bool {
+    let accessible = open.is_some().then(|| format!("Net {label}"));
     let response = workspace::tree_row(
         ui,
         ui.scope_id().with(key),
-        &workspace::TreeRow { depth, fold: open, icon: None, label, accessibility_label: None, tip, selected: false },
+        &workspace::TreeRow { depth, fold: open, icon: None, label, accessibility_label: accessible.as_deref(), tip, selected: false },
     );
     response.fold || response.clicked
 }
@@ -102,7 +109,11 @@ impl NetInspector {
                     query.is_empty() || net.name.to_lowercase().contains(&query) || net.pins.iter().any(|pin| pin.to_lowercase().contains(&query))
                 }) {
                     let expanded = !self.folded.contains(&index) || !query.is_empty();
-                    let tip = format!("{} pins", net.pins.len());
+                    let tip = if net.aliases.len() > 1 {
+                        format!("{} pins; electrical names: {}", net.pins.len(), net.aliases.join(", "))
+                    } else {
+                        format!("{} pins", net.pins.len())
+                    };
                     if row(ui, ("net", index), &net.name, 0, (!net.pins.is_empty()).then_some(expanded), &tip) && !self.folded.remove(&index) {
                         self.folded.insert(index);
                     }
@@ -163,7 +174,7 @@ mod tests {
             )
             .unwrap();
         harness.run();
-        harness.get_by_label("Net 1");
+        harness.get_by_label("Net Net-0001");
         harness.get_by_label("R1.2");
         harness.get_by_label("R2.1");
         harness.get_by_label("R1.1");
@@ -182,7 +193,7 @@ mod tests {
         click(&mut harness, "Search nets or pins");
         harness.get_by_label("Search nets or pins").type_text("R1.2");
         harness.run();
-        harness.get_by_label("Net 1");
+        harness.get_by_label("Net Net-0001");
         harness.get_by_label("R1.2");
         assert!(harness.query_by_label("R1.1").is_none());
         assert_eq!(harness.state().session.revision(), revision);

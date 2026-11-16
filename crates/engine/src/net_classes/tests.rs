@@ -341,7 +341,7 @@ fn classes_round_trip_with_board_rules_net_registry_and_no_connects() {
     edit(&mut session, crate::no_connect::SET, json!({"target":{"part":"component-2","terminal":"2"},"marked":true})).unwrap();
     round_trip(&session);
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(String::from_utf8(documents[ENTRY_POINT].clone()).unwrap().contains("pcbcraft-project/20"));
+    assert!(String::from_utf8(documents[ENTRY_POINT].clone()).unwrap().contains("pcbcraft-project/23"));
 }
 
 /// Geometry vocabulary/ranges stay aligned with board defaults, with no new unit convention.

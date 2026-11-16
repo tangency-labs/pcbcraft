@@ -185,6 +185,7 @@ impl Wire {
 pub struct Connectivity {
     pub nets: Vec<Vec<Terminal>>,
     pub(crate) names: Vec<Vec<String>>,
+    pub(crate) display_names: Vec<String>,
     pub unconnected: Vec<Terminal>,
     junctions: Vec<Vec<u64>>,
     interfaces: Vec<Vec<WireEndpoint>>,
@@ -212,9 +213,8 @@ impl Connectivity {
             .zip(&self.interfaces)
             .enumerate()
             .map(|(index, ((group, junctions), interfaces))| {
-                let mut net = json!({"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()});
+                let mut net = json!({"name":self.net_name(index),"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()});
                 if !self.names[index].is_empty() {
-                    net["name"] = json!(self.names[index][0]);
                     net["names"] = json!(self.names[index]);
                 }
                 if !junctions.is_empty() {
@@ -300,7 +300,7 @@ impl Connectivity {
             interfaces.push(ports.into_iter().collect());
         }
         let names = vec![Vec::new(); nets.len()];
-        Self { nets, names, junctions, interfaces, unconnected, by_terminal }
+        Self { nets, names, display_names: Vec::new(), junctions, interfaces, unconnected, by_terminal }
     }
 }
 
@@ -344,13 +344,22 @@ fn append_point(path: &mut Vec<super::Point>, point: super::Point) {
 }
 
 impl Connectivity {
-    /// Preferred authored name, or a view-local number when the group is unnamed.
+    /// Shared project-qualified display name; unresolved indices have no invented identity.
     pub fn net_name(&self, index: usize) -> String {
-        self.names.get(index).and_then(|names| names.first()).cloned().unwrap_or_else(|| format!("Net {}", index + 1))
+        self.display_names.get(index).cloned().unwrap_or_else(|| if index < self.nets.len() { "Unconnected".into() } else { "Unresolved net".into() })
     }
     /// All authored names on this group, including aliases introduced by wired connections.
     pub fn net_names(&self, index: usize) -> &[String] {
         self.names.get(index).map_or(&[], Vec::as_slice)
+    }
+    /// Iterate transient members for read-only presentation without a second graph traversal.
+    pub(crate) fn endpoints(&self, index: usize) -> impl Iterator<Item = WireEndpoint> + '_ {
+        self.nets[index]
+            .iter()
+            .copied()
+            .map(WireEndpoint::Terminal)
+            .chain(self.interfaces[index].iter().copied())
+            .chain(self.junctions[index].iter().copied().map(WireEndpoint::Junction))
     }
     /// Find a group from any endpoint, including label-only and free-wire groups.
     pub fn net_index_for_endpoint(&self, endpoint: WireEndpoint) -> Option<usize> {
@@ -372,6 +381,7 @@ impl Connectivity {
                 .collect();
             let mut seen = BTreeSet::new();
             self.names[index] = sorted.into_iter().map(|(_, name)| name).filter(|name| seen.insert(name.clone())).collect();
+            self.names[index].sort();
         }
     }
     /// Project the complete graph onto local endpoints, retaining connections made remotely
@@ -379,6 +389,7 @@ impl Connectivity {
     pub(crate) fn retain_endpoints(&mut self, own: &BTreeSet<WireEndpoint>) {
         let mut nets = Vec::new();
         let mut names = Vec::new();
+        let mut display_names = Vec::new();
         let mut junctions = Vec::new();
         let mut interfaces = Vec::new();
         for index in 0..self.nets.len() {
@@ -390,6 +401,7 @@ impl Connectivity {
             }
             nets.push(pins);
             names.push(self.names[index].clone());
+            display_names.push(self.net_name(index));
             junctions.push(points);
             interfaces.push(ports);
         }
@@ -397,6 +409,7 @@ impl Connectivity {
         self.by_terminal = nets.iter().enumerate().flat_map(|(index, pins)| pins.iter().map(move |pin| (*pin, index))).collect();
         self.nets = nets;
         self.names = names;
+        self.display_names = display_names;
         self.junctions = junctions;
         self.interfaces = interfaces;
     }

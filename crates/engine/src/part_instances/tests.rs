@@ -258,7 +258,7 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     let baseline = project.board.baseline.as_ref().unwrap();
     let definition = project.footprint_catalog().into_iter().find(|d| d.library == "parts-demo" && d.id == "resistor-0603").unwrap();
     assert_eq!(project.default_footprint_mapping(&component, &definition).unwrap(), project.board.footprints()[0].mapping.clone().unwrap());
-    assert_eq!(baseline.format, "pcbcraft-board-baseline/2");
+    assert_eq!(baseline.format, "pcbcraft-board-baseline/4");
     let ratsnest = project.board_view(project.board_target().unwrap()).unwrap().ratsnest().unwrap();
     assert_eq!(ratsnest.net_count, 1);
     assert_eq!(ratsnest.lines.len(), 1, "both lands on a singleton logical terminal still need copper");
@@ -294,7 +294,7 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     let proposed =
         crate::board::update::Baseline::proposed(current, &crate::board::update::Baseline::current_choices(current), baseline.source.clone())
             .unwrap();
-    assert_eq!(proposed.format, "pcbcraft-board-baseline/3");
+    assert_eq!(proposed.format, "pcbcraft-board-baseline/4");
     assert!(crate::board::update::preview(baseline, &proposed).unwrap().is_noop());
     proposed.validate_assets(current).unwrap();
     session.apply("edit.undo", &Json::Null).unwrap();

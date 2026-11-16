@@ -534,7 +534,7 @@ fn draw_report(ui: &mut egui::Ui, rows: &[(Option<u64>, form::Message)], filters
 
 /// Display terminal membership in a captured connection group using board annotations.
 fn net_label(preview: &BoardUpdatePreview<'_>, net: &NetState) -> String {
-    let name = if net.names.is_empty() { "Unnamed net".into() } else { net.names.join(", ") };
+    let name = net.display_name.clone().unwrap_or_else(|| if net.names.is_empty() { "Unresolved net".into() } else { net.names.join(", ") });
     let terminals = net
         .terminals
         .iter()

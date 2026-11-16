@@ -2335,13 +2335,11 @@ impl Project {
         symbol.pins().get(index).copied()
     }
 
-    /// Return the cached sheet projection of connectivity. Named anchors resolve project-wide
-    /// before projection; geometry edits invalidate their contact graph. Unnamed geometry edits
-    /// can continue sharing a topology-only cache.
+    /// Return cached sheet connectivity with project-wide readable naming and qualification.
+    /// Geometry-only edits can share the result when topology and naming inputs are unchanged;
+    /// authored contact, reference, definition and occurrence-path changes invalidate it.
     pub fn connectivity(&self) -> &Connectivity {
-        self.connectivity.get_or_init(|| {
-            if self.requires_project_graph() { self.named_connectivity(false) } else { Connectivity::build(&self.symbols, &self.wires) }
-        })
+        self.connectivity.get_or_init(|| self.named_connectivity(false))
     }
 
     /// Inspect the schematic in the shared command format, without including the board.
@@ -2381,7 +2379,7 @@ impl Project {
         Ok(Self { name: name_param(&json!({"name": name}))?, ..self.clone() })
     }
 
-    /// Whether two snapshots share the same terminal groups and pin references.
+    /// Whether two snapshots share terminal groups and readable pin/net presentation.
     pub fn same_connectivity(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.connectivity, &other.connectivity)
     }
@@ -2729,10 +2727,13 @@ impl Session {
             if p.board.baseline.is_some() || !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().map(|target|target.board), "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
+                if let Some(board) = p.board_target().and_then(|target|p.board_view(target)) {
+                    inspected["board"]["netlist"] = board.inspect_netlist();
+                }
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
                 inspected["board"]["outline"] = json!(p.board.outline);
                 if let Some(baseline) = &p.board.baseline {
-                    inspected["board"]["accepted_baseline"] = json!({"source":baseline.source,"component_count":baseline.components.len(),"net_count":baseline.nets.len()});
+                    inspected["board"]["accepted_baseline"] = json!({"source":baseline.source,"component_count":baseline.components.len(),"net_count":baseline.nets.len(),"net_names_pending":p.board_target().and_then(|target|p.board_view(target)).is_some_and(|board|board.net_names_pending())});
                     inspected["board"]["pending_removals"] = json!(baseline.components.keys().filter(|id| !p.component_is_board_eligible(**id)).map(|id| format!("component-{id}")).collect::<Vec<_>>());
                 }
                 if !p.board.definitions.is_empty() {
@@ -3566,8 +3567,34 @@ impl Session {
             }
         }
         project.refresh_board_folder();
+        // Whole-project presentation is snapshot-owned. Sheet caches may retain unchanged
+        // topology/metadata, but component names and occurrence paths invalidate their labels.
+        let topology_changed = self.project.as_ref().is_none_or(|old| {
+            old.net_scope() != project.net_scope()
+                || old.sheets.len() != project.sheets.len()
+                || old
+                    .sheets
+                    .iter()
+                    .zip(project.sheets.iter())
+                    .any(|(before, after)| before.sheet_id != after.sheet_id || !Arc::ptr_eq(&before.connectivity, &after.connectivity))
+        });
+        let presentation_changed = self.project.as_ref().is_none_or(|old| {
+            old.net_scope() != project.net_scope()
+                || (!Arc::ptr_eq(&old.components, &project.components)
+                    && (old.components.len() != project.components.len()
+                        || old.components.iter().any(|(id, part)| {
+                            project
+                                .components
+                                .get(id)
+                                .is_none_or(|next| part.reference != next.reference || !Arc::ptr_eq(&part.definition, &next.definition))
+                        })))
+                || old.sheets.iter().map(|s| (s.sheet_id, &s.sheet_name)).ne(project.sheets.iter().map(|s| (s.sheet_id, &s.sheet_name)))
+        });
+        if topology_changed || presentation_changed {
+            project.named_graph = Arc::default();
+        }
         // Named anchors can attach to moving geometry and join other sheets.
-        if project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
+        if presentation_changed || project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
                 sheet.connectivity = Arc::default();
@@ -3753,7 +3780,7 @@ mod tests {
         assert_eq!(changed.symbols()[0].position, Point { x_nm: 2_540_001, y_nm: -1_270_001 });
         assert_eq!(changed.symbols()[0].turns(), 1);
         assert_eq!(changed.reference(&changed.symbols()[0]), "R7");
-        assert!(before.same_connectivity(&changed));
+        assert!(!before.same_connectivity(&changed));
         let documents = persistence::encode_documents(changed.clone()).unwrap();
         assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
         let inspected = s.inspect();
@@ -4105,7 +4132,7 @@ mod wiring_tests {
         let schematic = &second["project"]["schematic"];
         let path = json!([{"x_nm": -5_080_000, "y_nm": 0}, {"x_nm": 5_080_000, "y_nm": 0}]);
         assert_eq!(schematic["wires"][0], json!({"id": "wire-5", "from": a, "to": b, "path": path}), "inspection reports the drawn route");
-        assert_eq!(schematic["netlist"]["nets"], json!([{"terminals": [a, b, c]}]));
+        assert_eq!(schematic["netlist"]["nets"], json!([{"name":"Net-0001","terminals": [a, b, c]}]));
         assert_eq!(schematic["netlist"]["unconnected"].as_array().unwrap().len(), 3);
 
         let undone = session.execute("edit.undo", &Value::Null).unwrap();

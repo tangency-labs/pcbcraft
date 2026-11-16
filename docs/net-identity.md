@@ -6,7 +6,8 @@ Design recorded November 8, 2026; related work:
 [#122](https://github.com/tangency-labs/pcbcraft/issues/122).
 This policy applies to schematic-only, single-board and multiboard projects.
 The [implemented single-board/schematic-only registry](net-registry-storage.md)
-covers sparse IDs, anchors, reconciliation and explicit ambiguity resolution.
+covers persistent net-owned numbers and IDs, bounded anchors, reconciliation and
+explicit ambiguity resolution.
 The [assignment slice](net-class-assignments.md) adds saved classes and origins.
 The broader multiboard, system and authored-rule contracts below remain
 design work; the [path to the net registry](net-registry-path.md) orders those slices.
@@ -25,22 +26,18 @@ accepted net/terminal baseline and pending physical removal information.
 `schematic_instances.net_registry`, plus a distinct system registry for system
 connections when required. System continuity does not merge the separate board copper-net records.
 
-The registry is sparse. Persist intentionally named nets, nets with authored
-rules/classes, other authored records that explicitly require a stable current
-net target, and identities promoted through a revision-checked stable-ID command.
-Accepting a board baseline does not promote all of its nets. The baseline stores
-historical terminal membership and source-snapshot-qualified net keys in
-`board.json`, with an optional persistent ID only where one already exists.
-That history supports comparison with a later derived graph; it does not define
-today's logical connectivity or require a mirrored logical member list.
+Every meaningful net receives a persistent identity and presentation number when
+created by an electrical transaction. A meaningful net has supported logical
+connectivity or an authored electrical name; bare unused pins and anonymous
+one-pin/orphan stubs do not receive competing identities. Numbers belong to the
+net, so a surviving net keeps its name when a component is renamed or deleted.
 
-Ordinary unnamed unconstrained networks remain derived even after layout.
-A fully routed or heavily constrained board may still have many persistent nets
-because real authored bindings need them; sparsity is a registration policy, not
-a promise of few entries on every board. The fixed-size anchor records prevent
-that registry from becoming a second saved membership graph.
-Inspection returns revision-scoped derived addresses without dirtying the project.
-Exports capture derived addresses in their source manifests without promotion.
+Compatibility projects remain read-only during Open, inspection and unchanged
+saves. Their first topology edit adopts the numbers shown by the before graph,
+then reconciles the edited graph in the same transaction. Physical board baseline
+acceptance does not itself promote legacy derived nets. Exports can still capture
+revision-scoped derived addresses when opening those older projects.
+
 A persisted registry record stores one primary anchor and at most three fallback
 anchors: four anchors total, independent of net size. It stores no full or
 canonical endpoint-membership list. Lineage/reconciliation records refer to

@@ -25,7 +25,7 @@ fn attached_junction_selection_is_read_only_and_identity_based() {
     assert_eq!(revision, s.revision());
     assert!(Arc::ptr_eq(&project, &s.snapshot().unwrap()));
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
-    assert!(project.net_registry.records.is_empty());
+    assert_eq!(project.net_registry.records.len(), 1);
 }
 
 /// Independent meaningful networks retain different exact targets, even before persistence.

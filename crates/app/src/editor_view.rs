@@ -12,6 +12,8 @@ mod tests;
 
 /// Stable arrangement key for the connection overlay, separate from physical layer UUIDs.
 pub(super) const RATSNEST_KEY: &str = "ratsnest";
+/// Local overlay state stored beside physical layer visibility, never in project history.
+pub(super) const NET_NAMES_KEY: &str = "net_names";
 
 /// Runtime view identity, independent of its document or native window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -257,7 +259,7 @@ impl BoardState {
             return cache.connectivity.clone();
         }
         let (copper, nets) = board.copper_with_nets();
-        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets });
+        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets, names_pending: board.net_names_pending() });
         self.copper_connectivity_cache =
             source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
         connectivity
@@ -290,17 +292,24 @@ impl BoardState {
         }
     }
 
+    /// Change only this view's copper name overlay, preserving document and routing state.
+    pub(super) fn set_net_names_visibility(&mut self, visible: bool) {
+        if visible {
+            self.hidden_layers.remove(NET_NAMES_KEY);
+        } else {
+            self.hidden_layers.insert(NET_NAMES_KEY.into());
+        }
+    }
+
     /// Replace the view's layer visibility in one action; isolation always reveals the active layer.
     /// Ratsnest visibility is independent of physical layer actions. Neither document revision
     /// nor saved files change, and unfinished drawing gestures expire.
     pub(super) fn set_layer_visibility(&mut self, layers: impl IntoIterator<Item = String>, active_only: bool) {
         self.drawing.cancel();
         self.tracks.cancel();
-        let ratsnest_hidden = self.hidden_layers.contains(RATSNEST_KEY);
+        let overlays: Vec<_> = self.hidden_layers.iter().filter(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY)).cloned().collect();
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
-        if ratsnest_hidden {
-            self.hidden_layers.insert(RATSNEST_KEY.into());
-        }
+        self.hidden_layers.extend(overlays);
     }
 
     /// Apply view-local layer choices through the same handler for Layers and live control.
@@ -865,7 +874,7 @@ impl EditorView {
                 );
                 self.board.layer_defaults_applied = true;
             }
-            self.board.hidden_layers.retain(|id| id == RATSNEST_KEY || layers.contains(id));
+            self.board.hidden_layers.retain(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY) || layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
                 self.board.active_layer = setup
                     .and_then(|setup| {

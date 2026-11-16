@@ -467,6 +467,30 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
 /// Empty boards also expose a compatibility layer derived from their distinct board IDs.
 /// Check each occurrence's sheet/use references before normalizing its independently allocated IDs.
 fn without_sheet_identity(mut state: Value) -> Value {
+    if let Some(registry) = state["project"].get_mut("net_registry") {
+        let scope = registry["scope"].clone();
+        let records = registry["records"].as_array_mut().unwrap();
+        let mut numbers = std::collections::BTreeMap::new();
+        for record in records.iter_mut() {
+            let id = record["id"].as_str().unwrap().to_owned();
+            assert_eq!(id.len(), 36);
+            let number = record["generated_number"].as_u64().unwrap();
+            assert!(number > 0 && numbers.insert(id, number).is_none());
+            record["id"] = json!(number);
+            assert_eq!(record["state"]["kind"], "active");
+            assert!(record["lineage"].as_array().unwrap().is_empty());
+            normalize_net_anchor(&mut record["primary"], &scope);
+            for anchor in record["fallbacks"].as_array_mut().unwrap() {
+                normalize_net_anchor(anchor, &scope);
+            }
+        }
+        records.sort_by_key(|record| record["generated_number"].as_u64().unwrap());
+        for net in registry["nets"].as_array_mut().unwrap() {
+            net["id"] = json!(numbers[net["id"].as_str().unwrap()]);
+            normalize_net_anchor(&mut net["anchor"], &scope);
+        }
+        registry["scope"]["id"] = Value::Null;
+    }
     let circuit_use = state["project"]["sheet_instances"]["circuit_uses"][0]["id"].clone();
     let definitions: Vec<_> = state["project"]["sheets"].as_array().unwrap().iter().map(|sheet| sheet["id"].clone()).collect();
     for occurrence in state["project"]["sheet_instances"]["sheet_occurrences"].as_array_mut().unwrap() {
@@ -495,6 +519,15 @@ fn without_sheet_identity(mut state: Value) -> Value {
         sheet["file"] = Value::Null;
     }
     state
+}
+
+/// Check exact owner consistency before normalizing entropy-generated project identities in
+/// independent executions. Numeric object/terminal keys and generated net numbers stay exact.
+fn normalize_net_anchor(anchor: &mut Value, scope: &Value) {
+    assert_eq!(anchor["scope"], *scope);
+    assert_eq!(anchor["project"].as_str().unwrap().len(), 36);
+    anchor["project"] = Value::Null;
+    anchor["scope"]["id"] = Value::Null;
 }
 
 /// Publish extensible native symbol identity/content parameters without changing legacy inputs.
