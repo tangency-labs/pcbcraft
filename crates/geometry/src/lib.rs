@@ -6,9 +6,10 @@
 //! [`Body`], [`BoundingBox`], [`Transform`] and [`GeometryError`] only, so the kernel can be replaced without
 //! touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
-//! Every kernel call runs under a guard: a panic inside the kernel becomes an error with the code
-//! [`ErrorCode::KernelInternal`] instead of ending the application, and the caller's own data is
-//! unchanged. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
+//! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
+//! guard: a panic inside it becomes an error with the code [`ErrorCode::KernelInternal`] instead
+//! of ending the application, and the caller's own data is unchanged. Dropping a [`Body`] frees
+//! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
 //! replies.
 //!
 //! The kernel is built for native targets only. On `wasm32` the same API compiles and every
@@ -200,10 +201,12 @@ impl Body {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::InvalidParams`] when a size is not positive or a coordinate lies more than
-    /// [`MAX_LENGTH_NM`] from zero; [`ErrorCode::KernelUnavailable`] without a kernel; otherwise
-    /// the kernel's failure.
+    /// [`ErrorCode::InvalidParams`] when the name has an ASCII control character, a size is not
+    /// positive or a coordinate lies more than [`MAX_LENGTH_NM`] from zero;
+    /// [`ErrorCode::KernelUnavailable`] without a kernel; otherwise the kernel's failure.
     pub fn cuboid(name: impl Into<String>, origin_nm: [i64; 3], size_nm: [i64; 3]) -> Result<Body> {
+        let name = name.into();
+        check_name("body name", &name)?;
         if size_nm.iter().any(|&s| s <= 0) {
             return Err(GeometryError::new(ErrorCode::InvalidParams, "every cuboid size must be positive"));
         }
@@ -215,7 +218,7 @@ impl Body {
         point_mm(far)?;
         let size = point_mm(size_nm)?;
         let solid = kernel::cuboid(origin, size)?;
-        Ok(Body { name: name.into(), solid })
+        Ok(Body { name, solid })
     }
 
     /// The body's name: the STEP solid's own name, else its product's; empty when it has none.
@@ -271,11 +274,12 @@ pub struct Placement {
     pub transform: Transform,
 }
 
-/// What [`read_step`] found: every body it read, in the file's entity order, where the file
-/// places each, and every solid item it refused.
+/// What [`read_step`] found: every body it read, in ascending entity-number order, where the
+/// file places each, and every solid item it refused. For a file written by [`write_step`] the
+/// body order is the order written.
 #[derive(Debug, Default)]
 pub struct StepRead {
-    /// The bodies read, in the file's entity order, each in its own representation's frame.
+    /// The bodies read, in ascending entity-number order, each in its own representation's frame.
     pub bodies: Vec<Body>,
     /// Every use of a body: those its product structure places, in the order the assembly tree
     /// lists them, then each body no product places, once and where it is.
@@ -353,16 +357,26 @@ pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
 
 /// Writes `bodies` as one part named `part_name` in an AP242 STEP file, exactly as the kernel
 /// holds them, without colours. The output depends only on the input: the header carries no time
-/// stamp, so writing the same bodies twice gives the same bytes.
+/// stamp, so writing the same bodies twice gives the same bytes. Body names are written
+/// unchanged, including spaces, quotes, backslashes and non-ASCII characters. The part name is
+/// written as given except that trailing `.step` suffixes and then trailing `.stp` suffixes
+/// (in any case) are dropped, and a part name that is then empty or only spaces is written as
+/// `Part`. A body with an empty name
+/// reads back with its part's name.
 ///
 /// # Errors
 ///
-/// [`ErrorCode::InvalidParams`] when `bodies` is empty; [`ErrorCode::OperationFailed`] when the
+/// [`ErrorCode::InvalidParams`] when `bodies` is empty or the part name or a body name has an
+/// ASCII control character, which STEP strings cannot carry; [`ErrorCode::OperationFailed`] when the
 /// writer refuses a body; [`ErrorCode::KernelUnavailable`] without a kernel;
 /// [`ErrorCode::KernelInternal`] when the kernel panics.
 pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
     if bodies.is_empty() {
         return Err(GeometryError::new(ErrorCode::InvalidParams, "there are no bodies to write"));
+    }
+    check_name("part name", part_name)?;
+    for body in bodies {
+        check_name("body name", &body.name)?;
     }
     let named: Vec<(&str, &kernel::KernelBody)> = bodies.iter().map(|b| (b.name.as_str(), &b.solid)).collect();
     kernel::write(part_name, &named).map(String::into_bytes)
@@ -377,6 +391,15 @@ pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
 /// [`ErrorCode::KernelUnavailable`] without a kernel.
 pub fn kernel_crash_test() -> Result<()> {
     kernel::crash_test()
+}
+
+/// Refuses a name that STEP cannot carry unchanged: its strings have no ASCII control characters
+/// (ISO 10303-21 allows only printable characters in a string), and the writer would drop them.
+fn check_name(what: &str, name: &str) -> Result<()> {
+    if name.chars().any(|c| c.is_ascii_control()) {
+        return Err(GeometryError::new(ErrorCode::InvalidParams, format!("the {what} has a control character")));
+    }
+    Ok(())
 }
 
 /// A point in nanometres as the kernel's millimetres.

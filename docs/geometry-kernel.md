@@ -59,10 +59,12 @@ could later move into an engine module if that proves simpler.
   `pcbcraft_units::MAX_LENGTH_NM` of zero. The kernel's millimetre floats are
   converted at the boundary, each coordinate rounded once to the nearest
   nanometre.
-- **Panic guard.** Every kernel call runs under a guard that turns a panic into
+- **Panic guard.** Every kernel operation the crate calls (make, measure, read,
+  write) runs under a guard that turns a panic into
   the error `kernel_internal`, adapted from SolidCraft's kernel boundary. The
   reader refuses only the solid whose conversion panicked and keeps the others.
   `kernel_crash_test()` lets a diagnostics command prove the guard works.
+  Dropping a body frees its kernel data outside the guard.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
   outside tests.
 - **Native only.** The kernel crates are target dependencies for
@@ -91,7 +93,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 
 | Code | Meaning |
 | --- | --- |
-| `invalid_params` | An argument was refused before the kernel saw it |
+| `invalid_params` | An argument was refused before the kernel saw it, including a name with an ASCII control character, which a STEP string cannot carry |
 | `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, or a malformed product structure (a cycle, a broken reference) |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
@@ -110,12 +112,15 @@ At SolidCraft revision `73bdb6c`:
 | Dependency closure of `pcbcraft-geometry` | 20 packages |
 | Dependency closure of `pcbcraft-engine` | no `solidcore` crate |
 | Round trip of a synthetic block written by the kernel as AP242 and read back | bounding box within 1 µm, name kept |
-| Two bodies in one part | both read back by name |
+| Two bodies in one part | both read back by name, in the order written |
+| Body names with an apostrophe, a backslash, non-ASCII characters and leading or trailing spaces | read back unchanged |
+| An empty body name; part names `board.STEP`, `board.stp.STEP`, `board.step.stp`, `.step`, blank | the body reads back with its part's name; the part name loses its trailing `.step` suffixes and then its trailing `.stp` suffixes (any case), so `board.step.stp` becomes `board.step`; a part name left empty or blank is written as `Part` |
+| 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
 | Writing the same bodies twice | identical bytes |
 | Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
 | A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
-| Non-positive sizes, coordinates out of range, nothing to write | `invalid_params` |
+| Non-positive sizes, coordinates out of range, names with control characters, nothing to write | `invalid_params` |
 | A transform that flattens, an axis that is not finite, a move out of range | `invalid_params` |
 | Ten synthetic STEP fixtures, read, written as one part of placed bodies and read again | every bounding box within 1 µm of the box worked out from the generator's dimensions |
 | Inch and metre units | converted to nanometres within 1 µm |
