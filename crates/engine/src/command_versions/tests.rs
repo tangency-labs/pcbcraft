@@ -386,3 +386,28 @@ fn prose_is_not_part_of_the_contract() {
         assert_ne!(contract_digest(&second), contract_digest(&first), "a changed {keyword} member kept the contract");
     }
 }
+
+/// The keys of `dependentRequired`, `dependentSchemas` and `dependencies` name parameters, so a
+/// parameter called `title`, `summary` or `description` there is part of the contract. There is no
+/// prose in those maps to leave out: each key is a parameter name.
+#[test]
+fn dependency_maps_keep_parameter_names() {
+    let original = crate::command(crate::SET_SYMBOL_FIELDS).unwrap().to_json();
+    for (keyword, first, second) in [
+        ("dependentRequired", json!(["metadata"]), json!(["value"])),
+        ("dependentSchemas", json!({"required": ["metadata"]}), json!({"required": ["value"]})),
+        ("dependencies", json!(["metadata"]), json!({"required": ["value"]})),
+    ] {
+        for name in ["title", "summary", "description"] {
+            let mut with = original.clone();
+            with["params"][keyword] = json!({name: first.clone()});
+            assert_ne!(contract_digest(&with), contract_digest(&original), "{keyword}.{name} was dropped as prose");
+            let mut changed = with.clone();
+            changed["params"][keyword][name] = second.clone();
+            assert_ne!(contract_digest(&changed), contract_digest(&with), "a changed {keyword}.{name} kept the contract");
+            let mut renamed = original.clone();
+            renamed["params"][keyword] = json!({"other": first.clone()});
+            assert_ne!(contract_digest(&renamed), contract_digest(&with), "{keyword} lost the name {name}");
+        }
+    }
+}

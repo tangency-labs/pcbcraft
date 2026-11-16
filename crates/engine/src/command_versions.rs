@@ -43,8 +43,10 @@ pub fn contract_digest(description: &Value) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Schema keywords whose object keys are parameter or definition names, not keywords.
-const NAMED_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "definitions"];
+/// Schema keywords whose object keys are parameter or definition names, not keywords. Under
+/// `dependentRequired`, `dependentSchemas` and `dependencies` every key names a parameter, so no
+/// key there is prose.
+const NAMED_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "definitions", "dependentRequired", "dependentSchemas", "dependencies"];
 
 /// Schema keywords whose values are data (allowed, default or sample values), not schemas.
 const DATA_VALUES: &[&str] = &["const", "default", "enum", "examples"];
