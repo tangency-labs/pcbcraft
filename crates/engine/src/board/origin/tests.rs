@@ -195,3 +195,45 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     missing.insert(path, text.replacen(&format, "pcbcraft-board/21", 1).into_bytes());
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
+
+/// The last in-range coordinates are accepted on both sides and one step beyond is refused.
+#[test]
+fn point_origins_accept_the_whole_coordinate_range_and_nothing_beyond() {
+    let max = crate::schematic::MAX_CENTER_NM;
+    let mut s = board();
+    for (x, y) in [(max, max), (-max, -max), (max, -max)] {
+        set(&mut s, json!({"kind":"point","x_nm":x,"y_nm":y})).unwrap();
+        assert_eq!(view(&s).placement_origin().unwrap().at, Point { x_nm: x, y_nm: y });
+    }
+    let before = s.snapshot().unwrap();
+    for (x, y) in [(-max - 1, 0), (0, -max - 1), (max + 1, 0), (0, max + 1)] {
+        assert!(set(&mut s, json!({"kind":"point","x_nm":x,"y_nm":y})).is_err(), "{x} {y}");
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+}
+
+/// A saved origin is read as strictly as a request: a nil identity, an out-of-range point and a
+/// field its kind does not use are each refused, and the unaltered file still opens.
+#[test]
+fn saved_origins_refuse_nil_ids_out_of_range_points_and_extra_fields() {
+    let max = crate::schematic::MAX_CENTER_NM;
+    let mut s = board();
+    set(&mut s, json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM})).unwrap();
+    let id = s.project().unwrap().board.placement_origin.as_ref().unwrap().id;
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&documents);
+    let text = String::from_utf8(documents[&path].clone()).unwrap();
+    let anchor = format!(r#"{{"kind":"point","x_nm":{},"y_nm":{}}}"#, 2 * MM, 3 * MM);
+    assert!(text.contains(&anchor) && text.contains(&id.to_string()));
+    assert!(decode_documents(&documents).is_ok());
+    for (from, to) in [
+        (id.to_string(), Uuid::nil().to_string()),
+        (anchor.clone(), format!(r#"{{"kind":"point","x_nm":{},"y_nm":0}}"#, max + 1)),
+        (anchor.clone(), r#"{"kind":"board_zero","x_nm":0}"#.to_owned()),
+        (anchor.clone(), r#"{"kind":"outline_lower_left","y_nm":0}"#.to_owned()),
+    ] {
+        let mut altered = documents.clone();
+        altered.insert(path.clone(), text.replacen(&from, &to, 1).into_bytes());
+        assert!(decode_documents(&altered).is_err(), "{to}");
+    }
+}

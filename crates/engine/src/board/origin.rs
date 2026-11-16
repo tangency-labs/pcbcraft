@@ -14,9 +14,10 @@ pub const SET_PLACEMENT_ORIGIN: &str = "pcb.set_placement_origin";
 /// The saved vocabulary of a placement origin record.
 const FORMAT: &str = "pcbcraft-origin/1";
 
-/// Where output coordinates are measured from.
+/// Where output coordinates are measured from. Requests and saved files are read through
+/// the same strict path, so both refuse fields an anchor's kind does not use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case", try_from = "Value")]
 pub enum Anchor {
     /// Board coordinate zero, the built-in default.
     BoardZero,
@@ -24,6 +25,34 @@ pub enum Anchor {
     OutlineLowerLeft,
     /// A fixed point in board coordinates (integer nanometres, Y down).
     Point { x_nm: i64, y_nm: i64 },
+}
+
+/// The tagged form an anchor is read from before its fields are checked.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum Tagged {
+    BoardZero,
+    OutlineLowerLeft,
+    Point { x_nm: i64, y_nm: i64 },
+}
+
+impl TryFrom<Value> for Anchor {
+    type Error = String;
+
+    /// Read an anchor, refusing unknown kinds, fields its kind does not use and out-of-range
+    /// points. Tagged unit variants would otherwise accept and drop extra fields.
+    fn try_from(value: Value) -> Result<Self, String> {
+        let anchor = match serde_json::from_value(value.clone()).map_err(|e| e.to_string())? {
+            Tagged::BoardZero => Self::BoardZero,
+            Tagged::OutlineLowerLeft => Self::OutlineLowerLeft,
+            Tagged::Point { x_nm, y_nm } => Self::Point { x_nm, y_nm },
+        };
+        if serde_json::to_value(anchor).ok() != Some(value) {
+            return Err("The placement origin has fields its kind does not use.".into());
+        }
+        anchor.validate()?;
+        Ok(anchor)
+    }
 }
 
 impl Anchor {
@@ -148,13 +177,7 @@ pub(crate) fn parse(value: &Value) -> Result<Option<Anchor>, String> {
     if value.is_null() {
         return Ok(None);
     }
-    let anchor: Anchor = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-    // Tagged unit variants would otherwise accept and drop extra fields.
-    if serde_json::to_value(anchor).ok().as_ref() != Some(value) {
-        return Err("The placement origin has fields its kind does not use.".into());
-    }
-    anchor.validate()?;
-    Ok(Some(anchor))
+    Anchor::try_from(value.clone()).map(Some)
 }
 
 impl Session {
