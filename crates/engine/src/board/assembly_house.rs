@@ -118,16 +118,36 @@ pub struct House {
     pub packages: Vec<PackageOffset>,
 }
 
-/// A saved package list is omitted when empty, so an empty array is refused.
+/// One saved package entry. The command accepts an explicit zero rotation and drops it, but a
+/// saved file never contains one, so the reader refuses it to keep a no-op save byte-identical.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedOffset {
+    library: String,
+    definition: String,
+    #[serde(default)]
+    rotation: Option<u16>,
+    #[serde(default, deserialize_with = "super::reference::present")]
+    centroid: Option<Point>,
+}
+
+/// A saved package list is omitted when empty, and a zero rotation is omitted from an entry,
+/// so an empty array and an explicit zero are both refused.
 fn listed<'de, D>(deserializer: D) -> Result<Vec<PackageOffset>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let packages = Vec::<PackageOffset>::deserialize(deserializer)?;
-    if packages.is_empty() {
+    let saved = Vec::<SavedOffset>::deserialize(deserializer)?;
+    if saved.is_empty() {
         return Err(serde::de::Error::custom("an empty packages array is not allowed"));
     }
-    Ok(packages)
+    saved
+        .into_iter()
+        .map(|SavedOffset { library, definition, rotation, centroid }| match rotation {
+            Some(0) => Err(serde::de::Error::custom("a zero rotation is omitted, never written")),
+            rotation => Ok(PackageOffset { library, definition, rotation: rotation.unwrap_or(0), centroid }),
+        })
+        .collect()
 }
 
 impl House {

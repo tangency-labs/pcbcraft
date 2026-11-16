@@ -265,7 +265,7 @@ Board format `pcbcraft-board/27` adds `assembly_houses`, a nonempty list of
 `pcbcraft-assembly-house/1` records in creation order. Each has a stable non-nil
 UUID, a unique `name`, a required `bottom_side` (`viewed_from_top` or
 `viewed_from_bottom`) and optional `packages`, sorted by `library` then `definition`
-with one entry each. An entry's `rotation` (0 to 359, written only when nonzero) and
+with one entry each. An entry's `rotation` (1 to 359; omitted when zero, and an explicit 0 is refused) and
 `centroid` (a nonzero `x_nm`/`y_nm` point within 100 mm of the footprint origin,
 never `null`) are optional, but each entry must change something: a nonzero rotation
 or a centroid. An empty `packages` array is never written and is refused. Format 27 requires at least one
