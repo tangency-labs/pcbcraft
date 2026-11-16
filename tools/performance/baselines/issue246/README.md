@@ -67,9 +67,39 @@ clearance or short decision about the new copper.
 Query preparation (`walkaround.prepare`) was 1.219 / 3.971 ms p95 and is shared with
 other query consumers. Raw samples are in the compressed reports.
 
+## Other-side retry
+
+`dbe0168` lets a walk that blocks return to the most recent obstacle and go round its
+other side, at most eight times. Only walks that block take a different path, so only
+the `walkaround` diagnostic was rerun, at that revision with the same fixtures and
+command ([environment](environment-retry.json), `board_perf` SHA-256
+`fddc18717ff8dd8745a7b33163050bd5aede926893c82787550a8331bc96a67d`). A macOS guest VM
+ran on the host meanwhile, so these timings carry more background load than the first
+runs. Every iteration again reproduced the first plans, and each first plan committed
+with no exhaustive clearance or short decision about the new copper.
+
+| Fixture | Case | Outcome | Probes | p50 ms | p95 ms | p99 ms | max ms |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| channels-v1 | six airwires (each) | reached, unchanged | 2–3 | ≤ 0.0025 | ≤ 0.0045 | ≤ 0.0075 | 0.1578 |
+| channels-v1 | channel | reached, unchanged | 35 | 0.0429 | 0.0555 | 0.0618 | 0.1571 |
+| channels-v1 | crowded | reached, 6 points (was blocked) | 119 | 0.2748 | 0.3015 | 0.3196 | 0.3281 |
+| channels-v1 | all eight | | | 0.3333 | 0.3737 | 0.4090 | 1.0232 |
+| dense-v1 | six airwires (each) | reached, unchanged | 2–3 | ≤ 0.0039 | ≤ 0.0073 | ≤ 0.0127 | 0.0131 |
+| dense-v1 | channel | reached, unchanged | 2 | 0.0016 | 0.0018 | 0.0020 | 0.0020 |
+| dense-v1 | crowded | blocked, 9 points, same prefix | 444 | 1.7738 | 1.8607 | 2.0683 | 2.2478 |
+| dense-v1 | all eight | | | 1.7930 | 1.8847 | 2.0940 | 2.2670 |
+
+The channels crowded route now reaches its target. The dense crowded route still
+blocks with the same first-try prefix after trying the other sides, which costs 444
+probes instead of 53 and 1.86 ms instead of 0.34 ms p95: a blocked plan now pays for
+its retries, within the default 4,096-probe budget. Query preparation was 1.217 /
+3.780 ms p95. Raw reports: [channels](walkaround-channels-v1-retry.json.gz),
+[dense](walkaround-dense-v1-retry.json.gz).
+
 ## Limits
 
 These are solver service costs on one host. Route-tool preview and commit latency,
 browser runtime, allocation and presentation are unmeasured: the tool does not call
 the solver yet. The airwire cases in these fixtures are short and mostly unobstructed;
-the crowded cases measure blocked searches rather than long successful detours.
+the dense crowded case measures a blocked search with retries rather than a long
+successful detour.

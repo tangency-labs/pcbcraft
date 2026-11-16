@@ -14,8 +14,9 @@ clearance cache through the query constructor's non-blocking `try_lock`.
 | Invalid budget, width, point or layer | Error before any probe; nothing changes | Tests on budget 0 / 65,537, foreign layer and unknown posture |
 | Head breaks clearance or joins two nets | `blocked` at the head, nothing to add | Reading: head probe before walking |
 | No way round (dead end, board edge, too-narrow channel) | `blocked` at the farthest confirmed point | Tests for dead end, board edge and channel; legal prefixes commit with DRC agreement |
+| The cheaper side of an obstacle dead-ends | The walk returns to the most recent obstacle and goes round its other side; a route blocked either way reports its first try | Test `a_dead_end_on_the_cheaper_side_is_walked_round_the_other_way`; dead-end and edge tests keep their blocked prefixes |
 | Hull rounding cuts a corner | Every kept leg is re-probed; the legal prefix is kept | Reading: final confirmation pass |
-| Search bounds (24 obstacles, 6 merges, 256 points) | `blocked` or `incomplete`, never an unbounded loop | Reading: every loop is bounded |
+| Search bounds (24 obstacles, 8 other-side retries, 6 merges, 256 points) | `blocked` or `incomplete`, never an unbounded loop | Reading: every loop is bounded |
 | Planning mutates the document | Revision and saved bytes unchanged | Tests `locked_copper_stays_unchanged`, command test |
 | Locked copper | Treated as an obstacle; geometry and lock unchanged after commit | Test `locked_copper_stays_unchanged` |
 | Nondeterminism | Same plan from reused, fresh and reopened queries and on every benchmark iteration | Test `plans_are_deterministic`; `walkaround` diagnostic |
