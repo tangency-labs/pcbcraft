@@ -1,6 +1,7 @@
-//! Sourced Tg/Dk/Df editing retains immutable material revisions and report conditions.
+//! Sourced Tg/Dk/Df editing retains immutable material revisions and report conditions; thermal
+//! and insulation reports are shown and carried into new revisions.
 use super::*;
-use pcbcraft_engine::board::materials::{DielectricReport, DielectricValueKind, MeasurementAxis, ReportBasis, Source, TgMethod, TgReport};
+use pcbcraft_engine::board::materials::{DielectricReport, DielectricValueKind, MeasurementAxis, ReportBasis, Source, TgMethod, TgRegion, TgReport};
 
 /// One new material or revision; existing reports survive while new characterization is appended.
 #[derive(Debug)]
@@ -31,6 +32,54 @@ pub(super) struct Edit {
 /// Blank optional text remains absent rather than becoming a misleading empty specification.
 fn text(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Read-only summaries of the thermal and insulation reports, each followed by its source.
+/// Unknown conditions are named as unspecified rather than shown as a default.
+fn thermal_and_insulation_lines(material: &Material) -> Vec<String> {
+    let axis = |axis: Option<MeasurementAxis>| axis.map(|a| format!("{a:?}-axis")).unwrap_or_else(|| "axis unspecified".into());
+    let celsius = |milli_c: i64| milli_c as f64 / 1000.;
+    let mut lines = Vec::new();
+    for report in &material.thermal_conductivity {
+        let temperature = report.temperature_milli_c.map(|t| format!(" · at {} °C", celsius(t))).unwrap_or_default();
+        lines.push(format!(
+            "Thermal conductivity {} W/(m·K) · {}{temperature} · {:?}",
+            report.conductivity_mw_per_m_k as f64 / 1000.,
+            axis(report.axis),
+            report.basis
+        ));
+        lines.push(report.source.document.clone());
+    }
+    for report in &material.cte {
+        let region = match report.region {
+            Some(TgRegion::BelowTg) => " · below Tg",
+            Some(TgRegion::AboveTg) => " · above Tg",
+            None => "",
+        };
+        let range = match (report.from_milli_c, report.to_milli_c) {
+            (Some(from), Some(to)) => format!(" · {} to {} °C", celsius(from), celsius(to)),
+            _ => String::new(),
+        };
+        lines.push(format!("CTE {} ppm/K · {}{region}{range} · {:?}", report.cte_ppb_per_k as f64 / 1000., axis(report.axis), report.basis));
+        lines.push(report.source.document.clone());
+    }
+    for report in &material.dielectric_strength {
+        lines.push(format!(
+            "Dielectric strength {} kV at {} mm · {} · {:?}",
+            report.breakdown_v as f64 / 1000.,
+            report.specimen_thickness_nm as f64 / 1_000_000.,
+            axis(report.axis),
+            report.basis
+        ));
+        lines.push(report.source.document.clone());
+    }
+    for report in &material.cti {
+        let value = report.cti_v.map(|v| format!("{v} V")).unwrap_or_else(|| "value unspecified".into());
+        let group = report.material_group.map(|g| format!(" · group {}", g.name())).unwrap_or_default();
+        lines.push(format!("CTI {value}{group} · {:?}", report.basis));
+        lines.push(report.source.document.clone());
+    }
+    lines
 }
 
 /// Convert exact authored decimals to integer fixed-point units without rounding away digits.
@@ -313,6 +362,9 @@ impl super::Edit {
                             ));
                             ui.label(&report.source.document);
                         }
+                        for line in thermal_and_insulation_lines(material) {
+                            ui.label(line);
+                        }
                         if pcbcraft_chrome::controls::button(ui, "Add specification…").clicked() {
                             match Edit::new(material.clone(), true) {
                                 Ok(edit) => self.material_edit = Some(edit),
@@ -364,5 +416,39 @@ mod tests {
             assert!(decimal(invalid, 6).is_err(), "{invalid}");
         }
         assert_eq!(decimal("-40.125", 3).unwrap(), Some(-40125));
+    }
+
+    /// Thermal and insulation reports are listed with their units, conditions and sources, and a
+    /// revision made in the form keeps them.
+    #[test]
+    fn thermal_and_insulation_reports_are_listed_and_kept_by_revisions() {
+        let source = json!({"document":"Synthetic report"});
+        let mut value = serde_json::to_value(Material::new("Reported laminate".into()).unwrap()).unwrap();
+        value["thermal_conductivity"] = json!([{"conductivity_mw_per_m_k":1000,"axis":"z","basis":"typical","source":source}]);
+        value["cte"] = json!([{"cte_ppb_per_k":50000,"axis":"z","region":"below_tg","basis":"typical","source":source}]);
+        value["dielectric_strength"] = json!([{"breakdown_v":40000,"specimen_thickness_nm":1000000,"basis":"minimum","source":source}]);
+        value["cti"] = json!([{"material_group":"IIIa","basis":"minimum","source":source}]);
+        let material: Material = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            thermal_and_insulation_lines(&material),
+            [
+                "Thermal conductivity 1 W/(m·K) · Z-axis · Typical",
+                "Synthetic report",
+                "CTE 50 ppm/K · Z-axis · below Tg · Typical",
+                "Synthetic report",
+                "Dielectric strength 40 kV at 1 mm · axis unspecified · Minimum",
+                "Synthetic report",
+                "CTI value unspecified · group IIIa · Minimum",
+                "Synthetic report",
+            ]
+        );
+        let mut edit = Edit::new(material.clone(), true).unwrap();
+        edit.product = "Revised".into();
+        let revised = edit.value().unwrap();
+        assert_eq!(revised.revision, 2);
+        assert_eq!(
+            (&revised.thermal_conductivity, &revised.cte, &revised.dielectric_strength, &revised.cti),
+            (&material.thermal_conductivity, &material.cte, &material.dielectric_strength, &material.cti)
+        );
     }
 }
