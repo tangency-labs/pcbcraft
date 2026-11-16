@@ -790,7 +790,9 @@ not a manufacturing sign-off.
 **Manufacture → Fabrication → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
 files for each copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
-through-hole pads). Coordinates are in millimeters with Y up, as seen from the top. Mask
+through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
+measured from the board's placement origin: board zero unless an origin has been set
+with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Mask
 and paste openings match the pads exactly, leaving any expansion to the fabricator, and
 vias are tented. It needs a board setup and a closed Board Outline, says so otherwise,
 and never edits the project; the same board always produces the same archive. Run DRC
