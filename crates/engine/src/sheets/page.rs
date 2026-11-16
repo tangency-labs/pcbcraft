@@ -13,15 +13,20 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::template::{self, Frame, Template, TemplateRef};
 use super::*;
 use crate::schematic::{GRID_NM, MAX_CENTER_NM, MAX_PIN_OFFSET_NM, Point, Shape};
 
 /// Set a sheet's paper size, orientation and optional top-left corner as one undo step.
 pub const SET_PAGE: &str = "sheet.set_page";
+/// Choose a sheet's frame template, or none, as one undo step.
+pub const SET_TEMPLATE: &str = "sheet.set_template";
+/// List the sheet templates this app provides.
+pub const LIST_TEMPLATES: &str = "template.list";
 
 const NM_PER_MM: i64 = 1_000_000;
-/// How far inside the paper's edge its plain border runs, in nanometres. Templates replace this
-/// border with their own later.
+/// How far inside the paper's edge the plain border of a sheet without a template runs, in
+/// nanometres.
 pub const BORDER_INSET_NM: i64 = 5 * NM_PER_MM;
 /// Paper must stay inside the schematic coordinate range, like every pin.
 const LIMIT_NM: i64 = MAX_CENTER_NM + MAX_PIN_OFFSET_NM;
@@ -37,6 +42,12 @@ pub(crate) const AT: Param = Param {
     name: "at",
     summary: "The paper's top-left corner in nanometres; omitted keeps the current corner",
     kind: ParamKind::Point,
+};
+pub(crate) const TEMPLATE: Param = Param {
+    required: true,
+    name: "template",
+    summary: "The frame template as {library, name, revision} from template.list, or null for a plain border",
+    kind: ParamKind::SheetTemplate,
 };
 
 /// ISO A paper sizes, smallest first.
@@ -137,20 +148,22 @@ impl Orientation {
     }
 }
 
-/// One sheet's paper. Construct it with [`Page::new`], which checks that the paper stays inside
-/// the schematic coordinate range.
+/// One sheet's paper and the frame drawn on it. Construct it with [`Page::new`], which checks
+/// that the paper stays inside the schematic coordinate range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Page {
     paper: Paper,
     orientation: Orientation,
     at: Point,
+    /// The frame template; `None` draws a plain border.
+    template: Option<&'static Template>,
 }
 
 impl Page {
-    /// A page whose paper lies entirely inside the schematic coordinate range, or an error
-    /// naming the problem. `at` is the paper's top-left corner.
+    /// A page without a template whose paper lies entirely inside the schematic coordinate
+    /// range, or an error naming the problem. `at` is the paper's top-left corner.
     pub fn new(paper: Paper, orientation: Orientation, at: Point) -> Result<Self, String> {
-        let page = Self { paper, orientation, at };
+        let page = Self { paper, orientation, at, template: None };
         // Reject a corner beyond the range before adding the paper size, which could overflow.
         let in_range = |p: Point| [p.x_nm, p.y_nm].iter().all(|v| (-LIMIT_NM..=LIMIT_NM).contains(v));
         if !in_range(at) || !in_range(page.corners()[1]) {
@@ -159,15 +172,21 @@ impl Page {
         Ok(page)
     }
 
-    /// The paper given to new sheets: A4 landscape, centered on the origin and on the grid.
+    /// The paper given to new sheets: A4 landscape with the Default frame, centered on the origin
+    /// and on the grid.
     pub fn new_sheet() -> Self {
-        Self::centered(Paper::A4, Orientation::Landscape, Point { x_nm: 0, y_nm: 0 })
+        Self::centered(Paper::A4, Orientation::Landscape, Point { x_nm: 0, y_nm: 0 }).with_template(template::default_template())
+    }
+
+    /// The same paper with another frame template, or none.
+    pub fn with_template(self, template: Option<&'static Template>) -> Self {
+        Self { template, ..self }
     }
 
     /// Center `paper` on a point, keeping the top-left corner on the schematic grid. The center
     /// is clamped so the result always lies inside the coordinate range.
     fn centered(paper: Paper, orientation: Orientation, center: Point) -> Self {
-        let size = Self { paper, orientation, at: center }.size();
+        let size = Self { paper, orientation, at: center, template: None }.size();
         let corner = |center: i64, extent: i64| {
             let snapped = (center - extent / 2).div_euclid(GRID_NM) * GRID_NM;
             // Grid multiples at both ends keep the clamped corner on the grid too.
@@ -175,29 +194,36 @@ impl Page {
             let high = (LIMIT_NM - extent).div_euclid(GRID_NM) * GRID_NM;
             snapped.clamp(low, high)
         };
-        Self { paper, orientation, at: Point { x_nm: corner(center.x_nm, size.x_nm), y_nm: corner(center.y_nm, size.y_nm) } }
+        Self { paper, orientation, at: Point { x_nm: corner(center.x_nm, size.x_nm), y_nm: corner(center.y_nm, size.y_nm) }, template: None }
     }
 
-    /// The smallest paper that holds `bounds` (a drawing's top-left and bottom-right corners)
-    /// with a margin for the border, centered on the drawing. Landscape is preferred at each
-    /// size. A drawing larger than A0 gets A0 landscape, centered; an empty sheet gets
-    /// [`Page::new_sheet`].
+    /// The smallest paper with the Default frame that holds `bounds` (a drawing's top-left and
+    /// bottom-right corners) with a margin for the border, centered on the drawing and clear of
+    /// the title block. Landscape is preferred at each size. A drawing larger than A0 gets A0
+    /// landscape, centered; an empty sheet gets [`Page::new_sheet`].
     pub fn around(bounds: Option<[Point; 2]>) -> Self {
         let Some([min, max]) = bounds else { return Self::new_sheet() };
+        let frame = template::default_template();
         let center = Point { x_nm: min.x_nm + (max.x_nm - min.x_nm) / 2, y_nm: min.y_nm + (max.y_nm - min.y_nm) / 2 };
         // Check the placed page: near the range's edge, centering is clamped and can shift the
         // paper off a drawing that its size alone would hold.
+        let fits = |page: Self| {
+            let [low, high] = page.corners();
+            let holds = low.x_nm <= min.x_nm - ADOPT_MARGIN_NM
+                && low.y_nm <= min.y_nm - ADOPT_MARGIN_NM
+                && high.x_nm >= max.x_nm + ADOPT_MARGIN_NM
+                && high.y_nm >= max.y_nm + ADOPT_MARGIN_NM;
+            let clear = frame
+                .and_then(|frame| frame.items_bounds(page))
+                .is_none_or(|[a, b]| b.x_nm < min.x_nm || a.x_nm > max.x_nm || b.y_nm < min.y_nm || a.y_nm > max.y_nm);
+            holds && clear
+        };
         Paper::ALL
             .into_iter()
             .flat_map(|paper| Orientation::ALL.map(|orientation| Self::centered(paper, orientation, center)))
-            .find(|page| {
-                let [low, high] = page.corners();
-                low.x_nm <= min.x_nm - ADOPT_MARGIN_NM
-                    && low.y_nm <= min.y_nm - ADOPT_MARGIN_NM
-                    && high.x_nm >= max.x_nm + ADOPT_MARGIN_NM
-                    && high.y_nm >= max.y_nm + ADOPT_MARGIN_NM
-            })
+            .find(|&page| fits(page))
             .unwrap_or_else(|| Self::centered(Paper::A0, Orientation::Landscape, center))
+            .with_template(frame)
     }
 
     /// The ISO paper size.
@@ -230,6 +256,11 @@ impl Page {
         [self.at, Point { x_nm: self.at.x_nm + size.x_nm, y_nm: self.at.y_nm + size.y_nm }]
     }
 
+    /// The frame template, or `None` for a plain border.
+    pub fn template(self) -> Option<&'static Template> {
+        self.template
+    }
+
     /// Top-left and bottom-right corners of the plain border, [`BORDER_INSET_NM`] inside the
     /// paper's edge.
     pub fn border_corners(self) -> [Point; 2] {
@@ -238,9 +269,23 @@ impl Page {
         [Point { x_nm: min.x_nm + inset, y_nm: min.y_nm + inset }, Point { x_nm: max.x_nm - inset, y_nm: max.y_nm - inset }]
     }
 
+    /// What is drawn on the paper: the template's frame with its texts resolved by `resolve`,
+    /// or the plain border when there is no template.
+    pub fn frame(self, resolve: &dyn Fn(&str) -> crate::parameters::Resolved) -> Frame {
+        match self.template {
+            Some(template) => template.frame(self, resolve),
+            None => Frame { lines: template::edges(self.border_corners()).to_vec(), texts: Vec::new() },
+        }
+    }
+
     /// The JSON shape used by inspection and the sheet file.
     pub(crate) fn record(self) -> Record {
-        Record { paper: self.paper, orientation: self.orientation, at_nm: [self.at.x_nm, self.at.y_nm] }
+        Record {
+            paper: self.paper,
+            orientation: self.orientation,
+            at_nm: [self.at.x_nm, self.at.y_nm],
+            template: self.template.map(Template::reference),
+        }
     }
 
     /// Inspection output, matching the stored record.
@@ -250,20 +295,31 @@ impl Page {
 }
 
 /// The stored and inspected form of a [`Page`]; the field order is the file order.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Record {
     paper: Paper,
     orientation: Orientation,
     at_nm: [i64; 2],
+    /// Absent for a plain border; `null` is refused like other malformed values.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    template: Option<TemplateRef>,
+}
+
+/// Read a field that, when written, must hold a template address rather than `null`.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<TemplateRef>, D::Error> {
+    TemplateRef::deserialize(deserializer).map(Some)
 }
 
 impl TryFrom<Record> for Page {
     type Error = String;
 
-    /// Validate decoded paper with the same range check as the command.
+    /// Validate decoded paper with the same range check as the command, and refuse a template
+    /// this app does not provide rather than drawing the sheet without it.
     fn try_from(record: Record) -> Result<Self, String> {
-        Page::new(record.paper, record.orientation, Point { x_nm: record.at_nm[0], y_nm: record.at_nm[1] })
+        let template =
+            record.template.map(|reference| reference.resolve().ok_or_else(|| format!("unknown sheet template {reference}"))).transpose()?;
+        Ok(Page::new(record.paper, record.orientation, Point { x_nm: record.at_nm[0], y_nm: record.at_nm[1] })?.with_template(template))
     }
 }
 
@@ -276,6 +332,13 @@ impl SchematicSheet {
 }
 
 impl Project {
+    /// What is drawn on the current sheet's paper, with title-block references resolved for
+    /// this sheet. `None` for a sheet without paper.
+    pub fn frame(&self) -> Option<Frame> {
+        let target = self.sheet_target();
+        Some(self.page()?.frame(&|text| self.resolve_text(Some(target), text)))
+    }
+
     /// The top-left and bottom-right corners of everything drawn on the current sheet: symbol
     /// pins and strokes after their pose, wire routes, net and hierarchical labels and sheet
     /// symbols. Text that extends past its anchor is not measured. `None` for an empty sheet.
@@ -356,7 +419,7 @@ impl Session {
             Some(at) => serde_json::from_value::<Point>(at.clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?,
             None => current.at(),
         };
-        let page = Page::new(paper, orientation, at).map_err(CommandError::InvalidParams)?;
+        let page = Page::new(paper, orientation, at).map_err(CommandError::InvalidParams)?.with_template(current.template());
         if project.sheets[index].page == Some(page) {
             return Ok(());
         }
@@ -365,6 +428,37 @@ impl Session {
         self.change(project)?;
         Ok(())
     }
+
+    /// Choose one sheet's frame template, or none, as one undo step. The paper stays as it is.
+    /// Choosing the current template changes nothing; an unknown template is refused.
+    pub(crate) fn set_template(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let mut project = self.open_project()?.clone();
+        let target = project.resolve_sheet(params["sheet"].as_str())?;
+        let index =
+            project.sheets().position(|sheet| sheet.target == target).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?;
+        let template = match &params["template"] {
+            Value::Null => None,
+            value => {
+                let reference: TemplateRef = serde_json::from_value(value.clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
+                Some(reference.resolve().ok_or_else(|| CommandError::InvalidParams(format!("unknown sheet template {reference}")))?)
+            }
+        };
+        let current = project.sheets[index].page.unwrap_or_else(Page::new_sheet);
+        let page = current.with_template(template);
+        if project.sheets[index].page == Some(page) {
+            return Ok(());
+        }
+        Arc::make_mut(&mut project.sheets)[index].page = Some(page);
+        project.sheet_index = 0;
+        self.change(project)?;
+        Ok(())
+    }
+}
+
+/// The `template.list` result: every template a sheet can use.
+pub(crate) fn list_templates() -> Value {
+    json!({"templates": template::bundled().iter().map(Template::summary).collect::<Vec<_>>()})
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::ops::Deref;
 
 pub mod page;
+pub mod template;
 
 /// Bound metadata and navigation as well as per-sheet geometry.
 pub const MAX_SHEETS: usize = 64;

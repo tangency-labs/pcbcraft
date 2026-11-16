@@ -97,7 +97,10 @@ fn paper_is_stored_per_sheet_and_round_trips() {
     let changed = encode_documents(s.snapshot().unwrap()).unwrap();
     let paths: Vec<_> = documents.keys().filter(|path| documents.get(*path) != changed.get(*path)).collect();
     assert_eq!(paths, vec![&format!("sheets/{}.json", power.id())]);
-    assert_eq!(stored_page(&changed, power.id()), json!({"paper":"a3","orientation":"portrait","at_nm":[-148_590_000,-105_410_000]}));
+    assert_eq!(
+        stored_page(&changed, power.id()),
+        json!({"paper":"a3","orientation":"portrait","at_nm":[-148_590_000,-105_410_000],"template":{"library":"basic-frames","name":"default","revision":1}})
+    );
 
     let path = format!("sheets/{}.json", power.id());
     let edits: [fn(&mut Value); 6] = [
@@ -174,6 +177,6 @@ fn adopted_paper_falls_back_to_a0_and_stays_in_range() {
     }
     let near = Point { x_nm: 900_000_000, y_nm: 0 };
     assert_eq!(Page::around(Some([near, near])).paper(), Paper::A4, "a small drawing near the edge still gets A4");
-    let tall = [Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 100_000_000, y_nm: 250_000_000 }];
+    let tall = [Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 100_000_000, y_nm: 200_000_000 }];
     assert_eq!(Page::around(Some(tall)).orientation(), Orientation::Portrait);
 }

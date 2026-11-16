@@ -1,10 +1,10 @@
 # Sheet frames, parameters and templates
 
-**Status: proposal, partly implemented.** PR 1 (paper on the sheet) and PR 2
-(parameters) are implemented; their storage contracts are in
-[native project storage](native-project-storage.md#sheet-paper-records) and
-[parameter records](native-project-storage.md#parameter-records). PRs 3–4 are
-proposals. Design agreed November 15, 2026 for
+**Status: proposal, partly implemented.** PR 1 (paper on the sheet), PR 2
+(parameters) and PR 3 (bundled templates) are implemented; their storage
+contracts are in [native project storage](native-project-storage.md#sheet-paper-records)
+and [parameter records](native-project-storage.md#parameter-records). PR 4 is a
+proposal. Design agreed November 15, 2026 for
 [#46](https://github.com/tangency-labs/pcbcraft/issues/46). Interactive
 mockup (private):
 <https://claude.ai/code/artifact/7119e9c8-def3-4fb0-a498-3e2a431ef947>.
@@ -16,20 +16,26 @@ zone markers and a title block. The title block shows parameter values such as
 ## Current state
 
 - Sheets have paper (PR 1): a size, orientation and top-left corner, stored as
-  sheet/9 and drawn with a plain border 5 mm inside the edge. The schematic range
-  stays ±1 m around the origin (`MAX_CENTER_NM` in
+  sheet/9. The schematic range stays ±1 m around the origin (`MAX_CENTER_NM` in
   `crates/engine/src/schematic.rs`), and paper must fit inside it.
-- The Browser's sheet menu has a **Paper** submenu; there is no Page setup
-  dialog or frame chooser yet.
-- The paper is drawn in the theme's schematic palette, and the canvas around it
-  stays editable. **Appearance → Show grid outside paper** chooses whether the
-  grid continues there.
+- Sheets have a frame (PR 3): the page record names a template by library, name
+  and revision, or none for a plain border 5 mm inside the edge. New sheets and
+  sheets adopted on open get the Default frame. The engine
+  (`crates/engine/src/sheets/template.rs`) turns a template into lines and
+  resolved texts for a sheet's paper; `crates/chrome/src/paper.rs` draws them.
+  Only bundled templates exist: `basic-frames/default` r1, in
+  `libraries/basic-frames/templates/`. Projects don't store template copies yet.
+- The Browser's sheet menu has **Paper** and **Frame** submenus; there is no
+  Page setup dialog.
+- The paper and frame are drawn in the theme's schematic palette, and the canvas
+  around the paper stays editable. **Appearance → Show grid outside paper**
+  chooses whether the grid continues there.
 - The schematic Y axis points down (`canvas_camera.rs`, `screen`). Coline's Y
   axis points up from the paper's bottom-left corner, so ported geometry must be
   flipped.
 - Projects and sheets have parameters (PR 2), edited in Properties when
-  nothing is selected or with the `parameter.*` commands. No drawn text resolves
-  references yet; title blocks (PR 3) are the first consumer. Components have
+  nothing is selected or with the `parameter.*` commands. Title blocks are the
+  first drawn text that resolves references. Components have
   named fields (`schematic/fields.rs`) and library parts have
   `fixed_parameters`, but those are unrelated.
 
@@ -39,7 +45,10 @@ zone markers and a title block. The title block shows parameter values such as
 | --- | --- |
 | Template per size | One template fits every paper size. Template items are anchored to a paper corner. Coline uses one template per size; we don't. |
 | Default paper | Every sheet has paper. New sheets start on A4 landscape with the Default frame. |
-| Existing sheets | On open, a sheet without paper gets the smallest A size whose placed paper holds its drawing and margin, falling back to A0 landscape. Paper is placed around the drawing, with its top-left corner snapped to the grid and clamped to the schematic coordinate range. Near those limits it may not be centered; a size is chosen only if the clamped paper still holds the drawing, so drawing extends outside the paper only with the A0 fallback. Nothing moves. Like the bundled-library migration, adoption happens in memory without an undo step; the next save writes paper to older sheet files. |
+| No template | A page record without `template` has a plain border; the Default frame is always stored explicitly. |
+| Template storage | Until template editing (PR 4), sheets reference bundled templates only and projects store no template copies. An unknown reference is refused on open. |
+| Frame chooser | A **Frame** submenu (None, Default) beside **Paper** in the Browser's sheet menu. |
+| Existing sheets | On open, a sheet without paper gets the Default frame and the smallest A size whose placed paper holds its drawing and margin, with the title block covering none of the drawing, falling back to A0 landscape. Paper is placed around the drawing, with its top-left corner snapped to the grid and clamped to the schematic coordinate range. Near those limits it may not be centered; a size is chosen only if the clamped paper still holds the drawing, so drawing extends outside the paper only with the A0 fallback. Nothing moves. Like the bundled-library migration, adoption happens in memory without an undo step; the next save writes paper to older sheet files. |
 | Parameter syntax | Coline's `@scope.Name`, ported as a baseline. |
 | Paper colour | Uniform by default: paper and surround use the same theme-following canvas colour, with no paper shadow. Appearance preferences offer Shaded paper or a Custom sheet colour, plus a canvas colour. Overrides are opaque and remembered separately for light and dark themes; Use theme clears an override. Symbols and wires retain the theme palette. Custom symbol colours and print styling remain deferred. |
 | Canvas | The paper outline marks the default export area; it is not an editing boundary. Parts can be placed and moved outside it, for example while rearranging circuits. The canvas around the paper keeps the theme's colour wherever the drawing lies. |
@@ -55,8 +64,11 @@ zone markers and a title block. The title block shows parameter values such as
 
 The Default template follows Coline: a border 5 mm inside the paper (a zone
 band takes it to 10 mm), and a 120 × 28 mm title block in the bottom-right
-corner. The block has four 7 mm rows, and a split 70 mm from its left edge. It
-shows Title, Project, Sheet, Company, Page, Drawn by, Rev and Date.
+corner of the inner border. The block has four 7 mm rows, and a split 70 mm from
+its left edge. It shows Title, Project, Sheet, Company, Page, Drawn by, Rev and
+Date. Each side of the band gets the nearest whole number of equal zones about
+50 mm long, so A4 landscape has 6 columns and 4 rows. Rows skip I and O, as in
+ISO 5457. Texts smaller than 3 points on screen are not drawn.
 
 ## Parameters
 
@@ -91,8 +103,9 @@ the value, and **New** adds an empty parameter by name.
 
 ## Storage sketch
 
-The `page` record without `template` and both `parameters` objects are final as
-of sheet/9 and project/22; the template parts are not.
+The `page` record, including the `template` reference, and both `parameters`
+objects are final as of sheet/9 and project/22. The template document schema is
+final for bundled templates; project template copies are still a sketch.
 Coordinates are in nanometres, like the rest of the format.
 
 ```jsonc
@@ -114,22 +127,34 @@ Coordinates are in nanometres, like the rest of the format.
 // project.json
 "parameters": { "Revision": "B", "Date": "2026-11-15", "Company": "", "DrawnBy": "" }
 
-// library/templates/basic-frames/default.r1.json
+// libraries/basic-frames/templates/default.r1.json (bundled; abridged)
 {
-  "schema": "pcbcraft.sheet-template/1",
-  "border": { "inset_nm": 5000000, "zones": { "pitch_nm": 50000000 } },
+  "schema": "pcbcraft-sheet-template/1",
+  "library": "basic-frames",
+  "name": "default",
+  "revision": 1,
+  "title": "Default",
+  "description": "Border with zone markers and a title block ...",
+  "border": {"inset_nm": 5000000, "zones": {"band_nm": 5000000, "pitch_nm": 50000000, "size_nm": 2500000}},
   "items": [
-    { "kind": "rect", "anchor": "bottom_right",
-      "at_nm": [-120000000, -28000000], "size_nm": [120000000, 28000000] },
-    { "kind": "text", "anchor": "bottom_right",
-      "at_nm": [-118000000, -24500000], "height_nm": 2500000, "text": "@sheet.Title" }
+    {"kind": "rect", "anchor": "bottom_right", "at_nm": [-130000000, -38000000], "size_nm": [120000000, 28000000]},
+    {"kind": "line", "anchor": "bottom_right", "from_nm": [-130000000, -31000000], "to_nm": [-10000000, -31000000]},
+    {"kind": "text", "anchor": "bottom_right", "at_nm": [-128000000, -34500000], "size_nm": 3500000,
+     "align": "left", "style": "value", "text": "@sheet.Title"}
   ]
 }
 ```
 
-Templates are a third native library kind next to symbols and footprints, and
-are pinned by revision. A bundled `basic-frames` library ships the Default
-template. Schema bumps follow [native project storage](native-project-storage.md).
+Item offsets use the sheet's axes from the anchor's paper corner, so bottom
+anchors have negative Y. `size_nm` on a text is measured like component field
+text; `style` is `label` or `value`; `align` is `left`, `center` or `right`, with
+the anchor at mid height. Unknown fields are refused.
+
+Templates are pinned by revision. Making them a third native library kind next to
+symbols and footprints, with copies stored in the project under
+`library/templates/<library>/<name>.r<revision>.json`, comes with template
+editing (PR 4), when a template's content can first differ from the bundled one.
+Schema bumps follow [native project storage](native-project-storage.md).
 
 ## Pull requests
 
@@ -141,11 +166,12 @@ template. Schema bumps follow [native project storage](native-project-storage.md
 2. **Parameters.** Port of Coline's parameter model and resolver for the
    project, sheet and instance scopes, with the `parameter.*` commands, the
    storage fields and a Parameters table in Properties.
-3. **Templates as library items.** Template documents with pinned revisions,
-   the bundled `basic-frames` library ported from Coline's Default generator,
-   zone markers and a frame chooser in Page setup.
-4. **Template editing and output.** Editing that reuses the symbol editor's
-   drawing tools, logo images, and the same frame in schematic PDF export
+3. **Templates (bundled).** Template documents with pinned revisions, the
+   bundled `basic-frames` Default template ported from Coline's generator, zone
+   markers, `sheet.set_template` and `template.list`, and a Frame submenu.
+4. **Template editing and output.** Project template copies as a native library
+   kind, editing that reuses the symbol editor's drawing tools, logo images, a
+   Page setup dialog if needed, and the same frame in schematic PDF export
    ([#87](https://github.com/tangency-labs/pcbcraft/issues/87)).
 
 Free text, lines and rectangles on sheets, the rest of #46, can be ported from

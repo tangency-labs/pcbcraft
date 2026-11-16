@@ -121,6 +121,9 @@ single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`
 `sheet.set_page` sets a sheet's `paper` (`a4` to `a0`) and `orientation`
 (`landscape` or `portrait`), keeping the paper's top-left corner unless `at` moves
 it; each inspected sheet reports its `page`.
+`sheet.set_template` gives a sheet a frame template (`template`
+`{library, name, revision}` from `template.list`) or a plain border (`template:
+null`); the paper stays put. `template.list` needs no open project.
 `parameter.set` sets, renames or removes (`value: null`) a project or sheet
 parameter, with `scope` `project` or `sheet`; a `rename` keeps the value unless
 `value` gives a new one, and refuses `value: null`; `parameter.list` returns a list's own

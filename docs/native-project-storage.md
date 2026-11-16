@@ -84,14 +84,14 @@ journal validation remain byte-preserving; hosts call the shared
 
 Every sheet has paper (see [Sheet paper records](#sheet-paper-records)). A sheet
 saved before sheet/9 has none, so opening gives it the smallest ISO A paper
-selected to fit its drawing with a 20 mm margin. Landscape is tried before
-portrait at each size; a drawing larger than A0 gets A0 landscape. Paper is
-centered around the drawing, with its top-left corner snapped to the 1.27 mm
-grid and clamped to the schematic coordinate range. Near those limits it may
-not be centered; a size is chosen only if the clamped paper still holds the
-drawing and margin. Drawing extends outside the paper only with the A0
-fallback. An empty sheet gets the new-sheet paper. Nothing
-on the sheet moves.
+selected to fit its drawing with a 20 mm margin, and the Default frame.
+Landscape is tried before portrait at each size; a drawing larger than A0 gets
+A0 landscape. Paper is centered around the drawing, with its top-left corner
+snapped to the 1.27 mm grid and clamped to the schematic coordinate range. Near
+those limits it may not be centered; a size is chosen only if the clamped paper
+still holds the drawing and margin and the frame's title block covers none of
+the drawing. Drawing extends outside the paper only with the A0 fallback. An
+empty sheet gets the new-sheet paper. Nothing on the sheet moves.
 
 Like the library migration, this happens in memory when the desktop app, browser
 or headless storage opens a project. It adds no undo step and doesn't mark the
@@ -385,17 +385,31 @@ with paper, which is every sheet created or opened by this version:
 
 `paper` is `a4`, `a3`, `a2`, `a1` or `a0`; `orientation` is `landscape` or
 `portrait`; `at_nm` is the paper's top-left corner in sheet nanometres (Y points
-down). The whole paper must lie inside the ±1 m schematic range. Unknown fields,
-null and other sizes are rejected, and older versions reject `page`. Sheet/9 is a
+down). The whole paper must lie inside the ±1 m schematic range. An optional
+`template` names the sheet's frame:
+
+```json
+"page": {"paper":"a4","orientation":"landscape","at_nm":[-148590000,-105410000],"template":{"library":"basic-frames","name":"default","revision":1}}
+```
+
+New sheets and sheets given paper on open store the Default frame,
+`basic-frames/default` revision 1. Without `template` the sheet has a plain border
+5 mm inside the paper. A template revision never changes once released, so a
+sheet keeps its frame across app updates. Only the app's bundled templates exist
+so far; a sheet naming any other template is refused rather than opened without
+its frame. Templates have no files in the project folder yet.
+Unknown fields, null (for `page` or `template`) and other sizes are rejected, and
+older versions reject `page`. Sheet/9 is a
 superset of sheet/8: it always carries the three hierarchy/named arrays, and its
 `generated_legs` and `no_connect_ends` arrays are optional but nonempty when
 present, with the sheet/7 and sheet/8 rules. Changing one sheet's paper changes
 only that sheet's document. The diagnostic single-file encoding refuses paper.
 
 `sheet.set_page` takes `sheet`, `paper`, `orientation` and an optional `at`
-point. Without `at` the paper's top-left corner stays where it is. It is one
-revision-checked project undo step, and setting the current paper changes
-nothing. Inspection reports each sheet's `page` in the same shape.
+point. Without `at` the paper's top-left corner stays where it is, and the frame
+is kept. `sheet.set_template` takes `sheet` and a `template` address or `null`.
+Each is one revision-checked project undo step, and setting the current value
+changes nothing. Inspection reports each sheet's `page` in the same shape.
 
 ### Parameter records
 

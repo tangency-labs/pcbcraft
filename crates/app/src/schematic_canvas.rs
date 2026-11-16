@@ -443,7 +443,7 @@ pub(crate) fn show(
     let overlap_index = overlap_cache.get(project, revision, &painter, camera.unit_step());
     let screen = |point| camera.screen(point, rect);
     let unit_step = camera.unit_step();
-    painter.extend(backdrop(project, camera, rect, rect, display));
+    painter.extend(backdrop(&painter, project, camera, rect, rect, Rect::EVERYTHING, display));
     let mut whole_wires = selected.wires.clone();
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
@@ -1278,16 +1278,24 @@ pub(crate) struct Display {
 }
 
 /// The sheet's backdrop over `area` of a canvas whose viewport is `canvas`: the paper with its
-/// border, or the grid everywhere on a sheet without paper. The paper marks the export area, not
-/// an editing boundary, so the canvas around it keeps the theme's colour wherever the drawing lies.
-pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: Rect, display: Display) -> Vec<egui::Shape> {
+/// frame, or the grid everywhere on a sheet without paper. The paper marks the export area, not
+/// an editing boundary, so the canvas around it keeps the theme's colour wherever the drawing
+/// lies. `painter` lays out the frame's texts, which are kept only within `text_area`, as for
+/// [`pcbcraft_chrome::paper::backdrop`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn backdrop(
+    painter: &Painter,
+    project: &Project,
+    camera: &Camera,
+    canvas: Rect,
+    area: Rect,
+    text_area: Rect,
+    display: Display,
+) -> Vec<egui::Shape> {
     let screen = |point| camera.screen(point, canvas);
-    let paper = project.page().map(|page| {
-        let ([min, max], [inner_min, inner_max]) = (page.corners(), page.border_corners());
-        pcbcraft_chrome::paper::Paper {
-            sheet: Rect::from_two_pos(screen(min), screen(max)),
-            border: Rect::from_two_pos(screen(inner_min), screen(inner_max)),
-        }
+    let paper = project.page().zip(project.frame()).map(|(page, frame)| {
+        let [min, max] = page.corners();
+        pcbcraft_chrome::paper::Paper { sheet: Rect::from_two_pos(screen(min), screen(max)), frame: screen_frame(&frame, screen, camera.unit_step()) }
     });
     let grid = pcbcraft_chrome::paper::Grid {
         origin: screen(Point { x_nm: 0, y_nm: 0 }),
@@ -1295,7 +1303,36 @@ pub(crate) fn backdrop(project: &Project, camera: &Camera, canvas: Rect, area: R
         opacity: display.opacity,
         outside_paper: display.outside_paper,
     };
-    pcbcraft_chrome::paper::backdrop(area, paper, grid, display.appearance)
+    pcbcraft_chrome::paper::backdrop(painter, area, text_area, paper.as_ref(), grid, display.appearance)
+}
+
+/// A sheet frame in screen coordinates. `screen` maps sheet points and `step` is the size of one
+/// schematic grid unit in points, which scales the texts like component fields.
+pub(crate) fn screen_frame(
+    frame: &pcbcraft_engine::sheets::template::Frame,
+    screen: impl Fn(Point) -> Pos2,
+    step: f32,
+) -> pcbcraft_chrome::paper::Frame {
+    use pcbcraft_engine::sheets::template::{Align, TextStyle};
+    pcbcraft_chrome::paper::Frame {
+        lines: frame.lines.iter().map(|[a, b]| [screen(*a), screen(*b)]).collect(),
+        texts: frame
+            .texts
+            .iter()
+            .map(|text| pcbcraft_chrome::paper::FrameText {
+                at: screen(text.at),
+                size: step * text.size_nm as f32 / GRID,
+                align: match text.align {
+                    Align::Left => egui::Align::Min,
+                    Align::Center => egui::Align::Center,
+                    Align::Right => egui::Align::Max,
+                },
+                label: text.style == TextStyle::Label,
+                text: text.text.clone(),
+                unknown: text.unknown.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

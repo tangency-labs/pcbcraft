@@ -285,6 +285,9 @@ pub struct Resolved {
     /// The references that named nothing, nested too deeply or were reached after the expansion
     /// budget ran out, as typed, each once. They stay in the text as typed.
     pub unknown: Vec<String>,
+    /// Where each unresolved reference sits in [`Resolved::text`], as byte ranges in text order,
+    /// so drawings can mark them.
+    pub unknown_spans: Vec<std::ops::Range<usize>>,
 }
 
 /// Where a parameter came from, for listings.
@@ -508,7 +511,9 @@ impl Project {
                             self.resolve_into(sheet, &value, after + pending, depth + 1, budget, out);
                         }
                         None => {
+                            let start = out.text.len();
                             out.text.push_str(raw);
+                            out.unknown_spans.push(start..out.text.len());
                             if !out.unknown.iter().any(|u| u == raw) {
                                 out.unknown.push(raw.to_owned());
                             }

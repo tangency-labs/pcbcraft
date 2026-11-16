@@ -14,7 +14,10 @@ thread_local! {
     static DARK: Cell<bool> = const { Cell::new(true) };
 }
 
-/// Width of the plain border drawn inside the paper, in logical points.
+/// Unresolved parameter references on the paper, such as a misspelt `@sheet.Titel`, are drawn
+/// as typed in this orange, which reads on the paper in either theme.
+pub const SCHEMATIC_UNRESOLVED: Color32 = Color32::from_rgb(214, 108, 16);
+/// Width of the frame lines drawn on the paper, in logical points.
 pub const SCHEMATIC_PAPER_BORDER: f32 = 1.0;
 /// Offset and opacity of the soft shadow that lifts the paper off the canvas.
 pub const SCHEMATIC_PAPER_SHADOW: egui::Vec2 = egui::vec2(2.0, 3.0);
@@ -491,6 +494,9 @@ mod tests {
                 assert!(contrast(t.canvas_ink, surface) >= 3.0);
                 assert!(contrast(t.schematic_highlight, surface) >= 4.5);
             }
+            // Frame labels and unresolved references stay readable on the paper.
+            assert!(contrast(t.text_dim, t.schematic_paper) >= 4.5);
+            assert!(contrast(SCHEMATIC_UNRESOLVED, t.schematic_paper) >= 3.0);
             assert_ne!(t.schematic_paper, t.canvas, "optional shaded paper stays distinct");
             assert!(contrast(t.error, t.panel) >= 4.5);
         }

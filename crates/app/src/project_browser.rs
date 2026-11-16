@@ -14,6 +14,7 @@ use pcbcraft_chrome::{
     workspace::{self, ToolIcon, TreeIcon, TreeRow},
 };
 use pcbcraft_engine::sheets::page::{Orientation, Page, Paper};
+use pcbcraft_engine::sheets::template::{self, TemplateRef};
 use pcbcraft_engine::{
     Project, Session,
     schematic::{Point, Terminal},
@@ -70,6 +71,11 @@ pub(crate) enum Action {
         paper: Paper,
         orientation: Orientation,
     },
+    /// Choose a sheet's frame template, or `None` for a plain border, from its context menu.
+    SetTemplate {
+        sheet: SheetTarget,
+        template: Option<TemplateRef>,
+    },
     UpdatePcb,
 }
 
@@ -81,7 +87,7 @@ impl Action {
             Self::OpenDocument(DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_)) => Some("Open in PCB layout"),
             Self::Schematic { .. } => Some("Show in Schematic"),
             Self::Footprint { .. } => Some("Show in PCB layout"),
-            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::UpdatePcb => None,
+            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
         }
     }
 
@@ -91,7 +97,7 @@ impl Action {
             Self::OpenDocument(target) => Some(*target),
             Self::Schematic { sheet, .. } => Some(DocumentTarget::Sheet(*sheet)),
             Self::Footprint { board, .. } => Some(DocumentTarget::Board(*board)),
-            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::UpdatePcb => None,
+            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
         }
     }
 }
@@ -485,6 +491,22 @@ impl Tree<'_> {
         });
     }
 
+    /// A Frame submenu offering a plain border and every bundled template, with the sheet's
+    /// current choice checked. Picking a row asks the host to run `sheet.set_template`.
+    fn frame_menu(&mut self, ui: &mut Ui, sheet: SheetTarget, page: Page) {
+        MenuItem::new("Frame").submenu(ui, |ui| {
+            if MenuItem::new("None").choice(page.template().is_none()).show(ui) {
+                self.picked = Some(Action::SetTemplate { sheet, template: None });
+            }
+            for frame in template::bundled() {
+                let current = page.template().is_some_and(|current| std::ptr::eq(current, frame));
+                if MenuItem::new(frame.title()).choice(current).show(ui) {
+                    self.picked = Some(Action::SetTemplate { sheet, template: Some(frame.reference()) });
+                }
+            }
+        });
+    }
+
     /// A single click may navigate sheets or boards within the current workspace, never across it.
     fn same_workspace(&self, action: &Action) -> bool {
         matches!(
@@ -556,6 +578,7 @@ impl Tree<'_> {
                     }
                     if let Some(page) = self.sheets.iter().find(|row| row.target == sheet).and_then(|row| row.page) {
                         self.paper_menu(ui, sheet, page);
+                        self.frame_menu(ui, sheet, page);
                     }
                 }
             });
