@@ -202,7 +202,9 @@ Command versions are not saved in projects.
 
 [`docs/schemas/commands-v1.json`](schemas/commands-v1.json) records each
 command's version and a SHA-256 digest of its description with object keys
-sorted, leaving out `version`, `title`, `summary` and `description`. The engine
+sorted, leaving out `version` and the `title`, `summary` and `description` of
+the command and its schemas (values of `const`, `default`, `enum` and
+`examples` are kept whole). The engine
 and app tests fail when a described parameter schema changes while its version
 stays, when a version falls, or when a version rises without `CATALOG_VERSION`
 in `crates/engine/src/command_versions.rs`. To change a command's contract,

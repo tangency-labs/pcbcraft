@@ -31,34 +31,59 @@ pub fn version(id: &str) -> u32 {
 
 /// The digest of a described command's contract: hex SHA-256 of its JSON with every object's
 /// keys sorted and without its `version` or the prose (`title`, `summary`, `description`) of the
-/// command and its parameter schemas. It changes exactly when the id, scope or parameter
-/// schema does.
+/// command and its parameter schemas. Data values in a schema (`const`, `default`, `enum`,
+/// `examples`) are kept whole. It changes exactly when the id, scope or parameter schema does.
 pub fn contract_digest(description: &Value) -> String {
     let mut unversioned = description.clone();
     if let Some(object) = unversioned.as_object_mut() {
         object.remove("version");
     }
-    let digest = Sha256::digest(contract(&unversioned, false).to_string().as_bytes());
+    let digest = Sha256::digest(contract(&unversioned, Level::Schema).to_string().as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Schema keywords whose object keys are parameter or definition names, not keywords.
 const NAMED_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "definitions"];
 
+/// Schema keywords whose values are data (allowed, default or sample values), not schemas.
+const DATA_VALUES: &[&str] = &["const", "default", "enum", "examples"];
+
+/// What a JSON value is within a described command.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// The command or a schema: its prose keys are dropped.
+    Schema,
+    /// A map from parameter or definition names to schemas: every key is kept.
+    Names,
+    /// A data value inside a schema: kept whole, even a key called `title`.
+    Data,
+}
+
 /// Drop prose and rebuild objects with sorted keys whatever map order
-/// `serde_json` was built with. Inside a `named` map every key is kept: a parameter may itself
-/// be called `title` or `description`.
-fn contract(value: &Value, named: bool) -> Value {
+/// `serde_json` was built with. Only schema objects lose their prose: a parameter may itself
+/// be called `title` or `description`, and a default value may be an object with such a key.
+fn contract(value: &Value, level: Level) -> Value {
     match value {
         Value::Object(object) => {
             let sorted: BTreeMap<&String, Value> = object
                 .iter()
-                .filter(|(key, _)| named || !matches!(key.as_str(), "title" | "summary" | "description"))
-                .map(|(key, value)| (key, contract(value, !named && NAMED_MAPS.contains(&key.as_str()))))
+                .filter(|(key, _)| level != Level::Schema || !matches!(key.as_str(), "title" | "summary" | "description"))
+                .map(|(key, value)| {
+                    let inner = match level {
+                        Level::Schema if NAMED_MAPS.contains(&key.as_str()) => Level::Names,
+                        Level::Schema if DATA_VALUES.contains(&key.as_str()) => Level::Data,
+                        Level::Schema | Level::Names => Level::Schema,
+                        Level::Data => Level::Data,
+                    };
+                    (key, contract(value, inner))
+                })
                 .collect();
             Value::Object(sorted.into_iter().map(|(key, value)| (key.clone(), value)).collect::<Map<String, Value>>())
         }
-        Value::Array(items) => Value::Array(items.iter().map(|item| contract(item, false)).collect()),
+        Value::Array(items) => {
+            let inner = if level == Level::Data { Level::Data } else { Level::Schema };
+            Value::Array(items.iter().map(|item| contract(item, inner)).collect())
+        }
         other => other.clone(),
     }
 }

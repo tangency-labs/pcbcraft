@@ -101,7 +101,8 @@ fn added_and_removed_commands_only_refresh_the_lock() {
     assert_eq!(contract_digest(&without_version), contract_digest(&removed));
 }
 
-/// Reworded prose keeps the contract; a parameter that happens to be called `title` is part of it.
+/// Reworded prose keeps the contract; a parameter that happens to be called `title`, and a data
+/// value with such a key, are part of it.
 #[test]
 fn prose_is_not_part_of_the_contract() {
     let original = crate::command(crate::SET_SYMBOL_FIELDS).unwrap().to_json();
@@ -122,4 +123,19 @@ fn prose_is_not_part_of_the_contract() {
     let mut required = original.clone();
     required["params"]["required"].as_array_mut().unwrap().push(json!("metadata"));
     assert_ne!(contract_digest(&required), contract_digest(&original));
+
+    for keyword in ["default", "const"] {
+        let mut first = named.clone();
+        first["params"]["properties"]["title"] = json!({"type": "object", keyword: {"title": "a"}});
+        let mut second = first.clone();
+        second["params"]["properties"]["title"][keyword] = json!({"title": "b"});
+        assert_ne!(contract_digest(&second), contract_digest(&first), "a changed {keyword} value kept the contract");
+    }
+    for keyword in ["enum", "examples"] {
+        let mut first = named.clone();
+        first["params"]["properties"]["title"] = json!({"type": "object", keyword: [{"description": "a"}]});
+        let mut second = first.clone();
+        second["params"]["properties"]["title"][keyword] = json!([{"description": "b"}]);
+        assert_ne!(contract_digest(&second), contract_digest(&first), "a changed {keyword} member kept the contract");
+    }
 }
