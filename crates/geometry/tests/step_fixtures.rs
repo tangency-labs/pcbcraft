@@ -51,12 +51,12 @@ fn every_fixture_round_trips_within_one_micrometre() {
     let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".step"))
+        .filter(|name| name != "expected.json")
         .collect();
     on_disk.sort();
     let mut listed: Vec<String> = fixtures.iter().map(|f| f.file.clone()).collect();
     listed.sort();
-    assert_eq!(on_disk, listed, "every STEP file in the folder has an expected box, and only those");
+    assert_eq!(on_disk, listed, "every file in the folder but expected.json has an expected box, and only those");
 
     for fixture in &fixtures {
         let name = &fixture.file;
@@ -117,5 +117,26 @@ fn an_assembly_that_contains_itself_is_model_unreadable() {
     let cycle = text.replacen("'first','',#174,#162,$", "'first','',#162,#174,$", 1);
     assert_ne!(cycle, text);
     let error = read_step(cycle.as_bytes()).unwrap_err();
+    assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+}
+
+/// `assembly.step` with the part placed `x_mm` along x instead of 45 mm.
+fn assembly_with_part_at(x_mm: &str) -> Vec<u8> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step");
+    let text = std::fs::read_to_string(dir.join("assembly.step")).unwrap();
+    let moved = text.replacen("#385=CARTESIAN_POINT('',(45.,30.,1.6));", &format!("#385=CARTESIAN_POINT('',({x_mm},30.,1.6));"), 1);
+    assert_ne!(moved, text);
+    moved.into_bytes()
+}
+
+#[test]
+fn a_placement_one_kilometre_out_reads_and_one_step_further_is_model_unreadable() {
+    // 1,000,000 mm is MAX_LENGTH_NM exactly; the placement is checked, not the box, which the
+    // part's own size takes past the limit.
+    let read = read_step(&assembly_with_part_at("1000000.")).unwrap();
+    let xs: Vec<i64> = read.placements.iter().map(|p| p.transform.translation_nm[0]).collect();
+    assert!(xs.contains(&pcbcraft_units::MAX_LENGTH_NM), "{xs:?}");
+
+    let error = read_step(&assembly_with_part_at("1000000.000001")).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
 }

@@ -135,12 +135,13 @@ impl BoundingBox {
     }
 }
 
-/// A rigid placement: a point `p` goes to `p.x·axes[0] + p.y·axes[1] + p.z·axes[2] +
+/// An affine placement: a point `p` goes to `p.x·axes[0] + p.y·axes[1] + p.z·axes[2] +
 /// translation`.
 ///
 /// The axes are the images of the x, y and z unit vectors, as unitless ratios; the translation is
-/// in nanometres. Placements read from a file are rotations, possibly mirrored, and may carry the
-/// uniform scale an assembly states.
+/// in nanometres. Placements read from a file are rotations, possibly mirrored, with at most a
+/// uniform scale; a non-uniform scale or a shear is accepted by [`Body::transformed`] and turns
+/// the body's surfaces into B-splines.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     /// The images of the x, y and z unit vectors.
@@ -160,6 +161,11 @@ impl Transform {
 
     /// The kernel's affine matrix in millimetres: rows 0 to 2 the axes, row 3 the translation,
     /// the fourth column `(0, 0, 0, 1)`.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] for an axis that is not finite or a translation more than
+    /// [`MAX_LENGTH_NM`] from zero.
     fn matrix_mm(&self) -> Result<[[f64; 4]; 4]> {
         if self.axes.iter().flatten().any(|v| !v.is_finite()) {
             return Err(GeometryError::new(ErrorCode::InvalidParams, "a transform axis is not finite"));
@@ -170,14 +176,15 @@ impl Transform {
     }
 
     /// The placement of a kernel matrix in millimetres, laid out as [`Transform::matrix_mm`]
-    /// gives it.
-    fn from_matrix_mm(m: &[[f64; 4]; 4]) -> Result<Transform> {
+    /// gives it, or `None` when an entry is not finite or the translation lies more than
+    /// [`MAX_LENGTH_NM`] from zero.
+    fn from_matrix_mm(m: &[[f64; 4]; 4]) -> Option<Transform> {
         let [x, y, z, t] = m;
         let axes = [[x[0], x[1], x[2]], [y[0], y[1], y[2]], [z[0], z[1], z[2]]];
         if axes.iter().flatten().any(|v| !v.is_finite()) {
-            return Err(GeometryError::new(ErrorCode::OperationFailed, "the kernel gave a placement that is not finite"));
+            return None;
         }
-        Ok(Transform { axes, translation_nm: point_nm([t[0], t[1], t[2]])? })
+        Some(Transform { axes, translation_nm: point_nm([t[0], t[1], t[2]]).ok()? })
     }
 }
 
@@ -340,7 +347,9 @@ impl StepRead {
 /// # Errors
 ///
 /// [`ErrorCode::ModelUnreadable`] when the bytes are not UTF-8 text or not an ISO 10303-21
-/// exchange structure, or its product structure is malformed (a cycle, a broken reference);
+/// exchange structure, its product structure is malformed (a cycle, a broken reference, nesting
+/// deeper than 32 levels or more than 100,000 placed instances), or a placement is not finite or
+/// moves a body more than [`MAX_LENGTH_NM`] from the origin;
 /// [`ErrorCode::KernelUnavailable`] without a kernel;
 /// [`ErrorCode::KernelInternal`] when the reader panics.
 pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
@@ -350,7 +359,11 @@ pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
     let placements = read
         .placements
         .iter()
-        .map(|(body, matrix)| Ok(Placement { body: *body, transform: Transform::from_matrix_mm(matrix)? }))
+        .map(|(body, matrix)| {
+            let transform = Transform::from_matrix_mm(matrix)
+                .ok_or_else(|| GeometryError::new(ErrorCode::ModelUnreadable, format!("the file places body {body} outside the supported range")))?;
+            Ok(Placement { body: *body, transform })
+        })
         .collect::<Result<_>>()?;
     Ok(StepRead { bodies, placements, refused: read.refused })
 }

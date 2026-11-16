@@ -94,7 +94,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | Code | Meaning |
 | --- | --- |
 | `invalid_params` | An argument was refused before the kernel saw it, including a name with an ASCII control character, which a STEP string cannot carry |
-| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, or a malformed product structure (a cycle, a broken reference) |
+| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 levels or more than 100,000 placed instances), or a placement that is not finite or moves a body more than 1 km from the origin |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
 | `kernel_unavailable` | This build has no kernel (the browser) |
@@ -122,6 +122,7 @@ At SolidCraft revision `73bdb6c`:
 | A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
 | Non-positive sizes, coordinates out of range, names with control characters, nothing to write | `invalid_params` |
 | A transform that flattens, an axis that is not finite, a move out of range | `invalid_params` |
+| A file placing a part exactly 1 km out, and 1 nm further | read; `model_unreadable` |
 | Ten synthetic STEP fixtures, read, written as one part of placed bodies and read again | every bounding box within 1 µm of the box worked out from the generator's dimensions |
 | Inch and metre units | converted to nanometres within 1 µm |
 | A part used twice, turned a quarter the second time | one body, two placements |
@@ -194,6 +195,9 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   their surface are refused with their solid; the kernel can make those curves
   but is not asked to yet. Names of assembly occurrences and colours are not
   read yet, and the writer writes no colours.
+- **Assembly size.** A STEP file with more than 100,000 placed bodies, or an
+  assembly nested deeper than 32 levels, is refused as a whole. A large board
+  exported with one body for each pin can come near that figure.
 - **Writing assemblies.** `write_step` writes one part. A placed read is written
   as one body per placement, so a part used twice is written twice; writing the
   product structure back is left to STEP assembly export.
