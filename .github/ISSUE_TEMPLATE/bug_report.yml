@@ -1,0 +1,76 @@
+name: Bug report
+description: Report something that went wrong in PCBCraft
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The shortest reproduction that shows the problem helps most;
+        questions and feature requests can use a blank issue.
+  - type: textarea
+    id: description
+    attributes:
+      label: What went wrong?
+      description: A brief description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows the problem, from launch or an opened project.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it happen?
+      options:
+        - Desktop app
+        - Browser app
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PCBCraft version or revision
+      description: The output of `pcbcraft-cli --version`, a commit hash, or the hosted build date.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and browser
+      description: For example "Fedora 41"; for browser reports include name and version, like "Firefox 133".
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots, logs or a sample project
+      description: |
+        Optional. Attach screenshots, paste relevant console or log excerpts, or link a minimal
+        project that shows the problem. Please do not include credentials, tokens or
+        proprietary design data; a small original example is enough.
+    validations:
+      required: false
