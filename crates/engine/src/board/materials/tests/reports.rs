@@ -29,6 +29,12 @@ fn saved(s: &Session, format: &str) -> persistence::Documents {
     documents
 }
 
+/// Saved documents that do not open, for the reason named.
+fn refused(documents: &persistence::Documents, reason: &str) {
+    let error = persistence::decode_documents(documents).map(|_| ()).unwrap_err();
+    assert!(error.contains(reason), "{error:?} does not name {reason:?}");
+}
+
 /// The saved board document as JSON.
 fn board_json(documents: &persistence::Documents) -> Value {
     serde_json::from_slice(&documents[&persistence::test_board_path(documents)]).unwrap()
@@ -141,12 +147,17 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_24() {
     assert_eq!(board["setup"], old["setup"]);
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert_eq!(serde_json::to_value(reopened.board_setup().unwrap()).unwrap(), inspected);
-    // Format 19 already fails on its own rules requirement; the others fail on the reports.
-    for older in ["pcbcraft-board/3", "pcbcraft-board/19", "pcbcraft-board/21", "pcbcraft-board/23"] {
-        let error = persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", older)).unwrap_err();
-        assert!(older.ends_with("/19") || older.ends_with("/21") || error.contains("format 24"), "{older}: {error}");
+    // Formats 19 and 21 already fail on their own rules and origin requirements; the others
+    // fail on the reports.
+    for (older, reason) in [
+        ("pcbcraft-board/3", "require board format 24"),
+        ("pcbcraft-board/19", "format 19 requires rules"),
+        ("pcbcraft-board/21", "format 21 requires a placement origin"),
+        ("pcbcraft-board/23", "require board format 24"),
+    ] {
+        refused(&with_header(&documents, "pcbcraft-board/24", older), reason);
     }
-    assert!(persistence::decode_documents(&with_header(&plain, "pcbcraft-board/3", "pcbcraft-board/24")).is_err());
+    refused(&with_header(&plain, "pcbcraft-board/3", "pcbcraft-board/24"), "require board format 24");
 
     s.apply("edit.undo", &json!({})).unwrap();
     assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &snapshot));
@@ -363,7 +374,7 @@ fn board_format_24_carries_stack_fields_origin_and_rules() {
     assert!(board_json(&documents)["rules"].is_object());
     assert_eq!(board_json(&documents)["placement_origin"]["anchor"], json!({"kind":"point","x_nm":1_000_000,"y_nm":2_000_000}));
     assert_eq!(setup(&s)["stackup"]["strata"][0]["role"], "signal");
-    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/23")).is_err());
+    refused(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/23"), "require board format 24");
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved(&s, "pcbcraft-board/23"), stacked);
     s.apply("edit.undo", &json!({})).unwrap();
@@ -391,7 +402,7 @@ fn board_format_24_carries_locked_copper() {
     let documents = saved(&s, "pcbcraft-board/24");
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert!(reopened.board.vias.iter().any(|via| via.locked));
-    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/18")).is_err());
+    refused(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/18"), "require board format 24");
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved(&s, "pcbcraft-board/18"), locked);
 }

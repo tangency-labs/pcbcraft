@@ -238,12 +238,14 @@ mod tests {
             for older in [FORMAT, STACK_FORMAT] {
                 let mut downgraded = serde_json::to_value(&profile).unwrap();
                 downgraded["format"] = json!(older);
-                assert!(SetupProfile::decode(&serde_json::to_vec(&downgraded).unwrap()).is_err(), "{older}");
+                let error = SetupProfile::decode(&serde_json::to_vec(&downgraded).unwrap()).map(|_| ()).unwrap_err();
+                assert!(error.contains("require setup profile version 3"), "{older}: {error}");
             }
         }
         let mut upgraded = serde_json::to_value(SetupProfile::new("Plain".into(), plain, Settings::default()).unwrap()).unwrap();
         upgraded["format"] = json!(REPORT_FORMAT);
-        assert!(SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).is_err());
+        let error = SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).map(|_| ()).unwrap_err();
+        assert!(error.contains("require setup profile version 3"), "{error}");
     }
     /// Import preserves target-owned graphic layers and material pins, then applies atomically
     /// through the same revision-bound command as manual edits and supports exact undo.
