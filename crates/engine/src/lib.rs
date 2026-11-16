@@ -2473,7 +2473,9 @@ impl Session {
     }
 
     /// Report later history roots and committed edits to `observer`, replacing any earlier one,
-    /// or stop reporting with `None`. An open project is reported at once as the first root, so
+    /// or stop reporting with `None`. Edits come from [`Self::apply`] and
+    /// [`Self::commit_copper_edit`]; roots from opens and from adopted save metadata, so every
+    /// change to the current project reaches the observer. An open project is reported at once as the first root, so
     /// the observer always knows the state the next edit builds on. Neither the project nor its
     /// history changes.
     pub fn observe_edits(&mut self, observer: Option<Arc<dyn edits::EditObserver>>) {
@@ -2498,9 +2500,7 @@ impl Session {
         self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
-        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
-            observer.opened(project.clone());
-        }
+        self.report_opened();
     }
 
     pub fn revision(&self) -> u64 {
@@ -2513,6 +2513,7 @@ impl Session {
     /// identity/absence and retains a later root/folder choice made since the save began.
     /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
+    /// When it changes anything, the edit observer is told the current project as a new root.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
@@ -2563,6 +2564,8 @@ impl Session {
         }
         if changed {
             self.update_plan = None;
+            // The adopted metadata is saved data, so it is a new base rather than an edit.
+            self.report_opened();
         }
         changed
     }
@@ -2853,12 +2856,29 @@ impl Session {
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let before = self.revision;
         let revision = self.apply_command(id, params)?;
-        if revision != before
-            && let (Some(observer), Some(project)) = (&self.observer, &self.project)
-        {
-            observer.committed(edits::CommittedEdit { command: id.to_owned(), params: params.clone(), revision, project: project.clone() });
+        if revision != before {
+            self.report_committed(id, params);
         }
         Ok(revision)
+    }
+
+    /// Tell the edit observer that `command` with `params` produced the current project.
+    pub(crate) fn report_committed(&self, command: &str, params: &Value) {
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.committed(edits::CommittedEdit {
+                command: command.to_owned(),
+                params: params.clone(),
+                revision: self.revision,
+                project: project.clone(),
+            });
+        }
+    }
+
+    /// Tell the edit observer that the current project is a new base for later edits.
+    fn report_opened(&self) {
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.opened(project.clone());
+        }
     }
 
     /// Route a command to its query, library, sheet or project handler. See [`Self::apply`].

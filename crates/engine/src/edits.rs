@@ -88,6 +88,31 @@ mod tests {
         );
     }
 
+    /// A prepared copper edit is reported as its command with its parameters once committed, and
+    /// save metadata adopted into the live project is reported as a new root.
+    #[test]
+    fn copper_commits_and_adopted_saves_are_reported() {
+        use crate::board::track::{
+            ADD_TRACKS,
+            tests::{copper_layers, routed_fixture, view},
+        };
+        let mut session = routed_fixture();
+        let log = Arc::new(Log::default());
+        session.observe_edits(Some(log.clone()));
+        let params = json!({"board":view(&session).target.board,"layer":copper_layers(&session)[0],"width_nm":250_000,
+            "points":[{"x_nm":-20_000_000,"y_nm":-20_000_000},{"x_nm":-10_000_000,"y_nm":-20_000_000}],"expected_revision":session.revision()});
+        let mut job = session.prepare_copper_edit(ADD_TRACKS, &params).unwrap();
+        while !job.step(1024) {}
+        let revision = session.commit_copper_edit(job.take_result().unwrap().unwrap()).unwrap();
+        let original = session.snapshot().unwrap();
+        let saved = Arc::new(Project { name: "Saved".to_owned(), ..Project::clone(&original) });
+        assert!(session.adopt_saved_metadata(&original, &saved));
+        assert!(!session.adopt_saved_metadata(&original, &saved));
+        let log = log.0.lock().unwrap().clone();
+        let name = original.name.clone();
+        assert_eq!(log, [(format!("opened {name}"), 0), (ADD_TRACKS.to_owned(), revision), ("opened Saved".to_owned(), 0)]);
+    }
+
     /// Attaching to a session with an open project reports that project first.
     #[test]
     fn attaching_reports_the_open_project() {

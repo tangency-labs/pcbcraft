@@ -959,8 +959,9 @@ a time stamp so two sessions never share it:
 | `<id>.lock` | Held locked by the writing session while it runs |
 
 [`Session::observe_edits`](../crates/engine/src/lib.rs) reports every edit
-committed through the shared command path, from the GUI, CLI or MCP, and each
-new history root. `JournalRecorder` encodes and writes them on its own thread,
+committed through the shared command path, from the GUI, CLI or MCP, including
+prepared copper edits, and each new history root: an open, or the name and
+layout a completed save adopts into the live project. `JournalRecorder` encodes and writes them on its own thread,
 so neither editing nor saving waits for it. Each record names its command,
 command version and parameters, and stores the documents the edit added, changed
 or removed with the same codec a save uses, plus fingerprints of the complete

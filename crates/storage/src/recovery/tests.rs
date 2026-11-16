@@ -320,3 +320,52 @@ fn an_open_replaces_the_snapshot() {
     assert_eq!(recovered.project.name, "After");
     assert_eq!(recovered.project.id(), other.project().unwrap().id());
 }
+
+/// A one-segment route prepared and committed outside `Session::apply`, on a fresh board with
+/// copper layers. Returns the committed revision.
+fn commit_route(session: &mut Session) -> u64 {
+    use pcbcraft_engine::board::setup::LayerPurpose;
+    session.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":session.revision()})).unwrap();
+    let project = session.project().unwrap();
+    let view = project.board_view(project.board_target().unwrap()).unwrap();
+    let layer = view.setup().unwrap().layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper).unwrap().id;
+    let params = json!({"board":view.target.board,"layer":layer,"width_nm":250_000,
+        "points":[{"x_nm":-20_000_000,"y_nm":-20_000_000},{"x_nm":-10_000_000,"y_nm":-20_000_000}],"expected_revision":session.revision()});
+    let mut job = session.prepare_copper_edit(pcbcraft_engine::ADD_TRACKS, &params).unwrap();
+    while !job.step(1024) {}
+    let prepared = job.take_result().unwrap().unwrap();
+    session.commit_copper_edit(prepared).unwrap()
+}
+
+/// Changes made outside `Session::apply` reach the journal: a prepared copper edit as its
+/// command, and save metadata adopted after a save as a new snapshot. Edits after each still
+/// replay, so nothing later is lost to a mismatch.
+#[test]
+fn copper_commits_and_save_adoption_are_journaled() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(JournalRecorder::start(dir.path().to_path_buf(), "entry".to_owned()).unwrap());
+    let mut session = Session::default();
+    session.observe_edits(Some(recorder.clone()));
+    session.apply("project.new", &json!({"name":"Routed","create_board":true})).unwrap();
+    commit_route(&mut session);
+    session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    recorder.sync().unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.commands[recovered.commands.len() - 2..], [pcbcraft_engine::ADD_TRACKS, PLACE_SYMBOL]);
+    assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
+
+    let original = session.snapshot().unwrap();
+    let mut saved = Project::clone(&original);
+    saved.name = "Saved As".to_owned();
+    let saved = Arc::new(saved);
+    assert!(session.adopt_saved_metadata(&original, &saved));
+    session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":20 * GRID_NM,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    session.observe_edits(None);
+    Arc::into_inner(recorder).unwrap().finish().unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.commands, [PLACE_SYMBOL]);
+    assert_eq!(recovered.project.name, "Saved As");
+    assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
+}
