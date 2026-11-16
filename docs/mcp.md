@@ -383,7 +383,7 @@ A profile is `{"name":...,"bottom_side":...,"packages":[...]}`:
   leading or trailing white space.
 - `bottom_side`: `viewed_from_top` (the default) or `viewed_from_bottom`; see
   [placement output conventions](footprint-schema.md#placement-output-conventions).
-- `packages` (optional, up to 4096): one entry per footprint definition, each with
+- `packages` (optional; up to 4096 in all profiles of a board together): one entry per footprint definition, each with
   `library` and `definition` ids and at least one change. `rotation` is 0 to 359 whole
   degrees from the library zero orientation to the house's, counterclockwise seen
   from the component side. `centroid` is a nonzero point in library footprint
@@ -391,7 +391,8 @@ A profile is `{"name":...,"bottom_side":...,"packages":[...]}`:
   footprint origin on each axis. An offset applies to every revision of the
   definition; legacy marker footprints have no definition and never match.
 
-A board holds at most 64 profiles. Board inspection lists them under
+A board holds at most 64 profiles. An edit that would exceed either bound is refused
+as invalid parameters and changes nothing. Board inspection lists them under
 `assembly_houses` in creation order, with packages sorted by library and definition.
 Profiles change no board geometry and no fabrication output; boards without them keep
 their earlier encoding.

@@ -257,12 +257,14 @@ See [board-rules.md](board-rules.md) for validation, resolution and reset behavi
 Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin with a
 stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
 in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier
-physical field, and requires the origin record; older headers reject it. Boards
+physical field, and requires the origin record; older headers reject it. A board that
+also carries assembly houses saves as format 22 instead, which accepts the origin. Boards
 without an origin retain their earlier encoding and measure outputs from board zero;
 removing the origin restores the format required by the remaining data.
 
 Board format `pcbcraft-board/22` adds `assembly_houses`, a nonempty list of
-`pcbcraft-assembly-house/1` records in creation order. Each has a stable non-nil
+`pcbcraft-assembly-house/1` records in creation order: at most 64 houses, with at
+most 4096 package entries in all houses of the board together. Each has a stable non-nil
 UUID, a unique `name`, a required `bottom_side` (`viewed_from_top` or
 `viewed_from_bottom`) and optional `packages`, sorted by `library` then `definition`
 with one entry each. An entry's `rotation` (1 to 359; omitted when zero, and an explicit 0 or `null` is refused) and

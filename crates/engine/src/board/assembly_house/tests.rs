@@ -362,6 +362,66 @@ fn profile_and_board_limits() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
+/// The package offsets of all houses on a board are bounded together: the last offset that
+/// fits is accepted, the first beyond it is refused as invalid params before the edit applies,
+/// and a saved board beyond it is refused on load.
+#[test]
+fn board_package_total_is_bounded() {
+    let packages = |from: usize, count: usize| {
+        (from..from + count).map(|n| json!({"library":LIBRARY,"definition":format!("p{n:05}"),"rotation":90})).collect::<Vec<_>>()
+    };
+    let half = MAX_BOARD_PACKAGES / 2;
+    let (mut s, _) = fixture();
+    set(&mut s, None, json!({"name":"First","packages":packages(0, half)})).unwrap();
+    set(&mut s, None, json!({"name":"Second","packages":packages(half, MAX_BOARD_PACKAGES - half - 1)})).unwrap();
+    set(&mut s, None, json!({"name":"Third","packages":packages(0, 1)})).unwrap();
+    let full = s.snapshot().unwrap();
+    assert_eq!(full.board.assembly_houses.iter().map(|house| house.packages.len()).sum::<usize>(), MAX_BOARD_PACKAGES);
+    let refused = set(&mut s, None, json!({"name":"Fourth","packages":packages(0, 1)}));
+    assert!(matches!(refused, Err(CommandError::InvalidParams(ref message)) if message.contains("together")), "{refused:?}");
+    assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
+    let third = full.board.assembly_houses[2].id;
+    assert!(set(&mut s, Some(third), json!({"name":"Third","packages":packages(0, 2)})).is_err());
+    assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
+
+    let documents = encode_documents(full.clone()).unwrap();
+    assert!(decode_documents(&documents).is_ok());
+    let path = test_board_path(&documents);
+    let mut saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    saved["assembly_houses"][2]["packages"].as_array_mut().unwrap().push(json!({"library":LIBRARY,"definition":"z-extra","rotation":90}));
+    let mut over = documents.clone();
+    over.insert(path, serde_json::to_vec(&saved).unwrap());
+    assert!(decode_documents(&over).is_err(), "a saved board beyond the total is refused");
+}
+
+/// The largest board the limits allow (every house, every offset, the longest names and ids and
+/// the widest values) serializes far below the board document limit.
+#[test]
+fn largest_allowed_houses_fit_one_board_document() {
+    let long_id = |n: usize| format!("{n:05}{}", "x".repeat(59));
+    let per_house = MAX_BOARD_PACKAGES / MAX_HOUSES;
+    let houses = (0..MAX_HOUSES)
+        .map(|h| House {
+            format: FORMAT.into(),
+            id: Uuid::from_u128(u128::MAX - h as u128),
+            name: format!("{h:02}{}", "\u{10ffff}".repeat(MAX_NAME_CHARS - 2)),
+            bottom_side: BottomSide::ViewedFromBottom,
+            packages: (0..per_house)
+                .map(|n| PackageOffset {
+                    library: long_id(h),
+                    definition: long_id(n),
+                    rotation: 359,
+                    centroid: Some(crate::schematic::Point { x_nm: -MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(houses.iter().map(|house| house.packages.len()).sum::<usize>(), MAX_BOARD_PACKAGES);
+    validate_all(&houses).unwrap();
+    let bytes = serde_json::to_vec_pretty(&houses).unwrap().len();
+    assert!(bytes < crate::persistence::MAX_DOCUMENT_BYTES / 8, "{bytes} bytes");
+}
+
 /// Format 22 is written only while a house exists, carries an origin, rules and every earlier
 /// field, reopens to the same bytes, and removing the houses restores the earlier encoding.
 #[test]
