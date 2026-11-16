@@ -48,14 +48,15 @@ When a kind moves to UUIDs, remove it from `EXPECTED_GAPS` in the same change.
 | Via | `board.json` `vias[]` | UUID |
 | Board drawing item | `board.json` `graphics.items[]` | UUID |
 | Layer | `board.json` `setup.layers[]` | UUID |
-| Rule | `board.json` `rules` | UUID |
+| Rule set | `board.json` `rules` (one per board; its values have no id of their own) | UUID |
 | Library item | library definition documents | Name |
 | Arc track, pour, keepout, text, dimension | none yet | Not stored |
 
 The stackup, its dielectric strata, circuit uses and the project itself also carry
 UUIDs. Copper strata are addressed by their layer. Wire bends, drawing vertices,
-package choices, accepted board connections, net anchors and class bindings belong
-to their owner and have no id of their own.
+no-connect intent on pins and wire ends, package choices, accepted board
+connections, net anchors and class bindings belong to their owner and have no id
+of their own.
 
 Pins are addressed differently by different consumers. Commands and inspection
 name a pin by its placed symbol unit, while net anchors and the accepted board
