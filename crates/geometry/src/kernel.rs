@@ -79,8 +79,8 @@ pub(crate) struct Read {
 /// Most placements one file's product structure may expand to.
 const MAX_PLACEMENTS: u64 = MAX_VISITS as u64;
 
-/// Most work one expansion may do, counted as each definition visited plus each representation
-/// walked and its items: ten for each placement the expansion is allowed.
+/// Most work one expansion may do, in steps: ten for each placement the expansion is allowed.
+/// [`Expansion`] says what one step is.
 const MAX_EXPANSION_WORK: u64 = 10 * MAX_PLACEMENTS;
 
 /// The named bodies of a STEP text, where its product structure places them, and the solid items
@@ -189,6 +189,16 @@ enum Node {
 /// walk's rules: a definition walks every representation its shapes reach through relationships
 /// without a transformation, then its occurrences; a representation emits its bodies and walks
 /// each mapped item's representation and those related to it, each once for that item.
+///
+/// A step is one unit of the walk's work, and every loop of the walk at the pinned revision is
+/// counted:
+/// - before the walk, for every definition in the file, each representation its shapes reach,
+///   plus one for each relationship of the file checked against it (the walk scans them all for
+///   each one);
+/// - each definition visited, plus each representation its shapes reach;
+/// - each representation walked, plus each of its items;
+/// - each mapped item walked, one for each relationship of the file (the walk scans them all to
+///   find the representations related to the mapped one).
 struct Expansion<'a> {
     structure: &'a ProductStructure,
     /// The placements one body item gives: the read bodies of its STEP item.
@@ -228,9 +238,20 @@ impl<'a> Expansion<'a> {
         }
     }
 
-    /// The cost of expanding every root; the first error any of them meets.
+    /// The cost of expanding every root, after the representations reached from every
+    /// definition are found; the first error any of them meets. It stops counting once the work
+    /// is past [`MAX_EXPANSION_WORK`], so a file of many large closures costs this count no more
+    /// than the limit.
     fn total(&mut self) -> std::result::Result<Cost, String> {
+        let scan = self.structure.links.len() as u64;
         let mut cost = Cost::default();
+        for definition in &self.structure.definitions {
+            let reached = self.closure(&definition.shapes).len() as u64;
+            cost = cost.plus(Cost { placements: 0, work: reached.saturating_mul(1 + scan) });
+            if cost.work > MAX_EXPANSION_WORK {
+                return Ok(cost);
+            }
+        }
         for &root in &self.structure.roots {
             cost = cost.plus(self.definition(root)?);
         }
@@ -275,8 +296,8 @@ impl<'a> Expansion<'a> {
     }
 
     /// The cost of walking `representation` once: one step and one for each item, a placement
-    /// for each read body of each body item, and for each mapped item the cost of its
-    /// representation and of those related to it. An error for a missing representation or map,
+    /// for each read body of each body item, and for each mapped item one step for each
+    /// relationship of the file and the cost of its representation and of those related to it. An error for a missing representation or map,
     /// and for a representation met again inside its own walk.
     fn representation(&mut self, representation: usize) -> std::result::Result<Cost, String> {
         match self.representations.get(representation) {
@@ -296,6 +317,7 @@ impl<'a> Expansion<'a> {
                     let Some(map) = structure.maps.get(*map) else {
                         return Err(format!("missing representation map #{}", item.entity));
                     };
+                    cost = cost.plus(Cost { placements: 0, work: structure.links.len() as u64 });
                     // The mapped representation, then each related one, each once for this item.
                     let mut walked = BTreeSet::new();
                     let related = self.related.get(map.representation).cloned().unwrap_or_default();

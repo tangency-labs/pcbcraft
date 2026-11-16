@@ -246,16 +246,57 @@ fn a_mapped_item_expansion_past_100000_placements_is_model_unreadable() {
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
 }
 
+/// `tree` with `count` relationships between two representations nothing places, before the end
+/// of its data section.
+fn with_unrelated_links(tree: Vec<u8>, count: usize) -> Vec<u8> {
+    let mut lines = vec!["#500001=SHAPE_REPRESENTATION('',(#167),#9);".to_string(), "#500002=SHAPE_REPRESENTATION('',(#167),#9);".to_string()];
+    lines.extend((0..count).map(|i| format!("#{}=SHAPE_REPRESENTATION_RELATIONSHIP('','',#500001,#500002);", 500_003 + i)));
+    let text = String::from_utf8(tree).unwrap();
+    let out = text.replacen("ENDSEC;\nEND-ISO-10303-21;", &format!("{}\nENDSEC;\nEND-ISO-10303-21;", lines.join("\n")), 1);
+    assert_ne!(out, text);
+    out.into_bytes()
+}
+
+/// The steps the reader counts for `mapped_tree(&[2; levels], false, pad)` with `links`
+/// unrelated relationships, as the reader's `Expansion` defines a step. Before the walk, the one part's shape reaches one representation, and every relationship is checked
+/// against it: 1 + links. The part: 1, and 1 for its representation. The block's
+/// representation: 1 + 2 + pad.0 items, walked 2^levels times. Each level: 1 + 3 items, plus
+/// links for each of its two mapped items, walked 2^levels − 1 times in all. The part's shape:
+/// pad.1 more items.
+fn steps(levels: u32, pad: (u64, u64), links: u64) -> u64 {
+    let uses = 1u64 << levels;
+    (1 + links) + 2 + uses * (3 + pad.0) + (4 + 2 * links) * (uses - 1) + pad.1
+}
+
 /// The expansion's work bound is exact: 1,000,000 steps read, one more is refused, with only
-/// 65,536 placements. Each part counts one step and one for each representation its shape
-/// reaches; each representation walked counts one and one for each item. Here the block's
-/// representation has 10 items (11 steps), each of the 16 levels of two mapped items 3 items
-/// (4 steps and its two uses), and the part's shape `pad` more: 1 + 1 + (7 + 8)·2^16 − 4 + pad.
+/// 65,536 placements.
 #[test]
 fn an_expansion_of_more_than_1000000_steps_is_model_unreadable() {
-    let read = read_step(&mapped_tree(&[2; 16], false, (8, 16_962))).unwrap();
+    assert_eq!(steps(16, (8, 16_961), 0), 1_000_000);
+    let read = read_step(&mapped_tree(&[2; 16], false, (8, 16_961))).unwrap();
     assert_eq!(read.placements.len(), 65_536);
-    let error = read_step(&mapped_tree(&[2; 16], false, (8, 16_963))).unwrap_err();
+    let error = read_step(&mapped_tree(&[2; 16], false, (8, 16_962))).unwrap_err();
+    assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains("1000000 steps"), "{error}");
+}
+
+/// Relationships the walk scans for each mapped item count in the bound: 2^16 placements under
+/// both limits read, and with 10,000 unrelated relationships (about 10^9 checks) the same tree is
+/// refused before it is expanded. With 7,870 relationships and 64 placements, 1,000,000 steps read
+/// and one more is refused.
+#[test]
+fn relationships_scanned_for_each_mapped_item_count_in_the_bound() {
+    let tree = mapped_tree(&[2; 16], false, (0, 0));
+    assert!(steps(16, (0, 0), 0) < 1_000_000);
+    assert_eq!(read_step(&tree).unwrap().placements.len(), 65_536);
+    let error = read_step(&with_unrelated_links(tree, 10_000)).unwrap_err();
+    assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains("1000000 steps"), "{error}");
+
+    assert_eq!(steps(6, (0, 63), 7_870), 1_000_000);
+    let read = read_step(&with_unrelated_links(mapped_tree(&[2; 6], false, (0, 63)), 7_870)).unwrap();
+    assert_eq!(read.placements.len(), 64);
+    let error = read_step(&with_unrelated_links(mapped_tree(&[2; 6], false, (0, 64)), 7_870)).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
     assert!(error.to_string().contains("1000000 steps"), "{error}");
 }

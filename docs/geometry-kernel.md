@@ -134,6 +134,7 @@ At SolidCraft revision `73bdb6c`:
 | Two placed surface models sharing one closed shell, each beside its own open shell | three bodies, four placements: the shell placed by each model, nothing left at the origin |
 | A few hundred bytes of mapped items that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | An expansion of exactly 1,000,000 steps, and of one more | read; `model_unreadable` |
+| 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 64 placements and 7,870 relationships at exactly 1,000,000 steps, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | A board of 500 components of 16 pins, each component its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
@@ -204,12 +205,17 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   but is not asked to yet. Names of assembly occurrences and colours are not
   read yet, and the writer writes no colours.
 - **Assembly size.** A STEP file whose assembly places more than 100,000 bodies,
-  takes more than 1,000,000 steps to expand (each part visited, each
-  representation walked and each of its items), or nests deeper than 32 levels,
-  is refused as a whole. The reader counts the expansion from the product graph
+  takes more than 1,000,000 steps to expand, or nests deeper than 32 levels, is
+  refused as a whole. A step is each part visited, each representation it
+  reaches, each representation walked and each of its items, and each
+  representation relationship in the file once for each mapped item walked and
+  once for each representation a part reaches (the expansion scans every
+  relationship then). The reader counts the expansion from the product graph
   before it expands anything, so a small file that would place a body millions
-  of times through mapped items is refused without being expanded. A large board
-  exported with one body for each pin can come near that figure. Memory grows with
+  of times through mapped items, or make the expansion scan thousands of
+  relationships for each of them, is refused without being expanded. A large
+  board exported with one body for each pin can come near the 100,000-body
+  figure. Memory grows with
   the bodies: the measured board needed about 110 KiB for each placed body
   (944 MiB for 8,500), so a file near the limit can need around 11 GB.
 - **Writing assemblies.** `write_step` writes one part. A placed read is written
