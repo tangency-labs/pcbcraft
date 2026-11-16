@@ -200,7 +200,9 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   read yet, and the writer writes no colours.
 - **Assembly size.** A STEP file with more than 100,000 placed bodies, or an
   assembly nested deeper than 32 levels, is refused as a whole. A large board
-  exported with one body for each pin can come near that figure.
+  exported with one body for each pin can come near that figure. Memory grows with
+  the bodies: the measured board needed about 110 KiB for each placed body
+  (944 MiB for 8,500), so a file near the limit can need around 11 GB.
 - **Writing assemblies.** `write_step` writes one part. A placed read is written
   as one body per placement, so a part used twice is written twice; writing the
   product structure back is left to STEP assembly export.
