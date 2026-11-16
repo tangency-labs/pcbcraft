@@ -10,12 +10,13 @@ open. No command, panel or saved format uses the crate yet.
 ## Choice
 
 The kernel is SolidCraft's `solidcore`, a Rust port of the SMLib and SM_API parts
-of NVIDIA's USD BRep. PCBcraft uses three crates from it:
+of NVIDIA's USD BRep. PCBcraft uses four crates from it:
 
 | Crate | Job |
 | --- | --- |
 | `solidcore` | B-rep solids (already in `Cargo.lock` through the Craft UI crates) |
-| `solidcore-ops` | Modelling calls on kernel bodies: primitives, record conversion, bounding boxes, the session's panic guard |
+| `solidcore-ops` | Modelling calls on kernel bodies: primitives, copies and transforms, record conversion, bounding boxes, assembly placement matrices, the session's panic guard |
+| `solidcore-record` | The product structure of a STEP file: parts, assemblies, occurrences and their placements, in millimetres |
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
 
 They come from `https://github.com/tangency-labs/solidcraft.git` at
@@ -51,7 +52,8 @@ engine tests and the browser editor do not pay for the kernel. The same API
 could later move into an engine module if that proves simpler.
 
 - **Kernel-neutral API.** No kernel type appears in the public API. Callers use
-  `Body`, `BoundingBox`, `StepRead`, `RefusedItem` and `GeometryError`, so a
+  `Body`, `BoundingBox`, `Transform`, `Placement`, `StepRead`, `RefusedItem` and
+  `GeometryError`, so a
   kernel swap touches only this crate.
 - **Units.** Lengths are whole nanometres (`i64`), within
   `pcbcraft_units::MAX_LENGTH_NM` of zero. The kernel's millimetre floats are
@@ -80,6 +82,9 @@ Current operations:
 | `Body::bounding_box()` | The exact box of the body's curves and surfaces, in nanometres |
 | `read_step(bytes)` | Every solid and surface model of a file in its stated units, and each solid item refused with its entity number and reason |
 | `write_step(part_name, bodies)` | One AP242 part; the same bodies always give the same bytes (no time stamp) |
+| `Body::transformed(transform)` | A moved copy; the body itself is unchanged |
+| `StepRead::placements` | Every use of a body in the file's world frame: one per assembly occurrence (a part used twice is one body placed twice), and each body outside any product placed once where it is |
+| `StepRead::placed_bodies()`, `StepRead::bounding_box()` | The placed bodies, and their exact box in the world frame |
 | `kernel_crash_test()` | `kernel_internal` from a deliberate kernel panic |
 
 Error codes are stable snake_case names that MCP and CLI replies can carry:
@@ -87,7 +92,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | Code | Meaning |
 | --- | --- |
 | `invalid_params` | An argument was refused before the kernel saw it |
-| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, or a malformed solid |
+| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, or a malformed product structure (a cycle, a broken reference) |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
 | `kernel_unavailable` | This build has no kernel (the browser) |
@@ -111,8 +116,60 @@ At SolidCraft revision `73bdb6c`:
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
 | A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
 | Non-positive sizes, coordinates out of range, nothing to write | `invalid_params` |
+| A transform that flattens, an axis that is not finite, a move out of range | `invalid_params` |
+| Ten synthetic STEP fixtures, read, written as one part of placed bodies and read again | every bounding box within 1 µm of the box worked out from the generator's dimensions |
+| Inch and metre units | converted to nanometres within 1 µm |
+| A part used twice, turned a quarter the second time | one body, two placements |
+| A board of 500 components of 16 pins, each component its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
 
-The automated checks are the unit tests in `crates/geometry/src/tests.rs`.
+The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
+the integration tests in `crates/geometry/tests/`.
+
+### STEP fixtures
+
+`crates/geometry/tests/fixtures/step` holds the qualification set, about 90 KB
+of STEP text written by `scripts/generate-step-fixtures.py` from the geometry and
+topology structures of ISO 10303-42 and the product and assembly structures of
+ISO 10303-41, -43 and -44, with no CAD system involved. Running the script again
+gives the same files.
+
+| File | What it tries |
+| --- | --- |
+| `box.step` | A block away from the origin (AP214) |
+| `cylinder.step` | A cylinder whose side is one face closed by a seam edge |
+| `cylinder_x_axis_ap203.step` | A cylinder along x whose side is bounded by its two circles alone, no seam (AP203) |
+| `hole_plate.step` | A 1.6 mm plate with four 3.2 mm holes and one 10 mm hole |
+| `assembly.step` | A board and a part, each its own product, placed by an assembly |
+| `assembly_shared_part_turned.step` | One part placed twice, the second time turned a quarter about z |
+| `box_inch.step` | A block in inches |
+| `assembly_inch.step` | The board-and-part assembly in inches |
+| `y_up.step` | A board placed with its thickness along y, as y-up systems write it (AP242) |
+| `box_metre.step` | A block in metres |
+
+`expected.json` beside them records, for each file, its unit, how many bodies
+and placements it holds and the box of the placed bodies in nanometres. The
+boxes are worked out by the generator from the dimensions it writes, not
+measured by a kernel, so the same file gates any later kernel bump or swap. The
+tolerance, 1 µm, is stored in the same file.
+
+### Board-sized read
+
+`crates/geometry/tests/step_board.rs`, adapted from SolidCraft's board fixture,
+builds a board whose components are each their own product with a package and
+its own pins, the worst case for an import, and reads it back. By default it
+builds 2 components of 16 pins so a debug test run takes a few seconds. The
+figures above are for the full size:
+
+```sh
+PCBCRAFT_STEP_BOARD_COMPONENTS=500 PCBCRAFT_STEP_BOARD_PINS=16 \
+    cargo test -p pcbcraft-geometry --test step_board
+```
+
+In a debug build nearly all of the read time is the kernel building bodies from
+their records (about 50 ms a body); parsing the file and walking its assembly
+take well under a second at that size, and the time grows in proportion to the
+number of bodies. A release build is much faster; its figures are not recorded
+yet.
 
 The kernel crates are Apache-2.0 only, unlike the rest of SolidCraft (MIT OR
 Apache-2.0). Apache-2.0 is on the `deny.toml` allow list, so no exception is
@@ -130,12 +187,14 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   pin is the only source today.
 - **Reader coverage.** Faces whose edges have no closed-form parameter curve on
   their surface are refused with their solid; the kernel can make those curves
-  but is not asked to yet. Assembly placements, names of assembly occurrences
-  and colours are not read into bodies yet, and the writer writes no colours.
-- **Qualification set.** A set of synthetic STEP fixtures (cylinders, holes,
-  assemblies, inch units, Y-up files) with expected bounding boxes in a
-  kernel-neutral file is still to come, so every later kernel bump or swap passes
-  the same gate.
+  but is not asked to yet. Names of assembly occurrences and colours are not
+  read yet, and the writer writes no colours.
+- **Writing assemblies.** `write_step` writes one part. A placed read is written
+  as one body per placement, so a part used twice is written twice; writing the
+  product structure back is left to STEP assembly export.
+- **Qualification set.** The fixtures cover planes, cylinders, holes, assemblies
+  and three units. Cones, spheres, tori, B-spline surfaces, mapped items and
+  bodies with voids are read by the kernel but not in the set yet.
 - **Browser.** `solidcore` itself checks for `wasm32-unknown-unknown`, but
   `solidcore-step` has not been built for it, and the kernel README asks for a
   wasm stack larger than the default 1 MB. Until that is qualified, every operation
@@ -146,6 +205,6 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   measured; the kernel should load there only when a 3D view or STEP action
   needs it.
 - **Distance, meshes and assemblies.** Tessellation for the 3D view, body
-  distance, assembly export and placement types are not in the crate yet. They
+  distance and assembly export are not in the crate yet. They
   are added as new functions over the same `Body` type without changing the
   error codes or units.
