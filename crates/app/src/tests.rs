@@ -193,9 +193,12 @@ fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
     click(harness, "Place");
 }
 
-/// Create an Untitled project through the File menu; it opens without a naming dialog.
+/// Create through the File menu, then give editing fixtures their fixed zoom and origin.
+/// Startup tests use the Home card directly to exercise the shipped initial framing.
 fn new_project(harness: &mut Harness<'_, PcbApp>) {
     choose(harness, "File", "New Project");
+    harness.state_mut().views.active.camera = canvas_camera::Camera::default();
+    harness.run();
 }
 
 /// Home's schematic start card, distinct from the New Project navigation row.
@@ -256,6 +259,27 @@ fn startup_new_project_enters_the_workspace() {
     assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     assert!(!harness.state().home);
     harness.get_by_label("Unsaved changes");
+}
+
+/// New schematics frame their paper without a Fit action, using the settled editor viewport.
+/// Initial framing remains presentation state rather than an extra authored edit.
+#[test]
+fn startup_new_schematic_fits_its_paper() {
+    for (size, theme) in [(egui::vec2(1000.0, 700.0), preferences::ThemeChoice::Dark), (egui::vec2(1400.0, 900.0), preferences::ThemeChoice::Light)] {
+        let mut h = startup_harness();
+        h.set_size(size);
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        new_project_tile(&h).click();
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let [min, max] = h.state().session().project().unwrap().page().unwrap().corners();
+        let camera = &h.state().views.active.camera;
+        let paper = egui::Rect::from_two_pos(camera.screen(min, canvas), camera.screen(max, canvas));
+        assert!(canvas.contains_rect(paper), "{paper:?} inside {canvas:?}");
+        assert!(paper.width() > canvas.width() / 2.0 || paper.height() > canvas.height() / 2.0);
+        assert_eq!(h.state().session().revision(), 1);
+    }
 }
 
 /// The inspector never reserves space for the empty workspace, even after undoing project creation.

@@ -77,7 +77,8 @@ same points. The opacity applies across views and windows and is kept with your
 preferences, not in the project. Schematic sheets sit on paper, and parts can still
 be placed on the canvas around it. **Show grid
 outside paper** (on by default) continues the schematic grid there; turn it off
-for a clean surround.
+for a clean surround. A new schematic starts with its whole sheet fitted into
+the editor viewport.
 
 Under **Appearance → Schematic canvas**, **Paper background** defaults to
 **Uniform**, with the same canvas colour on both sides of the page outline and
