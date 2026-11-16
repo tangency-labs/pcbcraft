@@ -31,9 +31,12 @@ pub(crate) fn write(part_name: &str, bodies: &[(&str, &KernelBody)]) -> Result<S
     })
 }
 
+/// The named bodies read from a file, and the solid items refused.
+pub(crate) type Read = (Vec<(String, KernelBody)>, Vec<RefusedItem>);
+
 /// The named bodies of a STEP text, and the solid items refused. A panic while one solid is
 /// handed to the kernel refuses that solid only.
-pub(crate) fn read(text: &str) -> Result<(Vec<(String, KernelBody)>, Vec<RefusedItem>)> {
+pub(crate) fn read(text: &str) -> Result<Read> {
     guard("STEP read", || {
         let exchange = solidcore_step::p21::parse(text).map_err(|e| GeometryError::new(ErrorCode::ModelUnreadable, String::from(e)))?;
         let solids = solidcore_step::topology::read_solids(&exchange);

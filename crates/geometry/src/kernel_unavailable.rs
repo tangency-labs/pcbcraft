@@ -22,7 +22,10 @@ pub(crate) fn write(_part_name: &str, _bodies: &[(&str, &KernelBody)]) -> Result
     Err(unavailable("STEP write"))
 }
 
-pub(crate) fn read(_text: &str) -> Result<(Vec<(String, KernelBody)>, Vec<RefusedItem>)> {
+/// The named bodies read from a file, and the solid items refused.
+pub(crate) type Read = (Vec<(String, KernelBody)>, Vec<RefusedItem>);
+
+pub(crate) fn read(_text: &str) -> Result<Read> {
     Err(unavailable("STEP read"))
 }
 
