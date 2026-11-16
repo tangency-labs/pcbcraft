@@ -58,6 +58,7 @@
     "pcb.set_footprint_reference_offset": {"contract":"0d88ec6bc9c0582863b63189a44a5acce71aa8af25d98dbcd33eefdb63b5be83","version":1},
     "pcb.set_footprint_reference_text": {"contract":"a471b24a3b19f193429a6379658d174a3d26fd4d4f2311acc2e119f30e60f768","version":1},
     "pcb.set_footprint_transform": {"contract":"32d46e8d8a3dd494c38120179c4cc646816c2c3e3b81111013cca991d1d47f8c","version":1},
+    "pcb.set_placement_origin": {"contract":"27f1eaed0114cd732ad60354294573a49f5a54c3854367af7a0dc63416aab613","version":1},
     "pcb.set_rules": {"contract":"1343f585232801b68358dfd21ad1eec2407d70aecb138bc52ee8c3eb89d8933a","version":1},
     "pcb.set_silkscreen": {"contract":"5e16401ad45830dec6c8d4b5b3c95b722aba4309e02f1c58f8569fae01eacf41","version":1},
     "pcb.set_track_width": {"contract":"b2879205b82ec5813aec86ac5511ee74400817e530e738c1967e68eb0283b57a","version":1},
