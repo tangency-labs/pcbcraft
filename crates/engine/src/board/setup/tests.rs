@@ -585,9 +585,10 @@ fn with_header(documents: &persistence::Documents, from: &str, to: &str) -> pers
 /// are one undoable setup edit that saves losslessly in its own board format. Unset values stay
 /// unknown and boards without these fields keep their earlier format and bytes.
 ///
-/// The bottom layer's 47.9 µm is IPC-2221A clause 10.1.1, Table 10-1: minimum external conductor
-/// thickness after processing for 1 oz foil, Class 1 and 2. The 35 µm foil for 1 oz follows
-/// IPC-2251 clause 4.1.1.3. The other values are arbitrary.
+/// 47.9 µm is IPC-2221A clause 10.1.1, Table 10-1: the minimum external conductor thickness after
+/// processing for 1 oz foil, Class 1 and 2. Top records it as nominal and Bottom as minimum, so both
+/// bases are covered. The 35 µm foil for 1 oz follows IPC-2251 clause 4.1.1.3; the other values are
+/// arbitrary.
 #[test]
 fn copper_strata_and_board_thickness_round_trip_in_board_format_20() {
     let mut s = session(4);
@@ -735,4 +736,23 @@ fn board_format_20_carries_rules() {
     assert!(persistence::decode_documents(&with_header(&stacked, "pcbcraft-board/20", "pcbcraft-board/19")).is_err());
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved_board(&s, "pcbcraft-board/19"), ruled);
+}
+
+/// Locked copper and the stack fields share format 20; removing the stack fields returns to format 18.
+#[test]
+fn board_format_20_carries_locked_copper() {
+    use crate::board::track::{ADD_VIA, SET_COPPER_LOCKED};
+    let mut s = crate::board::track::tests::routed_fixture();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    apply(&mut s, ADD_VIA, json!({"board":board,"at":{"x_nm":0,"y_nm":40_000_000}}));
+    let via = s.project().unwrap().board.vias[0].id;
+    apply(&mut s, SET_COPPER_LOCKED, json!({"board":board,"vias":[via],"locked":true}));
+    let locked = saved_board(&s, "pcbcraft-board/18");
+    let mut candidate = setup(&s);
+    candidate["stackup"]["strata"][0]["role"] = json!("signal");
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    saved_board(&s, "pcbcraft-board/20");
+    assert!(s.project().unwrap().board.vias.iter().any(|via| via.locked));
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved_board(&s, "pcbcraft-board/18"), locked);
 }
