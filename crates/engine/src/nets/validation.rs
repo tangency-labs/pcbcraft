@@ -132,21 +132,43 @@ impl Project {
                 let display_name = network
                     .anchors
                     .iter()
-                    .find_map(|anchor| {
-                        let endpoint = match anchor.kind {
-                            super::AnchorKind::Terminal => {
-                                self.component_terminal(anchor.object, &anchor.terminal).map(crate::WireEndpoint::Terminal)
-                            }
-                            super::AnchorKind::Label => Some(crate::WireEndpoint::NetLabel(anchor.object)),
-                            super::AnchorKind::Port => Some(crate::WireEndpoint::Label(anchor.object)),
-                            super::AnchorKind::Junction => None,
-                        }?;
-                        electrical.net_index_for_endpoint(endpoint).map(|index| electrical.net_name(index))
-                    })
+                    .find_map(|anchor| electrical.net_index_for_endpoint(self.anchor_endpoint(anchor)?).map(|index| electrical.net_name(index)))
                     .unwrap_or_else(|| "Unresolved net".into());
                 serde_json::json!({"id":id,"anchor":network.anchors.first(),"names":network.names,"name":display_name})
             })
             .collect();
         Ok(serde_json::json!({"scope":self.net_scope(),"records":self.net_registry.records,"nets":nets}))
+    }
+
+    /// Return the active persistent ID of each row of [`Project::electrical_connectivity`], by
+    /// row index; rows without one are `None`. Reads only, like [`Self::inspect_net_registry`].
+    pub(crate) fn persistent_net_ids(&self) -> Result<Vec<Option<uuid::Uuid>>, String> {
+        let electrical = self.electrical_connectivity();
+        let mut ids = vec![None; electrical.nets.len()];
+        if self.net_registry.records.is_empty() {
+            return Ok(ids);
+        }
+        let graph = Graph::build(self)?;
+        for record in &self.net_registry.records {
+            if !matches!(record.state, State::Active {}) {
+                continue;
+            }
+            let Some(network) = graph.network(&record.primary) else { continue };
+            let row = graph.networks[network].anchors.iter().find_map(|anchor| electrical.net_index_for_endpoint(self.anchor_endpoint(anchor)?));
+            if let Some(slot) = row.and_then(|row| ids.get_mut(row)) {
+                slot.get_or_insert(record.id);
+            }
+        }
+        Ok(ids)
+    }
+
+    /// The current schematic endpoint of a live anchor; junction anchors have none.
+    fn anchor_endpoint(&self, anchor: &Anchor) -> Option<crate::WireEndpoint> {
+        match anchor.kind {
+            AnchorKind::Terminal => self.component_terminal(anchor.object, &anchor.terminal).map(crate::WireEndpoint::Terminal),
+            AnchorKind::Label => Some(crate::WireEndpoint::NetLabel(anchor.object)),
+            AnchorKind::Port => Some(crate::WireEndpoint::Label(anchor.object)),
+            AnchorKind::Junction => None,
+        }
     }
 }
