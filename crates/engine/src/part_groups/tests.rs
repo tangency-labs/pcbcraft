@@ -292,13 +292,13 @@ fn deleting_a_part_instance_takes_its_memberships_with_it() {
     assert_eq!(memberships(s.project().unwrap()), assigned);
 }
 
-/// The single accessor pair is the only conversion between addresses and stored keys.
+/// The single accessor pair is the only conversion between published addresses and stored keys.
 #[test]
 fn part_instance_keys_round_trip_through_addresses() {
-    let published = format!("{PART_INSTANCE_ADDRESS_PREFIX}42");
-    assert_eq!(part_instance_key(&published), Some(42));
-    assert_eq!(part_instance_address(42), published);
-    for invalid in ["R1".into(), PART_INSTANCE_ADDRESS_PREFIX.into(), format!("{PART_INSTANCE_ADDRESS_PREFIX}x"), "42".into()] {
+    // The published address form is pinned literally: saved projects and reports use it.
+    assert_eq!(part_instance_key("component-42"), Some(42));
+    assert_eq!(part_instance_address(42), "component-42");
+    for invalid in ["R1", "component-", "component-x", "42"] {
         assert_eq!(part_instance_key(invalid), None);
     }
 }
