@@ -26,6 +26,8 @@ fn arguments_are_still_refused_before_the_kernel() {
     assert_eq!(read_step(&[0xff, 0xfe]).unwrap_err().code(), ErrorCode::ModelUnreadable);
 }
 
+/// Without a kernel, an empty read has no placed bodies and no box, a placement of a missing
+/// body is `invalid_params`, and boxes still unite.
 #[test]
 fn placements_need_no_kernel_until_a_body_is_moved() {
     let empty = StepRead::default();

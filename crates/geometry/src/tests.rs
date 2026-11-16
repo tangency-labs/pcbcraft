@@ -122,17 +122,35 @@ fn an_unsupported_surface_refuses_only_its_solid() {
     let second = Body::cuboid("Second", second_box.min_nm, [1_000_000; 3]).unwrap();
     let bytes = write_step("fixture", &[first, second]).unwrap();
     let text = String::from_utf8(bytes).unwrap();
-    assert_eq!(text.matches("=PLANE(").count(), 12);
-    // One face of one solid only.
-    let read = read_step(text.replacen("=PLANE(", "=UNKNOWN_SURFACE(", 1).as_bytes()).unwrap();
+    let planes: Vec<&str> = text.lines().filter(|line| line.contains("=PLANE(")).collect();
+    assert_eq!(planes.len(), 12);
+    // One face of the second solid only: the planes at x = 20 mm and beyond are its own, the
+    // block's end at 10.5 mm.
+    let theirs: Vec<&str> = planes.iter().copied().filter(|line| plane_origin_x_mm(&text, line) >= 20.0).collect();
+    assert_eq!(theirs.len(), 6);
+    let edited = text.replacen(theirs[0], &theirs[0].replacen("=PLANE(", "=UNKNOWN_SURFACE(", 1), 1);
+    let read = read_step(edited.as_bytes()).unwrap();
     assert_eq!(read.refused.len(), 1);
     assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
     assert!(read.refused[0].entity > 0);
     assert_eq!(read.bodies.len(), 1);
+    assert_eq!(read.bodies[0].name(), "Block", "the solid left whole is the one read");
     assert_eq!(read.placements.len(), 1, "a refused solid is not placed");
     let kept = read.bounding_box().unwrap().unwrap();
-    let deviation = kept.max_deviation_nm(&first_box).min(kept.max_deviation_nm(&second_box));
-    assert!(deviation <= ROUND_TRIP_TOLERANCE_NM, "the other solid, where it was written: {kept:?}");
+    assert!(kept.max_deviation_nm(&first_box) <= ROUND_TRIP_TOLERANCE_NM, "the block, where it was written: {kept:?}");
+    assert!(kept.max_deviation_nm(&second_box) > ROUND_TRIP_TOLERANCE_NM);
+}
+
+/// The x coordinate, in millimetres, of the origin of the plane on `line` of `text`, which writes
+/// one entity a line: `#n=PLANE('',#axis);`, `#axis=AXIS2_PLACEMENT_3D('',#point,..);` and
+/// `#point=CARTESIAN_POINT('',(x,y,z));`.
+fn plane_origin_x_mm(text: &str, line: &str) -> f64 {
+    let first_reference =
+        |line: &str| line.split_once('=').unwrap().1.split_once('#').unwrap().1.split(|c: char| !c.is_ascii_digit()).next().unwrap().to_owned();
+    let entity = |id: &str| text.lines().find(|l| l.starts_with(&format!("#{id}="))).unwrap().to_owned();
+    let axis = entity(&first_reference(line));
+    let point = entity(&first_reference(&axis));
+    point.split_once("',(").unwrap().1.split(',').next().unwrap().parse().unwrap()
 }
 
 /// Non-positive sizes, out-of-range corners and an empty write are `invalid_params`.
@@ -177,6 +195,8 @@ fn a_transformed_copy_moves_and_leaves_the_original() {
     assert_eq!(body.transformed(&Transform::translation([0, -MAX_LENGTH_NM - 1, 0])).unwrap_err().code(), ErrorCode::InvalidParams);
 }
 
+/// A placement naming a body the read does not hold is `invalid_params` for the placed bodies
+/// and the box; without it the read places its body.
 #[test]
 fn a_placement_of_a_missing_body_is_refused() {
     let (body, _) = block();
@@ -188,6 +208,7 @@ fn a_placement_of_a_missing_body_is_refused() {
     assert_eq!(read.placed_bodies().unwrap().len(), 1);
 }
 
+/// A body no product places is placed once by the identity; an empty file has no box.
 #[test]
 fn bodies_outside_any_assembly_are_placed_once_where_they_are() {
     let (body, expected) = block();
@@ -198,6 +219,7 @@ fn bodies_outside_any_assembly_are_placed_once_where_they_are() {
     assert_eq!(read_step(b"ISO-10303-21;DATA;ENDSEC;END-ISO-10303-21;").unwrap().bounding_box().unwrap(), None);
 }
 
+/// The union of two boxes is the smallest box holding both.
 #[test]
 fn a_union_holds_both_boxes() {
     let a = BoundingBox { min_nm: [0, -5, 2], max_nm: [10, 0, 3] };
@@ -205,6 +227,8 @@ fn a_union_holds_both_boxes() {
     assert_eq!(a.union(&b), BoundingBox { min_nm: [-1, -5, 2], max_nm: [10, 7, 9] });
 }
 
+/// Blocks touching either end of the coordinate range are made with exact boxes, and a point at
+/// either end converts exactly; one nanometre past either end is refused.
 #[test]
 fn both_ends_of_the_coordinate_range_are_accepted_and_one_past_is_refused() {
     // One-millimetre blocks: a one-nanometre block a kilometre out is below the kernel's
