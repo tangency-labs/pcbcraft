@@ -5,8 +5,9 @@
 //! The document follows `docs/schemas/netlist-v1.schema.json`. Terminals are logical part
 //! terminals, so a terminal drawn on several units of one part appears once. Nets carry their
 //! persistent registry UUID when they have one and the name the Net Inspector shows. Rows are
-//! ordered by component ID and terminal-table order, never by connectivity traversal, so the
-//! same design always gives the same bytes.
+//! ordered by the number in the component ID (`component-9` before `component-10`) and then by
+//! terminal-table order, never by connectivity traversal, so the same design always gives the
+//! same bytes.
 
 use crate::{
     CommandError, Project, Session,
@@ -32,11 +33,12 @@ pub struct Netlist {
     pub project: ProjectRef,
     /// Which connectivity the nets describe.
     pub basis: Basis,
-    /// Components in component ID order.
+    /// Components in numeric component ID order: `component-9` before `component-10`.
     pub components: Vec<Component>,
     /// Nets with at least one terminal, ordered by their first terminal.
     pub nets: Vec<Net>,
-    /// Terminals of placed units that are on no net, in component ID and terminal-table order.
+    /// Terminals of placed units that are on no net, in numeric component ID and then
+    /// terminal-table order.
     pub unconnected: Vec<TerminalRef>,
 }
 
@@ -128,7 +130,7 @@ pub struct Net {
     pub name: String,
     /// Every authored name on the net, sorted.
     pub names: Vec<String>,
-    /// Joined terminals in component ID and terminal-table order.
+    /// Joined terminals in numeric component ID and then terminal-table order.
     pub terminals: Vec<TerminalRef>,
 }
 
@@ -268,7 +270,7 @@ impl Project {
                 }
             })
             .collect();
-        // Terminals sort by component ID, then by the definition's terminal order.
+        // Terminals sort by the component ID's number, then by the definition's terminal order.
         let order = |part: u64, terminal: &str| {
             let index = self.components.get(&part).and_then(|component| component.definition.pin_index(terminal)).unwrap_or(usize::MAX);
             (part, index)

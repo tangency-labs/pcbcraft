@@ -22,7 +22,7 @@ always `schematic` in format 1. Board copper is not consulted.
 | `format` | Always `pcbcraft-netlist/1`. Readers refuse other values. |
 | `project` | The project's UUID and display name. |
 | `basis` | Which connectivity the nets describe; `schematic`. |
-| `components` | Every component, ordered by component ID. |
+| `components` | Every component, ordered by the number in its ID. |
 | `nets` | Every net with at least one part terminal, ordered by its first terminal. |
 | `unconnected` | Terminals of placed units that are on no net. |
 
@@ -62,8 +62,10 @@ unplaced unit appears in neither.
 
 ## Determinism
 
-Components, units, terminals and nets are ordered by IDs and terminal-table
-order, never by traversal or editing order, and the text is two-space indented
+Components are ordered by the number in their ID, so `component-9` comes before
+`component-10`. Units follow their unit ID, terminals the definition's terminal
+table, and nets their first terminal in that same component and terminal order.
+Nothing depends on traversal or editing order, and the text is two-space indented
 JSON ending in a newline. Exporting an unchanged project, including after save
 and reopen, gives identical bytes.
 

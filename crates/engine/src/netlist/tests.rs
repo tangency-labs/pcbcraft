@@ -334,21 +334,13 @@ fn reader_and_schema_agree_on_field_edges() {
         omitted.pointer_mut(pointer).unwrap().as_object_mut().unwrap().remove(field);
         agree(&omitted, false);
     }
-    // Every object kind in the document is closed on both sides.
-    assert!(!original["unconnected"].as_array().unwrap().is_empty());
-    for pointer in [
-        "",
-        "/project",
-        "/components/0",
-        "/components/0/definition",
-        "/components/0/units/0",
-        "/components/0/terminals/0",
-        "/nets/0",
-        "/nets/0/terminals/0",
-        "/unconnected/0",
-    ] {
+    // Every object in the document is closed on both sides, whatever its kind or depth.
+    let mut objects = Vec::new();
+    objects_in(&original, String::new(), &mut objects);
+    assert!(objects.len() > 9, "{objects:?}");
+    for pointer in objects {
         let mut value = original.clone();
-        value.pointer_mut(pointer).unwrap().as_object_mut().unwrap().insert("extra".into(), json!(1));
+        value.pointer_mut(&pointer).unwrap().as_object_mut().unwrap().insert("extra".into(), json!(1));
         agree(&value, false);
     }
     let id = original["project"]["id"].as_str().unwrap().to_owned();
@@ -374,12 +366,73 @@ fn schema_vocabularies_match_the_types() {
     let schema = schema();
     let names = |values: Vec<Value>| values.iter().map(Value::to_string).collect::<BTreeSet<_>>();
     let listed = |pointer: &str| names(schema.pointer(pointer).unwrap().as_array().unwrap().clone());
+    // Each list is checked by an exhaustive match, so a new variant fails to compile here
+    // until it is listed and the schema says the same.
     use ElectricalType::*;
     let types = [Passive, Input, Output, Bidirectional, PowerIn, PowerOut, Unspecified, TriState, OpenCollector, OpenEmitter, NoConnect];
+    for value in types {
+        match value {
+            Passive | Input | Output | Bidirectional | PowerIn | PowerOut | Unspecified | TriState | OpenCollector | OpenEmitter | NoConnect => {}
+        }
+    }
+    let kinds = [ComponentKind::Part, ComponentKind::Power];
+    for value in kinds {
+        match value {
+            ComponentKind::Part | ComponentKind::Power => {}
+        }
+    }
+    let bases = [Basis::Schematic];
+    for value in bases {
+        match value {
+            Basis::Schematic => {}
+        }
+    }
     assert_eq!(listed("/$defs/terminal/properties/electrical_type/enum"), names(types.iter().map(|t| json!(t)).collect()));
-    assert_eq!(listed("/$defs/component/properties/kind/enum"), names(vec![json!(ComponentKind::Part), json!(ComponentKind::Power)]));
-    assert_eq!(listed("/properties/basis/enum"), names(vec![json!(Basis::Schematic)]));
+    assert_eq!(listed("/$defs/component/properties/kind/enum"), names(kinds.iter().map(|k| json!(k)).collect()));
+    assert_eq!(listed("/properties/basis/enum"), names(bases.iter().map(|b| json!(b)).collect()));
     assert_eq!(schema["properties"]["format"]["const"], json!(FORMAT));
+}
+
+/// The JSON pointer of every object in a document, the document itself included.
+fn objects_in(value: &Value, at: String, found: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                objects_in(child, format!("{at}/{key}"), found);
+            }
+            found.push(at);
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                objects_in(child, format!("{at}/{index}"), found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Components and terminals sort by the number in the component ID, not by its text, so
+/// `component-9` comes before `component-10` in components, nets and unconnected terminals.
+#[test]
+fn rows_follow_the_component_number() {
+    let mut s = session();
+    let root = s.project().unwrap().sheet_target();
+    let mut symbols = Vec::new();
+    for index in 0..10 {
+        apply(&mut s, PLACE_RESISTOR, json!({"sheet":root.id(),"x_nm":index * 10_000_000,"y_nm":20_000_000}));
+        symbols.push(last_symbol(&s, root));
+    }
+    let (from, to) = (terminal(&s, root, &symbols[9], "1"), terminal(&s, root, &symbols[0], "1"));
+    wire(&mut s, root, from, to);
+    let netlist = s.project().unwrap().netlist().unwrap().netlist;
+    let number = |id: &str| id.strip_prefix("component-").unwrap().parse::<u64>().unwrap();
+    let parts: Vec<_> = netlist.components.iter().map(|part| number(&part.id)).collect();
+    assert!(parts.iter().any(|&n| n < 10) && parts.iter().any(|&n| n >= 10), "{parts:?}");
+    assert!(parts.is_sorted(), "{parts:?}");
+    let joined: Vec<_> = netlist.nets[0].terminals.iter().map(|t| number(&t.part)).collect();
+    assert!(joined.len() == 2 && joined.is_sorted(), "{joined:?}");
+    let open: Vec<_> = netlist.unconnected.iter().map(|t| number(&t.part)).collect();
+    assert!(open.is_sorted(), "{open:?}");
 }
 
 /// A net's terminals as `(reference, terminal)` pairs.

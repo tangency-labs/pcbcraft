@@ -40,7 +40,7 @@
       ]
     },
     "components": {
-      "description": "Components in component ID order.",
+      "description": "Components in numeric component ID order: component-9 before component-10.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/component"
@@ -54,7 +54,7 @@
       }
     },
     "unconnected": {
-      "description": "Terminals of placed units that are on no net, in component ID and terminal-table order.",
+      "description": "Terminals of placed units that are on no net, in numeric component ID and then terminal-table order.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/terminal_ref"
@@ -231,7 +231,7 @@
           }
         },
         "terminals": {
-          "description": "Joined terminals in component ID and terminal-table order.",
+          "description": "Joined terminals in numeric component ID and then terminal-table order.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/terminal_ref"
