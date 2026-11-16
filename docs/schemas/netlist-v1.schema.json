@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:netlist:1",
+  "title": "PCBcraft netlist, format 1",
+  "description": "Every component with its logical terminals, and every net with the terminals it joins, from the schematic's complete electrical connectivity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "project",
+    "basis",
+    "components",
+    "nets",
+    "unconnected"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-netlist/1"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "basis": {
+      "description": "Which connectivity the nets describe; `schematic` is the current wiring, labels and hierarchy across all sheets.",
+      "enum": [
+        "schematic"
+      ]
+    },
+    "components": {
+      "description": "Components in component ID order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    },
+    "nets": {
+      "description": "Nets with at least one terminal, ordered by their first terminal.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/net"
+      }
+    },
+    "unconnected": {
+      "description": "Terminals of placed units that are on no net, in component ID and terminal-table order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/terminal_ref"
+      }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "reference",
+        "value",
+        "definition",
+        "units",
+        "terminals"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable component ID, such as `component-3`.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`power` marks a power port that names its net.",
+          "enum": [
+            "part",
+            "power"
+          ]
+        },
+        "reference": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "library",
+            "id",
+            "revision"
+          ],
+          "properties": {
+            "library": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "units": {
+          "description": "Placed units in unit ID order; units not placed on any sheet are absent.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/unit"
+          }
+        },
+        "terminals": {
+          "description": "The definition's logical terminals in native terminal order, each listed once.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/terminal"
+          }
+        }
+      }
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "symbol",
+        "sheet",
+        "occurrence"
+      ],
+      "properties": {
+        "unit": {
+          "type": "string"
+        },
+        "symbol": {
+          "description": "The placement's symbol ID, such as `symbol-4`.",
+          "type": "string"
+        },
+        "sheet": {
+          "$ref": "#/$defs/uuid"
+        },
+        "occurrence": {
+          "description": "Sheet occurrence IDs from the root sheet down to the unit's own sheet.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terminal",
+        "name",
+        "electrical_type"
+      ],
+      "properties": {
+        "terminal": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "electrical_type": {
+          "enum": [
+            "passive",
+            "input",
+            "output",
+            "bidirectional",
+            "power_in",
+            "power_out",
+            "unspecified",
+            "tri_state",
+            "open_collector",
+            "open_emitter",
+            "no_connect"
+          ]
+        }
+      }
+    },
+    "net": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "names",
+        "terminals"
+      ],
+      "properties": {
+        "id": {
+          "description": "Persistent net UUID, or null for a net without one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "The name the Net Inspector shows.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Every authored name on the net, sorted.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "terminals": {
+          "description": "Joined terminals in component ID and terminal-table order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/terminal_ref"
+          }
+        }
+      }
+    },
+    "terminal_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "part",
+        "terminal"
+      ],
+      "properties": {
+        "part": {
+          "type": "string"
+        },
+        "terminal": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
