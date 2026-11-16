@@ -59,6 +59,16 @@ fn set(s: &mut Session, house: Option<Uuid>, profile: Value) -> Result<u64, Comm
     s.apply(SET_ASSEMBLY_HOUSE, &params)
 }
 
+/// Panics unless `result` is an invalid-parameters refusal whose message names `reason`.
+fn invalid_because<T: std::fmt::Debug>(result: Result<T, CommandError>, reason: &str) {
+    assert!(matches!(&result, Err(CommandError::InvalidParams(message)) if message.contains(reason)), "expected {reason:?}, got {result:?}");
+}
+
+/// Panics unless `result` is a refusal whose message names `reason`.
+fn refused_because<T: std::fmt::Debug>(result: Result<T, String>, reason: &str) {
+    assert!(matches!(&result, Err(message) if message.contains(reason)), "expected {reason:?}, got {result:?}");
+}
+
 /// The id of the house with this name.
 fn house(s: &Session, name: &str) -> Uuid {
     view(s).assembly_houses().iter().find(|house| house.name == name).unwrap().id
@@ -212,7 +222,8 @@ fn houses_leave_fabrication_and_legacy_markers_alone() {
     let (mut s, [id, _, _]) = fixture();
     let board = s.project().unwrap().board_target().unwrap().board;
     s.apply(SET_PLACEMENT_ORIGIN, &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"outline_lower_left"}})).unwrap();
-    assert!(view(&s).placement_row(&id, None).is_err(), "no outline to measure from");
+    // No outline to measure from.
+    refused_because(view(&s).placement_row(&id, None), "Draw a Board Outline");
 }
 
 /// The command creates, replaces in place and removes houses, one undo step each, keeps
@@ -297,23 +308,32 @@ fn bad_requests_change_nothing() {
         (Some(Uuid::from_u128(9)), json!({"name":"X"})),
         (Some(Uuid::from_u128(9)), Value::Null),
     ] {
-        assert!(set(&mut s, house, profile.clone()).is_err(), "{house:?} {profile}");
+        let reason = match (house, &profile) {
+            (Some(id), _) if id.is_nil() => "non-nil UUID",
+            (Some(_), _) => "No assembly house",
+            (None, Value::Null) => "Name the house to remove.",
+            (None, _) if profile["name"] == "Taken" => "repeats an identity or name",
+            (None, _) => "`profile` must be a house profile",
+        };
+        invalid_because(set(&mut s, house, profile.clone()), reason);
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()), "{profile}");
     }
     let board = before.board_target().unwrap().board;
     let mut params = json!({"board":board,"expected_revision":s.revision(),"profile":{"name":"Y"},"house":null});
-    assert!(s.apply(SET_ASSEMBLY_HOUSE, &params).is_err(), "a null house is refused, not read as a new one");
+    // A null house is refused, not read as a new one.
+    invalid_because(s.apply(SET_ASSEMBLY_HOUSE, &params), "non-nil UUID");
     params.as_object_mut().unwrap().remove("house");
     params["expected_revision"] = json!(s.revision() - 1);
-    assert!(s.apply(SET_ASSEMBLY_HOUSE, &params).is_err());
+    let stale = s.apply(SET_ASSEMBLY_HOUSE, &params);
+    assert!(matches!(&stale, Err(CommandError::Unavailable(message)) if message.contains("project changed")), "{stale:?}");
     params["expected_revision"] = json!(s.revision());
     params.as_object_mut().unwrap().remove("board");
-    assert!(s.apply(SET_ASSEMBLY_HOUSE, &params).is_err(), "the board is required");
+    invalid_because(s.apply(SET_ASSEMBLY_HOUSE, &params), "needs `board`");
     params["board"] = json!(Uuid::from_u128(5));
-    assert!(s.apply(SET_ASSEMBLY_HOUSE, &params).is_err(), "another board is refused");
+    invalid_because(s.apply(SET_ASSEMBLY_HOUSE, &params), "unknown board ID");
     params["board"] = json!(board);
     params.as_object_mut().unwrap().remove("profile");
-    assert!(s.apply(SET_ASSEMBLY_HOUSE, &params).is_err(), "the profile is required");
+    invalid_because(s.apply(SET_ASSEMBLY_HOUSE, &params), "needs `profile`");
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 
     let name = "n".repeat(MAX_NAME_CHARS);
@@ -348,17 +368,17 @@ fn profile_and_board_limits() {
             .collect::<Vec<_>>()
     };
     assert!(validate_all(&houses(MAX_HOUSES)).is_ok());
-    assert!(validate_all(&houses(MAX_HOUSES + 1)).is_err());
+    refused_because(validate_all(&houses(MAX_HOUSES + 1)), &format!("at most {MAX_HOUSES} assembly houses"));
     let mut repeated = houses(2);
     repeated[1].id = repeated[0].id;
-    assert!(validate_all(&repeated).is_err());
+    refused_because(validate_all(&repeated), "repeats an identity or name");
 
     let (mut s, _) = fixture();
     for n in 0..MAX_HOUSES {
         set(&mut s, None, json!({"name":format!("H{n}")})).unwrap();
     }
     let before = s.snapshot().unwrap();
-    assert!(set(&mut s, None, json!({"name":"One more"})).is_err());
+    invalid_because(set(&mut s, None, json!({"name":"One more"})), &format!("at most {MAX_HOUSES} assembly houses"));
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
@@ -381,7 +401,7 @@ fn board_package_total_is_bounded() {
     assert!(matches!(refused, Err(CommandError::InvalidParams(ref message)) if message.contains("together")), "{refused:?}");
     assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
     let third = full.board.assembly_houses[2].id;
-    assert!(set(&mut s, Some(third), json!({"name":"Third","packages":packages(0, 2)})).is_err());
+    invalid_because(set(&mut s, Some(third), json!({"name":"Third","packages":packages(0, 2)})), "package offsets together");
     assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
 
     let documents = encode_documents(full.clone()).unwrap();
@@ -391,7 +411,8 @@ fn board_package_total_is_bounded() {
     saved["assembly_houses"][2]["packages"].as_array_mut().unwrap().push(json!({"library":LIBRARY,"definition":"z-extra","rotation":90}));
     let mut over = documents.clone();
     over.insert(path, serde_json::to_vec(&saved).unwrap());
-    assert!(decode_documents(&over).is_err(), "a saved board beyond the total is refused");
+    // A saved board beyond the total is refused.
+    refused_because(decode_documents(&over), "package offsets together");
 }
 
 /// The largest house list the limits allow (every house, every offset, the longest names, ids and
@@ -492,7 +513,7 @@ fn house_format_round_trips_and_reset_restores_previous_bytes() {
     let mut missing = original.clone();
     let text = String::from_utf8(original[&path].clone()).unwrap();
     missing.insert(path, text.replacen("pcbcraft-board/21", "pcbcraft-board/22", 1).into_bytes());
-    assert!(decode_documents(&missing).is_err(), "format 22 requires a house");
+    refused_because(decode_documents(&missing), "assembly houses require format 22");
 }
 
 /// A house without an origin or rules still writes format 22 and reopens to the same bytes.
