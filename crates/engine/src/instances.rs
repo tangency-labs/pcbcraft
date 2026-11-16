@@ -151,7 +151,8 @@ impl Project {
 
     /// Validate the exact single-use hierarchy before installing decoded or migrated identities.
     /// No missing record, duplicate definition or foreign relationship is repaired by inference.
-    /// An optional net registry is validated against the installed occurrences before adoption.
+    /// An optional net registry is validated against the installed occurrences before adoption,
+    /// and optional component-class memberships against the project's components and classes.
     pub(crate) fn install_sheet_instances(&mut self, records: Instances) -> Result<(), String> {
         if records.circuit_uses.len() != 1 || records.sheet_occurrences.len() != self.sheets.len() {
             return Err("Instance records require one circuit use and one occurrence per sheet.".into());

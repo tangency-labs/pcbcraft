@@ -8,8 +8,8 @@ classes. This page describes the catalog, explicit membership and their storage;
 
 ## Identity
 
-Each class has a stable UUID, a positive definition revision and an editable
-name. The UUID is the only lookup authority: names may repeat and never select
+Each class has a stable UUID, a definition revision from 1 to 4294967295 and an
+editable name. A rename that would take the revision past that range is refused. The UUID is the only lookup authority: names may repeat and never select
 membership. Names are 1–200 trimmed characters without control characters. A
 project holds at most 256 component classes.
 
@@ -29,7 +29,7 @@ identity rewrites membership in one place.
 | `component_classes.remove` | `expected_revision`, `class`; refuses a class that any component belongs to and lists those components |
 | `component_classes.inspect` | No parameters; returns `component_classes` and the unchanged session `revision` |
 | `components.set_classes` | `expected_revision`, `component`, complete `classes` UUID set; replaces that component's memberships in one undo step, and an empty set removes them |
-| `components.inspect_classes` | Optional `component`; returns `component_memberships` for that component, or for every component that belongs to a class, and the unchanged `revision` |
+| `components.inspect_classes` | Optional `component` (omit it rather than passing null); returns `component_memberships` for that component, or for every component that belongs to a class, and the unchanged `revision` |
 
 Both queries return their data through MCP `execute` even with `inspect: false`.
 Normal project inspection includes a nonempty `component_classes` catalog. Class
@@ -54,7 +54,8 @@ numbers.
 
 A nonempty catalog selects `pcbcraft-project/24` and is stored in `project.json`
 directly after any net-class catalog, with definitions sorted by UUID and one per
-line:
+line. Readers accept the definitions in any order and sort them by UUID, as for
+net classes:
 
 ```json
 "component_classes": {

@@ -360,6 +360,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// may also carry locks; older board headers reject the rules field.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
+/// Project/24 requires a nonempty component-class catalog; its memberships require
+/// project/24 and, when board-owned, instances/5, and must name live components and classes.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
@@ -1806,6 +1808,7 @@ impl DocumentsEncoder {
 
     /// Finish components/package choices, writing adopted instances in their single storage home
     /// before starting sheets. Instance records consume the ordinary incremental record budget.
+    /// A board-owned home takes the oldest instance header that can hold its records.
     fn finish_project_document(&mut self) -> Result<(), String> {
         if self.instance_records.is_some() {
             if self.project.board_target().is_some() {

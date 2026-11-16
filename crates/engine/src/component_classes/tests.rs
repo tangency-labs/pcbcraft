@@ -269,3 +269,159 @@ fn component_keys_round_trip_through_addresses() {
         assert_eq!(component_key(invalid), None);
     }
 }
+
+/// Names are accepted up to 200 trimmed characters; the first character past the limit, blank,
+/// padded and control-containing names are refused on create, update and read.
+#[test]
+fn class_names_are_bounded_on_each_side_of_the_limit() {
+    let (mut s, _) = parts(0, false);
+    let longest = "A".repeat(200);
+    let class = create(&mut s, &longest);
+    assert_eq!(s.project().unwrap().component_classes().get(class).unwrap().name, longest);
+    let docs = round_trip(&s);
+    let assigned = s.snapshot().unwrap();
+    for name in ["A".repeat(201), String::new(), " A".into(), "A ".into(), "A\nB".into()] {
+        refuse(&mut s, CREATE, json!({"name":name}));
+        refuse(&mut s, UPDATE, json!({"class":class,"name":name}));
+        assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
+        let saved = edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"][0]["name"] = json!(name));
+        assert!(decode_documents(&saved).is_err(), "{name:?}");
+    }
+    for params in [json!({}), json!({"name":null}), json!({"name":7})] {
+        refuse(&mut s, CREATE, params);
+    }
+}
+
+/// A catalog holds at most 256 classes: the 256th is created, saved and reopened; the 257th is
+/// refused by the command and by the reader.
+#[test]
+fn catalog_size_is_bounded_on_each_side_of_the_limit() {
+    let (mut s, _) = parts(0, false);
+    for index in 0..MAX_CLASSES {
+        apply(&mut s, CREATE, json!({"name":format!("Class {index}")}));
+    }
+    assert_eq!(s.project().unwrap().component_classes().definitions.len(), MAX_CLASSES);
+    let docs = round_trip(&s);
+    let full = s.snapshot().unwrap();
+    refuse(&mut s, CREATE, json!({"name":"One more"}));
+    assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
+    let overfull = edited(&docs, ENTRY_POINT, |project| {
+        project["component_classes"]["definitions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":Uuid::from_u128(u128::MAX),"revision":1,"name":"Extra"}));
+    });
+    assert!(decode_documents(&overfull).is_err());
+}
+
+/// Saved revisions run from 1 to `u32::MAX`. The largest is read, and a later rename is then
+/// refused as exhausted rather than wrapping; zero, negative and wider values are refused.
+#[test]
+fn class_revisions_are_bounded_on_each_side_of_the_limit() {
+    let (mut s, _) = parts(0, false);
+    let class = create(&mut s, "Power");
+    let docs = round_trip(&s);
+    let revision = |value: Value| edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"][0]["revision"] = value);
+    for bad in [json!(0), json!(-1), json!(u64::from(u32::MAX) + 1), json!("1"), Value::Null] {
+        assert!(decode_documents(&revision(bad.clone())).is_err(), "{bad}");
+    }
+    let last = decode_documents(&revision(json!(u32::MAX))).unwrap();
+    assert_eq!(last.component_classes().get(class).unwrap().revision, u32::MAX);
+    s.open_snapshot(last);
+    let refusal = refuse(&mut s, UPDATE, json!({"class":class,"name":"Supply"}));
+    assert!(refusal.contains("exhausted"), "{refusal}");
+    assert_eq!(s.project().unwrap().component_classes().get(class).unwrap().name, "Power");
+}
+
+/// Saved records with missing, null, wrong-typed or out-of-range fields, missing required
+/// records, duplicate identities and unknown fields are refused by the reader.
+#[test]
+fn saved_record_edges_are_refused() {
+    for board in [false, true] {
+        let (mut s, components) = parts(2, board);
+        let power = create(&mut s, "Power");
+        create(&mut s, "Logic");
+        apply(&mut s, SET_CLASSES, json!({"component":components[0],"classes":[power]}));
+        let docs = round_trip(&s);
+        let path = s.project().unwrap().instances_document_path();
+        let home = path.clone().unwrap_or_else(|| ENTRY_POINT.into());
+        let key = component_key(&components[0]).unwrap();
+        let binding = |record: Value| {
+            edited(&docs, &home, |value| {
+                let list = if board { &mut value["component_class_bindings"] } else { &mut value["schematic_instances"]["component_class_bindings"] };
+                *list = json!([record]);
+            })
+        };
+        let mut cases = vec![
+            binding(json!({"component":-1,"class":power})),
+            binding(json!({"component":components[0],"class":power})),
+            {
+                // serde_json values cannot hold the first integer past u64, so write it as text.
+                let mut wide = binding(json!({"component":123_456_789,"class":power}));
+                let text = String::from_utf8(wide[&home].clone()).unwrap().replace("123456789", "18446744073709551616");
+                wide.insert(home.clone(), text.into_bytes());
+                wide
+            },
+            binding(json!({"component":key})),
+            binding(json!({"class":power})),
+            binding(json!({"component":key,"class":null})),
+            binding(json!({"component":key,"class":Uuid::nil()})),
+            binding(json!({"component":key,"class":"Power"})),
+            edited(&docs, &home, |value| {
+                let list = if board { &mut value["component_class_bindings"] } else { &mut value["schematic_instances"]["component_class_bindings"] };
+                *list = json!([{"component":key,"class":power},{"component":key,"class":power}]);
+            }),
+            edited(&docs, ENTRY_POINT, |project| {
+                project.as_object_mut().unwrap().remove("component_classes");
+            }),
+            edited(&docs, ENTRY_POINT, |project| {
+                project["component_classes"].as_object_mut().unwrap().remove("definitions");
+            }),
+            edited(&docs, ENTRY_POINT, |project| project["component_classes"]["extra"] = json!(1)),
+            edited(&docs, ENTRY_POINT, |project| {
+                let definitions = &mut project["component_classes"]["definitions"];
+                definitions[1]["id"] = definitions[0]["id"].clone();
+            }),
+            edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"][0]["id"] = json!(Uuid::nil())),
+        ];
+        if let Some(path) = &path {
+            cases.push(edited(&docs, path, |instances| {
+                instances.as_object_mut().unwrap().remove("component_class_bindings");
+            }));
+        }
+        for (index, case) in cases.into_iter().enumerate() {
+            assert!(decode_documents(&case).is_err(), "case {index}, board {board}");
+        }
+    }
+}
+
+/// Command parameters outside the published shapes are refused without changing the document.
+#[test]
+fn command_parameter_edges_are_refused() {
+    let (mut s, components) = parts(1, false);
+    let class = create(&mut s, "Power");
+    let before = s.snapshot().unwrap();
+    for params in [
+        json!({"component":components[0],"classes":[Uuid::nil()]}),
+        json!({"component":components[0]}),
+        json!({"component":components[0],"classes":null}),
+        json!({"component":components[0],"classes":class}),
+        json!({"component":components[0],"classes":["Power"]}),
+        json!({"classes":[class]}),
+        json!({"component":null,"classes":[class]}),
+        json!({"component":1,"classes":[class]}),
+    ] {
+        refuse(&mut s, SET_CLASSES, params);
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+    for params in [json!({"class":Uuid::nil(),"name":"X"}), json!({"name":"X"}), json!({"class":class})] {
+        refuse(&mut s, UPDATE, params);
+    }
+    for params in [json!({"class":Uuid::nil()}), json!({}), json!({"class":"Power"})] {
+        refuse(&mut s, REMOVE, params);
+    }
+    for params in [json!({"component":null}), json!({"component":"R1"}), json!({"component":"component-999"})] {
+        assert!(s.execute(INSPECT_CLASSES, &params).is_err(), "{params}");
+    }
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+}

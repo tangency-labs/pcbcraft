@@ -494,8 +494,8 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, occurrence IDs and sheet paper require split documents or an archive;
-    /// refuse loss.
+    /// drawings, rotation, occurrence IDs, sheet paper and net or component classes require split
+    /// documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());

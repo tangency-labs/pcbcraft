@@ -3628,6 +3628,7 @@ impl Session {
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
+    /// Memberships of components the candidate no longer contains are dropped in the same step.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         project.prune_component_class_bindings();
