@@ -239,7 +239,7 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
 }
 
 /// A value naming itself many times branches at every level; the shared expansion budget stops
-/// it quickly, leaves the remaining references as typed and reports them.
+/// it quickly, leaves the remaining references as typed and reports bounded highlight spans.
 #[test]
 fn branching_self_references_stay_bounded() {
     let mut s = schematic();
@@ -250,6 +250,12 @@ fn branching_self_references_stay_bounded() {
     let r = resolve(&mut s, &sheet, "@project.Loop");
     assert!(r["text"].as_str().unwrap().len() <= MAX_RESOLVED_LEN);
     assert_eq!(r["unknown"], json!(["@project.Loop"]));
+    let project = s.project().unwrap();
+    let resolved = project.resolve_text(Some(project.sheet_target()), "@project.Loop");
+    let spans: Vec<_> = resolved.text.match_indices("@project.Loop").map(|(start, reference)| start..start + reference.len()).collect();
+    assert!(!spans.is_empty());
+    assert!(spans.len() <= MAX_RESOLVED_LEN / "@project.Loop".len());
+    assert_eq!(resolved.unknown_spans, spans, "every unresolved reference has exactly its own valid byte span");
 }
 
 /// The output limit is strict: many references to a long value expand only while the whole
