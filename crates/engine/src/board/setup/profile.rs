@@ -10,10 +10,19 @@ pub const MAX_PROFILE_BYTES: usize = 1_048_576;
 const FORMAT: &str = "pcbcraft-setup-profile/1";
 /// Adds copper roles, base copper, copper thickness qualifiers and finished board thickness.
 const STACK_FORMAT: &str = "pcbcraft-setup-profile/2";
+/// Adds thermal conductivity, thermal expansion, dielectric strength and tracking reports and
+/// may carry every version 2 field.
+const REPORT_FORMAT: &str = "pcbcraft-setup-profile/3";
 
 /// The lowest profile version that holds this setup, so older readers keep opening the rest.
 fn format_for(setup: &BoardSetup) -> &'static str {
-    if setup.requires_stack_format() { STACK_FORMAT } else { FORMAT }
+    if setup.requires_report_format() {
+        REPORT_FORMAT
+    } else if setup.requires_stack_format() {
+        STACK_FORMAT
+    } else {
+        FORMAT
+    }
 }
 
 /// A self-contained, named setup profile. Applying copies its values into an explicitly addressed
@@ -56,13 +65,19 @@ impl SetupProfile {
         Ok(bytes)
     }
     /// In-memory construction receives the same validation as a decoded profile. Version 1 cannot
-    /// carry the stack fields, and version 2 is written only for a setup that uses them.
+    /// carry the stack fields, and version 2 is written only for a setup that uses them. Version 3
+    /// is written only for a setup whose materials carry thermal or insulation reports.
     fn validate(&self) -> Result<(), String> {
-        if (self.format != FORMAT && self.format != STACK_FORMAT) || self.id.is_nil() || self.revision == 0 {
+        if ![FORMAT, STACK_FORMAT, REPORT_FORMAT].contains(&self.format.as_str()) || self.id.is_nil() || self.revision == 0 {
             return Err("Unsupported or invalid setup profile identity/version.".into());
         }
         if self.format != format_for(&self.setup) {
-            return Err("Copper roles, base copper, copper thickness qualifiers and finished board thickness require setup profile version 2, which requires at least one of them.".into());
+            return Err(if self.setup.requires_report_format() || self.format == REPORT_FORMAT {
+                "Thermal conductivity, thermal expansion, dielectric strength and tracking reports require setup profile version 3, which requires at least one of them."
+            } else {
+                "Copper roles, base copper, copper thickness qualifiers and finished board thickness require setup profile version 2, which requires at least one of them."
+            }
+            .into());
         }
         if self.name.trim() != self.name || self.name.is_empty() || self.name.chars().count() > 80 || self.name.chars().any(char::is_control) {
             return Err("Profile name must contain 1–80 characters without surrounding whitespace or control characters.".into());
@@ -193,6 +208,41 @@ mod tests {
         assert!(SetupProfile::decode(&serde_json::to_vec(&downgraded).unwrap()).is_err());
         let mut upgraded = serde_json::to_value(&old).unwrap();
         upgraded["format"] = json!(STACK_FORMAT);
+        assert!(SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).is_err());
+    }
+    /// Version 3 is written only when a material carries thermal or insulation reports; it
+    /// carries version 2's stack fields, and the reports travel into the target board.
+    #[test]
+    fn material_reports_select_profile_version_3() {
+        let s = session();
+        let plain = s.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4OneOz).unwrap();
+        let mut value = serde_json::to_value(&plain).unwrap();
+        let material = json!({"id":uuid::Uuid::from_u128(77),"revision":1,"name":"Synthetic",
+            "cti":[{"cti_v":175,"material_group":"IIIa","basis":"minimum","source":{"document":"Synthetic"}}]});
+        match value["materials"].as_array_mut() {
+            Some(materials) => materials.push(material),
+            None => value["materials"] = json!([material]),
+        }
+        let reported: BoardSetup = serde_json::from_value(value.clone()).unwrap();
+        value["stackup"]["strata"][0]["role"] = json!("signal");
+        let both: BoardSetup = serde_json::from_value(value).unwrap();
+        for setup in [reported, both] {
+            let profile = SetupProfile::new("Reports".into(), setup, Settings::default()).unwrap();
+            assert_eq!(profile.format, REPORT_FORMAT);
+            let bytes = profile.encode().unwrap();
+            assert_eq!(SetupProfile::decode(&bytes).unwrap().encode().unwrap(), bytes);
+            let adopted = s.project().unwrap().board_setup().unwrap().with_profile(&profile).unwrap();
+            let reports = |setup: &BoardSetup| setup.materials().iter().find(|m| m.id == uuid::Uuid::from_u128(77)).map(|m| m.cti.clone());
+            assert_eq!(reports(&adopted), reports(&profile.setup));
+            assert!(reports(&adopted).is_some_and(|cti| cti.len() == 1));
+            for older in [FORMAT, STACK_FORMAT] {
+                let mut downgraded = serde_json::to_value(&profile).unwrap();
+                downgraded["format"] = json!(older);
+                assert!(SetupProfile::decode(&serde_json::to_vec(&downgraded).unwrap()).is_err(), "{older}");
+            }
+        }
+        let mut upgraded = serde_json::to_value(SetupProfile::new("Plain".into(), plain, Settings::default()).unwrap()).unwrap();
+        upgraded["format"] = json!(REPORT_FORMAT);
         assert!(SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).is_err());
     }
     /// Import preserves target-owned graphic layers and material pins, then applies atomically
