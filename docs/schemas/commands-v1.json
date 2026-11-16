@@ -62,6 +62,7 @@
     "pcb.set_silkscreen": {"contract":"5e16401ad45830dec6c8d4b5b3c95b722aba4309e02f1c58f8569fae01eacf41","version":1},
     "pcb.set_track_width": {"contract":"b2879205b82ec5813aec86ac5511ee74400817e530e738c1967e68eb0283b57a","version":1},
     "pcb.set_via_size": {"contract":"bad1a9ae34615930952aa500df6bcced7921f941016d61bfd4d34758f4fe755e","version":1},
+    "project.export_netlist": {"contract":"5836dfec90a1de8813d31e7eecb9fef07fb9c0af8c52817b15f7da7dc4254f12","version":1},
     "project.new": {"contract":"dd3f675cafc1192b53ba7426b87aea3cbb9951af78bec180949ef62539cdde50","version":1},
     "project.rename": {"contract":"60b1edaed66d245f0ab5d85aaa8315ded9d3bfa87a0016d41e200c41bac9bfc9","version":1},
     "schematic.add_hierarchical_label": {"contract":"670abedbb7ac1b3e1426bcbfad9daa631f71f6a4e8fbcf32b270f590f8710424","version":1},

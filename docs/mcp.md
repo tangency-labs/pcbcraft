@@ -270,6 +270,15 @@ including case-insensitive collisions with fixed-purpose output names. One
 `execute` request generates the file contents once; `apply` still validates
 exportability without changing the project or revision.
 
+`project.export_netlist` generates the project's netlist without editing it;
+`execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
+fabrication files) with its `name`
+and text `contents`, and `netlist.findings` for unplaced units and nets without a
+persistent ID. `dry_run: true` returns only the file name and the findings. The
+document lists every component with its logical terminals and every net across all
+sheets with its persistent UUID and joined terminals; see the
+[netlist format](netlist-format.md). Exporting an unchanged project gives the same bytes.
+
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
 or unlocks the whole selection in one undo step, with no geometry or connectivity
