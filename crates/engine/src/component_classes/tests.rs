@@ -425,3 +425,88 @@ fn command_parameter_edges_are_refused() {
     }
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
+
+/// Project/24 is a superset of project/23: component classes with members round-trip beside a
+/// net class with an assignment, a project parameter, a no-connect marker and generated net
+/// numbers. A board catalog without members over that registry keeps instances/4.
+#[test]
+fn component_classes_round_trip_with_every_project_23_record() {
+    for board in [false, true] {
+        let (mut s, components) = parts(3, board);
+        let pins: Vec<_> = s.project().unwrap().symbols().iter().take(2).map(|symbol| json!({"symbol":symbol.id(),"terminal":"1"})).collect();
+        apply(&mut s, crate::CONNECT_PINS, json!({"from":pins[0],"to":pins[1]}));
+        apply(&mut s, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":"B"}));
+        apply(&mut s, crate::no_connect::SET, json!({"target":{"part":components[2],"terminal":"2"},"marked":true}));
+        apply(&mut s, crate::net_classes::CREATE, json!({"name":"Power nets","rules":{"clearance_nm":500_000}}));
+        let net_class = s.project().unwrap().net_classes().definitions[0].id;
+        let project = s.project().unwrap();
+        let anchor = crate::nets::Anchor {
+            kind: crate::nets::AnchorKind::Terminal,
+            project: project.id,
+            scope: project.net_scope(),
+            occurrence: Uuid::nil(),
+            object: component_key(&components[0]).unwrap(),
+            terminal: "1".into(),
+        };
+        apply(&mut s, crate::nets::SET_CLASSES, json!({"target":crate::nets::ClassTarget::Derived{anchor},"classes":[net_class]}));
+        let path = s.project().unwrap().instances_document_path();
+        assert_eq!(path.is_some(), board);
+
+        // A catalog without members leaves a board's registry-bearing instance header at /4.
+        let empty = create(&mut s, "Unused");
+        let docs = round_trip(&s);
+        assert_eq!(document(&docs, ENTRY_POINT)["format"], "pcbcraft-project/24");
+        if let Some(path) = &path {
+            assert_eq!(document(&docs, path)["format"], "pcbcraft-instances/4");
+            assert!(document(&docs, path).get("net_registry").is_some());
+        }
+        apply(&mut s, REMOVE, json!({"class":empty}));
+
+        let power = create(&mut s, "Power");
+        for component in &components {
+            apply(&mut s, SET_CLASSES, json!({"component":component,"classes":[power]}));
+        }
+        let project = s.snapshot().unwrap();
+        let docs = round_trip(&s);
+        let entry = document(&docs, ENTRY_POINT);
+        assert_eq!(entry["format"], "pcbcraft-project/24");
+        let home = match &path {
+            Some(path) => {
+                let instances = document(&docs, path);
+                assert_eq!(instances["format"], "pcbcraft-instances/5");
+                instances
+            }
+            None => entry["schematic_instances"].clone(),
+        };
+        assert_eq!(entry["parameters"], json!({"Revision":"B"}));
+        assert!(entry["net_classes"]["definitions"][0]["id"] == json!(net_class));
+        assert!(String::from_utf8(docs[ENTRY_POINT].clone()).unwrap().contains("no_connects"));
+        assert!(home.get("net_registry").is_some() && home.get("component_class_bindings").is_some());
+        let reopened = decode_documents(&docs).unwrap();
+        assert_eq!(reopened.parameters(), project.parameters());
+        assert_eq!(reopened.net_classes(), project.net_classes());
+        assert_eq!(reopened.net_registry, project.net_registry);
+        assert!(reopened.net_registry.has_generated_numbers());
+        assert_eq!(reopened.component_classes(), project.component_classes());
+        assert_eq!(memberships(&reopened), memberships(&project));
+        let marked = |project: &Project| project.components.values().filter(|part| !part.no_connects.is_empty()).count();
+        assert_eq!((marked(&reopened), marked(&project)), (1, 1));
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+    }
+}
+
+/// Readers accept catalog definitions in any order and sort them by UUID, so a reversed file
+/// decodes to the same classes and re-encodes to the original sorted bytes.
+#[test]
+fn reversed_catalog_definitions_decode_sorted() {
+    let (mut s, _) = parts(0, false);
+    create(&mut s, "First");
+    create(&mut s, "Second");
+    let docs = round_trip(&s);
+    let reversed = edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"].as_array_mut().unwrap().reverse());
+    let sorted = document(&docs, ENTRY_POINT)["component_classes"]["definitions"].clone();
+    assert_ne!(document(&reversed, ENTRY_POINT)["component_classes"]["definitions"], sorted);
+    let reopened = decode_documents(&reversed).unwrap();
+    assert_eq!(reopened.component_classes(), s.project().unwrap().component_classes());
+    assert_eq!(encode_documents(reopened).unwrap(), docs);
+}
