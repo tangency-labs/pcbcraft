@@ -1,6 +1,24 @@
 //! Thermal conductivity, thermal expansion, dielectric strength and tracking reports.
 use super::*;
+use crate::CommandError;
 use crate::board::materials::{MaterialGroup, MeasurementAxis, TgRegion};
+
+/// Refuse a candidate at the current revision, so the refusal can only come from the setup
+/// itself: invalid parameters whose message contains `reason`, with the snapshot, history,
+/// revision and saved bytes unchanged.
+fn refuse(s: &mut Session, c: Value, reason: &str) {
+    let snapshot = s.snapshot().unwrap();
+    let state = s.inspect();
+    let saved = persistence::encode_documents(snapshot.clone()).unwrap();
+    let params = json!({"setup":c,"expected_revision":s.revision()});
+    match s.apply(SET_BOARD_SETUP, &params) {
+        Err(CommandError::InvalidParams(message)) => assert!(message.contains(reason), "{message:?} does not name {reason:?} for {c}"),
+        other => panic!("expected invalid parameters naming {reason:?} for {c}, got {other:?}"),
+    }
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+    assert_eq!(s.inspect(), state);
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
 
 /// Saved board documents, after checking the header and a lossless reopen.
 fn saved(s: &Session, format: &str) -> persistence::Documents {
@@ -152,31 +170,31 @@ fn reports_without_source_or_unit_are_refused() {
                 Some(source) => report.insert("source".into(), source),
                 None => report.remove("source"),
             };
-            reject(&mut s, c, revision);
+            refuse(&mut s, c, "");
         }
         let mut c = base.clone();
         let report = c["materials"][0][kind][0].as_object_mut().unwrap();
         let number = report.remove(value).unwrap();
         report.insert("value".into(), number);
-        reject(&mut s, c.clone(), revision);
+        refuse(&mut s, c.clone(), "value");
         c["materials"][0][kind][0]["unit"] = json!("SI");
-        reject(&mut s, c, revision);
+        refuse(&mut s, c, "");
         let mut c = base.clone();
         c["materials"][0][kind][0]["unit"] = json!("SI");
-        reject(&mut s, c, revision);
+        refuse(&mut s, c, "unit");
         if kind != "cti" {
             let mut c = base.clone();
             c["materials"][0][kind][0].as_object_mut().unwrap().remove(value);
-            reject(&mut s, c, revision);
+            refuse(&mut s, c, value);
         }
     }
     let mut c = base.clone();
     c["materials"][0]["cti"][0].as_object_mut().unwrap().remove("cti_v");
     c["materials"][0]["cti"][0].as_object_mut().unwrap().remove("material_group");
-    reject(&mut s, c, revision);
+    refuse(&mut s, c, "requires a CTI or a material group");
     let mut c = base;
     c["materials"][0]["dielectric_strength"][0].as_object_mut().unwrap().remove("specimen_thickness_nm");
-    reject(&mut s, c, revision);
+    refuse(&mut s, c, "specimen_thickness_nm");
     assert_eq!(s.revision(), revision);
 }
 
@@ -219,7 +237,6 @@ fn report_bounds_and_contradictions() {
         s.apply("edit.undo", &json!({})).unwrap();
     }
     assert_eq!(MaterialGroup::for_cti(99), None);
-    let revision_after = s.revision();
     let refused: &[(&str, Vec<Value>)] = &[
         ("/thermal_conductivity", vec![Value::Null, json!({})]),
         ("/thermal_conductivity/0/conductivity_mw_per_m_k", vec![json!(0), json!(10_000_001), json!(1.5), json!("1 W/(m K)"), Value::Null]),
@@ -251,28 +268,28 @@ fn report_bounds_and_contradictions() {
         for value in values {
             let mut c = base.clone();
             *c["materials"][0].pointer_mut(path).unwrap() = value.clone();
-            reject(&mut s, c, revision_after);
+            refuse(&mut s, c, "");
         }
     }
     for (kind, remove) in [("cte", "from_milli_c"), ("cte", "to_milli_c")] {
         let mut c = base.clone();
         c["materials"][0][kind][0].as_object_mut().unwrap().remove(remove);
-        reject(&mut s, c, revision_after);
+        refuse(&mut s, c, "temperature range requires both ends");
     }
     let mut c = base.clone();
     c["materials"][0]["cti"][0] = json!({"cti_v":99,"material_group":"IIIb","basis":"typical","source":{"document":"Synthetic"}});
-    reject(&mut s, c, revision_after);
+    refuse(&mut s, c, "outside the band of material group IIIb");
     for kind in ["thermal_conductivity", "cte", "dielectric_strength", "cti"] {
         let mut c = base.clone();
         c["materials"][0][kind][0]["future_field"] = json!(true);
-        reject(&mut s, c, revision_after);
+        refuse(&mut s, c, "future_field");
         let mut c = base.clone();
         c["materials"][0][kind][0]["source"]["future_field"] = json!(true);
-        reject(&mut s, c, revision_after);
+        refuse(&mut s, c, "future_field");
         let mut c = base.clone();
         let report = c["materials"][0][kind][0].clone();
         c["materials"][0][kind].as_array_mut().unwrap().push(report);
-        reject(&mut s, c, revision_after);
+        refuse(&mut s, c, "duplicate");
         for count in [16, 17] {
             let mut c = base.clone();
             let report = c["materials"][0][kind][0].clone();
@@ -290,7 +307,7 @@ fn report_bounds_and_contradictions() {
                 assert_eq!(setup(&s)["materials"][0][kind].as_array().unwrap().len(), 16);
                 s.apply("edit.undo", &json!({})).unwrap();
             } else {
-                reject(&mut s, c, revision_after);
+                refuse(&mut s, c, "at most 16");
             }
         }
     }
