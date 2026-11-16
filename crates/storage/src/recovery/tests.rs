@@ -192,6 +192,58 @@ fn a_record_from_another_state_stops_replay() {
     assert_eq!(recovered.stop, Some(Stop::Mismatch { index: 2, command: "project.rename".to_owned() }));
 }
 
+/// Append the bytes `extra` makes from the states of a two-edit journal, and recover it.
+fn recover_with_appended(extra: impl FnOnce(&[Documents]) -> Vec<u8>) -> (Recovered, Vec<Documents>) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut journal, states) = journal_with(dir.path(), 2);
+    journal.file.seek(SeekFrom::End(0)).unwrap();
+    journal.file.write_all(&extra(&states)).unwrap();
+    drop(journal);
+    (recover(dir.path(), "entry").unwrap(), states)
+}
+
+/// A record that writes or removes a path outside the project's documents is unreadable,
+/// even with intact framing and hashes that continue the state.
+#[test]
+fn a_record_path_outside_the_project_is_unreadable() {
+    for outside_written in [true, false] {
+        let (recovered, states) = recover_with_appended(|states| {
+            let inside = states[2].keys().next().unwrap().clone();
+            let (written, removed) = if outside_written { ("../x".to_owned(), vec![]) } else { (inside, vec!["../x".to_owned()]) };
+            let before = documents_sha256(&states[2]);
+            let record = Record {
+                command: "project.rename".to_owned(),
+                version: COMMAND_VERSION,
+                params: json!({}),
+                revision: 99,
+                before_sha256: before.clone(),
+                after_sha256: before,
+                written: vec![Written { path: written, size: 1 }],
+                removed,
+            };
+            let meta = serde_json::to_vec(&record).unwrap();
+            let mut payload = u32::try_from(meta.len()).unwrap().to_le_bytes().to_vec();
+            payload.extend_from_slice(&meta);
+            payload.push(b'x');
+            frame(&payload).unwrap()
+        });
+        assert_eq!(recovered.documents, states[2]);
+        match recovered.stop {
+            Some(Stop::Unreadable { index: 2, reason }) => assert!(reason.starts_with("../x:"), "{reason}"),
+            stop => panic!("outside path in written = {outside_written}: {stop:?}"),
+        }
+    }
+}
+
+/// A frame whose length is above the limit is unreadable without allocating that length.
+#[test]
+fn an_oversized_frame_is_unreadable() {
+    let length = u32::try_from(MAX_FRAME_BYTES + 1).unwrap();
+    let (recovered, states) = recover_with_appended(|_| length.to_le_bytes().to_vec());
+    assert_eq!(recovered.documents, states[2]);
+    assert_eq!(recovered.stop, Some(Stop::Unreadable { index: 2, reason: "record exceeds its size limit".to_owned() }));
+}
+
 /// A journal left from before a newer snapshot is ignored: the snapshot already holds its edits.
 #[test]
 fn a_journal_for_an_older_snapshot_is_ignored() {
@@ -239,6 +291,9 @@ fn entry_ids_are_plain_file_stems() {
     assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
     let mut session = Session::default();
     session.apply("project.new", &json!({})).unwrap();
+    let longest = "x".repeat(MAX_ID_LEN);
+    drop(EditJournal::create(dir.path(), &longest, encode_documents(session.snapshot().unwrap()).unwrap()).unwrap());
+    assert!(recover(dir.path(), &longest).unwrap().stop.is_none());
     let project = session.project().unwrap();
     let (first, second) = (new_entry_id(project), new_entry_id(project));
     assert_ne!(first, second);

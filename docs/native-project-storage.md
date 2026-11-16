@@ -970,8 +970,9 @@ again, because commands that create objects draw fresh random identities.
 The journal starts with the line `pcbcraft-recovery/1`. Each record is framed by
 its length and SHA-256 and flushed before the next. Recovery reads the snapshot
 and applies records in order. It stops at the first torn, damaged or
-inconsistent record and keeps the last complete state, so a kill loses at most
-the edit being written. A journal that names an older snapshot is ignored,
+inconsistent record and keeps the last complete state. A kill loses the edit
+being written and any edits still queued for the writer thread; every record
+already written is kept. A journal that names an older snapshot is ignored,
 because the snapshot is published first and already holds its edits. A newer
 format line is refused, for the caller to offer for discard. The store's layout
 and record encoding are private to PCBCraft and carry no compatibility promise

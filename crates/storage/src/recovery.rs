@@ -120,8 +120,8 @@ pub fn documents_sha256(documents: &Documents) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// The journal's first frame. Like [`Record`], unknown fields are ignored within format 1.
 #[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct Header {
     /// Fingerprint of the snapshot documents the journal continues.
     base_sha256: String,
