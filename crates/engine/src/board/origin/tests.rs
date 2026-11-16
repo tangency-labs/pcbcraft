@@ -195,3 +195,77 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     missing.insert(path, text.replacen(&format, "pcbcraft-board/21", 1).into_bytes());
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
+
+/// Move a footprint through the shared transform command.
+fn place(session: &mut Session, footprint: &str, at: Point, rotation: u16, side: &str) {
+    let params = json!({"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":rotation,"side":side,"expected_revision":session.revision()});
+    session.apply(crate::SET_FOOTPRINT_TRANSFORM, &params).unwrap();
+}
+
+/// Rows of one top and one bottom part at 30 degrees, measured from an origin at board
+/// (10 mm, 30 mm), under both bottom-side conventions.
+#[test]
+fn bottom_part_at_thirty_degrees_follows_each_convention() {
+    let mut s = routed_fixture();
+    let ids: Vec<_> = view(&s).footprints().map(|f| f.id).collect();
+    let (bottom, top) = (&ids[0], &ids[1]);
+    place(&mut s, bottom, Point { x_nm: 40 * MM, y_nm: 25 * MM }, 30, "back");
+    place(&mut s, top, Point { x_nm: 40 * MM, y_nm: 45 * MM }, 30, "front");
+    set(&mut s, json!({"kind":"point","x_nm":10 * MM,"y_nm":30 * MM})).unwrap();
+    let frame = view(&s).placement_origin().unwrap().frame();
+    let row = |id: &String, convention| {
+        let footprint = view(&s).footprints().find(|f| &f.id == id).unwrap();
+        frame.place(footprint.position, footprint.rotation, footprint.bottom, convention)
+    };
+    // Bottom part, seen from the top: X = 40 - 10 = 30 mm; Y up = 30 - 25 = 5 mm; rotation as
+    // placed, 30, still counterclockwise from the top (IPC-2581, 3.3.2).
+    assert_eq!(row(bottom, BottomSide::ViewedFromTop), Placed { at: Point { x_nm: 30 * MM, y_nm: 5 * MM }, rotation: 30 });
+    // Seen from below: X = -(40 - 10) = -30 mm; Y unchanged, 5 mm; rotation 360 - 30 = 330.
+    assert_eq!(row(bottom, BottomSide::ViewedFromBottom), Placed { at: Point { x_nm: -30 * MM, y_nm: 5 * MM }, rotation: 330 });
+    // Top part under either convention: X = 40 - 10 = 30 mm; Y up = 30 - 45 = -15 mm; rotation 30.
+    for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
+        assert_eq!(row(top, convention), Placed { at: Point { x_nm: 30 * MM, y_nm: -15 * MM }, rotation: 30 });
+    }
+    assert_eq!(BottomSide::default(), BottomSide::ViewedFromTop);
+    assert_eq!(serde_json::to_value(BottomSide::ViewedFromBottom).unwrap(), "viewed_from_bottom");
+}
+
+/// Each convention reproduces where the pads really are. Seen from the top, a bottom row is
+/// the mirrored footprint turned by its rotation; seen from below (X negated), it is the
+/// unmirrored footprint turned by its rotation. Checked on every quarter turn, which is exact.
+#[test]
+fn each_convention_reproduces_the_bottom_pads() {
+    let mut s = routed_fixture();
+    let id = view(&s).footprints().next().unwrap().id;
+    let at = Point { x_nm: 40 * MM, y_nm: 25 * MM };
+    let pads = |s: &Session| {
+        let footprint = view(s).footprints().find(|f| f.id == id).unwrap();
+        (footprint.position, footprint.rotation, footprint.pads.iter().map(|pad| pad.center).collect::<Vec<_>>())
+    };
+    place(&mut s, &id, at, 0, "front");
+    // Library offsets from the placement point, Y up.
+    let local: Vec<_> = pads(&s).2.iter().map(|pad| (pad.x_nm - at.x_nm, at.y_nm - pad.y_nm)).collect();
+    assert!(local.iter().any(|(x, y)| (*x, *y) != (0, 0)));
+    set(&mut s, json!({"kind":"point","x_nm":10 * MM,"y_nm":30 * MM})).unwrap();
+    let frame = view(&s).placement_origin().unwrap().frame();
+    let turn = |(x, y): (i64, i64), degrees: u16| match degrees {
+        0 => (x, y),
+        90 => (-y, x),
+        180 => (-x, -y),
+        _ => (y, -x),
+    };
+    for rotation in [0, 90, 180, 270] {
+        place(&mut s, &id, at, rotation, "back");
+        let (position, turned, board) = pads(&s);
+        assert_eq!(turned, rotation);
+        let top = frame.place(position, turned, true, BottomSide::ViewedFromTop);
+        let below = frame.place(position, turned, true, BottomSide::ViewedFromBottom);
+        for (&(x, y), pad) in local.iter().zip(&board) {
+            let seen = frame.to_output(*pad);
+            let (dx, dy) = turn((-x, y), top.rotation);
+            assert_eq!((seen.x_nm, seen.y_nm), (top.at.x_nm + dx, top.at.y_nm + dy), "from the top at {rotation}");
+            let (dx, dy) = turn((x, y), below.rotation);
+            assert_eq!((-seen.x_nm, seen.y_nm), (below.at.x_nm + dx, below.at.y_nm + dy), "from below at {rotation}");
+        }
+    }
+}
