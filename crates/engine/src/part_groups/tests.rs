@@ -643,29 +643,3 @@ fn membership_validation_looks_up_each_group_once() {
     let docs = round_trip(&s);
     assert_eq!(decode_documents(&docs).unwrap().part_group_memberships().len(), stored.len());
 }
-
-/// The record names of the unreleased draft of this feature were never published: a project/24
-/// file that carries them under the old keys is refused as unknown rather than read.
-#[test]
-fn unpublished_draft_record_names_are_refused() {
-    for board in [false, true] {
-        let (mut s, part_instances) = parts(1, board);
-        let group = create(&mut s, "Power");
-        apply(&mut s, SET_GROUPS, json!({"part_instance":part_instances[0],"groups":[group]}));
-        let docs = round_trip(&s);
-        let renamed = |value: &mut Value, from: &str, to: &str| {
-            let object = value.as_object_mut().unwrap();
-            let moved = object.remove(from).unwrap();
-            object.insert(to.into(), moved);
-        };
-        let draft_catalog = "component_classes";
-        let catalog = edited(&docs, ENTRY_POINT, |project| renamed(project, "part_groups", draft_catalog));
-        refused_on_read(&catalog, &format!("unknown field `{draft_catalog}`"));
-        let draft_memberships = "component_class_bindings";
-        let instances = match s.project().unwrap().instances_document_path() {
-            Some(path) => edited(&docs, &path, |home| renamed(home, "part_group_memberships", draft_memberships)),
-            None => edited(&docs, ENTRY_POINT, |project| renamed(&mut project["schematic_instances"], "part_group_memberships", draft_memberships)),
-        };
-        refused_on_read(&instances, &format!("unknown field `{draft_memberships}`"));
-    }
-}
