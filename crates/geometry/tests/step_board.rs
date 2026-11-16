@@ -148,12 +148,14 @@ mod board {
         let [build_s, write_s] = times[..] else { return Err(format!("no times from the child: {note}")) };
         let text = child.stdout;
 
-        let phases = phases(&text)?;
+        // Both samples are taken before the phases are timed: the peak is a high-water mark, and
+        // the timing pass would otherwise count in it.
         let before = peak_kib();
         let start = Instant::now();
         let read = pcbcraft_geometry::read_step(&text).map_err(|e| e.to_string())?;
         let read_s = start.elapsed().as_secs_f64();
         let peak = peak_kib();
+        let phases = phases(&text)?;
 
         let bodies = components * (pins + 1);
         if !read.refused.is_empty() {

@@ -105,17 +105,26 @@ fn a_file_without_solids_reads_as_empty() {
     assert!(read.refused.is_empty());
 }
 
+/// A solid with an unsupported surface is refused alone: the other solid of the part is read and
+/// placed where it was written.
 #[test]
 fn an_unsupported_surface_refuses_only_its_solid() {
-    let (body, _) = block();
-    let bytes = write_step("fixture", &[body]).unwrap();
-    let text = String::from_utf8(bytes).unwrap().replace("=PLANE(", "=UNKNOWN_SURFACE(");
-    let read = read_step(text.as_bytes()).unwrap();
-    assert!(read.bodies.is_empty());
+    let (first, first_box) = block();
+    let second_box = BoundingBox { min_nm: [20_000_000, 0, 0], max_nm: [21_000_000, 1_000_000, 1_000_000] };
+    let second = Body::cuboid("Second", second_box.min_nm, [1_000_000; 3]).unwrap();
+    let bytes = write_step("fixture", &[first, second]).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert_eq!(text.matches("=PLANE(").count(), 12);
+    // One face of one solid only.
+    let read = read_step(text.replacen("=PLANE(", "=UNKNOWN_SURFACE(", 1).as_bytes()).unwrap();
     assert_eq!(read.refused.len(), 1);
     assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
     assert!(read.refused[0].entity > 0);
-    assert!(read.placements.is_empty(), "a refused solid is not placed");
+    assert_eq!(read.bodies.len(), 1);
+    assert_eq!(read.placements.len(), 1, "a refused solid is not placed");
+    let kept = read.bounding_box().unwrap().unwrap();
+    let deviation = kept.max_deviation_nm(&first_box).min(kept.max_deviation_nm(&second_box));
+    assert!(deviation <= ROUND_TRIP_TOLERANCE_NM, "the other solid, where it was written: {kept:?}");
 }
 
 #[test]
