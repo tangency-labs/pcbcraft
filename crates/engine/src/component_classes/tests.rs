@@ -15,10 +15,21 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
     session.apply(command, &params).unwrap();
 }
 
-/// The same request as `apply`, returning the refusal instead of unwrapping it.
-fn refuse(session: &mut Session, command: &str, mut params: Value) -> String {
+/// The same request as `apply` at the current revision, which must be refused for `reason`:
+/// the message has to contain it, so a refusal for some other cause fails the test.
+#[track_caller]
+fn refuse(session: &mut Session, command: &str, mut params: Value, reason: &str) -> String {
     params["expected_revision"] = json!(session.revision());
-    session.apply(command, &params).unwrap_err().to_string()
+    let refusal = session.apply(command, &params).unwrap_err().to_string();
+    assert!(refusal.contains(reason), "{command} {params}: expected {reason:?}, got {refusal:?}");
+    refusal
+}
+
+/// Decoding must fail for `reason`; any other failure or a success fails the test.
+#[track_caller]
+fn refused_on_read(documents: &crate::persistence::Documents, reason: &str) {
+    let refusal = decode_documents(documents).err().unwrap_or_else(|| panic!("expected {reason:?}, the documents decoded"));
+    assert!(refusal.contains(reason), "expected {reason:?}, got {refusal:?}");
 }
 
 /// A project with `count` placed resistors, optionally with a board, and their component IDs.
@@ -152,6 +163,7 @@ fn malformed_and_downgraded_documents_are_refused() {
         let docs = round_trip(&s);
         let path = s.project().unwrap().instances_document_path();
         let home = path.clone().unwrap_or_else(|| ENTRY_POINT.into());
+        /// The membership list in this project's instance home.
         fn field(value: &mut Value, board: bool) -> &mut Value {
             if board { &mut value["component_class_bindings"] } else { &mut value["schematic_instances"]["component_class_bindings"] }
         }
@@ -174,11 +186,26 @@ fn malformed_and_downgraded_documents_are_refused() {
                 )
             }),
         ];
+        let mut reasons = vec![
+            "requires project format 24",
+            "Empty component-class catalogs must be omitted",
+            "invalid type: null, expected struct Catalog",
+            "Unsupported component-class format",
+            "unknown field `rules`",
+            "must be omitted or nonempty",
+            "invalid type: null, expected a sequence",
+            "must name existing components and classes",
+            "must name existing components and classes",
+            "unknown field `origin`",
+            "sorted by component and class",
+        ];
         if let Some(path) = &path {
             cases.push(edited(&docs, path, |instances| instances["format"] = json!("pcbcraft-instances/4")));
+            reasons.push("unsupported instances format");
         }
-        for case in cases {
-            assert!(decode_documents(&case).is_err());
+        assert_eq!(cases.len(), reasons.len());
+        for (case, reason) in cases.iter().zip(reasons) {
+            refused_on_read(case, reason);
         }
     }
 }
@@ -198,7 +225,7 @@ fn catalog_and_membership_edits_are_atomic_and_undoable() {
     apply(&mut s, SET_CLASSES, json!({"component":components[0],"classes":[]}));
     assert_eq!(s.revision(), revision);
 
-    refuse(&mut s, SET_CLASSES, json!({"component":components[0],"classes":[logic,power,power]}));
+    refuse(&mut s, SET_CLASSES, json!({"component":components[0],"classes":[logic,power,power]}), "unique non-nil class UUIDs");
     assert_eq!(s.revision(), revision);
     apply(&mut s, SET_CLASSES, json!({"component":components[0],"classes":[logic,power]}));
     apply(&mut s, SET_CLASSES, json!({"component":components[2],"classes":[power]}));
@@ -211,21 +238,22 @@ fn catalog_and_membership_edits_are_atomic_and_undoable() {
     expected.sort();
     assert_eq!(s.project().unwrap().classes_of_component(component_key(&components[0]).unwrap()).collect::<Vec<_>>(), expected);
 
-    let refusal = refuse(&mut s, REMOVE, json!({"class":power}));
+    let refusal = refuse(&mut s, REMOVE, json!({"class":power}), "still has members");
     assert!(refusal.contains(&components[0]) && refusal.contains(&components[2]) && !refusal.contains(&components[1]), "{refusal}");
-    for (command, params) in [
-        (SET_CLASSES, json!({"component":"component-999","classes":[power]})),
-        (SET_CLASSES, json!({"component":components[1],"classes":[Uuid::from_u128(5)]})),
-        (SET_CLASSES, json!({"component":"R1","classes":[power]})),
-        (UPDATE, json!({"class":power,"name":" padded"})),
-        (UPDATE, json!({"class":Uuid::from_u128(5),"name":"Other"})),
-        (REMOVE, json!({"class":Uuid::from_u128(5)})),
+    for (command, params, reason) in [
+        (SET_CLASSES, json!({"component":"component-999","classes":[power]}), "Unknown component."),
+        (SET_CLASSES, json!({"component":components[1],"classes":[Uuid::from_u128(5)]}), "Unknown component class."),
+        (SET_CLASSES, json!({"component":"R1","classes":[power]}), "Expected a component ID"),
+        (UPDATE, json!({"class":power,"name":" padded"}), "Class name must contain"),
+        (UPDATE, json!({"class":Uuid::from_u128(5),"name":"Other"}), "Unknown component class."),
+        (REMOVE, json!({"class":Uuid::from_u128(5)}), "Unknown component class."),
     ] {
-        refuse(&mut s, command, params);
+        refuse(&mut s, command, params, reason);
         assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
     }
     let stale = json!({"component":components[1],"classes":[power],"expected_revision":s.revision() - 1});
-    assert!(s.apply(SET_CLASSES, &stale).is_err());
+    let refusal = s.apply(SET_CLASSES, &stale).unwrap_err().to_string();
+    assert!(refusal.contains("project changed"), "{refusal}");
     assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
 
     apply(&mut s, SET_CLASSES, json!({"component":components[2],"classes":[]}));
@@ -281,14 +309,16 @@ fn class_names_are_bounded_on_each_side_of_the_limit() {
     let docs = round_trip(&s);
     let assigned = s.snapshot().unwrap();
     for name in ["A".repeat(201), String::new(), " A".into(), "A ".into(), "A\nB".into()] {
-        refuse(&mut s, CREATE, json!({"name":name}));
-        refuse(&mut s, UPDATE, json!({"class":class,"name":name}));
+        refuse(&mut s, CREATE, json!({"name":name}), "Class name must contain 1–200");
+        refuse(&mut s, UPDATE, json!({"class":class,"name":name}), "Class name must contain 1–200");
         assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
         let saved = edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"][0]["name"] = json!(name));
-        assert!(decode_documents(&saved).is_err(), "{name:?}");
+        refused_on_read(&saved, "Class name must contain 1–200");
     }
-    for params in [json!({}), json!({"name":null}), json!({"name":7})] {
-        refuse(&mut s, CREATE, params);
+    for (params, reason) in
+        [(json!({}), "needs `name`"), (json!({"name":null}), "`name` must be a string"), (json!({"name":7}), "`name` must be a string")]
+    {
+        refuse(&mut s, CREATE, params, reason);
     }
 }
 
@@ -303,7 +333,7 @@ fn catalog_size_is_bounded_on_each_side_of_the_limit() {
     assert_eq!(s.project().unwrap().component_classes().definitions.len(), MAX_CLASSES);
     let docs = round_trip(&s);
     let full = s.snapshot().unwrap();
-    refuse(&mut s, CREATE, json!({"name":"One more"}));
+    refuse(&mut s, CREATE, json!({"name":"One more"}), "catalog is full");
     assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
     let overfull = edited(&docs, ENTRY_POINT, |project| {
         project["component_classes"]["definitions"]
@@ -311,7 +341,7 @@ fn catalog_size_is_bounded_on_each_side_of_the_limit() {
             .unwrap()
             .push(json!({"id":Uuid::from_u128(u128::MAX),"revision":1,"name":"Extra"}));
     });
-    assert!(decode_documents(&overfull).is_err());
+    refused_on_read(&overfull, "class limit exceeded");
 }
 
 /// Saved revisions run from 1 to `u32::MAX`. The largest is read, and a later rename is then
@@ -322,14 +352,19 @@ fn class_revisions_are_bounded_on_each_side_of_the_limit() {
     let class = create(&mut s, "Power");
     let docs = round_trip(&s);
     let revision = |value: Value| edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"][0]["revision"] = value);
-    for bad in [json!(0), json!(-1), json!(u64::from(u32::MAX) + 1), json!("1"), Value::Null] {
-        assert!(decode_documents(&revision(bad.clone())).is_err(), "{bad}");
+    for (bad, reason) in [
+        (json!(0), "positive revisions"),
+        (json!(-1), "expected u32"),
+        (json!(u64::from(u32::MAX) + 1), "expected u32"),
+        (json!("1"), "invalid type: string \"1\", expected u32"),
+        (Value::Null, "invalid type: null, expected u32"),
+    ] {
+        refused_on_read(&revision(bad), reason);
     }
     let last = decode_documents(&revision(json!(u32::MAX))).unwrap();
     assert_eq!(last.component_classes().get(class).unwrap().revision, u32::MAX);
     s.open_snapshot(last);
-    let refusal = refuse(&mut s, UPDATE, json!({"class":class,"name":"Supply"}));
-    assert!(refusal.contains("exhausted"), "{refusal}");
+    refuse(&mut s, UPDATE, json!({"class":class,"name":"Supply"}), "revision exhausted");
     assert_eq!(s.project().unwrap().component_classes().get(class).unwrap().name, "Power");
 }
 
@@ -384,13 +419,31 @@ fn saved_record_edges_are_refused() {
             }),
             edited(&docs, ENTRY_POINT, |project| project["component_classes"]["definitions"][0]["id"] = json!(Uuid::nil())),
         ];
+        let mut reasons = vec![
+            "invalid value: integer `-1`, expected u64",
+            "invalid type: string",
+            "invalid type: floating point",
+            "missing field `class`",
+            "missing field `component`",
+            "invalid type: null, expected a formatted UUID",
+            "must name existing components and classes",
+            "UUID parsing failed",
+            "sorted by component and class",
+            "Component-class catalog requires project format 24",
+            "missing field `definitions`",
+            "unknown field `extra`",
+            "Class IDs must be unique",
+            "Class IDs must be unique",
+        ];
         if let Some(path) = &path {
             cases.push(edited(&docs, path, |instances| {
                 instances.as_object_mut().unwrap().remove("component_class_bindings");
             }));
+            reasons.push("unsupported instances format");
         }
-        for (index, case) in cases.into_iter().enumerate() {
-            assert!(decode_documents(&case).is_err(), "case {index}, board {board}");
+        assert_eq!(cases.len(), reasons.len());
+        for (case, reason) in cases.iter().zip(reasons) {
+            refused_on_read(case, reason);
         }
     }
 }
@@ -401,27 +454,36 @@ fn command_parameter_edges_are_refused() {
     let (mut s, components) = parts(1, false);
     let class = create(&mut s, "Power");
     let before = s.snapshot().unwrap();
-    for params in [
-        json!({"component":components[0],"classes":[Uuid::nil()]}),
-        json!({"component":components[0]}),
-        json!({"component":components[0],"classes":null}),
-        json!({"component":components[0],"classes":class}),
-        json!({"component":components[0],"classes":["Power"]}),
-        json!({"classes":[class]}),
-        json!({"component":null,"classes":[class]}),
-        json!({"component":1,"classes":[class]}),
+    let set = "unique non-nil class UUIDs";
+    for (params, reason) in [
+        (json!({"component":components[0],"classes":[Uuid::nil()]}), set),
+        (json!({"component":components[0]}), "needs `classes`"),
+        (json!({"component":components[0],"classes":null}), set),
+        (json!({"component":components[0],"classes":class}), set),
+        (json!({"component":components[0],"classes":["Power"]}), set),
+        (json!({"classes":[class]}), "needs `component`"),
+        (json!({"component":null,"classes":[class]}), "`component` must be a string"),
+        (json!({"component":1,"classes":[class]}), "`component` must be a string"),
     ] {
-        refuse(&mut s, SET_CLASSES, params);
+        refuse(&mut s, SET_CLASSES, params, reason);
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
-    for params in [json!({"class":Uuid::nil(),"name":"X"}), json!({"name":"X"}), json!({"class":class})] {
-        refuse(&mut s, UPDATE, params);
+    let uuid = "must identify a class by non-nil UUID";
+    for (params, reason) in
+        [(json!({"class":Uuid::nil(),"name":"X"}), uuid), (json!({"name":"X"}), "needs `class`"), (json!({"class":class}), "needs `name`")]
+    {
+        refuse(&mut s, UPDATE, params, reason);
     }
-    for params in [json!({"class":Uuid::nil()}), json!({}), json!({"class":"Power"})] {
-        refuse(&mut s, REMOVE, params);
+    for (params, reason) in [(json!({"class":Uuid::nil()}), uuid), (json!({}), "needs `class`"), (json!({"class":"Power"}), uuid)] {
+        refuse(&mut s, REMOVE, params, reason);
     }
-    for params in [json!({"component":null}), json!({"component":"R1"}), json!({"component":"component-999"})] {
-        assert!(s.execute(INSPECT_CLASSES, &params).is_err(), "{params}");
+    for (params, reason) in [
+        (json!({"component":null}), "`component` must be a string"),
+        (json!({"component":"R1"}), "Expected a component ID"),
+        (json!({"component":"component-999"}), "Unknown component."),
+    ] {
+        let refusal = s.execute(INSPECT_CLASSES, &params).unwrap_err().to_string();
+        assert!(refusal.contains(reason), "{params}: expected {reason:?}, got {refusal:?}");
     }
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
@@ -530,4 +592,52 @@ fn geometry_edits_leave_memberships_untouched() {
     assert!(Arc::ptr_eq(&before.component_class_bindings, &after.component_class_bindings));
     assert_eq!(memberships(&after), memberships(&before));
     round_trip(&s);
+}
+
+/// Validation looks up each distinct class and component once, not once per binding: a full
+/// catalog of 256 classes with every one of 16 components in every class (4,096 bindings)
+/// costs 256 class lookups and 16 component lookups, and a dangling class is still refused
+/// with the reason. The same memberships pass through the command path and a save and reopen.
+#[test]
+fn membership_validation_looks_up_each_class_once() {
+    use std::cell::Cell;
+    let (mut s, components) = parts(16, false);
+    for index in 0..MAX_CLASSES {
+        apply(&mut s, CREATE, json!({"name":format!("Class {index}")}));
+    }
+    let classes: Vec<Uuid> = s.project().unwrap().component_classes().definitions.iter().map(|class| class.id).collect();
+    for component in &components {
+        apply(&mut s, SET_CLASSES, json!({"component":component,"classes":classes}));
+    }
+    let project = s.project().unwrap();
+    let bindings = project.component_class_bindings();
+    assert_eq!(bindings.len(), components.len() * MAX_CLASSES);
+    let (class_lookups, component_lookups) = (Cell::new(0), Cell::new(0));
+    let known: BTreeSet<Uuid> = classes.iter().copied().collect();
+    let counted = |dangling: &[Binding]| {
+        class_lookups.set(0);
+        component_lookups.set(0);
+        check_bindings(
+            dangling,
+            |_| {
+                component_lookups.set(component_lookups.get() + 1);
+                true
+            },
+            |class| {
+                class_lookups.set(class_lookups.get() + 1);
+                known.contains(&class)
+            },
+        )
+    };
+    counted(bindings).unwrap();
+    assert_eq!((class_lookups.get(), component_lookups.get()), (MAX_CLASSES, components.len()));
+    let mut dangling = bindings.to_vec();
+    dangling.last_mut().unwrap().class = Uuid::from_u128(u128::MAX);
+    dangling.sort();
+    let refusal = counted(&dangling).unwrap_err();
+    assert!(refusal.contains("existing components and classes"), "{refusal}");
+    assert!(class_lookups.get() <= MAX_CLASSES + 1);
+    project.validate_component_class_bindings(bindings).unwrap();
+    let docs = round_trip(&s);
+    assert_eq!(decode_documents(&docs).unwrap().component_class_bindings().len(), bindings.len());
 }

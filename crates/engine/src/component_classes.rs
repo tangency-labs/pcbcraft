@@ -107,6 +107,21 @@ pub(crate) fn stored_bindings<'de, D: serde::Deserializer<'de>>(de: D) -> Result
     Ok(Some(bindings))
 }
 
+/// Check sorted order, the bound and that every binding names a known component and class.
+/// Each distinct component and each distinct class is looked up once, however many bindings
+/// share it; callers rely on that to keep validation linear in the number of bindings.
+fn check_bindings(bindings: &[Binding], component_exists: impl Fn(ComponentKey) -> bool, class_exists: impl Fn(Uuid) -> bool) -> Result<(), String> {
+    if bindings.len() > MAX_BINDINGS || bindings.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("Component class bindings must be bounded, unique and sorted by component and class.".into());
+    }
+    let components: BTreeSet<_> = bindings.iter().map(|binding| binding.component).collect();
+    let classes: BTreeSet<_> = bindings.iter().map(|binding| binding.class).collect();
+    if !components.into_iter().all(component_exists) || !classes.into_iter().all(class_exists) {
+        return Err("Component class bindings must name existing components and classes.".into());
+    }
+    Ok(())
+}
+
 impl Project {
     /// Inspect immutable project-level component classes without reading membership.
     pub fn component_classes(&self) -> &Catalog {
@@ -125,18 +140,12 @@ impl Project {
     }
 
     /// Refuse unsorted, repeated, foreign or dangling memberships before adoption. Every
-    /// binding names a live component and a class in this project's catalog.
+    /// binding names a live component and a class in this project's catalog. The catalog's
+    /// identities are collected into a set once per call, so the cost grows with the number
+    /// of bindings and classes, not with their product.
     pub(crate) fn validate_component_class_bindings(&self, bindings: &[Binding]) -> Result<(), String> {
-        if bindings.len() > MAX_BINDINGS || bindings.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err("Component class bindings must be bounded, unique and sorted by component and class.".into());
-        }
-        let components: BTreeSet<_> = bindings.iter().map(|binding| binding.component).collect();
-        if components.iter().any(|component| !self.components.contains_key(component))
-            || bindings.iter().any(|binding| self.component_classes.get(binding.class).is_none())
-        {
-            return Err("Component class bindings must name existing components and classes.".into());
-        }
-        Ok(())
+        let classes: BTreeSet<Uuid> = self.component_classes.definitions.iter().map(|class| class.id).collect();
+        check_bindings(bindings, |component| self.components.contains_key(&component), |class| classes.contains(&class))
     }
 
     /// Drop memberships of components this snapshot no longer contains, so a deleted component
