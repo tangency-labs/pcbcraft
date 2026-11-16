@@ -27,7 +27,7 @@ before treating an older plan as implemented behavior.
 
 | Topic | Guides |
 | --- | --- |
-| Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) |
+| Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) · [Schematic keyboard shortcuts](keyboard-shortcuts.md) |
 | Net names, labels and power symbols | [Named nets and power symbols](net-labels.md) |
 | Sheet hierarchy and interfaces | [Hierarchical sheets](hierarchical-sheets.md) |
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
