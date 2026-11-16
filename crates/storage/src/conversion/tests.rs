@@ -82,6 +82,27 @@ fn conversion_refuses_overlap_existing_destinations_and_invalid_inputs() {
     assert!(!target.exists());
 }
 
+/// On Windows, a destination named like a device (`con.pc`, `AUX`, `nul.pc` ...) is refused
+/// before anything is created. The canonical parent would otherwise let the conversion write a
+/// file or folder that ordinary Windows tools cannot open or delete (#156).
+#[cfg(windows)]
+#[test]
+fn windows_conversion_refuses_device_named_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("old");
+    source(&root);
+    let out = dir.path().join("out");
+    fs::create_dir(&out).unwrap();
+    for (name, encoding) in
+        [("con.pc", Encoding::Zip), ("NUL.pc", Encoding::Zip), ("com1.pc", Encoding::Zip), ("aux", Encoding::Json), ("lpt9", Encoding::Json)]
+    {
+        let error = convert(&root, &out.join(name), encoding).unwrap_err();
+        assert!(error.contains("Windows reserves the name"), "{name}: {error}");
+        assert!(fs::read_dir(&out).unwrap().next().is_none(), "{name}: nothing is created");
+    }
+    convert(&root, &out.join("console.pc"), Encoding::Zip).unwrap();
+}
+
 /// Pending recovery, an active writer and mixed entry points are never changed or recovered.
 #[test]
 fn conversion_refuses_busy_recovery_pending_and_mixed_sources() {

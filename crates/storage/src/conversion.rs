@@ -11,7 +11,8 @@ enum Source<'a> {
 
 /// Validate an old `project.pc` folder/entry point or container-v2 ZIP, then write a new
 /// folder or container-v3 package. Existing destinations and destinations inside the source
-/// folder are refused. The source is never recovered, rewritten or adopted as a live project.
+/// folder are refused, as are destinations Windows reads as a device on that platform. The
+/// source is never recovered, rewritten or adopted as a live project.
 /// Folder publication uses the normal recoverable save protocol; interruption can leave a
 /// new destination needing recovery, but cannot replace an existing project.
 pub fn convert(source: &Path, destination: &Path, encoding: Encoding) -> Result<(), String> {
@@ -33,6 +34,7 @@ pub fn convert(source: &Path, destination: &Path, encoding: Encoding) -> Result<
     let parent = destination.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let parent = fs::canonicalize(parent).map_err(error)?;
     let destination = parent.join(destination.file_name().ok_or("Conversion destination has no filename")?);
+    refuse_device_destination(&destination)?;
     if let Source::Folder(root) = &input {
         let root = fs::canonicalize(root).map_err(error)?;
         if destination.starts_with(&root) {
@@ -67,6 +69,21 @@ pub(super) fn publish(destination: &Path, documents: Documents, encoding: Encodi
         super::folder::sync_dir(destination.parent().ok_or("Conversion destination has no parent")?)?;
         super::folder::save(destination, None, &documents, &mut |_| Ok(()))
     }
+}
+
+/// On Windows, refuse a destination whose name before its first dot is a reserved device, such
+/// as `con.pc` or `aux`, ignoring ASCII case. The canonical `\\?\` parent would let it be
+/// created, leaving a file or folder that ordinary Windows tools cannot open or delete, while
+/// opening it by its usual path reaches the device (#156). Other platforms accept these names.
+fn refuse_device_destination(destination: &Path) -> Result<(), String> {
+    if cfg!(windows)
+        && let Some(device) = destination.file_name().and_then(|name| name.to_str()).and_then(super::folder::windows_device_name)
+    {
+        return Err(format!(
+            "Windows reserves the name \"{device}\" for a device, so the converted project can't be written there. Choose another destination name."
+        ));
+    }
+    Ok(())
 }
 
 /// Retain filesystem context through the ordinary CLI error channel.

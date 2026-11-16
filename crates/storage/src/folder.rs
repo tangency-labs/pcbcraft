@@ -333,7 +333,7 @@ fn refuse_windows_device_names(documents: &Documents) -> Result<(), String> {
 /// Return the first part of a `/`-separated document path, such as `con` in
 /// `library/symbols/workshop/con.r2.json`, whose text before its first dot is one of
 /// [`WINDOWS_DEVICE_NAMES`], ignoring ASCII case. `None` means every part is an ordinary name.
-fn windows_device_name(relative: &str) -> Option<&str> {
+pub(crate) fn windows_device_name(relative: &str) -> Option<&str> {
     relative
         .split('/')
         .map(|part| part.split_once('.').map_or(part, |(stem, _)| stem))
