@@ -590,7 +590,7 @@ fn with_header(documents: &persistence::Documents, from: &str, to: &str) -> pers
 /// bases are covered. The 35 µm foil for 1 oz follows IPC-2251 clause 4.1.1.3; the other values are
 /// arbitrary.
 #[test]
-fn copper_strata_and_board_thickness_round_trip_in_board_format_20() {
+fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
     let mut s = session(4);
     let original = saved_board(&s, "pcbcraft-board/2");
     let revision = s.revision();
@@ -613,7 +613,7 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_20() {
     assert_eq!(s.revision(), revision + 1);
     assert_eq!(setup(&s), candidate);
 
-    let documents = saved_board(&s, "pcbcraft-board/20");
+    let documents = saved_board(&s, "pcbcraft-board/23");
     let reopened = persistence::decode_documents(&documents).unwrap();
     let stack = reopened.board_setup().unwrap();
     assert_eq!(stack, s.project().unwrap().board_setup().unwrap());
@@ -640,12 +640,12 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_20() {
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved_board(&s, "pcbcraft-board/2"), original);
     s.apply("edit.redo", &json!({})).unwrap();
-    assert_eq!(saved_board(&s, "pcbcraft-board/20"), documents);
+    assert_eq!(saved_board(&s, "pcbcraft-board/23"), documents);
 
-    for older in ["pcbcraft-board/3", "pcbcraft-board/5", "pcbcraft-board/19"] {
-        assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/20", older)).is_err(), "{older}");
+    for older in ["pcbcraft-board/3", "pcbcraft-board/5", "pcbcraft-board/19", "pcbcraft-board/20", "pcbcraft-board/21"] {
+        assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/23", older)).is_err(), "{older}");
     }
-    assert!(persistence::decode_documents(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/20")).is_err());
+    assert!(persistence::decode_documents(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23")).is_err());
 }
 
 /// Without a declared minimum, checks use the nominal finished thickness and say so.
@@ -657,7 +657,7 @@ fn board_thickness_for_checks_says_which_value_it_uses() {
     candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
     assert_eq!(s.project().unwrap().board_setup().unwrap().board_thickness_for_checks(), Some((1_600_000, ThicknessBasis::Nominal)));
-    saved_board(&s, "pcbcraft-board/20");
+    saved_board(&s, "pcbcraft-board/23");
 }
 
 /// Qualifiers without their value, empty or out-of-range base copper, inverted board limits and
@@ -747,7 +747,7 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
         for (field, value) in stackup.as_object().unwrap() {
             assert_eq!(&stored["stackup"][field], value);
         }
-        saved_board(&s, "pcbcraft-board/20");
+        saved_board(&s, "pcbcraft-board/23");
     }
     let bad = [
         (json!({"base_copper":{"weight_milli_oz":100_001}}), json!({})),
@@ -778,7 +778,7 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
         reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(copper, stackup),"expected_revision":revision}));
     }
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(json!({"base_copper":{"weight_milli_oz":100_000}}), json!({}))}));
-    let saved = saved_board(&s, "pcbcraft-board/20");
+    let saved = saved_board(&s, "pcbcraft-board/23");
     let path = persistence::test_board_path(&saved);
     let text = String::from_utf8(saved[&path].clone()).unwrap();
     let field = text.find("\"weight_milli_oz\"").unwrap();
@@ -803,9 +803,9 @@ fn reducing_copper_count_keeps_authored_roles() {
     assert_eq!(grown.copper_stack().filter(|copper| copper.role == Some(CopperRole::Plane)).count(), 1);
 }
 
-/// Board rules and the stack fields share format 20; removing the stack fields returns to format 19.
+/// Board rules and the stack fields share format 23; removing the stack fields returns to format 19.
 #[test]
-fn board_format_20_carries_rules() {
+fn board_format_23_carries_rules() {
     let mut s = crate::board::track::tests::routed_fixture();
     let board = s.project().unwrap().board_target().unwrap().board;
     apply(&mut s, crate::board::rules::SET_RULES, json!({"board":board,"rules":crate::board::rules::Values::default()}));
@@ -813,15 +813,17 @@ fn board_format_20_carries_rules() {
     let mut candidate = setup(&s);
     candidate["stackup"]["strata"][0]["role"] = json!("mixed");
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
-    let stacked = saved_board(&s, "pcbcraft-board/20");
-    assert!(persistence::decode_documents(&with_header(&stacked, "pcbcraft-board/20", "pcbcraft-board/19")).is_err());
+    let stacked = saved_board(&s, "pcbcraft-board/23");
+    for older in ["pcbcraft-board/19", "pcbcraft-board/21"] {
+        assert!(persistence::decode_documents(&with_header(&stacked, "pcbcraft-board/23", older)).is_err(), "{older}");
+    }
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved_board(&s, "pcbcraft-board/19"), ruled);
 }
 
-/// Locked copper and the stack fields share format 20; removing the stack fields returns to format 18.
+/// Locked copper and the stack fields share format 23; removing the stack fields returns to format 18.
 #[test]
-fn board_format_20_carries_locked_copper() {
+fn board_format_23_carries_locked_copper() {
     use crate::board::track::{ADD_VIA, SET_COPPER_LOCKED};
     let mut s = crate::board::track::tests::routed_fixture();
     let board = s.project().unwrap().board_target().unwrap().board;
@@ -832,7 +834,7 @@ fn board_format_20_carries_locked_copper() {
     let mut candidate = setup(&s);
     candidate["stackup"]["strata"][0]["role"] = json!("signal");
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
-    saved_board(&s, "pcbcraft-board/20");
+    saved_board(&s, "pcbcraft-board/23");
     assert!(s.project().unwrap().board.vias.iter().any(|via| via.locked));
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved_board(&s, "pcbcraft-board/18"), locked);

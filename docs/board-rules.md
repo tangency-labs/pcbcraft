@@ -66,13 +66,14 @@ existing session revision. They do not claim to implement background checking.
 
 An authored board-default record has `format: "pcbcraft-rules/1"`, an
 independent UUID `id`, and the typed `values` object. It lives in `board.json`
-under board format 19, or 20 when the setup also uses copper roles, base copper,
-copper thickness qualifiers or finished board thickness, or 23 when a material
-also carries a thermal conductivity, thermal expansion, dielectric strength or
-CTI report; each accepts the earlier physical fields including locks. Format 19
-requires a valid rule record, and older board headers reject it. Null, missing
-or contradictory stored records fail before adoption. Removing the record
-returns to the format required by the board's remaining data.
+under board format 19 or later: 21 with a placement origin, 23 when the setup
+uses copper roles, base copper, copper thickness qualifiers or finished board
+thickness, 24 when a material also carries a thermal conductivity, thermal
+expansion, dielectric strength or CTI report. Each accepts the earlier physical
+fields including locks. Format 19 requires a valid rule record, and older board
+headers reject it. Null, missing or contradictory stored records fail before
+adoption. Removing the record returns to the format required by the board's
+remaining data.
 
 A board without authored rules retains its existing byte encoding. Folder and
 `.pc` archive saves preserve rule IDs and exact values; undo/redo restores the

@@ -53,13 +53,13 @@ fn reported(s: &Session) -> Value {
 /// Adding thermal conductivity (1.0 W/(m·K), z), thermal expansion (50 ppm/K, z, below Tg),
 /// dielectric strength (40 kV at 1.0 mm) and CTI (175 V, group IIIa), each with a source, to a
 /// new revision of a pinned material is one undoable edit that reads back with its unit, axis and
-/// source and saves losslessly in board format 23. The Tg and Dk/Df reports and the earlier pins
+/// source and saves losslessly in board format 24. The Tg and Dk/Df reports and the earlier pins
 /// stay unchanged, older headers refuse these reports, and undo restores the format-3 bytes.
 ///
 /// 175 V lies in group IIIa because IEC 60664-1:2007 clause 4.8.1.3 places IIIa from 175 V up to
 /// below 400 V. The other values are synthetic.
 #[test]
-fn thermal_and_insulation_reports_round_trip_in_board_format_23() {
+fn thermal_and_insulation_reports_round_trip_in_board_format_24() {
     let mut s = session();
     let c = candidate(&s);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
@@ -110,7 +110,7 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_23() {
     assert_eq!(typed.tg, snapshot.board_setup().unwrap().materials()[0].tg);
     assert_eq!(typed.dielectric, snapshot.board_setup().unwrap().materials()[0].dielectric);
 
-    let documents = saved(&s, "pcbcraft-board/23");
+    let documents = saved(&s, "pcbcraft-board/24");
     let mut board = board_json(&documents);
     let old = board_json(&plain);
     let saved_materials = board["setup"]["materials"].as_array_mut().unwrap();
@@ -124,11 +124,11 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_23() {
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert_eq!(serde_json::to_value(reopened.board_setup().unwrap()).unwrap(), inspected);
     // Format 19 already fails on its own rules requirement; the others fail on the reports.
-    for older in ["pcbcraft-board/3", "pcbcraft-board/19", "pcbcraft-board/20"] {
-        let error = persistence::decode_documents(&with_header(&documents, "pcbcraft-board/23", older)).unwrap_err();
-        assert!(older.ends_with("/19") || error.contains("format 23"), "{older}: {error}");
+    for older in ["pcbcraft-board/3", "pcbcraft-board/19", "pcbcraft-board/21", "pcbcraft-board/23"] {
+        let error = persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", older)).unwrap_err();
+        assert!(older.ends_with("/19") || older.ends_with("/21") || error.contains("format 24"), "{older}: {error}");
     }
-    assert!(persistence::decode_documents(&with_header(&plain, "pcbcraft-board/3", "pcbcraft-board/23")).is_err());
+    assert!(persistence::decode_documents(&with_header(&plain, "pcbcraft-board/3", "pcbcraft-board/24")).is_err());
 
     s.apply("edit.undo", &json!({})).unwrap();
     assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &snapshot));
@@ -322,38 +322,43 @@ fn report_order_is_canonical_and_missing_conditions_stay_unknown() {
     assert_eq!(s.revision(), revision);
 }
 
-/// Format 23 also carries format 20's stack fields and format 19's rules; dropping the reports
-/// returns to the format the remaining data needs.
+/// Format 24 also carries format 23's stack fields, a placement origin and format 19's rules;
+/// dropping the reports returns to the format the remaining data needs.
 #[test]
-fn board_format_23_carries_stack_fields_and_rules() {
+fn board_format_24_carries_stack_fields_origin_and_rules() {
     let mut s = crate::board::track::tests::routed_fixture();
     let board = s.project().unwrap().board_target().unwrap().board;
     apply(&mut s, crate::board::rules::SET_RULES, json!({"board":board,"rules":crate::board::rules::Values::default()}));
     let ruled = saved(&s, "pcbcraft-board/19");
+    apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"board":board,"origin":{"kind":"point","x_nm":1_000_000,"y_nm":2_000_000}}));
+    let originated = saved(&s, "pcbcraft-board/21");
     let mut c = setup(&s);
     c["stackup"]["strata"][0]["role"] = json!("signal");
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c.clone()}));
-    let stacked = saved(&s, "pcbcraft-board/20");
+    let stacked = saved(&s, "pcbcraft-board/23");
     let mut material = json!({"id":Uuid::from_u128(301),"revision":1,"name":"Synthetic insulation"});
     for (field, value) in reports().as_object().unwrap() {
         material[field] = value.clone();
     }
     c["materials"] = json!([material]);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
-    let documents = saved(&s, "pcbcraft-board/23");
+    let documents = saved(&s, "pcbcraft-board/24");
     assert!(board_json(&documents)["rules"].is_object());
+    assert_eq!(board_json(&documents)["placement_origin"]["anchor"], json!({"kind":"point","x_nm":1_000_000,"y_nm":2_000_000}));
     assert_eq!(setup(&s)["stackup"]["strata"][0]["role"], "signal");
-    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20")).is_err());
+    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/23")).is_err());
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(saved(&s, "pcbcraft-board/20"), stacked);
+    assert_eq!(saved(&s, "pcbcraft-board/23"), stacked);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved(&s, "pcbcraft-board/21"), originated);
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved(&s, "pcbcraft-board/19"), ruled);
 }
 
-/// Locked copper also travels in format 23 without any format 20 stack field, and dropping the
+/// Locked copper also travels in format 24 without any format 23 stack field, and dropping the
 /// reports returns to format 18 byte for byte.
 #[test]
-fn board_format_23_carries_locked_copper() {
+fn board_format_24_carries_locked_copper() {
     use crate::board::track::{ADD_VIA, SET_COPPER_LOCKED};
     let mut s = crate::board::track::tests::routed_fixture();
     let board = s.project().unwrap().board_target().unwrap().board;
@@ -366,10 +371,10 @@ fn board_format_23_carries_locked_copper() {
     material["cti"] = reports()["cti"].clone();
     c["materials"] = json!([material]);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
-    let documents = saved(&s, "pcbcraft-board/23");
+    let documents = saved(&s, "pcbcraft-board/24");
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert!(reopened.board.vias.iter().any(|via| via.locked));
-    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/18")).is_err());
+    assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/24", "pcbcraft-board/18")).is_err());
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved(&s, "pcbcraft-board/18"), locked);
 }

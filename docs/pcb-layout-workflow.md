@@ -107,9 +107,10 @@ explicit local tool sizes remain a per-view choice. Changing rules invalidates
 previous checks and unfinished route authority without resizing existing copper.
 
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
-Authored defaults have a stable rule UUID and use board format 19 (20 when the
-board setup also uses the copper or board thickness fields, 23 when a material
-also carries thermal or insulation reports); removing the
+Authored defaults have a stable rule UUID and use board format 19 or later
+(21 with a placement origin, 23 when the board setup uses the copper or board
+thickness fields, 24 when a material also carries thermal or insulation
+reports); removing the
 record restores built-in resolution and the format required by the remaining
 board data. A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
