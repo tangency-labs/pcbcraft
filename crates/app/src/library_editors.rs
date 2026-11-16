@@ -589,6 +589,10 @@ impl PcbApp {
         let ctx = ui.ctx().clone();
         self.sync_library_focus();
         let main = self.views.host == self.views.main;
+        #[cfg(not(target_arch = "wasm32"))]
+        let assistant_keys = main && self.assistant_shortcuts(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        let assistant_keys = false;
         let enabled = matches!(self.dialog, Dialog::None)
             && !self.files.busy()
             && !self.project_action_pending()
@@ -623,14 +627,8 @@ impl PcbApp {
             Quit,
         }
         let intents = std::cell::RefCell::new(Vec::new());
-        let mut preferences = false;
-        let mut help = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut assistant_clicked = false;
-        #[cfg(not(target_arch = "wasm32"))]
-        let (assistant_open, assistant_ready) = self.assistant.toolbar_state();
-        #[cfg(not(target_arch = "wasm32"))]
-        let assistant_visible = self.assistant.toolbar_visible();
+        let mut picked = crate::Utilities::default();
+        let assistant = self.assistant_toolbar();
         shell::app_bar(
             ui,
             title.as_ref().map(|(name, dirty)| (name.as_str(), *dirty)),
@@ -704,27 +702,13 @@ impl PcbApp {
                     });
                 }
             },
-            |ui, width| {
-                if width >= crate::COMPACT_APP_BAR {
-                    help = menu::help(ui, crate::help_menu).flatten();
-                }
-                preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", "", true).clicked();
-                #[cfg(not(target_arch = "wasm32"))]
-                if assistant_visible {
-                    assistant_clicked = pcbcraft_chrome::assistant::toolbar(ui, assistant_open, assistant_ready, "");
-                }
-            },
+            |ui, width| picked = crate::utilities(ui, width, assistant),
         );
-        if preferences {
-            self.open_preferences();
-        } else if let Some(help) = help {
-            self.help_action(&ctx, help);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if assistant_clicked {
-            self.assistant.toggle(&ctx);
-        }
-        if enabled && !ctx.egui_wants_keyboard_input() {
+        self.apply_utilities(&ctx, picked);
+        if enabled && !assistant_keys && !ctx.egui_wants_keyboard_input() {
+            if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
+                self.open_preferences();
+            }
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_S)) {
                 intents.borrow_mut().push(if IN_BROWSER { Intent::Save(false) } else { Intent::Publish });
             }
@@ -802,16 +786,7 @@ impl PcbApp {
         #[cfg(not(target_arch = "wasm32"))]
         if main {
             let area = self.library_editors.active.and_then(|id| self.library_editors.documents.get(&id)).and_then(|doc| doc.camera.schematic_rect());
-            self.assistant.show(&ctx, area, &self.session, enabled && !self.library_editors.busy(), self.library_editors.active.is_some());
-            self.serve_chat(&ctx);
-            if let Some(request) = self.assistant.take_settings_request() {
-                self.dialog = match request {
-                    crate::assistant::SettingsRequest::Settings => {
-                        Dialog::Preferences(crate::preferences::PreferencesWindow::at_ai(self.preferences))
-                    }
-                    crate::assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
-                };
-            }
+            self.host_assistant(&ctx, area, enabled && !self.library_editors.busy(), self.library_editors.active.is_some());
         }
         let dialog_host = self.arrangement_dialog_host().or_else(|| self.rule_dialog_host()).unwrap_or(self.views.main);
         if self.views.host == dialog_host {

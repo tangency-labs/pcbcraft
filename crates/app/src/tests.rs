@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod app_bar_utilities;
 mod board_colors;
 mod board_drawing;
 mod board_layers;

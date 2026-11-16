@@ -163,6 +163,44 @@ fn help_menu(ui: &mut Ui) -> Option<Help> {
     pick
 }
 
+/// What the application-wide utilities at the end of an app bar asked for this frame.
+#[derive(Default)]
+struct Utilities {
+    preferences: bool,
+    help: Option<Help>,
+    #[cfg(not(target_arch = "wasm32"))]
+    assistant: bool,
+}
+
+/// Draw the utilities every workspace's app bar ends with, so they share one set, order,
+/// tooltips and breakpoints: the version and Report a bug from 950 points, Help from
+/// [`COMPACT_APP_BAR`] (narrower bars leave its rows to the Home page), Preferences, then the
+/// Assistant when `assistant` carries its open and ready state. Report a bug opens the issue
+/// form directly.
+fn utilities(ui: &mut Ui, width: f32, assistant: Option<(bool, bool)>) -> Utilities {
+    let mut picked = Utilities::default();
+    if width >= 950.0 {
+        ui.label(dim(format!("v{VERSION}")));
+        ui.add_space(Tokens::get().space_8);
+        if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
+        }
+    }
+    if width >= COMPACT_APP_BAR {
+        picked.help = menu::help(ui, help_menu).flatten();
+    }
+    let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
+    picked.preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((open, ready)) = assistant {
+        let shortcut = ui.ctx().format_shortcut(&assistant::TOGGLE);
+        picked.assistant = pcbcraft_chrome::assistant::toolbar(ui, open, ready, &shortcut);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = assistant;
+    picked
+}
+
 /// A row in the Help menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Help {
@@ -811,17 +849,9 @@ impl PcbApp {
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
-        let mut preferences = false;
-        let mut help = None;
+        let mut picked = Utilities::default();
         let mut home = false;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut assistant_clicked = false;
-        #[cfg(not(target_arch = "wasm32"))]
-        let (assistant_open, assistant_ready) = self.assistant.toolbar_state();
-        #[cfg(not(target_arch = "wasm32"))]
-        let assistant_open = assistant_open && !self.home;
-        #[cfg(not(target_arch = "wasm32"))]
-        let assistant_visible = self.assistant.toolbar_visible();
+        let assistant = self.assistant_toolbar();
         shell::app_bar(
             ui,
             title,
@@ -848,37 +878,36 @@ impl PcbApp {
                 }
             },
             |_| {},
-            |ui, width| {
-                if width >= 950.0 {
-                    ui.label(dim(format!("v{VERSION}")));
-                    ui.add_space(Tokens::get().space_8);
-                    if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
-                    }
-                }
-                // Narrow bars leave Help's rows to the Home page so Home fits beside the history actions.
-                if width >= COMPACT_APP_BAR {
-                    help = menu::help(ui, help_menu).flatten();
-                }
-                let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
-                preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
-                #[cfg(not(target_arch = "wasm32"))]
-                if assistant_visible {
-                    let shortcut = ui.ctx().format_shortcut(&assistant::TOGGLE);
-                    assistant_clicked = pcbcraft_chrome::assistant::toolbar(ui, assistant_open, assistant_ready, &shortcut);
-                }
-            },
+            |ui, width| picked = utilities(ui, width, assistant),
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        if assistant_clicked {
-            self.toggle_assistant(ui.ctx());
-        }
-        if preferences {
-            self.open_preferences();
-        } else if let Some(pick) = help {
-            self.help_action(ui.ctx(), pick);
-        } else if home {
+        self.apply_utilities(ui.ctx(), picked);
+        if home {
             self.show_home();
+        }
+    }
+
+    /// The Assistant's app-bar state where this host supports it and the toolbar preference
+    /// shows it: whether its view is open in the workspace, and whether an agent is answering.
+    fn assistant_toolbar(&self) -> Option<(bool, bool)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.assistant.toolbar_visible() {
+            let (open, ready) = self.assistant.toolbar_state();
+            return Some((open && !self.home, ready));
+        }
+        None
+    }
+
+    /// Act on the utilities picked this frame: the Assistant toggles on its own, and Preferences
+    /// wins over a Help row.
+    fn apply_utilities(&mut self, ctx: &egui::Context, picked: Utilities) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if picked.assistant {
+            self.toggle_assistant(ctx);
+        }
+        if picked.preferences {
+            self.open_preferences();
+        } else if let Some(pick) = picked.help {
+            self.help_action(ctx, pick);
         }
     }
 
@@ -889,6 +918,22 @@ impl PcbApp {
             self.assistant.open(ctx);
         } else {
             self.assistant.toggle(ctx);
+        }
+    }
+
+    /// Draw the main host's Assistant over `workspace`, serve its chat, and open the settings
+    /// it asks for. Every workspace calls this, so the toolbar toggle works wherever it shows.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn host_assistant(&mut self, ctx: &egui::Context, workspace: Option<egui::Rect>, can_edit: bool, has_document: bool) {
+        self.assistant.show(ctx, workspace, &self.session, can_edit, has_document);
+        self.serve_chat(ctx);
+        if let Some(request) = self.assistant.take_settings_request() {
+            self.dialog = match request {
+                assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
+                assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
         }
     }
 
@@ -2568,16 +2613,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             if main {
                 let can_edit = workspace.is_some() && matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
-                self.assistant.show(&ctx, workspace, &self.session, can_edit, self.session.project().is_some());
-                self.serve_chat(&ctx);
-                if let Some(request) = self.assistant.take_settings_request() {
-                    self.dialog = match request {
-                        assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
-                        assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
-                    };
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    ctx.request_repaint();
-                }
+                self.host_assistant(&ctx, workspace, can_edit, self.session.project().is_some());
             }
             #[cfg(target_arch = "wasm32")]
             let _ = workspace;
