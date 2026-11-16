@@ -120,7 +120,8 @@ impl Resolved {
 }
 
 /// Board-to-output coordinates: shift to the origin, then point Y up as seen from the top.
-/// Rotations need no change; counterclockwise on screen is counterclockwise seen from the top.
+/// Top-side rotations need no change; counterclockwise on screen is counterclockwise seen from
+/// the top. [`Frame::place`] writes bottom-side placements under a [`BottomSide`] convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Frame {
     origin: Point,
@@ -135,6 +136,47 @@ impl Frame {
     pub fn to_output(self, point: Point) -> Point {
         Point { x_nm: point.x_nm - self.origin.x_nm, y_nm: self.origin.y_nm - point.y_nm }
     }
+
+    /// Express a footprint placement in output terms. Top-side placements always keep the
+    /// output X and the board rotation; `convention` decides how bottom-side rows are written.
+    /// Exact for every input: X is negated at most once and rotation stays in whole degrees.
+    pub fn place(self, at: Point, rotation: u16, on_bottom: bool, convention: BottomSide) -> Placed {
+        let at = self.to_output(at);
+        let rotation = rotation % 360;
+        match (on_bottom, convention) {
+            (false, _) | (true, BottomSide::ViewedFromTop) => Placed { at, rotation },
+            (true, BottomSide::ViewedFromBottom) => Placed { at: Point { x_nm: -at.x_nm, y_nm: at.y_nm }, rotation: (360 - rotation) % 360 },
+        }
+    }
+}
+
+/// How placement rows of bottom-side parts are written. Top-side rows are the same in both.
+///
+/// A bottom placement at board rotation `r` is its library footprint with local X mirrored and
+/// then turned `r` counterclockwise, seen from the top.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BottomSide {
+    /// Seen from the top like every other row: X is not mirrored and the rotation is the board
+    /// rotation, counterclockwise from the top; the mirror is implied by the side. Positive
+    /// rotation stays counterclockwise as viewed from the top on the bottom side as well
+    /// (IPC-2581, 3.3.2).
+    #[default]
+    ViewedFromTop,
+    /// Seen from below, as the part sits on the bottom of the board: X is negated about the
+    /// origin and the rotation is counterclockwise seen from below, `(360 - r) mod 360`. Seen
+    /// this way the part is its unmirrored library footprint at that rotation.
+    ViewedFromBottom,
+}
+
+/// A footprint placement in an output frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Placed {
+    /// The placement point in output coordinates (integer nanometres).
+    pub at: Point,
+    /// Counterclockwise whole degrees from the library zero orientation in the convention's view,
+    /// 0 through 359.
+    pub rotation: u16,
 }
 
 impl<'a> BoardView<'a> {
