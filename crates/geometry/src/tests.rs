@@ -4,6 +4,7 @@ use crate::guard::guard;
 /// The round-trip tolerance for bounding boxes: one micrometre.
 const ROUND_TRIP_TOLERANCE_NM: u64 = 1_000;
 
+/// A 12.5 x 8 x 1.6 mm block named `Block` off the origin, and the box it must have.
 fn block() -> (Body, BoundingBox) {
     let origin = [-2_000_000, 3_500_000, 0];
     let size = [12_500_000, 8_000_000, 1_600_000];
@@ -11,6 +12,7 @@ fn block() -> (Body, BoundingBox) {
     (Body::cuboid("Block", origin, size).unwrap(), expected)
 }
 
+/// The error codes keep the names that callers and saved results rely on.
 #[test]
 fn error_codes_keep_their_names() {
     let names: Vec<&str> = [
@@ -30,6 +32,7 @@ fn error_codes_keep_their_names() {
     );
 }
 
+/// A block written as AP242 and read back keeps its name and its box within one micrometre.
 #[test]
 fn cuboid_round_trips_through_step_within_one_micrometre() {
     let (body, expected) = block();
@@ -49,6 +52,7 @@ fn cuboid_round_trips_through_step_within_one_micrometre() {
     assert!(back.max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM, "{back:?} against {expected:?}");
 }
 
+/// Both bodies of a part read back by name, in the order written, in either order.
 #[test]
 fn every_body_of_a_part_reads_back() {
     let (first, _) = block();
@@ -67,6 +71,7 @@ fn every_body_of_a_part_reads_back() {
     assert_eq!(names, ["Spacer", "Block"]);
 }
 
+/// The writer is deterministic: the same bodies give the same bytes.
 #[test]
 fn writing_the_same_bodies_twice_gives_the_same_bytes() {
     let (body, _) = block();
@@ -74,6 +79,7 @@ fn writing_the_same_bodies_twice_gives_the_same_bytes() {
     assert_eq!(write_step("fixture", &bodies).unwrap(), write_step("fixture", &bodies).unwrap());
 }
 
+/// A panic inside or outside the kernel's own guard is `kernel_internal`, and the kernel keeps working.
 #[test]
 fn a_kernel_panic_is_reported_as_kernel_internal() {
     let error = kernel_crash_test().unwrap_err();
@@ -89,6 +95,7 @@ fn a_kernel_panic_is_reported_as_kernel_internal() {
     assert!(body.bounding_box().unwrap().max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM);
 }
 
+/// Bytes that are not UTF-8, text that is not STEP and an empty input are `model_unreadable`.
 #[test]
 fn unreadable_bytes_are_model_unreadable() {
     let inputs: [&[u8]; 3] = [b"\xff\xfe\x00", b"not a STEP file", b""];
@@ -98,6 +105,7 @@ fn unreadable_bytes_are_model_unreadable() {
     }
 }
 
+/// A STEP file with no solid item reads as no bodies and no refusals.
 #[test]
 fn a_file_without_solids_reads_as_empty() {
     let read = read_step(b"ISO-10303-21;DATA;#1=CARTESIAN_POINT('',(0.,0.,0.));ENDSEC;END-ISO-10303-21;").unwrap();
@@ -105,8 +113,8 @@ fn a_file_without_solids_reads_as_empty() {
     assert!(read.refused.is_empty());
 }
 
-/// A solid with an unsupported surface is refused alone: the other solid of the part is read and
-/// placed where it was written.
+/// A solid on a surface entity the reader does not know is refused alone, with its entity number:
+/// the other solid of the part is read and placed where it was written.
 #[test]
 fn an_unsupported_surface_refuses_only_its_solid() {
     let (first, first_box) = block();
@@ -127,6 +135,7 @@ fn an_unsupported_surface_refuses_only_its_solid() {
     assert!(deviation <= ROUND_TRIP_TOLERANCE_NM, "the other solid, where it was written: {kept:?}");
 }
 
+/// Non-positive sizes, out-of-range corners and an empty write are `invalid_params`.
 #[test]
 fn bad_arguments_are_refused_before_the_kernel() {
     for size in [[0, 1, 1], [1, -1, 1]] {
@@ -137,6 +146,7 @@ fn bad_arguments_are_refused_before_the_kernel() {
     assert_eq!(write_step("fixture", &[]).unwrap_err().code(), ErrorCode::InvalidParams);
 }
 
+/// Millimetres convert to nanometres with one rounding, and non-finite or huge values are refused.
 #[test]
 fn millimetre_conversion_rounds_once_to_the_nanometre() {
     assert_eq!(point_nm(point_mm([1, -2_540_001, MAX_LENGTH_NM]).unwrap()).unwrap(), [1, -2_540_001, MAX_LENGTH_NM]);
@@ -145,6 +155,7 @@ fn millimetre_conversion_rounds_once_to_the_nanometre() {
     assert_eq!(point_nm([2e6, 0.0, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
 }
 
+/// Blocks touching either end of the coordinate range are exact, and one nanometre past is refused.
 #[test]
 fn a_transformed_copy_moves_and_leaves_the_original() {
     let (body, expected) = block();
@@ -214,6 +225,7 @@ fn both_ends_of_the_coordinate_range_are_accepted_and_one_past_is_refused() {
     assert_eq!(point_nm([0.0, -limit_mm - one_nm_mm, 0.0]).unwrap_err().code(), ErrorCode::OperationFailed);
 }
 
+/// The body names read back from one block named `body_name` in a part named `part_name`.
 fn names_after_round_trip(part_name: &str, body_name: &str) -> Vec<String> {
     let body = Body::cuboid(body_name, [0; 3], [1_000_000; 3]).unwrap();
     let read = read_step(&write_step(part_name, &[body]).unwrap()).unwrap();
@@ -221,6 +233,7 @@ fn names_after_round_trip(part_name: &str, body_name: &str) -> Vec<String> {
     read.bodies.iter().map(|b| b.name().to_string()).collect()
 }
 
+/// Body and part names survive the round trip, with the writer's rules for empty and suffixed names.
 #[test]
 fn names_read_back_unchanged() {
     let awkward = "O'Brien \\ bracket Ø 中 🚀";
@@ -243,6 +256,7 @@ fn names_read_back_unchanged() {
     assert_eq!(names_after_round_trip("  ", ""), ["Part"]);
 }
 
+/// Names with ASCII control characters, which STEP strings cannot carry, are `invalid_params`.
 #[test]
 fn names_with_control_characters_are_refused() {
     for name in ["tab\there", "line\nbreak", "nul\0", "delete\u{7f}"] {
@@ -252,6 +266,8 @@ fn names_with_control_characters_are_refused() {
     }
 }
 
+/// A kernel failure while making a body's STEP record keeps its code: a caught panic is
+/// `kernel_internal`, a refusal is `operation_failed`.
 #[test]
 fn a_body_record_the_kernel_cannot_make_keeps_its_code() {
     // A valid body cannot be made to fail its record here, so the record step is replaced.
@@ -277,6 +293,8 @@ fn solid_lines(text: &str) -> Vec<(u64, u64, String)> {
         .collect()
 }
 
+/// A surface model listing its closed shells out of entity order reads them back in ascending
+/// entity-number order.
 #[test]
 fn a_surface_model_with_shells_out_of_order_reads_back_in_entity_order() {
     let a = Body::cuboid("A", [0; 3], [1_000_000; 3]).unwrap();
