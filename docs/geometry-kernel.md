@@ -114,9 +114,12 @@ At SolidCraft revision `73bdb6c`:
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs`.
 
-`solidcore` ships a `NOTICE` file. Apache-2.0 requires it to accompany
-distributed builds, so the release notices file listed under
-[Dependencies](../ATTRIBUTION.md#dependencies) must include it.
+The kernel crates are Apache-2.0 only, unlike the rest of SolidCraft (MIT OR
+Apache-2.0). Apache-2.0 is on the `deny.toml` allow list, so no exception is
+needed. `solidcore`'s `NOTICE` is kept unchanged in
+[`crates/geometry/SOLIDCORE-NOTICE`](../crates/geometry/SOLIDCORE-NOTICE).
+Apache-2.0 requires it to accompany distributed builds, so the release notices
+file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it.
 
 ## Known limits and open work
 

@@ -1651,12 +1651,15 @@ introduced. Test projects use production commands and native codecs.
 `crates/geometry` depends on `solidcore`, `solidcore-ops` and `solidcore-step`
 from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
 `73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision already pinned for the
-Craft UI crates. They are Apache-2.0, copyright (c) 2026 The solidcore
+Craft UI crates. Unlike the rest of SolidCraft, which is MIT OR Apache-2.0,
+these kernel crates are Apache-2.0 only, copyright (c) 2026 The solidcore
 contributors. `solidcore` is a Rust port of the SMLib and SM_API components of
 NVIDIA's [USD BRep](https://github.com/NVIDIA-Omniverse/usd-brep) (v1.0.1,
-Apache-2.0); its `NOTICE` file must ship with distributed builds and belongs in
-the release notices file described under [Dependencies](#dependencies). No
-kernel source is copied into this repository.
+Apache-2.0). Its `NOTICE` is retained unchanged in
+`crates/geometry/SOLIDCORE-NOTICE`; Apache-2.0 requires it to ship with
+distributed builds, so the release notices file described under
+[Dependencies](#dependencies) must include it. No kernel source is copied into
+this repository.
 
 The panic guard in `crates/geometry/src/guard.rs` adapts SolidCraft's `guard` in
 `crates/kernel/src/lib.rs` at the same revision (MIT OR Apache-2.0, copyright (c)
