@@ -1777,7 +1777,8 @@ mod live {
         }
 
         /// Window and UI input commands are versioned like engine commands and locked beside
-        /// them, so a changed contract that kept its version fails here.
+        /// them, so a changed contract that kept its version fails here unless the same change
+        /// rewrote its digest in the lock.
         #[test]
         fn window_commands_match_the_committed_lock() {
             use pcbcraft_engine::command_versions::{CATALOG_VERSION, LockMismatch, check_lock, version};

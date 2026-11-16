@@ -206,9 +206,14 @@ command's version and a SHA-256 digest of its description with object keys
 sorted, leaving out `version` and the `title`, `summary` and `description` of
 the command and its schemas (values of `const`, `default`, `enum` and
 `examples` are kept whole). The engine
-and app tests fail when a described parameter schema changes while its version
-stays, when a version or `CATALOG_VERSION` falls, or when a version rises
-without `CATALOG_VERSION` in `crates/engine/src/command_versions.rs`. To change a command's contract,
+and app tests compare the code with the lock in the same commit. They fail
+when a described parameter schema no longer matches its locked digest at the
+same version, when a version or `CATALOG_VERSION` falls below the lock's, or
+when a version rises without `CATALOG_VERSION` in
+`crates/engine/src/command_versions.rs`. A change that also rewrites the lock
+passes them, so a review must read every change to `commands-v1.json`: a
+changed digest at an unchanged version is a contract change without a bump.
+Comparing with the lock on the merge base in CI would catch that case too. To change a command's contract,
 raise its entry in that file's version table and `CATALOG_VERSION`, then copy
 the section the failing test prints into the lock. Adding or removing a command
 only needs the lock refreshed the same way; a removed command stays in the lock,

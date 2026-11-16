@@ -29,7 +29,7 @@ fn every_described_command_has_its_version() {
 }
 
 /// The committed lock matches what discovery describes, so a contract change that kept its
-/// version fails here.
+/// version fails here unless the same change rewrote its digest in the lock.
 #[test]
 fn every_command_matches_the_committed_lock() {
     let lock: Value = serde_json::from_str(LOCK).unwrap();
