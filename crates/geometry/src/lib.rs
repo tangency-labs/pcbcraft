@@ -310,6 +310,12 @@ impl StepRead {
         Ok(out)
     }
 
+    /// The body `placement` names, moved by it.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] when the placement names no body of this read; otherwise the
+    /// failures of [`Body::transformed`].
     fn placed(&self, placement: &Placement) -> Result<Body> {
         let body = self
             .bodies

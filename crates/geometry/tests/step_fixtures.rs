@@ -97,3 +97,14 @@ fn a_part_used_twice_is_one_body_placed_twice() {
     let x = turned.transform.axes[0];
     assert!(x[0].abs() < 1e-12 && (x[1] - 1.0).abs() < 1e-12 && x[2].abs() < 1e-12, "{x:?}");
 }
+
+#[test]
+fn an_assembly_that_contains_itself_is_model_unreadable() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step");
+    let text = std::fs::read_to_string(dir.join("assembly_shared_part_turned.step")).unwrap();
+    // The first use's parent and child swapped: the part holds the assembly that holds it.
+    let cycle = text.replacen("'first','',#174,#162,$", "'first','',#162,#174,$", 1);
+    assert_ne!(cycle, text);
+    let error = read_step(cycle.as_bytes()).unwrap_err();
+    assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+}

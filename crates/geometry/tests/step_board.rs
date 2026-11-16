@@ -14,6 +14,8 @@
 //! on its standard output, so the reader's peak memory is measured in a process that held no
 //! kernel bodies before; nothing is written to disk.
 
+/// Builds the board in a child process and reads it, or, given the child's argument, builds it;
+/// a failure is printed and ends the process with status 1.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let result = if std::env::args().nth(1).as_deref() == Some(board::GENERATE) { board::generate() } else { board::run() };
@@ -23,6 +25,7 @@ fn main() {
     }
 }
 
+/// Nothing to run without a kernel.
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 

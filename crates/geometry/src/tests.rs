@@ -109,6 +109,7 @@ fn an_unsupported_surface_refuses_only_its_solid() {
     assert_eq!(read.refused.len(), 1);
     assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
     assert!(read.refused[0].entity > 0);
+    assert!(read.placements.is_empty(), "a refused solid is not placed");
 }
 
 #[test]
@@ -145,7 +146,20 @@ fn a_transformed_copy_moves_and_leaves_the_original() {
     assert_eq!(body.transformed(&flat).unwrap_err().code(), ErrorCode::InvalidParams);
     let not_finite = Transform { axes: [[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [0; 3] };
     assert_eq!(body.transformed(&not_finite).unwrap_err().code(), ErrorCode::InvalidParams);
+    assert!(body.transformed(&Transform::translation([-MAX_LENGTH_NM, 0, MAX_LENGTH_NM])).is_ok());
     assert_eq!(body.transformed(&Transform::translation([MAX_LENGTH_NM + 1, 0, 0])).unwrap_err().code(), ErrorCode::InvalidParams);
+    assert_eq!(body.transformed(&Transform::translation([0, -MAX_LENGTH_NM - 1, 0])).unwrap_err().code(), ErrorCode::InvalidParams);
+}
+
+#[test]
+fn a_placement_of_a_missing_body_is_refused() {
+    let (body, _) = block();
+    let mut read = read_step(&write_step("fixture", &[body]).unwrap()).unwrap();
+    read.placements.push(Placement { body: 1, transform: Transform::IDENTITY });
+    assert_eq!(read.placed_bodies().unwrap_err().code(), ErrorCode::InvalidParams);
+    assert_eq!(read.bounding_box().unwrap_err().code(), ErrorCode::InvalidParams);
+    read.placements.truncate(1);
+    assert_eq!(read.placed_bodies().unwrap().len(), 1);
 }
 
 #[test]
