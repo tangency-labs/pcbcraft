@@ -102,8 +102,10 @@ pub enum Stratum {
         layer: Uuid,
         #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         thickness_nm: Option<i64>,
+        /// How the layer is used; it does not assign nets.
         #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         role: Option<CopperRole>,
+        /// The foil as ordered; it never changes the finished `thickness_nm`.
         #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         base_copper: Option<BaseCopper>,
         /// Symmetric tolerance on finished copper thickness; requires a specified thickness.
@@ -190,17 +192,24 @@ impl Stackup {
 /// A copper layer's finished thickness with the qualifiers stored beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CopperThickness {
+    /// Finished conductor thickness, always positive.
     pub thickness_nm: i64,
+    /// Symmetric tolerance, `None` when unknown.
     pub tolerance_nm: Option<i64>,
+    /// Whether `thickness_nm` is nominal or a guaranteed minimum, `None` when unknown.
     pub basis: Option<ThicknessBasis>,
 }
 
 /// The stack facts of one copper layer. Every field is `None` when unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CopperFacts {
+    /// The catalog copper layer these facts describe.
     pub layer: Uuid,
+    /// How the layer is used.
     pub role: Option<CopperRole>,
+    /// The foil as ordered.
     pub base_copper: Option<BaseCopper>,
+    /// The finished thickness with its qualifiers; `None` when the thickness is unspecified.
     pub finished: Option<CopperThickness>,
 }
 
@@ -378,8 +387,9 @@ impl BoardSetup {
     }
 
     /// Resize the physical copper stack while retaining surface IDs, surviving inner-layer IDs,
-    /// finished dimensions and dielectric construction. Removing authored strata is refused;
-    /// callers can clear their metadata deliberately before reduction. Adoption validates drawings.
+    /// finished dimensions and dielectric construction. Removing authored strata is refused,
+    /// including a copper layer with only a role or base copper; callers can clear their metadata
+    /// deliberately before reduction. The declared board thickness is kept. Adoption validates drawings.
     pub fn with_copper_count(&self, count: u64) -> Result<Self, CommandError> {
         let mut preset = Self::preset(count)?;
         let old: Vec<_> = self.stackup.strata.iter().step_by(2).cloned().collect();

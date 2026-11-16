@@ -77,6 +77,7 @@ impl BoardSetup {
     /// layer IDs. Extra target layers survive, preserving graphic ownership. Existing material
     /// pins cannot be rewritten; ambiguity/name collisions fail through ordinary setup validation.
     /// Shrinking authored strata retains the same protection as a manual copper-count edit.
+    /// The profile's declared finished board thickness, tolerance and minimum replace the board's.
     pub fn with_profile(&self, profile: &SetupProfile) -> Result<Self, CommandError> {
         profile.validate().map_err(CommandError::InvalidParams)?;
         let incoming = &profile.setup;

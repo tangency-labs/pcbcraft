@@ -154,15 +154,19 @@ between the two is enforced.
 Optional `role` is `signal`, `plane` or `mixed`. It describes how the layer is
 used and does not assign nets. Optional `base_copper` describes the foil as ordered:
 `weight_milli_oz`, the nominal weight in thousandths of an ounce per square foot
-(1000 is 1 oz), and/or the foil `thickness_nm`. At least one is required. Neither is
-derived from the other, and neither changes the finished thickness.
+(1000 is 1 oz, accepted from 1 to 100 000), and/or the foil `thickness_nm`. At least
+one is required. Neither is derived from the other, and neither changes the finished
+thickness.
 
 The stackup may declare the finished board thickness: `finished_thickness_nm`
-(nominal), a symmetric `finished_thickness_tolerance_nm`, and
-`declared_minimum_thickness_nm`, the lowest thickness the board is stated to have.
-The minimum may not exceed the nominal value. These are declarations: they cover
-plating, coatings and fabrication variation and are never computed from, or checked
-against, the laminate sum. Checks that need one board thickness take the declared
+(nominal), a symmetric `finished_thickness_tolerance_nm`, which requires the
+nominal, and `declared_minimum_thickness_nm`, the lowest thickness the board is
+stated to have.
+Each thickness is a positive whole number of nanometers up to 100 mm, and a tolerance
+keeps the lower bound positive and the upper bound within 100 mm. The minimum may not
+exceed the nominal value. These are declarations: they cover plating, coatings and
+fabrication variation and are never computed from, or checked against, the laminate
+sum. Checks that need one board thickness take the declared
 minimum when given, otherwise the nominal value, and report which one they used.
 
 Every field is optional and omitted means unknown; zero is never a placeholder.

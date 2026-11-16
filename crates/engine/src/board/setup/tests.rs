@@ -707,6 +707,87 @@ fn invalid_copper_and_board_thickness_fields_never_change_state() {
     }
 }
 
+/// Each new bound accepts its last good value, which also saves and reopens, and refuses the
+/// first bad one, a wrong type and an unknown field; the file reader refuses an out-of-range weight.
+#[test]
+fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
+    let mut s = session(2);
+    let base = setup(&s);
+    let candidate = |copper: Value, stackup: Value| {
+        let mut candidate = base.clone();
+        for (field, value) in copper.as_object().unwrap() {
+            candidate["stackup"]["strata"][0][field] = value.clone();
+        }
+        for (field, value) in stackup.as_object().unwrap() {
+            candidate["stackup"][field] = value.clone();
+        }
+        candidate
+    };
+    let good = [
+        (json!({"base_copper":{"weight_milli_oz":1}}), json!({})),
+        (json!({"base_copper":{"weight_milli_oz":100_000}}), json!({})),
+        (json!({"base_copper":{"thickness_nm":1}}), json!({})),
+        (json!({"base_copper":{"thickness_nm":100_000_000}}), json!({})),
+        (json!({"thickness_nm":35_000,"thickness_tolerance_nm":0,"thickness_basis":"minimum"}), json!({})),
+        (json!({"thickness_nm":35_000,"thickness_tolerance_nm":34_999}), json!({})),
+        (json!({"thickness_nm":99_000_000,"thickness_tolerance_nm":1_000_000}), json!({})),
+        (json!({}), json!({"finished_thickness_nm":1})),
+        (json!({}), json!({"finished_thickness_nm":100_000_000})),
+        (json!({}), json!({"finished_thickness_nm":99_000_000,"finished_thickness_tolerance_nm":1_000_000})),
+        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":0})),
+        (json!({}), json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_000})),
+        (json!({}), json!({"declared_minimum_thickness_nm":100_000_000})),
+    ];
+    for (copper, stackup) in good {
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(copper.clone(), stackup.clone())}));
+        let stored = setup(&s);
+        for (field, value) in copper.as_object().unwrap() {
+            assert_eq!(&stored["stackup"]["strata"][0][field], value);
+        }
+        for (field, value) in stackup.as_object().unwrap() {
+            assert_eq!(&stored["stackup"][field], value);
+        }
+        saved_board(&s, "pcbcraft-board/20");
+    }
+    let bad = [
+        (json!({"base_copper":{"weight_milli_oz":100_001}}), json!({})),
+        (json!({"base_copper":{"weight_milli_oz":-1}}), json!({})),
+        (json!({"base_copper":{"weight_milli_oz":4_294_967_296_u64}}), json!({})),
+        (json!({"base_copper":{"weight_milli_oz":"1000"}}), json!({})),
+        (json!({"base_copper":{"weight_milli_oz":Value::Null}}), json!({})),
+        (json!({"base_copper":{"thickness_nm":100_000_001}}), json!({})),
+        (json!({"base_copper":{"thickness_nm":-1}}), json!({})),
+        (json!({"thickness_nm":99_000_000,"thickness_tolerance_nm":1_000_001}), json!({})),
+        (json!({"thickness_nm":35_000,"thickness_basis":"typical"}), json!({})),
+        (json!({"thickness_nm":35_000,"thickness_basis":Value::Null}), json!({})),
+        (json!({"thickness_nm":35_000,"thickness_tolerance_nm":Value::Null}), json!({})),
+        (json!({"base_copper":Value::Null}), json!({})),
+        (json!({"role":1}), json!({})),
+        (json!({}), json!({"finished_thickness_nm":100_000_001})),
+        (json!({}), json!({"finished_thickness_nm":-1})),
+        (json!({}), json!({"finished_thickness_nm":"1600000"})),
+        (json!({}), json!({"finished_thickness_nm":99_000_000,"finished_thickness_tolerance_nm":1_000_001})),
+        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":-1})),
+        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":Value::Null})),
+        (json!({}), json!({"declared_minimum_thickness_nm":100_000_001})),
+        (json!({}), json!({"declared_minimum_thickness_nm":Value::Null})),
+        (json!({}), json!({"finish":"enig"})),
+    ];
+    for (copper, stackup) in bad {
+        let revision = s.revision();
+        reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(copper, stackup),"expected_revision":revision}));
+    }
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(json!({"base_copper":{"weight_milli_oz":100_000}}), json!({}))}));
+    let saved = saved_board(&s, "pcbcraft-board/20");
+    let path = persistence::test_board_path(&saved);
+    let text = String::from_utf8(saved[&path].clone()).unwrap();
+    let field = text.find("\"weight_milli_oz\"").unwrap();
+    let value = field + text[field..].find("100000").unwrap();
+    let mut changed = saved.clone();
+    changed.insert(path, format!("{}100001{}", &text[..value], &text[value + 6..]).into_bytes());
+    assert!(persistence::decode_documents(&changed).is_err());
+}
+
 /// A copper-count reduction refuses to discard an inner layer that has only a role.
 #[test]
 fn reducing_copper_count_keeps_authored_roles() {
