@@ -230,9 +230,11 @@ and label every difference:
   added, a `pattern`, `format`, `const` or `multipleOf` added or changed, a
   `default` added, changed or dropped, a property added to an object that
   accepted unknown names (a call may already pass that name with another
-  value), any `oneOf` change
-  (a value may then match two alternatives), and any change under a keyword
-  without a rule (`allOf`, `not`, `$ref`, the dependency maps and others).
+  value), any `oneOf` change (a value may then match two alternatives), any
+  change under a keyword compared as a whole (`not`, `allOf`, `$ref`, `if`,
+  `then`, `else`, `patternProperties`, `dependentRequired`,
+  `dependentSchemas`, `dependencies`), and any change under a keyword without
+  a rule.
 
 The rules apply at every depth of a schema. A breaking difference fails the
 tests until `COMMAND_API_VERSION` is raised; then, as for any compatible

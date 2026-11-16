@@ -132,6 +132,10 @@ impl std::fmt::Display for Change {
 const LOWER_BOUNDS: &[&str] = &["minimum", "exclusiveMinimum", "minLength", "minItems", "minProperties"];
 /// Upper bounds: a higher or dropped value accepts more.
 const UPPER_BOUNDS: &[&str] = &["maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"];
+/// Keywords compared only as a whole: any change under one is breaking, because whether it accepts
+/// more or less depends on the schema around it (`not` inverts, `dependentRequired` and the other
+/// dependency maps tie parameters together, `$ref` points elsewhere).
+const WHOLE: &[&str] = &["not", "allOf", "$ref", "if", "then", "else", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies"];
 /// Restrictions: dropping one accepts more; adding or changing one may refuse a valid call.
 const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 
@@ -163,8 +167,9 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 ///   match two, and `oneOf` refuses it; common alternatives are still compared for the path.
 /// - `prefixItems`: compared item by item; a changed length is breaking.
 /// - `examples`: an annotation, so compatible.
-/// - any other keyword (`allOf`, `not`, `$ref`, `if`, `patternProperties`, the dependency maps,
-///   ...): any change is breaking, because the classifier cannot tell.
+/// - `not`, `allOf`, `$ref`, `if`/`then`/`else`, `patternProperties`, `dependentRequired`,
+///   `dependentSchemas`, `dependencies`: compared as a whole; any change is breaking.
+/// - any other keyword: any change is breaking, because the classifier cannot tell.
 ///
 /// Outside the parameter schema (for example `scope`), any change is breaking. A command only in
 /// `new` is compatible; a command only in `old` is breaking (see [`check_snapshot`]).
@@ -281,6 +286,7 @@ fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after
             }
         },
         "anyOf" | "oneOf" | "prefixItems" => alternatives(walk, path, key, before, after),
+        whole if WHOLE.contains(&whole) => walk.push(true, path, change),
         _ => walk.push(true, path, change),
     }
 }

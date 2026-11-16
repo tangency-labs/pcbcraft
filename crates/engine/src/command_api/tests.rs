@@ -264,6 +264,23 @@ fn breaking_changes_are_labelled_breaking() {
         ),
         (p(json!({"$ref": "#/$defs/a"})), p(json!({"$ref": "#/$defs/b"})), "params.properties.p.$ref: changed from \"#/$defs/a\" to \"#/$defs/b\""),
         (p(json!({})), p(json!({"allOf": [{"type": "string"}]})), "params.properties.p.allOf: changed from absent to [{\"type\":\"string\"}]"),
+        (p(json!({})), p(json!({"not": {"type": "null"}})), "params.properties.p.not: changed from absent to {\"type\":\"null\"}"),
+        (
+            p(json!({"not": {"type": "null"}})),
+            p(json!({"not": {"type": "string"}})),
+            "params.properties.p.not: changed from {\"type\":\"null\"} to {\"type\":\"string\"}",
+        ),
+        (p(json!({"not": {"type": "null"}})), p(json!({})), "params.properties.p.not: changed from {\"type\":\"null\"} to absent"),
+        (
+            p(json!({"type": "object", "dependentRequired": {"a": ["b"]}})),
+            p(json!({"type": "object", "dependentRequired": {"a": ["b", "c"]}})),
+            "params.properties.p.dependentRequired: changed from {\"a\":[\"b\"]} to {\"a\":[\"b\",\"c\"]}",
+        ),
+        (
+            p(json!({"type": "object", "dependentRequired": {"a": ["b"]}})),
+            p(json!({"type": "object"})),
+            "params.properties.p.dependentRequired: changed from {\"a\":[\"b\"]} to absent",
+        ),
         (
             nested(json!({"type": "integer"})),
             p(json!({"type": "object", "properties": {}, "required": []})),
@@ -327,6 +344,7 @@ fn every_keyword_of_the_catalog_has_a_rule() {
         "prefixItems",
     ]
     .into_iter()
+    .chain(WHOLE.iter().copied())
     .chain(LOWER_BOUNDS.iter().copied())
     .chain(UPPER_BOUNDS.iter().copied())
     .chain(RESTRICTIONS.iter().copied())
