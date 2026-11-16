@@ -109,7 +109,8 @@ pub enum LockMismatch {
 ///
 /// # Errors
 ///
-/// [`LockMismatch::Version`] when a contract changed without a version bump, a version fell
+/// [`LockMismatch::Version`] when a version in the lock is not a whole number of at least 1, a
+/// contract changed without a version bump, a version fell
 /// (also for a removed id that comes back, or an id that moves from another section),
 /// `catalog_version` fell below the lock's, or a version
 /// rose while `catalog_version` stayed at the lock's. Otherwise [`LockMismatch::Stale`] when a
@@ -118,6 +119,10 @@ pub enum LockMismatch {
 pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_version: u32) -> Result<(), LockMismatch> {
     let empty = Map::new();
     let locked = lock[section].as_object().unwrap_or(&empty);
+    let unreadable = unreadable_versions(lock);
+    if !unreadable.is_empty() {
+        return Err(LockMismatch::Version(unreadable));
+    }
     let locked_catalog = lock["catalog_version"].as_u64().unwrap_or(0);
     let mut version_problems = Vec::new();
     let mut stale = Vec::new();
@@ -166,6 +171,26 @@ pub fn check_lock(lock: &Value, section: &str, described: &[Value], catalog_vers
         stale.push(format!("the lock's catalog version is {locked_catalog}, not {catalog_version}"));
     }
     if stale.is_empty() { Ok(()) } else { Err(LockMismatch::Stale { problems: stale, section: lock_section(described, locked) }) }
+}
+
+/// Every version in the lock that is not a whole number of at least 1: the catalog version and
+/// each entry of every section. Such a value is refused, never read as 0, so a lock edited by hand
+/// (for example `3.0`, `"3"` or a missing field) cannot switch off a rule.
+fn unreadable_versions(lock: &Value) -> Vec<String> {
+    let shown = |value: &Value| if value.is_null() { "missing".to_owned() } else { value.to_string() };
+    let readable = |value: &Value| value.as_u64().is_some_and(|version| version >= 1);
+    let mut problems = Vec::new();
+    if !readable(&lock["catalog_version"]) {
+        problems.push(format!("the lock's catalog_version is {}, not a whole number of at least 1", shown(&lock["catalog_version"])));
+    }
+    for (name, entries) in lock.as_object().into_iter().flatten() {
+        for (id, entry) in entries.as_object().into_iter().flatten() {
+            if !readable(&entry["version"]) {
+                problems.push(format!("`{id}` in `{name}` has version {}, not a whole number of at least 1", shown(&entry["version"])));
+            }
+        }
+    }
+    problems
 }
 
 /// The lock entry that `id` is checked against, with its section's name: the highest version

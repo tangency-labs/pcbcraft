@@ -162,6 +162,43 @@ fn a_command_moved_to_another_section_keeps_its_version() {
     assert_eq!(problems, [format!("`{id}` is version 3, below its version 5 in `commands`; versions never fall")]);
 }
 
+/// A lock version that is not a whole number of at least 1 is refused wherever it stands, never
+/// read as 0: as the command's own entry, as a removed entry of another section, or as the catalog
+/// version.
+#[test]
+fn a_lock_version_must_be_a_whole_number() {
+    let command = json!({"id": "schematic.synthetic", "version": 3, "params": {"type": "object"}});
+    let contract = json!(contract_digest(&command));
+    // The field as it is written in the lock file; `None` leaves it out.
+    let field = |name: &str, version: Option<&str>| version.map_or(String::new(), |version| format!("\"{name}\":{version},"));
+    let entry = |version: Option<&str>| format!("{{{}\"contract\":{contract},\"removed\":false}}", field("version", version));
+    let lock = |catalog: Option<&str>, own: Option<&str>, other: Option<&str>| {
+        format!(
+            "{{{}\"commands\":{{\"schematic.synthetic\":{}}},\"window_commands\":{{\"window.synthetic\":{}}}}}",
+            field("catalog_version", catalog),
+            entry(own),
+            entry(other).replace("false", "true"),
+        )
+    };
+    let good = Some("3");
+    for spelling in [Some("3.0"), Some("3e0"), Some("18446744073709551616"), Some("\"3\""), Some("-1"), Some("0"), None, good] {
+        for (place, text) in [
+            ("own section", lock(good, spelling, good)),
+            ("other section", lock(good, good, spelling)),
+            ("catalog_version", lock(spelling, good, good)),
+        ] {
+            let lock: Value = serde_json::from_str(&text).unwrap();
+            let result = check_lock(&lock, "commands", std::slice::from_ref(&command), 3);
+            if spelling == good {
+                assert_eq!(result, Ok(()), "{place} at 3");
+            } else {
+                let Err(LockMismatch::Version(problems)) = result else { panic!("{place} {spelling:?} was read as a version: {result:?}") };
+                assert!(problems.len() == 1 && problems[0].contains("not a whole number of at least 1"), "{place} {spelling:?}: {problems:?}");
+            }
+        }
+    }
+}
+
 /// One command's state in code: the lock section that describes it (if any), its version and a
 /// number standing for its contract, and the catalog version.
 #[derive(Clone, Copy, Debug)]
