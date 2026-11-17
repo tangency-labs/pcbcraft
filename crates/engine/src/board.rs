@@ -24,6 +24,7 @@ pub mod origin;
 pub mod outline;
 pub mod ratsnest;
 pub mod reference;
+pub mod route;
 pub mod rules;
 pub mod setup;
 #[cfg(test)]

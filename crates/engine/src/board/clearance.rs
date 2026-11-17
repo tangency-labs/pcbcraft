@@ -68,6 +68,10 @@ impl Authority {
     pub fn class_rules(&self) -> Option<&super::class_rules::Context> {
         self.class_rules.as_deref()
     }
+    /// The captured board, for engine consumers that need more of the same snapshot than copper.
+    pub(crate) fn view(&self) -> Option<BoardView<'_>> {
+        self.snapshot.board_view(self.target)
+    }
     /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
     /// Rule overrides are immutable inputs: a different override requires a new query.
     pub fn is_current(&self, session: &Session) -> bool {
@@ -255,10 +259,23 @@ impl ClearanceQuery {
             }
             None => &[],
         };
+        self.probe_membership(contour, layers, nets, intended_from)
+    }
+
+    /// Evaluate a route leg with the complete connected route's intended memberships. The
+    /// optional replaced source retains the public single-contour probe's exclusion behavior;
+    /// a new route passes none so every existing contact is checked.
+    pub(super) fn probe_membership(
+        &self,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        replaced: Option<usize>,
+    ) -> Result<Results, CommandError> {
         let candidates = self.candidates(contour, layers)?;
         let gaps: Vec<_> = candidates
             .into_iter()
-            .filter(|index| Some(*index) != intended_from)
+            .filter(|index| Some(*index) != replaced)
             .map(|index| (index, contour.gap(&self.geometry.items[index].contour)))
             .collect();
         let connected: Vec<_> = nets

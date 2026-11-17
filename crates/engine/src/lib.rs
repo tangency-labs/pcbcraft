@@ -150,6 +150,7 @@ enum ParamKind {
     DrawingPoints,
     DrawingId,
     TrackPath,
+    PreviousRoute,
     TrackWidth,
     TrackIds,
     LayerChanges,
@@ -185,6 +186,10 @@ enum ParamKind {
     ParameterName,
     /// A bounded parameter value, or null to remove it.
     ParameterValue,
+    /// A route posture spelling, such as `diagonal`.
+    RoutePosture,
+    /// A route planner's probe budget.
+    RouteBudget,
     /// A bounded text whose references are resolved.
     ParameterText,
 }
@@ -258,6 +263,11 @@ impl ParamKind {
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
+            Self::PreviousRoute => {
+                let mut schema = board::track::path_schema();
+                schema["minItems"] = json!(0);
+                schema
+            }
             Self::LayerChanges => board::track::layer_changes_schema(),
             Self::TrackEnds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
@@ -278,6 +288,8 @@ impl ParamKind {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":{"type":"string","format":"uuid"}})
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
+            Self::RoutePosture => board::route::posture_schema(),
+            Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
@@ -489,10 +501,19 @@ impl ParamKind {
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
+            Self::RoutePosture if value.as_str().is_some_and(|name| board::route::Posture::NAMES.contains(&name)) => Ok(()),
+            Self::RouteBudget if value.as_u64().is_some_and(|n| (1..=board::route::MAX_BUDGET as u64).contains(&n)) => Ok(()),
             Self::TrackPath
                 if value
                     .as_array()
                     .is_some_and(|v| (2..=board::track::MAX_PATH_POINTS).contains(&v.len()) && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
+            {
+                Ok(())
+            }
+            Self::PreviousRoute
+                if value
+                    .as_array()
+                    .is_some_and(|v| v.len() <= board::track::MAX_PATH_POINTS && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
             {
                 Ok(())
             }
@@ -579,11 +600,14 @@ impl ParamKind {
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
             Self::TrackPath => Err("must contain 2–256 bounded vertices"),
+            Self::PreviousRoute => Err("must contain at most 256 bounded vertices"),
             Self::TrackWidth => Err("must be a track width from 10000 to 10000000 nanometers"),
             Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
             Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
             Self::DrawingId => Err("must identify a drawing or layer by non-nil UUID"),
             Self::Closed | Self::Locked => Err("must be a boolean"),
+            Self::RoutePosture => Err("must be diagonal or orthogonal"),
+            Self::RouteBudget => Err("must be a probe budget from 1 to 65536"),
             Self::HierarchyId
                 if value.as_str().is_some_and(|s| {
                     schematic::wiring::parse_id(s, "label-").is_some() || schematic::wiring::parse_id(s, "sheet-symbol-").is_some()
@@ -2049,6 +2073,43 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::route::PLAN_ROUTE,
+        title: "Plan Route",
+        summary: "Plan one route on a copper layer around existing copper with effective width, clearance and board-edge rules, without editing. Feed reached points to pcb.add_tracks.",
+        params: &[
+            BOARD,
+            Param {
+                name: "from",
+                required: true,
+                summary: "Route head in integer nanometres; copper it touches lends the route its net",
+                kind: ParamKind::Point,
+            },
+            Param { name: "to", required: true, summary: "Target point in integer nanometres", kind: ParamKind::Point },
+            Param { name: "layer", required: true, summary: "Copper layer UUID of the addressed board", kind: ParamKind::DrawingId },
+            Param {
+                name: "width_nm",
+                required: false,
+                summary: "Track width; omitted uses the head contact's net-class or board preferred width",
+                kind: ParamKind::TrackWidth,
+            },
+            Param { name: "posture", required: false, summary: "diagonal (45°, default) or orthogonal (90°)", kind: ParamKind::RoutePosture },
+            Param { name: "flipped", required: false, summary: "Start with the elbow's other leg first", kind: ParamKind::Flag },
+            Param {
+                name: "previous",
+                required: false,
+                summary: "The last plan's points for this gesture; kept while still legal, and its side is preferred",
+                kind: ParamKind::PreviousRoute,
+            },
+            Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 4096", kind: ParamKind::RouteBudget },
+            Param {
+                name: "expected_revision",
+                required: false,
+                summary: "Revision the caller planned against; a different current revision gives a stale outcome",
+                kind: ParamKind::Revision,
+            },
+        ],
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -2858,6 +2919,7 @@ impl Session {
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
             | board::class_rules::ROUTE_RULES
+            | board::route::PLAN_ROUTE
             | EXPORT_FABRICATION
             | ADD_TRACKS
             | ADD_VIA
@@ -3021,6 +3083,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_rule_query(params);
         }
+        if id == board::route::PLAN_ROUTE {
+            self.validate_project_command(id, params)?;
+            return self.route_plan_query(params);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
@@ -3134,6 +3200,7 @@ impl Session {
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
                 | board::class_rules::ROUTE_RULES
+                | board::route::PLAN_ROUTE
                 | EXPORT_FABRICATION
                 | ADD_TRACKS
                 | ADD_VIA
@@ -3404,6 +3471,9 @@ impl Session {
             CHECK_DESIGN => self.validate_design_check(params)?,
             board::class_rules::ROUTE_RULES => {
                 self.route_rule_query(params)?;
+            }
+            board::route::PLAN_ROUTE => {
+                self.route_plan_query(params)?;
             }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;

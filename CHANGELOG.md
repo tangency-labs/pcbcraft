@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
+on one copper layer that go round existing pads, tracks and vias, locked or not,
+keeping the effective track width, net-class clearances and board-edge clearance.
+A route that cannot get through stops at its last legal point and names what
+blocked it. Planning never edits the board; the points go to `pcb.add_tracks` as
+one undo step. The route tool does not use the planner yet.
+
 Preferences → Appearance → **Panel style** switches the workspace shell
 between **Floating** cards and a **Compact** layout, following SolidCraft. In
 Compact the ribbon, workspace tile, Browser, Net Inspector, docked panels and
