@@ -1,6 +1,8 @@
 //! Part-group acceptance through the shared command path and the native codecs.
 use super::*;
 use crate::{
+    CommandError,
+    CommandError::{InvalidParams, Unavailable},
     Session,
     persistence::{ENTRY_POINT, decode_documents, decode_packed, encode_documents, encode_packed},
 };
@@ -15,12 +17,14 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
     session.apply(command, &params).unwrap();
 }
 
-/// The same request as `apply` at the current revision, which must be refused for `reason`:
-/// the message has to contain it, so a refusal for some other cause fails the test.
+/// The same request as `apply` at the current revision, refused with the given error variant
+/// and a message containing `reason`, so a different cause cannot satisfy the assertion.
 #[track_caller]
-fn refuse(session: &mut Session, command: &str, mut params: Value, reason: &str) -> String {
+fn refuse(session: &mut Session, command: &str, mut params: Value, kind: fn(String) -> CommandError, reason: &str) -> String {
     params["expected_revision"] = json!(session.revision());
-    let refusal = session.apply(command, &params).unwrap_err().to_string();
+    let error = session.apply(command, &params).unwrap_err();
+    let refusal = error.to_string();
+    assert_eq!(error, kind(refusal.clone()), "{command} {params}: unexpected refusal kind");
     assert!(refusal.contains(reason), "{command} {params}: expected {reason:?}, got {refusal:?}");
     refusal
 }
@@ -225,7 +229,7 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
         }
         assert_eq!(s.project().unwrap().part_group_memberships().len(), MAX_MEMBERSHIPS);
         let snapshot = s.snapshot().unwrap();
-        refuse(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}), "already has 4096 symbols");
+        refuse(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}), Unavailable, "already has 4096 symbols");
         assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     }
 }
@@ -331,7 +335,7 @@ fn catalog_and_membership_edits_are_atomic_and_undoable() {
     apply(&mut s, SET_GROUPS, json!({"part_instance":part_instances[0],"groups":[]}));
     assert_eq!(s.revision(), revision);
 
-    refuse(&mut s, SET_GROUPS, json!({"part_instance":part_instances[0],"groups":[logic,power,power]}), "unique non-nil class UUIDs");
+    refuse(&mut s, SET_GROUPS, json!({"part_instance":part_instances[0],"groups":[logic,power,power]}), InvalidParams, "unique non-nil class UUIDs");
     assert_eq!(s.revision(), revision);
     apply(&mut s, SET_GROUPS, json!({"part_instance":part_instances[0],"groups":[logic,power]}));
     apply(&mut s, SET_GROUPS, json!({"part_instance":part_instances[2],"groups":[power]}));
@@ -344,7 +348,7 @@ fn catalog_and_membership_edits_are_atomic_and_undoable() {
     expected.sort();
     assert_eq!(s.project().unwrap().groups_of_part_instance(part_instance_key(&part_instances[0]).unwrap()).collect::<Vec<_>>(), expected);
 
-    let refusal = refuse(&mut s, REMOVE, json!({"group":power}), "still has members");
+    let refusal = refuse(&mut s, REMOVE, json!({"group":power}), InvalidParams, "still has members");
     assert!(refusal.contains(&part_instances[0]) && refusal.contains(&part_instances[2]) && !refusal.contains(&part_instances[1]), "{refusal}");
     for (command, params, reason) in [
         (SET_GROUPS, json!({"part_instance":part_instance_address(999),"groups":[power]}), "Unknown part instance."),
@@ -354,11 +358,13 @@ fn catalog_and_membership_edits_are_atomic_and_undoable() {
         (UPDATE, json!({"group":Uuid::from_u128(5),"name":"Other"}), "Unknown part group."),
         (REMOVE, json!({"group":Uuid::from_u128(5)}), "Unknown part group."),
     ] {
-        refuse(&mut s, command, params, reason);
+        refuse(&mut s, command, params, InvalidParams, reason);
         assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
     }
     let stale = json!({"part_instance":part_instances[1],"groups":[power],"expected_revision":s.revision() - 1});
-    let refusal = s.apply(SET_GROUPS, &stale).unwrap_err().to_string();
+    let error = s.apply(SET_GROUPS, &stale).unwrap_err();
+    assert!(matches!(error, Unavailable(_)), "{error:?}");
+    let refusal = error.to_string();
     assert!(refusal.contains("project changed"), "{refusal}");
     assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
 
@@ -419,8 +425,8 @@ fn group_names_are_bounded_on_each_side_of_the_limit() {
     let docs = round_trip(&s);
     let assigned = s.snapshot().unwrap();
     for name in ["A".repeat(201), String::new(), " A".into(), "A ".into(), "A\nB".into()] {
-        refuse(&mut s, CREATE, json!({"name":name}), "Group name must contain 1–200");
-        refuse(&mut s, UPDATE, json!({"group":group,"name":name}), "Group name must contain 1–200");
+        refuse(&mut s, CREATE, json!({"name":name}), InvalidParams, "Group name must contain 1–200");
+        refuse(&mut s, UPDATE, json!({"group":group,"name":name}), InvalidParams, "Group name must contain 1–200");
         assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));
         let saved = edited(&docs, ENTRY_POINT, |project| project["part_groups"]["groups"][0]["name"] = json!(name));
         refused_on_read(&saved, "Group name must contain 1–200");
@@ -428,7 +434,7 @@ fn group_names_are_bounded_on_each_side_of_the_limit() {
     for (params, reason) in
         [(json!({}), "needs `name`"), (json!({"name":null}), "`name` must be a string"), (json!({"name":7}), "`name` must be a string")]
     {
-        refuse(&mut s, CREATE, params, reason);
+        refuse(&mut s, CREATE, params, InvalidParams, reason);
     }
 }
 
@@ -443,7 +449,7 @@ fn catalog_size_is_bounded_on_each_side_of_the_limit() {
     assert_eq!(s.project().unwrap().part_groups().groups.len(), MAX_GROUPS);
     let docs = round_trip(&s);
     let full = s.snapshot().unwrap();
-    refuse(&mut s, CREATE, json!({"name":"One more"}), "catalog is full");
+    refuse(&mut s, CREATE, json!({"name":"One more"}), Unavailable, "catalog is full");
     assert!(Arc::ptr_eq(&full, &s.snapshot().unwrap()));
     let overfull = edited(&docs, ENTRY_POINT, |project| {
         project["part_groups"]["groups"].as_array_mut().unwrap().push(json!({"id":Uuid::from_u128(u128::MAX),"revision":1,"name":"Extra"}));
@@ -471,7 +477,7 @@ fn group_revisions_are_bounded_on_each_side_of_the_limit() {
     let last = decode_documents(&revision(json!(u32::MAX))).unwrap();
     assert_eq!(last.part_groups().get(group).unwrap().revision, u32::MAX);
     s.open_snapshot(last);
-    refuse(&mut s, UPDATE, json!({"group":group,"name":"Supply"}), "revision exhausted");
+    refuse(&mut s, UPDATE, json!({"group":group,"name":"Supply"}), Unavailable, "revision exhausted");
     assert_eq!(s.project().unwrap().part_groups().get(group).unwrap().name, "Power");
 }
 
@@ -572,24 +578,26 @@ fn command_parameter_edges_are_refused() {
         (json!({"part_instance":null,"groups":[group]}), "`part_instance` must be a string"),
         (json!({"part_instance":1,"groups":[group]}), "`part_instance` must be a string"),
     ] {
-        refuse(&mut s, SET_GROUPS, params, reason);
+        refuse(&mut s, SET_GROUPS, params, InvalidParams, reason);
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
     let uuid = "must identify a class by non-nil UUID";
     for (params, reason) in
         [(json!({"group":Uuid::nil(),"name":"X"}), uuid), (json!({"name":"X"}), "needs `group`"), (json!({"group":group}), "needs `name`")]
     {
-        refuse(&mut s, UPDATE, params, reason);
+        refuse(&mut s, UPDATE, params, InvalidParams, reason);
     }
     for (params, reason) in [(json!({"group":Uuid::nil()}), uuid), (json!({}), "needs `group`"), (json!({"group":"Power"}), uuid)] {
-        refuse(&mut s, REMOVE, params, reason);
+        refuse(&mut s, REMOVE, params, InvalidParams, reason);
     }
     for (params, reason) in [
         (json!({"part_instance":null}), "`part_instance` must be a string"),
         (json!({"part_instance":"R1"}), "Expected a part-instance ID"),
         (json!({"part_instance":part_instance_address(999)}), "Unknown part instance."),
     ] {
-        let refusal = s.execute(INSPECT_GROUPS, &params).unwrap_err().to_string();
+        let error = s.execute(INSPECT_GROUPS, &params).unwrap_err();
+        assert!(matches!(error, InvalidParams(_)), "{error:?}");
+        let refusal = error.to_string();
         assert!(refusal.contains(reason), "{params}: expected {reason:?}, got {refusal:?}");
     }
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));

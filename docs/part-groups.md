@@ -66,10 +66,11 @@ numbers.
 
 ## Storage
 
-A nonempty catalog selects `pcbcraft-project/24` and is stored in `project.json`
-directly after any net-class catalog, with groups sorted by UUID and one per
-line. Readers accept the groups in any order and sort them by UUID, as for net
-classes:
+A nonempty catalog selects `pcbcraft-project/24` for expanded memberships, or
+`pcbcraft-project/39` for the compact representation described below. In both,
+it is stored in `project.json` directly after any net-class catalog, with groups
+sorted by UUID and one per line. Readers accept the groups in any order and sort
+them by UUID, as for net classes:
 
 ```json
 "part_groups": {
@@ -82,9 +83,10 @@ classes:
 
 Memberships live in the project's instance home beside the sheet occurrences and
 any net registry: `schematic_instances` in `project.json` when there is no board,
-or the board folder's `instances.json`, which then uses
-`pcbcraft-instances/5`. Records are sorted by part instance and then group,
-unique, and one per line:
+or the board folder's `instances.json`. Expanded memberships use project/24 and
+board-owned `pcbcraft-instances/5`; compact memberships instead use project/39
+and board-owned instances/7. Expanded records are sorted by part instance and
+then group, unique, and one per line:
 
 ```json
 "part_group_memberships": [

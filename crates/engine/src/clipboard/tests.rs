@@ -101,8 +101,9 @@ fn part_groups_stay_in_the_source_project_on_copy_and_cut() {
             native["format"] = json!("pcbcraft-project/24");
             native["part_groups"] = json!(before.part_groups());
             envelope["documents"][persistence::ENTRY_POINT] = json!(serde_json::to_string(&native).unwrap());
-            let error = Fragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err().to_string();
-            assert!(error.contains("clipboard cannot transfer project-owned part groups"), "{error}");
+            let error = Fragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
+            assert!(matches!(error, CommandError::InvalidParams(_)), "{error:?}");
+            assert!(error.to_string().contains("clipboard cannot transfer project-owned part groups"), "{error}");
         }
     }
 }

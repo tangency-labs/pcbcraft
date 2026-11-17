@@ -15,10 +15,9 @@ Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
-Project/22 adds [project parameters](#parameter-records); projects with stored
-project values and no generated net numbers select it. Projects with generated
-net numbers use project/23, which can also store project parameters.
-Project/24 adds the [part-group catalog](part-groups.md); its
+Project/22 adds [project parameters](#parameter-records); project/23 adds generated
+net numbers and can also store project parameters.
+Project/24 adds the [part-group catalog](part-groups.md); its expanded
 memberships live in the instance home and use instances/5 when board-owned.
 Project/39 and instances/7 carry the same memberships through a compact UUID
 dictionary when expanded membership exceeds the existing document-size limits;
@@ -476,8 +475,8 @@ keeps its earlier bytes.
 
 A sheet/9 document may carry a nonempty `parameters` object directly after
 `page`. A project/22 entry point requires a nonempty `parameters` object;
-project/23 accepts the same object optionally alongside generated net numbers,
-and project/24 accepts it optionally alongside the part-group catalog.
+project/23 accepts the same object optionally alongside generated net numbers;
+project/24 and project/39 accept it optionally alongside the part-group catalog.
 In each of these project formats, the object appears directly before `sheets`:
 
 ```json
@@ -494,13 +493,14 @@ references. Editing ignores case, so a name that differs from another stored
 name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
-objects require sheet/9; project parameter objects require project/22, project/23
-or project/24 and are rejected in other project versions. Project/22 is a superset
+objects require sheet/9; project parameter objects require project/22, project/23,
+project/24 or project/39 and are rejected in other project versions. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
 generated net numbers and permits those same optional fields, including project
 parameters. Project/24 adds the part-group catalog and keeps every record
-of project/23 optional, generated net numbers included. All three formats require
+of project/23 optional, generated net numbers included. Project/39 keeps those
+same rules with compact part-group memberships. All four formats require
 adopted storage and occurrence metadata;
 setting the first project value adopts them in the same undo step.
 Removing the last project value returns the entry point to the version its other
@@ -508,15 +508,15 @@ content needs. The diagnostic single-file encoding refuses parameters.
 
 ### Part-group records
 
-A project/24 entry point requires a nonempty `part_groups` catalog
+Both project/24 and project/39 require a nonempty `part_groups` catalog
 (`pcbcraft-part-groups/1`) directly after any `net_classes` record.
-Project/24 is a superset of project/23: generated net numbers, net classes and
+Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each
 with its existing rules, and it requires adopted storage and occurrence metadata.
-Explicit memberships are stored as `part_group_memberships`, after the sheet
-occurrences and any net registry in the instance home: `schematic_instances`
-without a board, or the board's `instances.json`, which selects
-`pcbcraft-instances/5` exactly when memberships exist. Records are
+Under project/24, explicit memberships are stored as `part_group_memberships`,
+after the sheet occurrences and any net registry in the instance home:
+`schematic_instances` without a board, or the board's `instances.json`, which
+selects `pcbcraft-instances/5` exactly when expanded memberships exist. Records are
 `{"part_instance":N,"group":UUID}`, sorted by part instance and group, unique and one per
 line. Empty lists, null, dangling records and these records under older headers
 are rejected. `N` is the part instance's number, as in `components` and

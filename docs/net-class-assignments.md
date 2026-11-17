@@ -80,8 +80,11 @@ Without generated numbers, nonempty bindings select `pcbcraft-project/21`, retai
 class catalog. Schematic-only bindings remain under
 `schematic_instances.net_registry`; board-owned bindings use
 `pcbcraft-instances/3` in the existing board folder. Numbered registries instead
-use project/23 and board-owned instances/4, with bindings optional in that envelope; with
-[part groups](part-groups.md) the same records use project/24, and board-owned memberships select instances/5. First-board creation moves
+use project/23 and board-owned instances/4, with bindings optional in that envelope.
+With [part groups](part-groups.md), the same records use project/24 with expanded
+memberships or project/39 with compact memberships; their board-owned homes use
+instances/5 or instances/7 respectively. A catalog without memberships retains
+the header its other records require. First-board creation moves
 the live registry and requalifies its anchors without changing net IDs or
 binding origins. Physical `board.json` bytes, accepted connectivity baselines and
 pending board updates remain independent of classification edits.
