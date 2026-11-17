@@ -79,6 +79,23 @@ could later move into an engine module if that proves simpler.
   and meshes are derived and rebuilt on load, so a kernel change never breaks a
   saved file.
 
+### Later integrations
+
+This crate takes bytes, dimensions and transforms; it does not open an external
+application, own a project revision or choose a transport. A later live
+SolidCraft or FieldCraft connection can pass a model snapshot through the same
+STEP boundary without making that connection a prerequisite for standalone
+inspection or editing. Simulation results and their provenance belong to that
+integration, not to a kernel body.
+
+A parametric external board outline can likewise remain authored source outside
+this crate, with a derived geometry snapshot and its transform passed here for
+measurement. There is no outline editor or parametric evaluator here. Applying
+an imported outline to a board must go through the board's shared command and
+validation path; reading or measuring the snapshot does not author it. Neither
+live integration, simulation nor parametric outline import is implemented by
+this change.
+
 Current operations:
 
 | Function | Result |

@@ -210,7 +210,8 @@ fn millimetre_conversion_rounds_once_to_the_nanometre() {
     }
 }
 
-/// Blocks touching either end of the coordinate range are exact, and one nanometre past is refused.
+/// A transformed copy turns and moves the body without changing the original; a flat or
+/// non-finite transform and a translation outside the coordinate range are refused.
 #[test]
 fn a_transformed_copy_moves_and_leaves_the_original() {
     let (body, expected) = block();
