@@ -223,11 +223,13 @@ annotation retains its earlier offset-only behavior.
 
 ## Placement output conventions
 
-Placement outputs measure each footprint origin from the board's
+PCBCraft does not write a placement file yet. The engine can already compute a
+placement row for each footprint (`Frame::place`), and a placement file will use
+these rows when it is added. A row measures the footprint origin from the board's
 [placement origin](mcp.md#placement-origin), with X right and Y up as seen from
 the top. Rotation is in whole degrees from the library's zero orientation. Top-side
-rows always keep that X and the board rotation. Bottom-side rows follow one of
-two conventions (`BottomSide` in the engine):
+rows keep that X and the board rotation. Bottom-side rows follow one of two
+conventions (`BottomSide` in the engine):
 
 | Convention | Bottom-side X | Bottom-side rotation |
 | --- | --- | --- |
@@ -243,6 +245,10 @@ bottom part at board X 40 mm and 30 degrees, with the origin at X 10 mm, is
 written as X 30 mm at 30 degrees from the top and X -30 mm at 330 degrees from
 below. Y is the same in both. Any rotation is reduced to 0 through 359, and both
 conventions are exact within the board coordinate range.
+
+For the generic `Frame::place` calculation, the caller supplies the convention;
+the calculation neither saves a project setting nor selects an assembly output
+profile.
 
 Generic rows use `viewed_from_top`. An adopted [assembly output profile](mcp.md#assembly-output-profiles)
 names its convention and carries corrections per footprint definition, for packages
