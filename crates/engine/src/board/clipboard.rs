@@ -411,12 +411,16 @@ impl BoardFragment {
 
     /// Decode untrusted bounded text, using native schematic codecs and the existing physical
     /// geometry validators before any destination is addressed or any identity is allocated.
+    /// Footprint lock intent has no clipboard envelope yet and is refused without adoption.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > crate::clipboard::MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft board fragment."))?;
+        if envelope.footprints.iter().any(|footprint| footprint.locked) {
+            return Err(invalid("footprint locks are not supported by the board clipboard format"));
+        }
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
         if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3")
             || (envelope.format == "pcbcraft-clipboard/3") != locked
@@ -563,7 +567,11 @@ impl BoardFragment {
     }
 
     /// Encode exact packages, geometry and circuit fragments without source files or board setup.
+    /// Refuse footprint lock intent rather than lose it under a released clipboard envelope.
     pub fn to_text(&self) -> Result<String, CommandError> {
+        if self.footprints.iter().any(|footprint| footprint.locked) {
+            return Err(invalid("footprint locks are not supported by the board clipboard format"));
+        }
         let circuits = self
             .circuits
             .iter()

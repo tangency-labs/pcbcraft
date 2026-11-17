@@ -262,6 +262,24 @@ older headers reject the origin. Boards
 without an origin retain their earlier encoding and measure outputs from board zero;
 removing the origin restores the format required by the remaining data.
 
+### Placed-footprint lock metadata
+
+Board format `pcbcraft-board/25` adds optional boolean `locked` on placed
+footprints and requires at least one `true` footprint lock. Missing means false;
+canonical saves omit false. Null, nonboolean values and duplicate keys are
+refused. The extension works with or without setup and retains all earlier
+physical fields, including optional origin, rules, zones and track/via locks.
+Formats 22–24 are not supported by this reader. Older readers reject format 25;
+this reader rejects active footprint locks under every older header. Unlocking
+the last footprint selects the format required by the remaining data. Unlocked
+boards keep their previous encoding; folder and archive reopen preserve IDs,
+pinned definitions, geometry and connectivity.
+
+This is storage and inspection only: no footprint lock command, GUI toggle or
+movement/deletion protection is provided yet. Diagnostic single-file encoding
+and the board clipboard explicitly refuse active footprint locks rather than
+silently losing them. See [the layout guide](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
+
 ### Zone outline records
 
 Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
@@ -269,7 +287,7 @@ all board/19 fields, with board rules optional. A zone board with a placement
 origin uses format 21, preserving both records; removing either feature retains
 the other and selects its required format. Without zones the encoder chooses
 the format required by the remaining content. An absent array in board/20, an
-empty or null array in either format, or zones in a format below 20, is refused. Zones are
+empty or null array in any supported format, or zones in a format below 20, is refused. Format 25 also accepts these records alongside footprint locks. Zones are
 UUID-sorted, one authored record per line, with `id`, `layer`, `net`, `points` and
 `options`; no derived fill is stored. Layer UUIDs resolve to copper on that board,
 and net UUIDs resolve to its persistent registry, including retained ambiguous
@@ -290,7 +308,7 @@ registry's retained identities.
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22` or `/23` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, and version 23 adds net-owned generated numbers with optional project parameters |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/4` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, and version 4 adds generated net numbers; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/21` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/21`, or `/25` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 25 adds placed-footprint lock metadata (storage only) |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 

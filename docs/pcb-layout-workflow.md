@@ -246,8 +246,9 @@ ribbon's planned entries and the editor guide have a stated destination.
 - **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
-  flags and the shared snapshot publication guard. Footprint/zone locks and an
-  optional locked-object selection filter remain broader #81 work.
+  flags and the shared snapshot publication guard. Footprint lock commands/protection, zone locks and an
+  optional locked-object selection filter remain broader #81 work; footprint
+  lock metadata has the storage-only contract below.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -255,6 +256,19 @@ ribbon's planned entries and the editor guide have a stated destination.
   between the schematic and the board.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
+
+## Footprint lock metadata (storage only)
+
+Placed footprints now retain an optional `locked` flag in native board format
+25. Inspection and typed board views report a boolean, defaulting to false for
+older files. Folder/archive saves omit false and preserve true; unlocking the
+last footprint restores the format needed by the remaining data. This slice
+does **not** expose a lock/unlock command or GUI action, nor does the flag yet
+protect footprint movement, rotation, flipping, alignment or deletion. It is not
+a fixed-obstacle promise. Those shared-command and enforcement workflows remain
+under #81. Clipboard export/import and diagnostic single-file storage refuse
+active footprint locks explicitly; unlocked clipboard content is unchanged.
+See [native storage](native-project-storage.md#placed-footprint-lock-metadata).
 
 ## Fixed tracks and vias
 
@@ -278,8 +292,8 @@ track's fixed geometry. Locking/unlocking alone changes no copper connectivity.
 Copy, duplicate and paste preserve lock flags while assigning new identities
 and the requested new positions to copies. Existing source objects remain
 protected. Cut refuses a selection containing locked copper. Native folder and
-archive saves preserve locks; board format 18 and board-kind clipboard format 3
-are used only while locks are present. Older readers refuse these extensions.
+archive saves preserve copper locks; board format 18 (or a later extension
+required by other content) and board-kind clipboard format 3 carry them. Older readers refuse these extensions.
 Unlocked boards/fragments keep their earlier encodings. Unlocking the last object
 returns to the format needed by the remaining authored data. Inspection exposes
 an explicit `locked` boolean for every track and via, and typed board snapshots

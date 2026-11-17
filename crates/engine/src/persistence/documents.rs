@@ -74,6 +74,7 @@ const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
 const ZONE_BOARD_FORMAT: &str = "pcbcraft-board/20";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
+const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/25";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -357,6 +358,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 21
 /// requires a validated placement origin and may carry rules and every earlier field.
+/// Board format 25 requires an authored footprint lock and accepts all earlier fields,
+/// including optional origin, zones and rules. Missing footprint locks default to false.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
@@ -784,22 +787,26 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT;
+    if footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+        return Err("board.json: footprint locks require board format 25, which requires an authored footprint lock.".into());
+    }
     let originated = board.format == ORIGIN_BOARD_FORMAT;
-    if originated != board.placement_origin.is_some() {
-        return Err("board.json: a placement origin requires format 21, which requires a placement origin.".into());
+    if (originated && board.placement_origin.is_none()) || (!originated && !footprint_locks && board.placement_origin.is_some()) {
+        return Err("board.json: a placement origin requires format 21 or 25; format 21 requires a placement origin.".into());
     }
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
     }
     let zoned = board.format == ZONE_BOARD_FORMAT;
     if (zoned && board.zones.is_none())
-        || (!zoned && !originated && board.zones.is_some())
+        || (!zoned && !originated && !footprint_locks && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err("board.json: zones require format 20 or 21 and a nonempty array; format 20 requires zones.".into());
+        return Err("board.json: zones require format 20, 21 or 25 and a nonempty array; format 20 requires zones.".into());
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
-    if (ruled && board.rules.is_none()) || (!ruled && !originated && !zoned && board.rules.is_some()) {
+    if (ruled && board.rules.is_none()) || (!ruled && !originated && !zoned && !footprint_locks && board.rules.is_some()) {
         return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
     if let Some(rules) = &board.rules {
@@ -808,10 +815,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !ruled && !originated && !zoned && locked != authored_locks {
+    if !ruled && !originated && !zoned && !footprint_locks && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || originated || zoned;
+    let locked = locked || ruled || originated || zoned || footprint_locks;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -843,6 +850,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | RULES_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
     );
     if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
@@ -860,6 +868,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | RULES_BOARD_FORMAT
                     | ORIGIN_BOARD_FORMAT
                     | ZONE_BOARD_FORMAT
+                    | LOCKED_FOOTPRINT_BOARD_FORMAT
             ))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
@@ -946,6 +955,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | RULES_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -968,6 +978,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | RULES_BOARD_FORMAT
                 | ORIGIN_BOARD_FORMAT
                 | ZONE_BOARD_FORMAT
+                | LOCKED_FOOTPRINT_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -986,8 +997,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
+        (LOCKED_FOOTPRINT_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => {
+            Some(decode_setup(&value, false)?)
+        }
+        (LOCKED_FOOTPRINT_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, None) => None,
@@ -1844,7 +1857,8 @@ impl DocumentsEncoder {
 /// Keep legacy bytes until newer authored data requires a newer format. Locked copper
 /// uses format 18 while an authored lock exists, unless board defaults require format 19.
 /// Format 19 requires validated rules and accepts earlier physical fields. Format 21
-/// requires a placement origin and accepts every earlier field, including rules. Independent
+/// requires a placement origin and accepts every earlier field, including rules. Format 25
+/// requires an active footprint lock and retains all fields through format 21. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,
@@ -1872,7 +1886,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         });
 
     if let Some(setup) = setup {
-        let format = if board.placement_origin.is_some() {
+        let format = if board.footprints().iter().any(|footprint| footprint.locked) {
+            LOCKED_FOOTPRINT_BOARD_FORMAT
+        } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
         } else if !board.zones.is_empty() {
             ZONE_BOARD_FORMAT
@@ -1934,7 +1950,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if board.placement_origin.is_some() {
+        let format = if board.footprints().iter().any(|footprint| footprint.locked) {
+            LOCKED_FOOTPRINT_BOARD_FORMAT
+        } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
         } else if !board.zones.is_empty() {
             ZONE_BOARD_FORMAT

@@ -156,6 +156,8 @@ pub struct FootprintView<'a> {
     pub pending_removal: bool,
     /// Placed on the bottom side, mirrored and on the back layers.
     pub bottom: bool,
+    /// Board-local lock intent. This storage foundation does not yet enforce manipulation protection.
+    pub locked: bool,
 }
 
 impl Project {
@@ -348,6 +350,7 @@ impl<'a> BoardView<'a> {
                 ),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
                 bottom: footprint.bottom,
+                locked: footprint.locked,
             })
         })
     }
