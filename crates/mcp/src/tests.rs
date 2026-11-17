@@ -1338,7 +1338,7 @@ fn assembly_output_profiles_round_trip_through_execute() {
     assert_eq!(body(&response)["project"]["boards"][0]["assembly_profiles"], json!([]));
     let before = body(&call(&mut server, "inspect_project", json!({})));
     let mut adoption = json!({"board":board,"expected_revision":before["revision"],"profile":profiles[0]["id"],"revision":1});
-    let reviewed = call(&mut server, "execute", json!({"command":pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE,"params":adoption}));
+    let reviewed = call(&mut server, "execute", json!({"command":pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE,"params":adoption,"inspect":false}));
     assert_ne!(reviewed["isError"], true, "{reviewed}");
     let review = body(&reviewed);
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
@@ -1361,6 +1361,66 @@ fn assembly_output_profiles_round_trip_through_execute() {
     assert_eq!(body(&response)["project"]["boards"][0]["assembly_profiles"], inspected["project"]["boards"][0]["assembly_profiles"]);
     assert_eq!(body(&response)["project"]["assembly_profiles"]["heads"][0]["removed"], true);
     assert_eq!(body(&response)["project"]["assembly_profiles"]["revisions"], profiles);
+}
+
+/// Suppressing inspection preserves identical read-only profile previews on headless and live dispatch.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn assembly_output_profiles_preview_through_headless_and_live() {
+    use crate::{
+        Backend,
+        live::{Editor, call_editor},
+    };
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        /// The live dispatcher uses this same command session.
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        /// This fixture has no modal interaction.
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        /// The fixture exposes engine commands only.
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        /// No editor-local state participates in a profile review.
+        fn inspect(&self) -> Value {
+            json!({})
+        }
+        /// A mistaken window dispatch fails explicitly.
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), String> {
+            Err("not a window operation".into())
+        }
+    }
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    let id = "00000000-0000-0000-0000-000000000093";
+    setup.apply(pcbcraft_engine::SET_ASSEMBLY_PROFILE,&json!({"expected_revision":setup.revision(),"profile":id,"content":{"revision":1,"name":"Portable","provenance":{"kind":"authored"},"bottom_side":"viewed_from_bottom"}})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap().board;
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot);
+    let mut editor = OpenEditor(live);
+    let before = headless.call("project.inspect", json!({})).unwrap();
+    let params = json!({"board":board,"expected_revision":before["revision"],"profile":id,"revision":1});
+    let request = json!({"command":pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE,"params":params,"inspect":false});
+    let headless_review = headless.call("engine.execute", request.clone()).unwrap();
+    let live_review = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    assert_eq!(serde_json::to_vec(&headless_review).unwrap(), serde_json::to_vec(&live_review).unwrap());
+    assert!(headless_review["acceptance"].as_str().is_some_and(|digest| digest.len() == 64));
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), before);
+    assert_eq!(editor.0.inspect(), before);
+    let mut accept = params;
+    accept["acceptance"] = headless_review["acceptance"].clone();
+    let request = json!({"command":pcbcraft_engine::ADOPT_ASSEMBLY_PROFILE,"params":accept,"inspect":false});
+    assert_eq!(
+        headless.call("engine.execute", request.clone()).unwrap(),
+        call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap()
+    );
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), editor.0.inspect());
 }
 
 /// A netlist export with inspect:false still returns its file and leaves the project unchanged.

@@ -276,7 +276,10 @@ strings are 1–64 characters without surrounding whitespace or controls. Active
 latest names are unique. Each correction has a rotation (1–359, omitted at zero,
 never explicit zero or null) and/or nonzero centroid (integer nanometres, each
 axis within 100 mm, never null). IDs, revisions and correction identities are
-unique; unknown fields are refused.
+unique; unknown fields are refused. Stored numeric fields use canonical JSON
+integer tokens (`0`, not `-0`, for zero), without decimal points or exponents;
+shared commands additionally normalize integer-valued decimal spellings before
+writing canonical records.
 
 Board format `pcbcraft-board/22` adds required nonempty `assembly_profiles`:
 identity-sorted `{profile, revision}` adoption records resolving exact pinned

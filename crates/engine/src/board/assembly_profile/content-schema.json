@@ -31,7 +31,7 @@
               }
             },
             "required": ["library", "definition"], "additionalProperties": false,
-            "anyOf": [{"required": ["rotation"]}, {"required": ["centroid"]}]
+            "anyOf": [{"required": ["rotation"], "properties": {"rotation": {"minimum": 1}}}, {"required": ["centroid"]}]
           }
         }
       },

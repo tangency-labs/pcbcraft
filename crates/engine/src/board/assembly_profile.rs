@@ -83,7 +83,7 @@ impl PackageCorrection {
     }
 }
 
-/// Origin of a profile revision. Source is a portable human hint, never a path or an identity.
+/// Origin of a profile revision. Source is a human hint, never resolved as a path or an identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Provenance {
@@ -365,7 +365,7 @@ pub(crate) fn schema() -> Value {
             "library":id,"definition":id,"rotation":{"type":"integer","minimum":0,"maximum":359},
             "centroid":{"type":"object","properties":{"x_nm":coordinate,"y_nm":coordinate},"required":["x_nm","y_nm"],"additionalProperties":false,
                 "not":{"properties":{"x_nm":{"const":0},"y_nm":{"const":0}}}}
-        },"required":["library","definition"],"additionalProperties":false,"anyOf":[{"required":["rotation"]},{"required":["centroid"]}]}}
+        },"required":["library","definition"],"additionalProperties":false,"anyOf":[{"required":["rotation"],"properties":{"rotation":{"minimum":1}}},{"required":["centroid"]}]}}
     },"required":["revision","name","provenance"],"additionalProperties":false}]})
 }
 
@@ -376,7 +376,10 @@ pub(crate) fn integer(value: &Value) -> Option<i64> {
         return Some(integer);
     }
     let number = value.as_number()?.to_string();
-    let (mantissa, exponent) = number.split_once(['e', 'E']).map_or((number.as_str(), 0), |(m, e)| (m, e.parse::<i32>().unwrap_or(i32::MAX)));
+    let (mantissa, exponent) = match number.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (number.as_str(), 0),
+    };
     let decimals = mantissa.split_once('.').map_or(0, |(_, tail)| tail.len() as i32);
     let digits = mantissa.replace('.', "");
     let mut result = digits.parse::<i128>().ok()?;

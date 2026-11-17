@@ -607,6 +607,72 @@ fn removal_and_cleanup_preserve_adoptions_and_undo_redo() {
     assert_eq!(first.assembly_profiles.revisions[0].content.revision, 1, "cleanup cannot mutate history");
 }
 
+/// Provenance and optional vendor metadata reject null, unknown fields and first oversized values.
+#[test]
+fn metadata_edges_change_nothing_and_imported_content_reopens() {
+    let (mut s, _) = fixture();
+    let before = s.snapshot().unwrap();
+    for (field, value) in [
+        ("vendor", Value::Null),
+        ("vendor", json!(7)),
+        ("vendor", json!("")),
+        ("vendor", json!(" padded")),
+        ("vendor", json!("x".repeat(MAX_NAME_CHARS + 1))),
+        ("provenance", Value::Null),
+        ("provenance", json!("authored")),
+        ("provenance", json!({})),
+        ("provenance", json!({"kind":"unknown"})),
+        ("provenance", json!({"kind":"authored","source":"extra"})),
+        ("provenance", json!({"kind":"imported"})),
+        ("provenance", json!({"kind":"imported","source":null})),
+        ("provenance", json!({"kind":"imported","source":""})),
+        ("provenance", json!({"kind":"imported","source":"padded "})),
+        ("provenance", json!({"kind":"imported","source":"x".repeat(MAX_NAME_CHARS+1)})),
+        ("provenance", json!({"kind":"imported","source":"valid","extra":true})),
+    ] {
+        let mut invalid = content(json!({"name":"Metadata"}), 1);
+        invalid[field] = value;
+        invalid_because(pin(&mut s, None, invalid), "immutable profile content");
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()), "{field}");
+    }
+    let last = "\u{10ffff}".repeat(MAX_NAME_CHARS);
+    let mut good = content(json!({"name":"Imported","vendor":last}), 1);
+    good["provenance"] = json!({"kind":"imported","source":last});
+    pin(&mut s, None, good).unwrap();
+    let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+}
+
+/// Saved revisions and coordinates use canonical integer tokens, unlike normalized command inputs.
+#[test]
+fn saved_numbers_refuse_decimal_tokens() {
+    let (mut s, _) = fixture();
+    set(
+        &mut s,
+        Some(Uuid::from_u128(1)),
+        json!({"name":"Canonical","corrections":[{"library":LIBRARY,"definition":"resistor-0402","rotation":90,"centroid":{"x_nm":1,"y_nm":1}}]}),
+    )
+    .unwrap();
+    let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&docs);
+    for pointer in [
+        "/assembly_profiles/revisions/0/content/revision",
+        "/assembly_profiles/revisions/0/content/corrections/0/rotation",
+        "/assembly_profiles/revisions/0/content/corrections/0/centroid/x_nm",
+    ] {
+        let mut altered = docs.clone();
+        let mut project: Value = serde_json::from_slice(&altered["project.json"]).unwrap();
+        *project.pointer_mut(pointer).unwrap() = serde_json::from_str("1.0").unwrap();
+        altered.insert("project.json".into(), serde_json::to_vec(&project).unwrap());
+        refused_because(decode_documents(&altered), "floating point");
+    }
+    let mut altered = docs.clone();
+    let mut board: Value = serde_json::from_slice(&altered[&path]).unwrap();
+    board["assembly_profiles"][0]["revision"] = serde_json::from_str("1e0").unwrap();
+    altered.insert(path, serde_json::to_vec(&board).unwrap());
+    refused_because(decode_documents(&altered), "floating point");
+}
+
 /// Metadata-only revisions share correction lists; changing one correction shares every intact sibling.
 #[test]
 fn content_revisions_share_unchanged_corrections_with_history() {
