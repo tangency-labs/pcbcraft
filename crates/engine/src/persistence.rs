@@ -1035,7 +1035,6 @@ fn validate_with_hierarchy(
             no_connect_ends: Arc::default(),
             page: None,
             parameters: Arc::default(),
-            assembly_profiles: Arc::default(),
         }]),
         sheet_index: 0,
         name,

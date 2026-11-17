@@ -136,7 +136,23 @@ pub struct ProfileHead {
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     pub heads: Vec<ProfileHead>,
+    #[serde(serialize_with = "serialize_revisions", deserialize_with = "deserialize_revisions")]
     pub revisions: Vec<Arc<AssemblyProfile>>,
+}
+
+/// Serialize pinned payloads by reference without changing their shared in-memory ownership.
+fn serialize_revisions<S: serde::Serializer>(revisions: &[Arc<AssemblyProfile>], serializer: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(revisions.len()))?;
+    for revision in revisions {
+        sequence.serialize_element(revision.as_ref())?;
+    }
+    sequence.end()
+}
+
+/// Loaded payloads become immutable shared records before any snapshots or history are created.
+fn deserialize_revisions<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Arc<AssemblyProfile>>, D::Error> {
+    Ok(Vec::<AssemblyProfile>::deserialize(deserializer)?.into_iter().map(Arc::new).collect())
 }
 
 /// Canonical correction records never contain an explicit zero rotation or an empty list.
