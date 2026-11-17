@@ -430,6 +430,18 @@ pub(super) struct LiveEditor<'a> {
 }
 
 impl Editor for LiveEditor<'_> {
+    /// Removal revokes every addressed board-view worker through the shared command path.
+    fn zone_unfill(&mut self, params: &Value) -> Option<Result<Value, String>> {
+        let result = self.app.queue_zone_unfill(params);
+        self.ctx.request_repaint();
+        Some(result)
+    }
+    /// Refill returns source-qualified pending state while the existing bounded worker runs.
+    fn zone_refill(&mut self, params: &Value) -> Option<Result<Value, String>> {
+        let result = self.app.queue_zone_refill(params);
+        self.ctx.request_repaint();
+        Some(result)
+    }
     /// UI actions retain normal dialog and text-field interaction rather than bypassing them
     /// through project commands. The queue validates native focus and endpoint ownership.
     fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, String> {

@@ -1,0 +1,18 @@
+{
+  "browser": "156.0.8078.79",
+  "wasm": [
+    "pcbcraft-web-f838c547db772d9a_bg.wasm"
+  ],
+  "source_revision": "14c3a65064245a83c252b31b31d03f2099c622eb",
+  "workers": {
+    "started": 1,
+    "completed": [
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      }
+    ]
+  },
+  "errors": []
+}

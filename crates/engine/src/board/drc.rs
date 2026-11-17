@@ -5,7 +5,8 @@
 //! unrouted connections, the board outline (missing, copper outside it, copper too close to its
 //! edge) and overlapping footprint courtyards. Rule
 //! values resolve saved board defaults and bounded request-local overrides through the shared resolver. Results are deterministic, so the same board and rules give the same report.
-//! This is not a manufacturing sign-off: arcs, zones, hole-to-hole spacing, silkscreen and
+//! Analytic zone fill shares connectivity and spacing checks. This is not a manufacturing
+//! sign-off: native circular routes, hole-to-hole spacing, silkscreen and
 //! solder mask checks are not implemented.
 use super::{
     clearance::{BoardGeometry, Object as Item},
@@ -43,6 +44,12 @@ pub use super::rules::Values as Rules;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    /// An authored zone refers to a retired or unresolved persistent net.
+    ZoneNetUnavailable,
+    /// Minimum-area removal detached pads from a filled island.
+    ZoneDisconnected,
+    /// Current zone geometry could not be calculated or validated completely.
+    ZoneFillUnavailable,
     /// Applicable hard requirements contradict, so the affected checking result is incomplete.
     NetClassConflict,
     /// Saved via intent no longer resolves to one active net on this board.
@@ -215,6 +222,23 @@ fn capture_class_rules(
 }
 
 impl BoardView<'_> {
+    /// Native and isolated browser zone diagnostics share the same stable finding mapping.
+    fn add_zone_problems(problems: Vec<super::fill::Problem>, found: &mut Findings) {
+        use super::fill::ProblemKind;
+        for problem in problems {
+            let kind = match problem.kind {
+                ProblemKind::NetUnavailable => Kind::ZoneNetUnavailable,
+                ProblemKind::RemovedIslandPads => Kind::ZoneDisconnected,
+                ProblemKind::Unavailable => Kind::ZoneFillUnavailable,
+                ProblemKind::Clearance => Kind::Clearance,
+                ProblemKind::BoardEdge => Kind::EdgeClearance,
+            };
+            let mut items = vec![problem.zone.to_string()];
+            items.extend(problem.items);
+            found.push(Violation { kind, message: problem.message, at: problem.at, items, nets: Vec::new() });
+        }
+    }
+
     /// Check this board against `rules` and return every finding, sorted by kind and position.
     pub fn check_design(self, rules: Rules) -> Report {
         let mut effective = self.effective_rules();
@@ -236,9 +260,12 @@ impl BoardView<'_> {
         let geometry = BoardGeometry::new(self);
         let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
         let items = &geometry.items;
+        let (fill, problems) = super::fill::diagnostics_with_fill(self, &geometry, rules);
+        Self::add_zone_problems(problems, &mut found);
         self.check_dimensions(rules, class_rules.as_ref(), &mut found);
 
-        self.check_shorts(&geometry.lands, &geometry.members, items, &mut found);
+        let members = fill.as_ref().map_or(&geometry.members, |fill| &fill.members);
+        self.check_shorts(&geometry.lands, members, items, &mut found);
 
         // Physical island short diagnostics remain independent of the strict clearance rule.
         for decision in geometry.clearance_pairs(rules.clearance_nm, class_rules.as_ref()) {

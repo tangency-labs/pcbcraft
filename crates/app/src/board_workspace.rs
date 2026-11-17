@@ -242,8 +242,8 @@ impl PcbApp {
         }
     }
 
-    /// Tracks and vias share their layer and dimension controls; planned copper tools
-    /// stay in the Route menu and cannot submit commands.
+    /// Tracks and vias share layer/dimension controls. Refill recalculates derived copper;
+    /// unfinished differential-pair and tuning tools stay disabled in the shared Route menu.
     fn board_route_tools(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
@@ -280,15 +280,48 @@ impl PcbApp {
                 menu_check: None,
             },
         ];
+        let fill_shortcut = ui.ctx().format_shortcut(&crate::POUR_COPPER);
+        let unfill_shortcut = ui.ctx().format_shortcut(&crate::REMOVE_POURS);
         let planned = [
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
-            planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
+            RibbonTool {
+                icon: ToolIcon::Refill,
+                label: "Pour copper",
+                description: "Fill zone outlines with copper",
+                shortcut: &fill_shortcut,
+                enabled: enabled
+                    && !editing
+                    && self
+                        .session
+                        .project()
+                        .and_then(|p| self.views.active.board.target.and_then(|t| p.board_view(t)))
+                        .is_some_and(|v| !v.zones().is_empty()),
+                active: false,
+                menu_check: None,
+            },
+            RibbonTool {
+                icon: ToolIcon::Delete,
+                label: "Remove pours",
+                description: "Remove poured copper and keep zone outlines",
+                shortcut: &unfill_shortcut,
+                enabled: enabled
+                    && !editing
+                    && self
+                        .session
+                        .project()
+                        .and_then(|p| self.views.active.board.target.and_then(|t| p.board_view(t)))
+                        .is_some_and(|v| !v.zones().is_empty() && v.zone_fill_enabled()),
+                active: false,
+                menu_check: None,
+            },
         ];
         match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
             Some(2) => self.begin_zone(),
+            Some(5) => self.refill_zones(),
+            Some(6) => self.unfill_zones(),
             _ => {}
         }
     }
@@ -756,5 +789,34 @@ impl PcbApp {
             self.begin_board_setup(id);
             self.repaint_editors(ui.ctx());
         }
+    }
+}
+
+#[cfg(test)]
+mod zone_menu_tests {
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    /// The real Route controls address the focused view; an unavailable target cannot inherit
+    /// the default board's pours. Render the ribbon directly so frame binding cannot repair it.
+    #[test]
+    fn pour_actions_follow_the_focused_board_target() {
+        let mut fixture = crate::tests::fill_harness();
+        let app = std::mem::take(fixture.state_mut());
+        let mut h = Harness::builder()
+            .with_context_setup(pcbcraft_chrome::install)
+            .with_size(egui::vec2(1200., 700.))
+            .build_ui_state(|ui, app: &mut crate::PcbApp| app.board_route_tools(ui), app);
+        h.run();
+        h.get_by_label("Route menu").click();
+        h.run();
+        assert!(!h.get_by_label("Pour copper").accesskit_node().is_disabled());
+        assert!(!h.get_by_label("Remove pours").accesskit_node().is_disabled());
+        h.state_mut().views.active.board.target = None;
+        h.run();
+        assert!(h.get_by_label("Pour copper").accesskit_node().is_disabled());
+        assert!(h.get_by_label("Remove pours").accesskit_node().is_disabled());
     }
 }

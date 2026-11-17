@@ -7,6 +7,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct Source {
     pub(crate) snapshot: Arc<Project>,
+    pub(crate) fill_authority: Arc<()>,
     pub(crate) session: Arc<()>,
     pub(crate) opening: u64,
     pub(crate) revision: u64,
@@ -23,9 +24,14 @@ impl Source {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    /// Reject explicit repour/removal even though it leaves authored revision unchanged.
+    pub(crate) fn fill_current(&self) -> bool {
+        Arc::ptr_eq(&self.fill_authority, &self.snapshot.fill_authority())
+    }
     /// Reject a different session, project reopening, changed rules or replaced snapshot.
     pub fn is_current(&self, session: &Session) -> bool {
-        Arc::ptr_eq(&self.session, &session.clearance_identity)
+        self.fill_current()
+            && Arc::ptr_eq(&self.session, &session.clearance_identity)
             && self.opening == session.history_root_revision()
             && self.revision == session.revision()
             && session.snapshot().is_some_and(|p| Arc::ptr_eq(&p, &self.snapshot))

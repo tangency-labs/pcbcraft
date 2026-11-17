@@ -8,9 +8,67 @@ pub(crate) trait Work: Send + 'static {
     fn progress(&self) -> CheckProgress;
     fn step(&mut self, budget: usize) -> bool;
     fn take_output(&mut self) -> Result<Option<Self::Output>, String>;
+    /// Jobs with indivisible kernel work may sample the same host cancellation between calls.
+    fn cancellation(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
+    /// Browser work that cannot safely run in the foreground supplies an isolated request.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_request(&mut self) -> Option<Result<String, String>> {
+        None
+    }
+    /// Some isolated work prepares a job that must subsequently resume incremental phases.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_prepares(&self) -> bool {
+        false
+    }
+    /// Decode a completed isolated result into the same engine output as native work.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_response(&mut self, _response: &str) -> Result<Option<Self::Output>, String> {
+        Err("This job has no isolated browser result adapter".into())
+    }
+}
+impl Work for pcbcraft_engine::board::fill::FillJob {
+    type Output = std::sync::Arc<pcbcraft_engine::board::fill::Fill>;
+    fn source(&self) -> &CheckSource {
+        self.source()
+    }
+    fn progress(&self) -> CheckProgress {
+        self.progress()
+    }
+    fn step(&mut self, budget: usize) -> bool {
+        self.step(budget)
+    }
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+        self.take_result()
+    }
+    fn cancellation(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.cancellation())
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_request(&mut self) -> Option<Result<String, String>> {
+        if self.is_ready() { None } else { Some(self.worker_request()) }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_response(&mut self, response: &str) -> Result<Option<Self::Output>, String> {
+        self.accept_worker_response(response)
+    }
 }
 impl Work for CheckJob {
     type Output = Report;
+    #[cfg(target_arch = "wasm32")]
+    fn browser_request(&mut self) -> Option<Result<String, String>> {
+        self.browser_zone_request()
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_prepares(&self) -> bool {
+        true
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_response(&mut self, response: &str) -> Result<Option<Report>, String> {
+        self.accept_browser_zones(response)?;
+        Ok(None)
+    }
     fn source(&self) -> &CheckSource {
         self.source()
     }
@@ -142,11 +200,33 @@ mod incremental {
     pub(super) struct Running<J: Work> {
         request: Option<Request<J>>,
         canceled: bool,
+        #[cfg(target_arch = "wasm32")]
+        worker: Option<u32>,
+        #[cfg(target_arch = "wasm32")]
+        failure: Option<String>,
     }
     impl<J: Work> Running<J> {
-        /// Retain the captured engine job directly; browser execution serializes no project.
+        /// Retain incremental jobs directly; kernel jobs capture one same-build isolated request.
         pub fn start(request: Request<J>) -> Self {
-            Self { request: Some(request), canceled: false }
+            #[cfg(target_arch = "wasm32")]
+            let mut request = request;
+            #[cfg(target_arch = "wasm32")]
+            let (worker, failure) = match request.job.browser_request() {
+                Some(Ok(payload)) => match super::browser_worker::start(&payload) {
+                    Ok(id) => (Some(id), None),
+                    Err(error) => (None, Some(error)),
+                },
+                Some(Err(error)) => (None, Some(error)),
+                None => (None, None),
+            };
+            Self {
+                request: Some(request),
+                canceled: false,
+                #[cfg(target_arch = "wasm32")]
+                worker,
+                #[cfg(target_arch = "wasm32")]
+                failure,
+            }
         }
         /// Captured source, absent after an incremental request has been consumed.
         pub fn source(&self) -> Option<&CheckSource> {
@@ -155,6 +235,13 @@ mod incremental {
         /// Signal cooperative cancellation without waiting for the current batch.
         pub fn cancel(&mut self) {
             self.canceled = true;
+            #[cfg(target_arch = "wasm32")]
+            if let Some(worker) = self.worker.take() {
+                super::browser_worker::cancel(worker);
+            }
+            if let Some(cancel) = self.request.as_ref().and_then(|r| r.job.cancellation()) {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
         }
         /// Copy the latest progress when available; never block the caller.
         pub fn progress(&self) -> Option<CheckProgress> {
@@ -162,6 +249,25 @@ mod incremental {
         }
         /// Advance one engine batch, publishing only a complete report or cancellation.
         fn poll_batch(&mut self) -> Option<Completion<J::Output>> {
+            #[cfg(target_arch = "wasm32")]
+            if !self.canceled && (self.worker.is_some() || self.failure.is_some()) {
+                let response = if let Some(error) = self.failure.take() {
+                    Err(error)
+                } else {
+                    let id = self.worker?;
+                    let response = super::browser_worker::poll(id)?;
+                    self.worker = None;
+                    response
+                };
+                let mut request = self.request.take()?;
+                let retryable = response.as_ref().err().is_some_and(|e| e.contains("worker capacity"));
+                let result = response.and_then(|response| request.job.browser_response(&response));
+                if request.job.browser_prepares() && result.is_ok() {
+                    self.request = Some(request);
+                } else {
+                    return Some(Completion { id: request.id, source: request.job.source().clone(), report: result, retryable });
+                }
+            }
             let request = self.request.as_mut()?;
             if !self.canceled && !request.job.step(256) {
                 return None;
@@ -193,7 +299,19 @@ mod incremental {
             self.poll_batch()
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    impl<J: Work> Drop for Running<J> {
+        /// Closing a view retires only its worker, with no join or foreground kernel work.
+        fn drop(&mut self) {
+            if let Some(worker) = self.worker.take() {
+                super::browser_worker::cancel(worker);
+            }
+        }
+    }
 }
+
+#[cfg(target_arch = "wasm32")]
+mod browser_worker;
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
@@ -239,7 +357,7 @@ mod native {
     impl<J: Work> Running<J> {
         /// Own a snapshot on one worker; its one-result channel never blocks publication.
         pub fn start(mut request: Request<J>) -> Self {
-            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel = request.job.cancellation().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
             let progress = Arc::new(Mutex::new(request.job.progress()));
             let (tx, result) = mpsc::sync_channel(1);
             let (stop, update) = (cancel.clone(), progress.clone());

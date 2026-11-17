@@ -171,6 +171,7 @@ pub(super) struct CopperConnectivityCache {
     source: ViewInput,
     target: BoardTarget,
     connectivity: Arc<crate::board_appearance::Connectivity>,
+    fill: Option<Arc<pcbcraft_engine::board::fill::Fill>>,
 }
 
 /// Schematic interaction state is separate from board selection and input handling.
@@ -199,9 +200,10 @@ pub(super) struct SchematicState {
 /// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) fills: crate::board_fills::State,
     pub(super) clipboard: crate::board_clipboard::State,
     pub(super) movement: crate::board_move::State,
-    pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
+    pub(super) ratsnest_cache: Option<(ViewInput, Arc<pcbcraft_engine::board::ratsnest::Ratsnest>, Option<Arc<pcbcraft_engine::board::fill::Fill>>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
@@ -254,16 +256,18 @@ impl BoardState {
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
     ) -> Arc<crate::board_appearance::Connectivity> {
+        let fill = board.filled_zones().and_then(Result::ok);
         if let Some(cache) = &self.copper_connectivity_cache
             && Some(cache.source) == source
             && cache.target == board.target
+            && cache.fill.as_ref().map(Arc::as_ptr) == fill.as_ref().map(Arc::as_ptr)
         {
             return cache.connectivity.clone();
         }
         let (copper, nets) = board.copper_with_nets();
         let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets, names_pending: board.net_names_pending() });
         self.copper_connectivity_cache =
-            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
+            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone(), fill });
         connectivity
     }
 
@@ -274,14 +278,16 @@ impl BoardState {
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
     ) -> Option<std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>> {
-        if let Some((previous, cached)) = &self.ratsnest_cache
+        let fill = board.filled_zones().and_then(Result::ok);
+        if let Some((previous, cached, previous_fill)) = &self.ratsnest_cache
             && Some(*previous) == source
             && cached.board == board.target
+            && previous_fill.as_ref().map(Arc::as_ptr) == fill.as_ref().map(Arc::as_ptr)
         {
             return Some(cached.clone());
         }
         let result = board.ratsnest().map(std::sync::Arc::new);
-        self.ratsnest_cache = source.zip(result.clone());
+        self.ratsnest_cache = source.zip(result.clone()).map(|(input, ratsnest)| (input, ratsnest, fill));
         result
     }
 

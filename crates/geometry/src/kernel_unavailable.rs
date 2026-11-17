@@ -1,4 +1,4 @@
-//! The kernel boundary for builds without a kernel (`wasm32`): every operation that reaches it
+//! The 3D/STEP boundary on `wasm32`: every operation that reaches it
 //! answers [`ErrorCode::KernelUnavailable`], and no body can exist.
 
 use crate::{ErrorCode, GeometryError, RefusedItem, Result};
@@ -8,7 +8,7 @@ pub(crate) enum KernelBody {}
 
 /// The `kernel_unavailable` error for the operation `what`.
 fn unavailable(what: &str) -> GeometryError {
-    GeometryError::new(ErrorCode::KernelUnavailable, format!("{what}: this build has no geometry kernel"))
+    GeometryError::new(ErrorCode::KernelUnavailable, format!("{what}: this build has no 3D/STEP kernel"))
 }
 
 /// No block can be made: always `kernel_unavailable`.

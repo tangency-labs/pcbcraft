@@ -786,6 +786,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         board: Arc::default(),
         named_graph: Arc::default(),
         board_graphics: Arc::default(),
+        board_fill: Arc::default(),
         upgraded_from: None,
         layout: None,
         circuit_use: None,

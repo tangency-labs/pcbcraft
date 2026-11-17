@@ -4,6 +4,10 @@
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    // The same module is imported by an isolated fill worker; it must not bootstrap a UI there.
+    if web_sys::window().is_none() {
+        return;
+    }
     use eframe::wasm_bindgen::JsCast as _;
 
     const CANVAS_ID: &str = "pcbcraft_canvas";
@@ -28,6 +32,13 @@ fn main() {
             }
         }
     });
+}
+
+/// Pure worker entry point; native document decoding and calculation stay in the engine.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn pcbcraft_fill_worker(request: &str) -> String {
+    pcbcraft_engine::board::fill::worker::execute(request)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

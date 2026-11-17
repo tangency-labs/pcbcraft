@@ -1,18 +1,23 @@
-//! Solid bodies and STEP (ISO 10303-21) exchange for PCBcraft's 3D features.
+//! Planar regions, solid bodies and STEP (ISO 10303-21) exchange behind a kernel-neutral API.
 //!
 //! This crate is the boundary to the B-rep kernel. It is implemented with SolidCraft's
 //! `solidcore` kernel and its `solidcore-ops`, `solidcore-record` and `solidcore-step` crates, at the
 //! SolidCraft revision the workspace already pins, but no kernel type appears in its public API:
-//! callers use kernel-neutral types such as [`Body`], [`BoundingBox`], [`Transform`] and
+//! callers use kernel-neutral types such as [`Body`], [`BoundingBox`], [`Transform`], [`planar::Regions`] and
 //! [`GeometryError`], so the kernel can be replaced without touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
-//! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
-//! guard: a panic inside it becomes an error with the code [`ErrorCode::KernelInternal`] instead
+//! Every kernel operation this crate calls (including planar operations) runs under a
+//! guard: a native unwinding panic becomes an error with the code [`ErrorCode::KernelInternal`] instead
 //! of ending the application, and the caller's own data is unchanged. Dropping a [`Body`] frees
 //! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
 //! replies.
+//! Native unwinding panics are caught; the browser's `panic=abort` build traps instead of
+//! unwinding, so its host must isolate fallible background calculations. Ordinary kernel
+//! refusals return errors on both targets. No panic recovery guarantee is made for stack
+//! exhaustion or an aborting runtime.
 //!
-//! The kernel is built for native targets only. On `wasm32` the same API compiles, no [`Body`]
+//! [`planar`] operations build on native and WebAssembly targets. STEP and 3D remain native-only:
+//! on `wasm32` the same API compiles, no [`Body`]
 //! can be made, and every operation that reaches the kernel answers
 //! [`ErrorCode::KernelUnavailable`]; arguments refused before the kernel keep their own codes.
 //!
@@ -26,6 +31,7 @@ mod kernel;
 #[cfg(target_arch = "wasm32")]
 #[path = "kernel_unavailable.rs"]
 mod kernel;
+pub mod planar;
 
 use std::fmt;
 
@@ -47,7 +53,7 @@ pub enum ErrorCode {
     ModelUnsupportedEntity,
     /// The kernel could not complete an operation on valid input (`operation_failed`).
     OperationFailed,
-    /// This build has no geometry kernel, as in the browser (`kernel_unavailable`).
+    /// The requested 3D/STEP operation is unavailable on this build (`kernel_unavailable`).
     KernelUnavailable,
     /// The kernel panicked; the panic was caught and nothing the caller owns changed
     /// (`kernel_internal`).

@@ -84,6 +84,9 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
+                        | pcbcraft_engine::REFILL_ZONES
+                        | pcbcraft_engine::UNFILL_ZONES
+                        | pcbcraft_engine::board::fill::INSPECT_FILL
                         | pcbcraft_engine::EXPORT_FABRICATION
                         | pcbcraft_engine::netlist::EXPORT_NETLIST
                         | pcbcraft_engine::clipboard::COPY

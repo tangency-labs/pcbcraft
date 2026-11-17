@@ -16,6 +16,7 @@ pub mod definition;
 pub mod drawing;
 pub mod drc;
 pub mod fabrication;
+pub mod fill;
 pub mod geometry;
 pub mod identity;
 mod library_migration;

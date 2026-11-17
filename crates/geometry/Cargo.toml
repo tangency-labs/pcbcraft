@@ -1,6 +1,6 @@
 [package]
 name = "pcbcraft-geometry"
-description = "Solid bodies and STEP exchange behind a kernel-neutral API, implemented with SolidCraft's solidcore kernel"
+description = "Planar regions, solid bodies and STEP exchange behind a kernel-neutral SolidCore adapter"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,10 +12,15 @@ workspace = true
 
 [dependencies]
 log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 pcbcraft-units = { workspace = true }
+solidcore = { workspace = true }
+solidcore-convert = { workspace = true }
+solidcore-record = { workspace = true }
+solidcore-tess = { workspace = true }
 
-# The kernel is qualified for native builds only; the browser build answers kernel_unavailable
-# (docs/geometry-kernel.md).
+# STEP and 3D bodies remain native-only; planar operations also build for the browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 solidcore-ops = { workspace = true }
 solidcore-record = { workspace = true }

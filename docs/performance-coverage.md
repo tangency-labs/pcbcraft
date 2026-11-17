@@ -172,3 +172,19 @@ broad replay. These short shared-host runs do not qualify statistical tails,
 native-window/browser rendered latency, allocation, large-class capacity or
 Wayland endurance. Headless dark/light GPU images verify the reused route halo;
 WASI correctness and browser compilation cover separate boundaries.
+
+## Zone-fill slice (#232)
+
+The [bounded #232 evidence](../tools/performance/baselines/issue232/README.md)
+retains the saved-project navigation pair, raw samples, source/artifact hashes
+and packaged-worker success/failure record. The navigation fixture lacks a closed
+outline and correctly has unavailable fill; it does not measure filled-material
+rendering or refill throughput. The final packaged demo exercises actual automatic
+fill, while native window/endurance and realistic-board capture costs remain open.
+
+The subsequent [supplied-demo fill calculation comparison](../tools/performance/baselines/issue232/fill-speed/README.md)
+records three original/optimized samples per build and a prepared-operand change.
+Optimized calculation median falls from 428.011 to 105.841 ms on that one board;
+the initial development build took about 5.9 seconds. This isolates headless fill
+calculation and does not qualify physical presentation, large-board throughput,
+retained-topology memory growth or a vendor comparison.

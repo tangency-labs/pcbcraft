@@ -165,10 +165,11 @@ clearance enforcement and gesture integration remain later work.
 
 This is #57.
 
-**Implemented first slice.** [Zone outline authoring](copper-zone-outlines.md)
-(#231) draws and edits single-layer, net-addressed outlines with saved fill intent.
-It creates no conductive fill. The fill, thermal, DRC and output behavior below
-remains the proposal for #232/#233; **Refill zones** is still planned.
+**Implemented authoring and fill.** [Copper zones](copper-zone-outlines.md)
+(#231/#232) draws and edits single-layer, net-addressed outlines and derives their
+conductive material. Automatic and explicit **Pour copper**, thermal connections,
+priority, island filtering, connectivity/ratsnest and zone DRC share that result.
+Fabrication output remains #233; advanced policy remains #304.
 
 **Behavior.**
 - Drawing a zone works like a Board Outline rectangle or polygon on a copper
@@ -178,8 +179,9 @@ remains the proposal for #232/#233; **Refill zones** is still planned.
 - The fill connects same-net pads with thermal spokes or a solid connection.
   Islands smaller than a minimum area are dropped.
 - Overlapping zones fill by priority.
-- A refill runs after edits, or on demand with **Refill zones**. A changed fill
-  updates connectivity and the ratsnest.
+- A refill runs after edits, or on demand with **Pour copper**. After **Remove
+  pours**, edits leave automatic refill suppressed until **Pour copper** resumes
+  it. A changed fill updates connectivity and the ratsnest.
 
 **Model and commands.**
 - **Authored record:** the zone (outline, layer, net, priority, clearance

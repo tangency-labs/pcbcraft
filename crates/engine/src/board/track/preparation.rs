@@ -91,6 +91,7 @@ impl Session {
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 opening: self.history_root_revision(),

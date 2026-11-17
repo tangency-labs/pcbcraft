@@ -12,6 +12,7 @@ workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 pcbcraft-app = { workspace = true }
+pcbcraft-engine = { workspace = true }
 eframe = { workspace = true }
 log = { workspace = true }
 wasm-bindgen = "0.2"

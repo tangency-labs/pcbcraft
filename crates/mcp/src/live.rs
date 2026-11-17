@@ -84,6 +84,15 @@ view., window., arrangement., app. and file. commands change its views, windows,
 /// What an open editor provides to the live connection. The editor runs on its own thread
 /// and owns every policy: which commands may run now, and how window commands act.
 pub trait Editor {
+    /// Interactive removal retires the addressed board's workers as well as clearing engine
+    /// material. Hosts without such work use the ordinary session implementation.
+    fn zone_unfill(&mut self, _params: &Value) -> Option<Result<Value, String>> {
+        None
+    }
+    /// An interactive host schedules pouring through its view-owned worker.
+    fn zone_refill(&mut self, _params: &Value) -> Option<Result<Value, String>> {
+        None
+    }
     /// Run opt-in UI automation through the live host, with native input lifecycle ownership.
     /// Implementations without input automation retain an explicit refusal.
     fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, String> {
@@ -127,6 +136,16 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, St
             }
             if let Some(reason) = editor.refusal(id) {
                 return Err(reason);
+            }
+            if id == pcbcraft_engine::UNFILL_ZONES
+                && let Some(result) = editor.zone_unfill(&params["params"])
+            {
+                return result;
+            }
+            if id == pcbcraft_engine::REFILL_ZONES
+                && let Some(result) = editor.zone_refill(&params["params"])
+            {
+                return result;
             }
             if !is_window_command(id) {
                 return call_session(editor.session(), method, params);
