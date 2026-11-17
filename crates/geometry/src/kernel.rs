@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use solidcore_record::step::product::{ItemKind, MAX_VISITS, ProductStructure};
+use solidcore_record::step::product::{ItemKind, MAX_ASSEMBLY_DEPTH, MAX_VISITS, ProductStructure};
 use solidcore_step::write::product::{ExportBody, ExportError, Header};
 
 use crate::guard::guard;
@@ -79,9 +79,12 @@ pub(crate) struct Read {
 /// Most placements one file's product structure may expand to.
 const MAX_PLACEMENTS: u64 = MAX_VISITS as u64;
 
-/// Most work one expansion may do, in steps: ten for each placement the expansion is allowed.
-/// [`Expansion`] says what one step is.
-const MAX_EXPANSION_WORK: u64 = 10 * MAX_PLACEMENTS;
+/// Work reserved for expansion independently of input size. [`Expansion`] defines a step.
+const BASE_EXPANSION_WORK: u64 = 10 * MAX_PLACEMENTS;
+
+/// Additional work per parsed entity. This admits the flat 1,000-product qualification while
+/// bounding work amplification linearly in input size, including the pinned walk's link scans.
+const WORK_PER_ENTITY: u64 = 1_000;
 
 /// The named bodies of a STEP text, where its product structure places them, and the solid items
 /// refused. A panic while one solid is handed to the kernel refuses that solid only. A STEP item
@@ -129,7 +132,7 @@ pub(crate) fn read(text: &str) -> Result<Read> {
 
 /// Every use of a read body in the world frame: the product structure's, then each body it does
 /// not place, by the identity. A refused item's placements are dropped with it. The expansion is
-/// counted before it runs and refused past [`MAX_PLACEMENTS`] or [`MAX_EXPANSION_WORK`].
+/// counted before it runs and refused past [`MAX_PLACEMENTS`] or its input-scaled work budget.
 ///
 /// Which bodies a body item gives is worked out once for each item: `topology::items` reads a
 /// surface model's whole shell list on every call, so calling it for each use would cost the
@@ -146,12 +149,13 @@ fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<
         }
     }
     let bodies_of = |entity: u64| bodies.get(&entity).map_or(0, |list| list.len() as u64);
-    let cost = Expansion::new(&structure, &bodies_of).total().map_err(unreadable)?;
+    let work_limit = BASE_EXPANSION_WORK.saturating_add((exchange.entities.len() as u64).saturating_mul(WORK_PER_ENTITY));
+    let cost = Expansion::new(&structure, &bodies_of, work_limit).total().map_err(unreadable)?;
     if cost.placements > MAX_PLACEMENTS {
         return Err(unreadable(format!("the assembly places more than {MAX_PLACEMENTS} bodies")));
     }
-    if cost.work > MAX_EXPANSION_WORK {
-        return Err(unreadable(format!("the assembly takes more than {MAX_EXPANSION_WORK} steps to expand")));
+    if cost.work > work_limit {
+        return Err(unreadable(format!("the assembly takes more than {work_limit} steps to expand")));
     }
     let placed = solidcore_ops::placed_bodies(&structure).map_err(unreadable)?;
     let mut out = Vec::with_capacity(placed.len().max(count));
@@ -171,16 +175,36 @@ fn placements(exchange: &solidcore_step::p21::Exchange, body_of_item: &BTreeMap<
     Ok(out)
 }
 
-/// What expanding part of a product structure costs: the placements it emits and the work it does.
+/// An expansion's placements, work and greatest additional occurrence/mapping depth.
 #[derive(Clone, Copy, Default)]
 struct Cost {
     placements: u64,
     work: u64,
+    height: usize,
 }
 
 impl Cost {
+    /// Combines sibling work and placements, retaining their greatest relative depth.
     fn plus(self, other: Cost) -> Cost {
-        Cost { placements: self.placements.saturating_add(other.placements), work: self.work.saturating_add(other.work) }
+        Cost {
+            placements: self.placements.saturating_add(other.placements),
+            work: self.work.saturating_add(other.work),
+            height: self.height.max(other.height),
+        }
+    }
+
+    /// The same expansion reached through one occurrence or mapped item.
+    fn nested(self) -> Cost {
+        Cost { height: self.height + 1, ..self }
+    }
+}
+
+/// Refuses a path past the walk's depth limit, including a previously counted subtree's height.
+fn check_depth(depth: usize, height: usize) -> std::result::Result<(), String> {
+    if depth.saturating_add(height) > MAX_ASSEMBLY_DEPTH {
+        Err(format!("the assembly nests deeper than {MAX_ASSEMBLY_DEPTH} levels"))
+    } else {
+        Ok(())
     }
 }
 
@@ -213,6 +237,7 @@ struct Expansion<'a> {
     structure: &'a ProductStructure,
     /// The placements one body item gives: the read bodies of its STEP item.
     bodies_of: &'a dyn Fn(u64) -> u64,
+    work_limit: u64,
     /// Representations related to each without a transformation, in relationship order.
     related: Vec<Vec<usize>>,
     /// Child definitions of each definition, in occurrence order.
@@ -226,7 +251,7 @@ impl<'a> Expansion<'a> {
     /// a transformation and each definition's children gathered once. An occurrence whose parent
     /// is out of range is skipped, as the walk skips it; a relationship to a representation out
     /// of range is still listed under its other end, so the count reports it as the walk does.
-    fn new(structure: &'a ProductStructure, bodies_of: &'a dyn Fn(u64) -> u64) -> Expansion<'a> {
+    fn new(structure: &'a ProductStructure, bodies_of: &'a dyn Fn(u64) -> u64, work_limit: u64) -> Expansion<'a> {
         let mut related = vec![Vec::new(); structure.representations.len()];
         for link in structure.links.iter().filter(|l| l.transformation.is_none()) {
             if let Some(list) = related.get_mut(link.rep_1) {
@@ -245,6 +270,7 @@ impl<'a> Expansion<'a> {
         Expansion {
             structure,
             bodies_of,
+            work_limit,
             related,
             children,
             definitions: vec![Node::Unseen; structure.definitions.len()],
@@ -254,42 +280,47 @@ impl<'a> Expansion<'a> {
 
     /// The cost of expanding every root, after the representations reached from every
     /// definition are found; the first error any of them meets. The preliminary closure scan
-    /// stops after its accumulated work exceeds [`MAX_EXPANSION_WORK`].
+    /// stops after its accumulated work exceeds the input-scaled budget.
     fn total(&mut self) -> std::result::Result<Cost, String> {
         let scan = self.structure.links.len() as u64;
         let mut cost = Cost::default();
         for definition in &self.structure.definitions {
             let reached = self.closure(&definition.shapes).len() as u64;
-            cost = cost.plus(Cost { placements: 0, work: reached.saturating_mul(1 + scan) });
-            if cost.work > MAX_EXPANSION_WORK {
+            cost = cost.plus(Cost { work: reached.saturating_mul(1 + scan), ..Cost::default() });
+            if cost.work > self.work_limit {
                 return Ok(cost);
             }
         }
         for &root in &self.structure.roots {
-            cost = cost.plus(self.definition(root)?);
+            cost = cost.plus(self.definition(root, 0)?);
         }
         Ok(cost)
     }
 
     /// The cost of expanding `definition` once: one step, one for each representation its
     /// shapes reach, those representations' costs and its occurrences' children's. An error for
-    /// a definition met again inside its own expansion.
-    fn definition(&mut self, definition: usize) -> std::result::Result<Cost, String> {
+    /// a definition met again inside its own expansion or a combined path deeper than the walk
+    /// permits. A cached subtree's height is checked at each caller's depth.
+    fn definition(&mut self, definition: usize, depth: usize) -> std::result::Result<Cost, String> {
+        check_depth(depth, 0)?;
         match self.definitions.get(definition) {
-            None => return Ok(Cost { placements: 0, work: 1 }),
+            None => return Ok(Cost { work: 1, ..Cost::default() }),
             Some(Node::Open) => return Err("assembly cycle".into()),
-            Some(Node::Done(cost)) => return Ok(*cost),
+            Some(Node::Done(cost)) => {
+                check_depth(depth, cost.height)?;
+                return Ok(*cost);
+            }
             Some(Node::Unseen) => {}
         }
         self.definitions[definition] = Node::Open;
         let shapes = self.structure.definitions[definition].shapes.clone();
         let reached = self.closure(&shapes);
-        let mut cost = Cost { placements: 0, work: 1 + reached.len() as u64 };
+        let mut cost = Cost { work: 1 + reached.len() as u64, ..Cost::default() };
         for representation in reached {
-            cost = cost.plus(self.representation(representation)?);
+            cost = cost.plus(self.representation(representation, depth)?);
         }
         for child in self.children[definition].clone() {
-            cost = cost.plus(self.definition(child)?);
+            cost = cost.plus(self.definition(child, depth + 1)?.nested());
         }
         self.definitions[definition] = Node::Done(cost);
         Ok(cost)
@@ -312,32 +343,37 @@ impl<'a> Expansion<'a> {
     /// for each read body of each body item, and for each mapped item one step for each
     /// relationship of the file and the cost of its representation and of those related to it.
     /// An error for a missing representation or map, and for a representation met again inside
-    /// its own walk.
-    fn representation(&mut self, representation: usize) -> std::result::Result<Cost, String> {
+    /// its own walk or a combined path past the depth limit. A mapped target and its relationship
+    /// companions share one increased depth; cached heights remain relative to their caller.
+    fn representation(&mut self, representation: usize, depth: usize) -> std::result::Result<Cost, String> {
+        check_depth(depth, 0)?;
         match self.representations.get(representation) {
             None => return Err(format!("missing representation #{representation}")),
             Some(Node::Open) => return Err("mapped items form a cycle".into()),
-            Some(Node::Done(cost)) => return Ok(*cost),
+            Some(Node::Done(cost)) => {
+                check_depth(depth, cost.height)?;
+                return Ok(*cost);
+            }
             Some(Node::Unseen) => {}
         }
         self.representations[representation] = Node::Open;
         let structure = self.structure;
         let items = &structure.representations[representation].items;
-        let mut cost = Cost { placements: 0, work: 1 + items.len() as u64 };
+        let mut cost = Cost { work: 1 + items.len() as u64, ..Cost::default() };
         for item in items {
             match &item.kind {
-                ItemKind::Body(_) => cost = cost.plus(Cost { placements: (self.bodies_of)(item.entity), work: 0 }),
+                ItemKind::Body(_) => cost = cost.plus(Cost { placements: (self.bodies_of)(item.entity), ..Cost::default() }),
                 ItemKind::Mapped { map, .. } => {
                     let Some(map) = structure.maps.get(*map) else {
                         return Err(format!("missing representation map #{}", item.entity));
                     };
-                    cost = cost.plus(Cost { placements: 0, work: structure.links.len() as u64 });
+                    cost = cost.plus(Cost { work: structure.links.len() as u64, ..Cost::default() });
                     // The mapped representation, then each related one, each once for this item.
                     let mut walked = BTreeSet::new();
                     let related = self.related.get(map.representation).cloned().unwrap_or_default();
                     for target in std::iter::once(map.representation).chain(related) {
                         if walked.insert(target) {
-                            cost = cost.plus(self.representation(target)?);
+                            cost = cost.plus(self.representation(target, depth + 1)?.nested());
                         }
                     }
                 }

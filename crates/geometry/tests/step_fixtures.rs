@@ -13,6 +13,15 @@ use serde_json::Value;
 
 const FIXTURE_COUNT: usize = 10;
 
+/// Appends synthetic data records before the single data-section footer, regardless of checkout
+/// line endings. A missing or repeated footer is a broken fixture, not a successful mutation.
+fn append_entities(text: &str, lines: &[String]) -> String {
+    let text = text.replace("\r\n", "\n");
+    let footer = "ENDSEC;\nEND-ISO-10303-21;";
+    assert_eq!(text.matches(footer).count(), 1, "one data-section footer");
+    text.replacen(footer, &format!("{}\n{footer}", lines.join("\n")), 1)
+}
+
 struct Fixture {
     file: String,
     bodies: usize,
@@ -154,10 +163,12 @@ fn a_placement_one_kilometre_out_reads_and_one_step_further_is_model_unreadable(
 fn assembly_sharing_a_closed_shell() -> Vec<u8> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step");
     let text = std::fs::read_to_string(dir.join("assembly.step")).unwrap();
-    let shared = text
-        .replacen("#198=MANIFOLD_SOLID_BREP('board',#197);", "#198=SHELL_BASED_SURFACE_MODEL('board',(#197,#901));", 1)
-        .replacen("#360=MANIFOLD_SOLID_BREP('part',#359);", "#360=SHELL_BASED_SURFACE_MODEL('part',(#197,#902));", 1)
-        .replacen("ENDSEC;\nEND-ISO-10303-21;", "#901=OPEN_SHELL('',(#196));\n#902=OPEN_SHELL('',(#358));\nENDSEC;\nEND-ISO-10303-21;", 1);
+    let models = text.replacen("#198=MANIFOLD_SOLID_BREP('board',#197);", "#198=SHELL_BASED_SURFACE_MODEL('board',(#197,#901));", 1).replacen(
+        "#360=MANIFOLD_SOLID_BREP('part',#359);",
+        "#360=SHELL_BASED_SURFACE_MODEL('part',(#197,#902));",
+        1,
+    );
+    let shared = append_entities(&models, &["#901=OPEN_SHELL('',(#196));".into(), "#902=OPEN_SHELL('',(#358));".into()]);
     assert_eq!(shared.matches("SHELL_BASED_SURFACE_MODEL").count(), 2);
     assert_eq!(shared.matches("=OPEN_SHELL(").count(), 2);
     shared.into_bytes()
@@ -224,8 +235,8 @@ fn mapped_tree(factors: &[usize], extra: bool, pad: (usize, usize)) -> Vec<u8> {
             &format!("#168=ADVANCED_BREP_SHAPE_REPRESENTATION('box',(#159,#167{bottom}),#9);"),
             1,
         )
-        .replacen("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#168);", &format!("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#{below});"), 1)
-        .replacen("ENDSEC;\nEND-ISO-10303-21;", &format!("{}\nENDSEC;\nEND-ISO-10303-21;", lines.join("\n")), 1);
+        .replacen("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#168);", &format!("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#{below});"), 1);
+    let tree = append_entities(&tree, &lines);
     assert!(tree.contains(&format!("(#163,#{below})")));
     assert!(tree.contains(&format!("(#159,#167{bottom})")));
     tree.into_bytes()
@@ -257,7 +268,7 @@ fn with_unrelated_links(tree: Vec<u8>, count: usize) -> Vec<u8> {
     let mut lines = vec!["#500001=SHAPE_REPRESENTATION('',(#167),#9);".to_string(), "#500002=SHAPE_REPRESENTATION('',(#167),#9);".to_string()];
     lines.extend((0..count).map(|i| format!("#{}=SHAPE_REPRESENTATION_RELATIONSHIP('','',#500001,#500002);", 500_003 + i)));
     let text = String::from_utf8(tree).unwrap();
-    let out = text.replacen("ENDSEC;\nEND-ISO-10303-21;", &format!("{}\nENDSEC;\nEND-ISO-10303-21;", lines.join("\n")), 1);
+    let out = append_entities(&text, &lines);
     assert_ne!(out, text);
     out.into_bytes()
 }
@@ -273,37 +284,55 @@ fn steps(levels: u32, pad: (u64, u64), links: u64) -> u64 {
     (1 + links) + 2 + uses * (3 + pad.0) + (4 + 2 * links) * (uses - 1) + pad.1
 }
 
-/// The expansion's work bound is exact: 1,000,000 steps read, one more is refused, with only
-/// 65,536 placements.
+/// The input-scaled work budget for these synthetic files, which have one entity per line.
+/// Repeating an item reference in a representation changes work, but not the entity count.
+fn work_budget(text: &[u8]) -> u64 {
+    let entities = std::str::from_utf8(text).unwrap().lines().filter(|line| line.starts_with('#')).count() as u64;
+    1_000_000 + 1_000 * entities
+}
+
+/// Exactly the input-scaled work budget reads, one more step is refused, with only 65,536
+/// placements. Top-level item padding preserves the same entity count on both sides.
 #[test]
-fn an_expansion_of_more_than_1000000_steps_is_model_unreadable() {
-    assert_eq!(steps(16, (8, 16_961), 0), 1_000_000);
-    let read = read_step(&mapped_tree(&[2; 16], false, (8, 16_961))).unwrap();
-    assert_eq!(read.placements.len(), 65_536);
-    let error = read_step(&mapped_tree(&[2; 16], false, (8, 16_962))).unwrap_err();
+fn an_expansion_past_its_work_budget_is_model_unreadable() {
+    let budget = work_budget(&mapped_tree(&[2; 16], false, (8, 0)));
+    assert_eq!(budget, 1_233_000);
+    let pad = usize::try_from(budget - steps(16, (8, 0), 0)).unwrap();
+    assert_eq!(steps(16, (8, pad as u64), 0), budget);
+    let exact = mapped_tree(&[2; 16], false, (8, pad));
+    let past = mapped_tree(&[2; 16], false, (8, pad + 1));
+    assert_eq!((work_budget(&exact), work_budget(&past)), (budget, budget));
+    assert_eq!(read_step(&exact).unwrap().placements.len(), 65_536);
+    let error = read_step(&past).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
-    assert!(error.to_string().contains("the assembly takes more than 1000000 steps to expand"), "{error}");
+    assert!(error.to_string().contains(&format!("the assembly takes more than {budget} steps to expand")), "{error}");
 }
 
 /// Relationships the walk scans for each mapped item count in the bound: 2^16 placements under
 /// both limits read, and with 10,000 unrelated relationships (about 10^9 checks) the same tree is
-/// refused before it is expanded. With 7,870 relationships and 64 placements, 1,000,000 steps read
-/// and one more is refused.
+/// refused before it is expanded. With 1,000 relationships and 1,024 placements, exactly the
+/// input-scaled work budget reads and one more step is refused.
 #[test]
 fn relationships_scanned_for_each_mapped_item_count_in_the_bound() {
     let tree = mapped_tree(&[2; 16], false, (0, 0));
     assert!(steps(16, (0, 0), 0) < 1_000_000);
     assert_eq!(read_step(&tree).unwrap().placements.len(), 65_536);
-    let error = read_step(&with_unrelated_links(tree, 10_000)).unwrap_err();
+    let huge = with_unrelated_links(tree, 10_000);
+    let error = read_step(&huge).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
-    assert!(error.to_string().contains("the assembly takes more than 1000000 steps to expand"), "{error}");
+    assert!(error.to_string().contains(&format!("the assembly takes more than {} steps to expand", work_budget(&huge))), "{error}");
 
-    assert_eq!(steps(6, (0, 63), 7_870), 1_000_000);
-    let read = read_step(&with_unrelated_links(mapped_tree(&[2; 6], false, (0, 63)), 7_870)).unwrap();
-    assert_eq!(read.placements.len(), 64);
-    let error = read_step(&with_unrelated_links(mapped_tree(&[2; 6], false, (0, 64)), 7_870)).unwrap_err();
+    let budget = work_budget(&with_unrelated_links(mapped_tree(&[2; 10], false, (0, 0)), 1_000));
+    assert_eq!(budget, 2_211_000);
+    let pad = usize::try_from(budget - steps(10, (0, 0), 1_000)).unwrap();
+    let exact = with_unrelated_links(mapped_tree(&[2; 10], false, (0, pad)), 1_000);
+    let past = with_unrelated_links(mapped_tree(&[2; 10], false, (0, pad + 1)), 1_000);
+    assert_eq!(steps(10, (0, pad as u64), 1_000), budget);
+    assert_eq!((work_budget(&exact), work_budget(&past)), (budget, budget));
+    assert_eq!(read_step(&exact).unwrap().placements.len(), 1_024);
+    let error = read_step(&past).unwrap_err();
     assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
-    assert!(error.to_string().contains("the assembly takes more than 1000000 steps to expand"), "{error}");
+    assert!(error.to_string().contains(&format!("the assembly takes more than {budget} steps to expand")), "{error}");
 }
 
 /// A surface model of many shells placed many times is read in time that does not grow with
@@ -318,11 +347,7 @@ fn a_surface_model_of_many_shells_placed_many_times_reads_in_under_30_s() {
     let shells: Vec<String> = (0..SHELLS).map(|i| format!("#{}", 600_001 + i)).collect();
     let mut lines = vec![format!("#600000=SHELL_BASED_SURFACE_MODEL('',({}));", shells.join(","))];
     lines.extend(shells.iter().map(|shell| format!("{shell}=CLOSED_SHELL('',());")));
-    let text = tree.replacen("('box',(#159,#167", "('box',(#159,#600000,#167", 1).replacen(
-        "ENDSEC;\nEND-ISO-10303-21;",
-        &format!("{}\nENDSEC;\nEND-ISO-10303-21;", lines.join("\n")),
-        1,
-    );
+    let text = append_entities(&tree.replacen("('box',(#159,#167", "('box',(#159,#600000,#167", 1), &lines);
     assert!(text.contains("#600000,#167") && text.contains("#600001=CLOSED_SHELL"));
 
     let start = std::time::Instant::now();
@@ -332,4 +357,181 @@ fn a_surface_model_of_many_shells_placed_many_times_reads_in_under_30_s() {
     assert_eq!(read.placements.len(), 32_768);
     assert!(read.refused.iter().any(|r| r.entity == 600_000), "{:?}", read.refused);
     assert!(seconds < 30.0, "read in {seconds:.1} s");
+}
+
+/// Both checkout encodings receive the intended data records, and both raw payload encodings
+/// read to the same body and placement counts. Missing/repeated footers fail fixture construction.
+#[test]
+fn fixture_splices_and_reader_payloads_support_lf_and_crlf() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step");
+    for file in ["box.step", "assembly.step"] {
+        let lf = std::fs::read_to_string(dir.join(file)).unwrap().replace("\r\n", "\n");
+        let expected = read_step(lf.as_bytes()).unwrap();
+        for source in [lf.clone(), lf.replace('\n', "\r\n")] {
+            let text = append_entities(&source, &["#900000=SHAPE_REPRESENTATION('',(),#9);".into()]);
+            assert_eq!(text.matches("#900000=SHAPE_REPRESENTATION").count(), 1);
+            assert!(!text.contains('\r'));
+            for payload in [text.clone(), text.replace('\n', "\r\n")] {
+                let read = read_step(payload.as_bytes()).unwrap();
+                assert!(read.refused.is_empty());
+                assert_eq!((read.bodies.len(), read.placements.len()), (expected.bodies.len(), expected.placements.len()));
+                assert_eq!(read.bounding_box().unwrap(), expected.bounding_box().unwrap());
+            }
+        }
+    }
+    assert!(std::panic::catch_unwind(|| append_entities("not a STEP footer", &[])).is_err());
+    assert!(std::panic::catch_unwind(|| append_entities("ENDSEC;\nEND-ISO-10303-21;\nENDSEC;\nEND-ISO-10303-21;", &[])).is_err());
+}
+
+/// Alternating mapped targets and plain relationship companions, ending in the block. Each
+/// direct mapped chain has length one; the actual placement route has `levels` mapped calls.
+fn mixed_mapped_chain(levels: usize) -> (String, u64) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step");
+    let text = std::fs::read_to_string(dir.join("box.step")).unwrap();
+    let mut lines = Vec::new();
+    let mut below = 168;
+    for level in 0..levels as u64 {
+        let target = 1_000 + 5 * level;
+        let (link, map, item, rep) = (target + 1, target + 2, target + 3, target + 4);
+        lines.extend([
+            format!("#{target}=SHAPE_REPRESENTATION('',(#167),#9);"),
+            format!("#{link}=SHAPE_REPRESENTATION_RELATIONSHIP('','',#{target},#{below});"),
+            format!("#{map}=REPRESENTATION_MAP(#167,#{target});"),
+            format!("#{item}=MAPPED_ITEM('',#{map},#167);"),
+            format!("#{rep}=SHAPE_REPRESENTATION('',(#{item},#167),#9);"),
+        ]);
+        below = rep;
+    }
+    let text = text.replacen("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#168);", &format!("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#{below});"), 1);
+    (append_entities(&text, &lines), below)
+}
+
+/// The pinned product reader accepts the mapped-only depth of this graph. Any too-deep result
+/// must be the wrapper pre-count's combined-depth refusal, not a later dependency-walk error.
+fn check_mixed_depth(text: &str, placements: Option<usize>) {
+    let exchange = solidcore_step::p21::parse(text).unwrap();
+    let structure = solidcore_record::step::product::read(&exchange).unwrap();
+    assert_eq!(structure.definitions[structure.roots[0]].entity, if structure.occurrences.is_empty() { 162 } else { 900_006 });
+    match placements {
+        Some(count) => {
+            let read = read_step(text.as_bytes()).unwrap();
+            assert!(read.refused.is_empty());
+            assert_eq!((read.bodies.len(), read.placements.len()), (1, count));
+        }
+        None => {
+            let error = read_step(text.as_bytes()).unwrap_err();
+            assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+            assert!(error.to_string().contains("the assembly nests deeper than 32 levels"), "{error}");
+        }
+    }
+}
+
+/// The real mixed graph's last good and first bad depth, plus a long acyclic route which must
+/// be refused before native recursion can grow with its length.
+#[test]
+fn mixed_mapped_relationship_depth_is_bounded_before_expansion() {
+    check_mixed_depth(&mixed_mapped_chain(32).0, Some(1));
+    check_mixed_depth(&mixed_mapped_chain(33).0, None);
+    let long = mixed_mapped_chain(2_048).0;
+    assert!(long.len() < 1_000_000);
+    check_mixed_depth(&long, None);
+}
+
+/// The first root caches a tail shallowly; the second root reaches it one mapped call deeper.
+#[test]
+fn a_cached_mixed_tail_is_checked_at_its_callers_depth() {
+    for (levels, expected) in [(31, Some(2)), (32, None)] {
+        let (text, tail) = mixed_mapped_chain(levels);
+        let lines = [
+            "#900001=SHAPE_REPRESENTATION('',(#167),#9);".into(),
+            format!("#900002=SHAPE_REPRESENTATION_RELATIONSHIP('','',#900001,#{tail});"),
+            "#900003=REPRESENTATION_MAP(#167,#900001);".into(),
+            "#900004=MAPPED_ITEM('',#900003,#167);".into(),
+            "#900005=SHAPE_REPRESENTATION('',(#900004,#167),#9);".into(),
+            "#900006=PRODUCT_DEFINITION('design','',#161,#4);".into(),
+            "#900007=PRODUCT_DEFINITION_SHAPE('','',#900006);".into(),
+            "#900008=SHAPE_DEFINITION_REPRESENTATION(#900007,#900005);".into(),
+        ];
+        check_mixed_depth(&append_entities(&text, &lines), expected);
+    }
+}
+
+/// Occurrences and mapped calls share the same depth allowance; a plain relationship companion
+/// does not consume another level. A shared definition cached through the shallower root also
+/// carries its relative mapped height into the deeper occurrence route.
+#[test]
+fn occurrence_and_mixed_mapping_depth_share_the_limit() {
+    for (levels, expected) in [(31, Some(1)), (32, None)] {
+        let (text, _) = mixed_mapped_chain(levels);
+        let lines = [
+            "#900005=SHAPE_REPRESENTATION('',(#167),#9);".into(),
+            "#900006=PRODUCT_DEFINITION('design','',#161,#4);".into(),
+            "#900007=PRODUCT_DEFINITION_SHAPE('','',#900006);".into(),
+            "#900008=SHAPE_DEFINITION_REPRESENTATION(#900007,#900005);".into(),
+            "#900009=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','child','',#900006,#162,$);".into(),
+        ];
+        check_mixed_depth(&append_entities(&text, &lines), expected);
+    }
+    for (levels, expected) in [(30, Some(2)), (31, None)] {
+        let (text, _) = mixed_mapped_chain(levels);
+        let lines = [
+            "#900005=SHAPE_REPRESENTATION('',(#167),#9);".into(),
+            "#900006=PRODUCT_DEFINITION('design','',#161,#4);".into(),
+            "#900007=PRODUCT_DEFINITION_SHAPE('','',#900006);".into(),
+            "#900008=SHAPE_DEFINITION_REPRESENTATION(#900007,#900005);".into(),
+            "#900009=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','shallow','',#900006,#162,$);".into(),
+            "#900106=PRODUCT_DEFINITION('design','',#161,#4);".into(),
+            "#900107=PRODUCT_DEFINITION_SHAPE('','',#900106);".into(),
+            "#900108=SHAPE_DEFINITION_REPRESENTATION(#900107,#900005);".into(),
+            "#900109=NEXT_ASSEMBLY_USAGE_OCCURRENCE('2','deep','',#900106,#900206,$);".into(),
+            "#900206=PRODUCT_DEFINITION('design','',#161,#4);".into(),
+            "#900207=PRODUCT_DEFINITION_SHAPE('','',#900206);".into(),
+            "#900208=SHAPE_DEFINITION_REPRESENTATION(#900207,#900005);".into(),
+            "#900209=NEXT_ASSEMBLY_USAGE_OCCURRENCE('3','tail','',#900206,#162,$);".into(),
+        ];
+        check_mixed_depth(&append_entities(&text, &lines), expected);
+    }
+}
+
+/// A flat board-like product graph uses the writer's two representations per part, one plain
+/// link between them and one transformed occurrence link. Geometry is shared to keep the test
+/// small: 1,000 distinct products/definitions, not 1,000 kernel-built solids or a performance run.
+#[test]
+fn a_thousand_distinct_products_with_writer_style_links_read() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step");
+    let text = std::fs::read_to_string(dir.join("box.step")).unwrap();
+    let text = text.replacen("#168=ADVANCED_BREP_SHAPE_REPRESENTATION('box',(#159,#167),#9);", "#168=SHAPE_REPRESENTATION('board',(#167),#9);", 1);
+    let mut lines = Vec::new();
+    for part in 0..1_000 {
+        let id = 10_000 + 16 * part;
+        lines.extend([
+            format!("#{id}=PRODUCT('part{part}','part{part}','',(#3));"),
+            format!("#{}=PRODUCT_DEFINITION_FORMATION('','',#{id});", id + 1),
+            format!("#{}=PRODUCT_DEFINITION('design','',#{},#4);", id + 2, id + 1),
+            format!("#{}=PRODUCT_DEFINITION_SHAPE('','',#{});", id + 3, id + 2),
+            format!("#{}=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#159,#167),#9);", id + 4),
+            format!("#{}=SHAPE_REPRESENTATION('',(#167),#9);", id + 5),
+            format!("#{}=SHAPE_DEFINITION_REPRESENTATION(#{},#{});", id + 6, id + 3, id + 5),
+            format!("#{}=SHAPE_REPRESENTATION_RELATIONSHIP('','',#{},#{});", id + 7, id + 4, id + 5),
+            format!("#{}=NEXT_ASSEMBLY_USAGE_OCCURRENCE('{part}','part','',#162,#{},$);", id + 8, id + 2),
+            format!("#{}=PRODUCT_DEFINITION_SHAPE('','',#{});", id + 9, id + 8),
+            format!("#{}=ITEM_DEFINED_TRANSFORMATION('','',#167,#167);", id + 10),
+            format!("#{}=(REPRESENTATION_RELATIONSHIP('','',#{},#168)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{})SHAPE_REPRESENTATION_RELATIONSHIP());", id + 11, id + 5, id + 10),
+            format!("#{}=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{},#{});", id + 12, id + 11, id + 9),
+        ]);
+    }
+    let text = append_entities(&text, &lines);
+    assert!(text.len() < 2_000_000, "small metadata fixture, not a body-heavy benchmark");
+    let exchange = solidcore_step::p21::parse(&text).unwrap();
+    let structure = solidcore_record::step::product::read(&exchange).unwrap();
+    assert_eq!((structure.definitions.len(), structure.occurrences.len(), structure.links.len()), (1_001, 1_000, 2_000));
+    assert_eq!(structure.roots.len(), 1);
+    let read = read_step(text.as_bytes()).unwrap();
+    assert!(read.refused.is_empty());
+    assert_eq!((read.bodies.len(), read.placements.len()), (1, 1_000));
+    assert!(read.placements.iter().all(|p| p.body == 0 && p.transform.translation_nm == [0, 0, 0]));
+    assert_eq!(
+        read.bodies[0].bounding_box().unwrap(),
+        BoundingBox { min_nm: [-5_000_000, 2_500_000, 0], max_nm: [25_000_000, 22_500_000, 10_000_000] }
+    );
 }

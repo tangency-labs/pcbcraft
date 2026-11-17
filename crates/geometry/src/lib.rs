@@ -1,10 +1,10 @@
 //! Solid bodies and STEP (ISO 10303-21) exchange for PCBcraft's 3D features.
 //!
 //! This crate is the boundary to the B-rep kernel. It is implemented with SolidCraft's
-//! `solidcore` kernel and its `solidcore-ops` and `solidcore-step` crates, at the SolidCraft
-//! revision the workspace already pins, but no kernel type appears in its public API: callers see
-//! [`Body`], [`BoundingBox`], [`Transform`] and [`GeometryError`] only, so the kernel can be replaced without
-//! touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
+//! `solidcore` kernel and its `solidcore-ops`, `solidcore-record` and `solidcore-step` crates, at the
+//! SolidCraft revision the workspace already pins, but no kernel type appears in its public API:
+//! callers use kernel-neutral types such as [`Body`], [`BoundingBox`], [`Transform`] and
+//! [`GeometryError`], so the kernel can be replaced without touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
 //! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
 //! guard: a panic inside it becomes an error with the code [`ErrorCode::KernelInternal`] instead
@@ -352,8 +352,8 @@ impl StepRead {
 ///
 /// [`ErrorCode::ModelUnreadable`] when the bytes are not UTF-8 text or not an ISO 10303-21
 /// exchange structure, its product structure is malformed (a cycle, a broken reference, nesting
-/// deeper than 32 levels, an expansion past 100,000 placed bodies or 1,000,000 steps,
-/// counted before it runs), or a placement is not finite or
+/// deeper than 32 combined occurrence/mapping levels, an expansion past 100,000 placed bodies
+/// or its work budget of 1,000,000 + 1,000 × parsed entity count steps, counted before it runs), or a placement is not finite or
 /// moves a body more than [`MAX_LENGTH_NM`] from the origin;
 /// [`ErrorCode::KernelUnavailable`] without a kernel;
 /// [`ErrorCode::KernelInternal`] when the reader panics.

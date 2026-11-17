@@ -46,14 +46,14 @@ Alternatives considered:
 
 ## Boundary
 
-`pcbcraft-geometry` is the only crate that depends on `solidcore-ops` or
-`solidcore-step`. `pcbcraft-engine` has no kernel dependency, so engine builds,
+`pcbcraft-geometry` is the only crate that directly depends on `solidcore-ops`,
+`solidcore-record` or `solidcore-step`. `pcbcraft-engine` has no kernel dependency, so engine builds,
 engine tests and the browser editor do not pay for the kernel. The same API
 could later move into an engine module if that proves simpler.
 
 - **Kernel-neutral API.** No kernel type appears in the public API. Callers use
-  `Body`, `BoundingBox`, `Transform`, `Placement`, `StepRead`, `RefusedItem` and
-  `GeometryError`, so a
+  kernel-neutral types such as `Body`, `BoundingBox`, `Transform`, `Placement`,
+  `StepRead`, `RefusedItem`, `ErrorCode` and `GeometryError`, so a
   kernel swap touches only this crate.
 - **Units.** Lengths are whole nanometres (`i64`), within
   `pcbcraft_units::MAX_LENGTH_NM` of zero. The kernel's millimetre floats are
@@ -105,7 +105,7 @@ Current operations:
 | `read_step(bytes)` | Every solid and surface model of a file in its stated units, and each solid item refused with its entity number and reason |
 | `write_step(part_name, bodies)` | One AP242 part; the same bodies always give the same bytes (no time stamp) |
 | `Body::transformed(transform)` | A moved copy; the body itself is unchanged |
-| `StepRead::placements` | Every use of a body in the file's world frame: one per assembly occurrence (a part used twice is one body placed twice), and each body outside any product placed once where it is |
+| `StepRead::placements` | Every use of a body in the file's world frame: one entry for each body placed by an assembly occurrence (a single-body part used twice is one body placed twice), and each otherwise-unplaced body placed once where it is |
 | `StepRead::placed_bodies()`, `StepRead::bounding_box()` | The placed bodies, and their box in the world frame, each body measured after it is moved |
 | `kernel_crash_test()` | `kernel_internal` from a deliberate kernel panic |
 
@@ -114,7 +114,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | Code | Meaning |
 | --- | --- |
 | `invalid_params` | An argument is invalid or is refused by the kernel, including a name with an ASCII control character, which a STEP string cannot carry |
-| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 levels, or an expansion past 100,000 placed bodies or 1,000,000 steps), or a placement that is not finite or moves a body more than 1 km from the origin |
+| `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 combined occurrence/mapping levels, or an expansion past 100,000 placed bodies or its input-scaled work budget), or a placement that is not finite or moves a body more than 1 km from the origin |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
 | `kernel_unavailable` | This build has no kernel (the browser) |
@@ -122,13 +122,14 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 
 ## Qualification
 
-At SolidCraft revision `73bdb6c`:
+At SolidCraft revision `73bdb6c`. Unless a target is named, these are Linux
+qualification results, not native Windows, macOS or browser-runtime coverage.
 
 | Check | Result |
 | --- | --- |
 | Licences, from each crate's manifest | `solidcore`, `solidcore-ops`, `solidcore-step`, `solidcore-convert` and `solidcore-record` are Apache-2.0 (the `solidcore/` workspace licence). Their other dependencies (serde, serde_json, thiserror, log and their proc-macro crates) are MIT OR Apache-2.0, with `memchr` Unlicense OR MIT, `zmij` MIT and `unicode-ident` (MIT OR Apache-2.0) AND Unicode-3.0. |
 | `cargo deny --locked check licenses sources bans` (cargo-deny 0.20.2, `deny.toml` unchanged) | bans ok, licenses ok, sources ok |
-| New `Cargo.lock` entries | `pcbcraft-geometry`, `solidcore-ops`, `solidcore-step`; no new crates.io package |
+| Packages introduced by the initial kernel qualification | `pcbcraft-geometry`, `solidcore-ops`, `solidcore-step`; no new crates.io package |
 | Dependency closure of `pcbcraft-geometry` | 20 packages |
 | Dependency closure of `pcbcraft-engine` | no `solidcore` crate |
 | Round trip of a synthetic block written by the kernel as AP242 and read back | bounding box within 1 µm, name kept |
@@ -151,10 +152,14 @@ At SolidCraft revision `73bdb6c`:
 | A part used twice, turned a quarter the second time | one body, two placements |
 | Two placed surface models sharing one closed shell, each beside its own open shell | three bodies, four placements: the shell placed by each model, nothing left at the origin |
 | A small mapped-item tree that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
-| An expansion of exactly 1,000,000 steps, and of one more | read; `model_unreadable` |
-| 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 64 placements and 7,870 relationships at exactly 1,000,000 steps, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
+| An expansion at its input-scaled work budget (1,233,000 steps for the synthetic file), and of one more | read; `model_unreadable` |
+| 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 1,024 placements and 1,000 relationships at their 2,211,000-step budget, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
+| Alternating mapped targets and plain relationship companions at 32 and 33 levels; a 2,048-level acyclic route | read; `model_unreadable` from pre-count before dependency expansion; `model_unreadable` |
+| A shared mixed tail cached shallowly then reached deeper; combined occurrence/mapping paths | accepted at combined depth 32; `model_unreadable` at 33 |
+| 1,000 distinct products with the writer's two representations and two relationships per part, sharing one synthetic B-rep | one body in 1,000 placements; a small reader regression, not the body-heavy board measurement |
+| Fixture construction and reader payloads with LF and CRLF endings | the intended records are inserted; identical counts and world boxes |
 | A surface model of 20,000 empty closed shells beside the block, both placed 32,768 times through mapped items | read in under 30 s: one body, 32,768 placements, the model refused |
-| A board of 500 part instances of 16 pins, each part instance its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux) |
+| Original qualification sample: 500 part instances of 16 pins, each part instance its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux); historical measurement, not a timing bound |
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
 the integration tests in `crates/geometry/tests/`.
@@ -192,7 +197,8 @@ tolerance, 1 µm, is stored in the same file.
 builds and reads a board whose part instances are each their own product with a
 package and its own pins: a body-heavy import case with no shared parts. By default it
 builds 2 part instances of 16 pins so a debug test run takes a few seconds. The
-figures above are for the full size:
+figures above are the original Linux debug measurement at the full size, not a
+claim that every read has the same time or memory cost:
 
 ```sh
 PCBCRAFT_STEP_BOARD_PART_INSTANCES=500 PCBCRAFT_STEP_BOARD_PINS=16 \
@@ -223,21 +229,28 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   but is not asked to yet. Names of assembly occurrences and colours are not
   read yet, and the writer writes no colours.
 - **Assembly size.** A STEP file whose assembly places more than 100,000 bodies,
-  takes more than 1,000,000 steps to expand, or nests deeper than 32 levels, is
-  refused as a whole. A step is each part visited, each representation it
+  exceeds its work budget, or nests deeper than 32 combined occurrence/mapping
+  levels, is refused as a whole. The work budget is 1,000,000 steps plus 1,000
+  steps per parsed STEP entity, independent of line endings or repeated item
+  references in one entity. The input allowance admits ordinary flat products
+  while bounding work amplification linearly in the input entity count; the
+  placement limit remains independent. A step is each part visited, each representation it
   reaches, each representation walked and each of its items, and each
   representation relationship in the file once for each mapped item walked and
   once for each representation a part reaches (the expansion scans every
-  relationship then). The reader counts the expansion from the product graph
-  before it expands anything, so a small file that would place a body millions
+  relationship then). All those scans count, including unrelated links; the
+  high placement ceiling does not promise acceptance of every assembly below it.
+  The reader counts the expansion from the product graph and checks the actual
+  mixed-edge depth, including cached tails reached deeper, before it expands anything, so a small file that would place a body millions
   of times through mapped items, or make the expansion scan thousands of
   relationships for each of them, is refused without being expanded. Which
   bodies an item gives (a surface model can give one per closed shell) is
   worked out once for each item, not again at each of its placements. A large
   board exported with one body for each pin can come near the 100,000-body
-  figure. Memory grows with the bodies: the measured board needed about 110 KiB
-  for each placed body (944 MiB for 8,500), so a file near the limit can need
-  around 11 GB.
+  figure. The original measured board needed about 110 KiB for each placed body
+  (944 MiB for 8,500); extrapolating that same construction to 100,000 bodies
+  gives around 11 GB. This is not a measured limit or a scaling law for other
+  files; shared geometry and body complexity change the cost.
 - **Writing assemblies.** `write_step` writes one part. A placed read is written
   as one body per placement, so a part used twice is written twice; writing the
   product structure back is left to STEP assembly export.
