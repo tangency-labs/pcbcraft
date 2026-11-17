@@ -819,8 +819,8 @@ adding members to or changing the existing archive. Its `generator_version`,
 record contains `name`, `size_bytes` and lowercase hexadecimal `sha256` of the
 exact bytes; member sizes refer to uncompressed UTF-8 content, including line
 endings. The archive record names the selected ZIP filename, even after a desktop
-save-dialog rename. The JSON has no wall clock; the same captured outputs and
-archive name give identical JSON. It is an integrity sidecar, not a design or
+save-dialog rename. The JSON has no wall clock; at the same generator version,
+the same capture and archive name give identical JSON. It is an integrity sidecar, not a design or
 release manifest: it does not establish source identity, configuration or DRC/ERC
 freshness and cannot authorize a synchronized release.
 
