@@ -17,7 +17,7 @@ pub struct ThermalConductivityReport {
     /// Conductivity in whole mW/(m·K), 1 to 10,000,000, as a JSON integer-kind token.
     pub conductivity_mw_per_m_k: u32,
     /// Direction measured; absent means unknown, not isotropic.
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_string_enum", skip_serializing_if = "Option::is_none")]
     pub axis: Option<MeasurementAxis>,
     /// Specimen temperature, in the Tg report range, as a JSON integer-kind token.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
@@ -26,6 +26,7 @@ pub struct ThermalConductivityReport {
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     /// Whether the value is typical, a minimum, a maximum or measured.
+    #[serde(deserialize_with = "string_enum")]
     pub basis: ReportBasis,
     /// Where the value comes from; required.
     pub source: Source,
@@ -49,10 +50,10 @@ pub struct CteReport {
     /// Expansion in whole ppb/K, -1,000,000 to 10,000,000, as a JSON integer-kind token.
     pub cte_ppb_per_k: i64,
     /// Direction measured; absent means unknown, not isotropic.
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_string_enum", skip_serializing_if = "Option::is_none")]
     pub axis: Option<MeasurementAxis>,
     /// Side of the glass transition, when the source states it.
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_string_enum", skip_serializing_if = "Option::is_none")]
     pub region: Option<TgRegion>,
     /// Lower end of the averaging range, as a JSON integer-kind token; given with `to_milli_c`.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
@@ -64,9 +65,22 @@ pub struct CteReport {
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     /// Whether the value is typical, a minimum, a maximum or measured.
+    #[serde(deserialize_with = "string_enum")]
     pub basis: ReportBasis,
     /// Where the value comes from; required.
     pub source: Source,
+}
+
+/// Decode the published string representation, not Serde's alternative singleton enum map.
+/// The enum itself remains responsible for its variant names.
+pub(super) fn string_enum<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<T, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    T::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(value))
+}
+
+/// An omitted enum stays unknown; a present value must be a string, never a map or null.
+pub(super) fn present_string_enum<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    string_enum(deserializer).map(Some)
 }
 
 /// Whether a temperature lies in the representable range shared with Tg reports.

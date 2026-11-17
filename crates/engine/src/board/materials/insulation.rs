@@ -1,5 +1,6 @@
 //! Sourced insulation reports for clearance and creepage work; no spacing is derived here.
 
+use super::thermal::{present_string_enum, string_enum};
 use super::{MAX_LENGTH_NM, MeasurementAxis, ReportBasis, Source, optional_text, present};
 use serde::{Deserialize, Serialize};
 
@@ -18,12 +19,13 @@ pub struct DielectricStrengthReport {
     /// Specimen thickness, 1 to 100,000,000 nm, as a JSON integer-kind token.
     pub specimen_thickness_nm: i64,
     /// Direction of the applied field; absent means unknown.
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_string_enum", skip_serializing_if = "Option::is_none")]
     pub axis: Option<MeasurementAxis>,
     /// Test method or standard as written by the source, up to 80 characters.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     /// Whether the value is typical, a minimum, a maximum or measured.
+    #[serde(deserialize_with = "string_enum")]
     pub basis: ReportBasis,
     /// Where the value comes from; required.
     pub source: Source,
@@ -77,12 +79,13 @@ pub struct CtiReport {
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub cti_v: Option<u32>,
     /// Material group; must hold `cti_v` when both are given.
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_string_enum", skip_serializing_if = "Option::is_none")]
     pub material_group: Option<MaterialGroup>,
     /// Test method or standard as written by the source, up to 80 characters.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     /// Whether the value is typical, a minimum, a maximum or measured.
+    #[serde(deserialize_with = "string_enum")]
     pub basis: ReportBasis,
     /// Where the value comes from; required.
     pub source: Source,

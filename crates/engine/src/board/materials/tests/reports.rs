@@ -1,4 +1,5 @@
 //! Thermal conductivity, thermal expansion, dielectric strength and tracking reports.
+mod enum_spellings;
 mod number_spellings;
 
 use super::*;
@@ -292,7 +293,7 @@ fn report_bounds_and_contradictions() {
             vec![
                 (json!("isotropic"), "unknown variant `isotropic`, expected one of `x`, `y`, `z`"),
                 (json!("through-plane"), "unknown variant `through-plane`, expected one of `x`, `y`, `z`"),
-                (Value::Null, "invalid type: null, expected string or map"),
+                (Value::Null, "invalid type: null, expected a string"),
             ],
         ),
         (
@@ -313,7 +314,7 @@ fn report_bounds_and_contradictions() {
         ),
         (
             "/thermal_conductivity/0/basis",
-            vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")],
+            vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected a string")],
         ),
         ("/cte", vec![(Value::Null, "invalid type: null, expected a sequence")]),
         (
@@ -330,21 +331,21 @@ fn report_bounds_and_contradictions() {
             vec![
                 (json!("at_tg"), "unknown variant `at_tg`, expected `below_tg` or `above_tg`"),
                 (json!("below"), "unknown variant `below`, expected `below_tg` or `above_tg`"),
-                (Value::Null, "invalid type: null, expected string or map"),
+                (Value::Null, "invalid type: null, expected a string"),
             ],
         ),
         (
             "/cte/0/axis",
             vec![
                 (json!("isotropic"), "unknown variant `isotropic`, expected one of `x`, `y`, `z`"),
-                (Value::Null, "invalid type: null, expected string or map"),
+                (Value::Null, "invalid type: null, expected a string"),
             ],
         ),
         (
             "/cte/0/method",
             vec![(json!(" "), "thermal expansion test method requires 1 to 80 characters"), (Value::Null, "invalid type: null, expected a string")],
         ),
-        ("/cte/0/basis", vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")]),
+        ("/cte/0/basis", vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected a string")]),
         (
             "/cte/0/from_milli_c",
             vec![
@@ -385,7 +386,7 @@ fn report_bounds_and_contradictions() {
             "/dielectric_strength/0/axis",
             vec![
                 (json!("parallel"), "unknown variant `parallel`, expected one of `x`, `y`, `z`"),
-                (Value::Null, "invalid type: null, expected string or map"),
+                (Value::Null, "invalid type: null, expected a string"),
             ],
         ),
         (
@@ -394,7 +395,7 @@ fn report_bounds_and_contradictions() {
         ),
         (
             "/dielectric_strength/0/basis",
-            vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")],
+            vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected a string")],
         ),
         ("/cti", vec![(Value::Null, "invalid type: null, expected a sequence")]),
         (
@@ -414,14 +415,14 @@ fn report_bounds_and_contradictions() {
                 (json!("iiia"), "unknown variant `iiia`"),
                 (json!("3a"), "unknown variant `3a`"),
                 (json!("IIIb"), "CTI 175 V lies outside the band of material group IIIb"),
-                (Value::Null, "invalid type: null, expected string or map"),
+                (Value::Null, "invalid type: null, expected a string"),
             ],
         ),
         (
             "/cti/0/method",
             vec![(json!(""), "tracking test method requires 1 to 80 characters"), (Value::Null, "invalid type: null, expected a string")],
         ),
-        ("/cti/0/basis", vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")]),
+        ("/cti/0/basis", vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected a string")]),
     ];
     for (path, values) in refused {
         for (value, reason) in values {
