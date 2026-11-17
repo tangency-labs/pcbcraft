@@ -27,6 +27,14 @@ Taking the crates from the mirror would put a second copy of the kernel in the
 build with types that do not match, and would need another `allow-git` entry in
 `deny.toml`.
 
+The workspace applies a narrow local `solidcore-ops` backport for STEP transform
+composition, described in [its patch record](../vendor/solidcore-ops/PATCH.md).
+The three matrix products follow the already-merged upstream correction while
+the remaining kernel and toolkit sources stay at the qualified revision. Only
+geometry's dependency closure uses this ops layer; it introduces no UI change or second
+kernel copy. The non-conformant transformation-item detection from the upstream
+PR is outside this backport.
+
 The pin moves only with the workspace's SolidCraft revision. A bump is its own
 change that re-runs the qualification below and lists the kernel changes since
 the previous pin. When the kernel crates are published on crates.io, they move
@@ -149,9 +157,11 @@ or a browser runtime.
 | Non-positive sizes, coordinates out of range, names with control characters, nothing to write | `invalid_params` |
 | A transform that flattens, an axis that is not finite, a move out of range | `invalid_params` |
 | A file placing a part exactly 1 km out, and 1 nm further | read; `model_unreadable` |
-| Ten synthetic STEP fixtures, read, written as one part of placed bodies and read again | every bounding box within 1 µm of the box worked out from the generator's dimensions |
+| Thirteen synthetic STEP fixtures, read, written as one part of placed bodies and read again | every bounding box within 1 µm of the box worked out from the generator's dimensions |
 | Inch and metre units | converted to nanometres within 1 µm |
 | A part used twice, turned a quarter the second time | one body, two placements |
+| A translated child under a quarter-turned parent; mapped descendants under a rotated/translated parent | child-local transforms apply before inherited world transforms; placement matrices and placed-body boxes match analytic expectations |
+| A mapped solid with origin at x=5 mm and a quarter-turned target | the map origin lands at target zero; its inverse applies before the target and the world box matches the independent fixture oracle |
 | Two placed surface models sharing one closed shell, each beside its own open shell | three bodies, four placements: the shell placed by each model, nothing left at the origin |
 | A small mapped-item tree that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | An expansion at its input-scaled work budget (1,233,000 steps for the synthetic file), and of one more | read; `model_unreadable` |
@@ -167,10 +177,12 @@ or a browser runtime.
 
 The automated checks are the unit tests in `crates/geometry/src/` and
 the integration tests in `crates/geometry/tests/`.
+The [placement-order review evidence](../tools/performance/baselines/issue387-review/README.md)
+retains the three before-fix failures, dependency/source audit and bounded board smoke.
 
 ### STEP fixtures
 
-`crates/geometry/tests/fixtures/step` holds the qualification set, about 90 KB
+`crates/geometry/tests/fixtures/step` holds the qualification set, 113,540 bytes including `expected.json`
 of STEP text written by `scripts/generate-step-fixtures.py` from the geometry and
 topology structures of ISO 10303-42 and the product and assembly structures of
 ISO 10303-41, -43 and -44, with no CAD system involved. Running the script again
@@ -184,6 +196,9 @@ gives the same files.
 | `hole_plate.step` | A 1.6 mm plate with four 3.2 mm holes and one 10 mm hole |
 | `assembly.step` | A board and a part, each its own product, placed by an assembly |
 | `assembly_shared_part_turned.step` | One part placed twice, the second time turned a quarter about z |
+| `assembly_nested_rotated.step` | A translated child inside a quarter-turned parent |
+| `mapped_offset_origin.step` | A non-zero representation-map origin placed at a rotated target |
+| `assembly_mapped_rotated.step` | A mapped translation inside a rotated and translated parent |
 | `box_inch.step` | A block in inches |
 | `assembly_inch.step` | The board-and-part assembly in inches |
 | `y_up.step` | A board placed with its thickness along y, as y-up systems write it (AP242) |

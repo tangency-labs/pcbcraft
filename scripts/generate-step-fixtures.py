@@ -256,7 +256,8 @@ class StepFile:
 
     def assembly(self, name, uses):
         """An assembly placing parts: each use is (part, name, origin, z axis, x axis), the part
-        as `part` returns it, the frame in the assembly's coordinates."""
+        as `part` returns it, the frame in the assembly's coordinates. Returns the same
+        (definition, representation, origin) triple so assemblies can be nested."""
         w = self.w
         definition, shape = self.product(name)
         origin = w.axis((0.0, 0.0, 0.0))
@@ -272,7 +273,23 @@ class StepFile:
             usage = w.add(f"NEXT_ASSEMBLY_USAGE_OCCURRENCE('{n}','{use_name}','',#{definition},#{child},$)")
             usage_shape = w.add(f"PRODUCT_DEFINITION_SHAPE('','',#{usage})")
             w.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{relation},#{usage_shape})")
-        return definition
+        return definition, rep, origin
+
+    def mapped_part(self, name, solids, map_origin, target_origin, target_z=Z, target_x=X):
+        """One part whose solids are used through a representation map. Map-origin removal
+        precedes the target frame; the returned part can itself be an assembly child."""
+        w = self.w
+        source_origin = w.axis(map_origin)
+        source = w.add(f"ADVANCED_BREP_SHAPE_REPRESENTATION('{name}_source',{w.refs(solids + [source_origin])},#{self.context})")
+        mapping = w.add(f"REPRESENTATION_MAP(#{source_origin},#{source})")
+        x, y, z = (w.direction(v) for v in (target_x, cross(target_z, target_x), target_z))
+        target = w.add(f"CARTESIAN_TRANSFORMATION_OPERATOR_3D('','',#{x},#{y},#{w.point(target_origin)},1.,#{z})")
+        item = w.add(f"MAPPED_ITEM('',#{mapping},#{target})")
+        definition, shape = self.product(name)
+        origin = w.axis((0.0, 0.0, 0.0))
+        rep = w.add(f"SHAPE_REPRESENTATION('{name}',{w.refs([origin, item])},#{self.context})")
+        w.add(f"SHAPE_DEFINITION_REPRESENTATION(#{shape},#{rep})")
+        return definition, rep, origin
 
     def text(self, file_name):
         schema = SCHEMAS[self.schema][0]
@@ -342,6 +359,26 @@ def fixtures():
     f.assembly("pair", [(part, "first", *first), (part, "turned", *turned)])
     box = union(placed(lo, hi, *first), placed(lo, hi, *turned))
     out.append(("assembly_shared_part_turned.step", f, 1, 2, box, "mm"))
+
+    f = StepFile("ap214", "mm")
+    lo, hi = (0.0, 0.0, 0.0), (2.0, 3.0, 4.0)
+    part = f.part("nested_part", [block(f.w, "nested_part", lo, hi)], linked=True)
+    child = f.assembly("child", [(part, "translated_part", (10.0, 0.0, 0.0), Z, X)])
+    f.assembly("parent", [(child, "rotated_child", (0.0, 0.0, 0.0), Z, Y)])
+    # Translate in the child's x, then turn the parent: x=10 becomes world y=10.
+    out.append(("assembly_nested_rotated.step", f, 1, 1, ((-3.0, 10.0, 0.0), (0.0, 12.0, 4.0)), "mm"))
+
+    f = StepFile("ap214", "mm")
+    lo, hi = (5.0, 0.0, 0.0), (7.0, 3.0, 4.0)
+    f.mapped_part("offset_map", [block(f.w, "offset_map", lo, hi)], (5.0, 0.0, 0.0), (0.0, 0.0, 0.0), Z, Y)
+    # Subtract map x=5 before the quarter turn: the map origin lands at world zero.
+    out.append(("mapped_offset_origin.step", f, 1, 1, ((-3.0, 0.0, 0.0), (0.0, 2.0, 4.0)), "mm"))
+
+    f = StepFile("ap214", "mm")
+    lo, hi = (0.0, 0.0, 0.0), (2.0, 3.0, 4.0)
+    part = f.mapped_part("mapped_child", [block(f.w, "mapped_child", lo, hi)], (0.0, 0.0, 0.0), (10.0, 0.0, 0.0))
+    f.assembly("parent", [(part, "rotated_map", (20.0, 30.0, 5.0), Z, Y)])
+    out.append(("assembly_mapped_rotated.step", f, 1, 1, ((17.0, 40.0, 5.0), (20.0, 42.0, 9.0)), "mm"))
 
     f = StepFile("ap214", "inch")
     lo, hi = (0.5, 0.25, 0.0), (2.5, 1.25, 0.0625)

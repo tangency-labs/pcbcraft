@@ -11,7 +11,7 @@ use std::path::Path;
 use pcbcraft_geometry::{BoundingBox, read_step, write_step};
 use serde_json::Value;
 
-const FIXTURE_COUNT: usize = 10;
+const FIXTURE_COUNT: usize = 13;
 
 /// Appends synthetic data records before the single data-section footer, regardless of checkout
 /// line endings. A missing or repeated footer is a broken fixture, not a successful mutation.
@@ -588,4 +588,42 @@ fn a_thousand_distinct_products_with_writer_style_links_read() {
         read.bodies[0].bounding_box().unwrap(),
         BoundingBox { min_nm: [-5_000_000, 2_500_000, 0], max_nm: [25_000_000, 22_500_000, 10_000_000] }
     );
+}
+
+/// A child-local x translation is rotated by its parent, and both the placed solid and its
+/// world box use that order. This fixture has only one solid, so no other body hides the error.
+#[test]
+fn composition_nested_occurrence_rotates_child_translation() {
+    let read = read_step(include_bytes!("fixtures/step/assembly_nested_rotated.step")).unwrap();
+    assert_eq!((read.bodies.len(), read.placements.len()), (1, 1));
+    assert_eq!(read.placements[0].transform.translation_nm, [0, 10_000_000, 0]);
+    let expected = BoundingBox { min_nm: [-3_000_000, 10_000_000, 0], max_nm: [0, 12_000_000, 4_000_000] };
+    assert!(read.bounding_box().unwrap().unwrap().max_deviation_nm(&expected) <= 1000);
+    assert!(read.placed_bodies().unwrap()[0].bounding_box().unwrap().max_deviation_nm(&expected) <= 1000);
+}
+
+/// The nonzero map origin is removed before target rotation; its original point maps to zero,
+/// and world bounds match the separately authored analytic box.
+#[test]
+fn composition_mapping_removes_origin_before_target_rotation() {
+    let read = read_step(include_bytes!("fixtures/step/mapped_offset_origin.step")).unwrap();
+    assert_eq!((read.bodies.len(), read.placements.len()), (1, 1));
+    let transform = &read.placements[0].transform;
+    for axis in 0..3 {
+        let origin = transform.translation_nm[axis] as f64 + transform.axes[0][axis] * 5_000_000.;
+        assert!(origin.abs() < 1., "mapped origin axis {axis}: {origin}");
+    }
+    let expected = BoundingBox { min_nm: [-3_000_000, 0, 0], max_nm: [0, 2_000_000, 4_000_000] };
+    assert!(read.bounding_box().unwrap().unwrap().max_deviation_nm(&expected) <= 1000);
+}
+
+/// Mapped descendants compose local placement before a nonidentity parent just as ordinary
+/// child occurrences do; this exercises the traversal's separate mapped-item branch.
+#[test]
+fn composition_nested_map_rotates_target_translation() {
+    let read = read_step(include_bytes!("fixtures/step/assembly_mapped_rotated.step")).unwrap();
+    assert_eq!((read.bodies.len(), read.placements.len()), (1, 1));
+    assert_eq!(read.placements[0].transform.translation_nm, [20_000_000, 40_000_000, 5_000_000]);
+    let expected = BoundingBox { min_nm: [17_000_000, 40_000_000, 5_000_000], max_nm: [20_000_000, 42_000_000, 9_000_000] };
+    assert!(read.bounding_box().unwrap().unwrap().max_deviation_nm(&expected) <= 1000);
 }
