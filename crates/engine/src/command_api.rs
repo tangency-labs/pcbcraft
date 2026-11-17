@@ -498,13 +498,11 @@ pub const SNAPSHOT_SECTIONS: &[&str] = &["commands", "window_commands"];
 ///
 /// The list of problems when `head`'s `command_api_version` is not a whole number of at least 1,
 /// when it is below `base`'s, or when any section has a breaking difference (a command removed
-/// included) while it equals `base`'s. A `base` without a valid version is compared as version 1.
+/// included) while it equals `base`'s. Both snapshots must have a version in `1..=u32::MAX`,
+/// both command sections as objects, and each contract as an object with a parameter schema.
 pub fn compare_snapshots(base: &Value, head: &Value) -> Result<Vec<String>, Vec<String>> {
-    let base_api = base["command_api_version"].as_u64().filter(|version| *version >= 1).unwrap_or(1);
-    let Some(head_api) = head["command_api_version"].as_u64().filter(|version| *version >= 1) else {
-        let found = shown(head.get("command_api_version"));
-        return Err(vec![format!("the new snapshot's command_api_version is {found}, not a whole number of at least 1")]);
-    };
+    let base_api = validate_snapshot(base, "base").map_err(|problem| vec![problem])?;
+    let head_api = validate_snapshot(head, "new").map_err(|problem| vec![problem])?;
     if head_api < base_api {
         return Err(vec![format!("command_api_version fell from {base_api} to {head_api}; it never falls")]);
     }
@@ -528,6 +526,27 @@ pub fn compare_snapshots(base: &Value, head: &Value) -> Result<Vec<String>, Vec<
         return Err(problems);
     }
     Ok(changes.iter().map(ToString::to_string).collect())
+}
+
+/// Validate the version and section shapes before comparing snapshots, so malformed input cannot
+/// silently look like an empty catalog. Returns the version, or the label and offending field.
+fn validate_snapshot(snapshot: &Value, label: &str) -> Result<u32, String> {
+    let version =
+        snapshot["command_api_version"].as_u64().and_then(|value| u32::try_from(value).ok()).filter(|value| *value >= 1).ok_or_else(|| {
+            format!(
+                "the {label} snapshot's command_api_version is {}, not a whole number in 1..=u32::MAX",
+                shown(snapshot.get("command_api_version"))
+            )
+        })?;
+    for section in SNAPSHOT_SECTIONS {
+        let commands = snapshot[*section].as_object().ok_or_else(|| format!("the {label} snapshot's {section} must be an object"))?;
+        for (id, contract) in commands {
+            if !contract.is_object() || !matches!(contract.get("params"), Some(Value::Object(_) | Value::Bool(_))) {
+                return Err(format!("the {label} snapshot's {section}.{id} must be a contract object with a parameter schema"));
+            }
+        }
+    }
+    Ok(version)
 }
 
 /// The snapshot section for `described` commands: one line per command, sorted by id, mapping

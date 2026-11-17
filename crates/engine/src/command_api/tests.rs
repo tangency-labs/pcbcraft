@@ -620,6 +620,59 @@ fn snapshots_compare_against_the_base() {
     }
 }
 
+/// Both inputs must be usable snapshots: malformed versions, sections and contracts are refused
+/// with their field named, rather than compared as empty catalogs.
+#[test]
+fn snapshot_comparison_refuses_malformed_inputs() {
+    let valid = json!({"command_api_version": 1, "commands": {}, "window_commands": {}});
+    for version in [Value::Null, json!(0), json!(-1), json!(1.0), json!("1"), json!(u64::from(u32::MAX) + 1)] {
+        let mut bad = valid.clone();
+        bad["command_api_version"] = version;
+        for (base, head, label) in [(&bad, &valid, "base"), (&valid, &bad, "new")] {
+            assert!(compare_snapshots(base, head).unwrap_err()[0].starts_with(&format!("the {label} snapshot's command_api_version")));
+        }
+    }
+    let largest = json!({"command_api_version": u32::MAX, "commands": {}, "window_commands": {}});
+    assert_eq!(compare_snapshots(&largest, &largest), Ok(vec![]));
+    for section in SNAPSHOT_SECTIONS {
+        for value in [Value::Null, json!([]), json!(false), json!(1)] {
+            let mut bad = valid.clone();
+            bad[*section] = value;
+            for (base, head, label) in [(&bad, &valid, "base"), (&valid, &bad, "new")] {
+                assert_eq!(compare_snapshots(base, head), Err(vec![format!("the {label} snapshot's {section} must be an object")]));
+            }
+        }
+        for contract in [Value::Null, json!({}), json!({"params": null}), json!({"params": []})] {
+            let mut bad = valid.clone();
+            bad[*section] = json!({"a.x": contract});
+            assert_eq!(
+                compare_snapshots(&valid, &bad),
+                Err(vec![format!("the new snapshot's {section}.a.x must be a contract object with a parameter schema")])
+            );
+        }
+    }
+}
+
+/// Refreshing the snapshot in the same commit hides a tightened real command schema from the
+/// catalog test, but comparison with the prior snapshot still refuses it until the API rises.
+#[test]
+fn rewriting_the_snapshot_cannot_hide_a_breaking_change_from_the_base() {
+    let original = crate::command(crate::SET_SYMBOL_FIELDS).unwrap().to_json();
+    let mut changed = original.clone();
+    changed["params"]["required"].as_array_mut().unwrap().push(json!("new_required_parameter"));
+    let mut base = snapshot_of(&[original], 1);
+    let mut rewritten = snapshot_of(std::slice::from_ref(&changed), 1);
+    base["window_commands"] = json!({});
+    rewritten["window_commands"] = json!({});
+    assert_eq!(check_snapshot(&rewritten, "commands", std::slice::from_ref(&changed), 1), Ok(()));
+    let problems = compare_snapshots(&base, &rewritten).unwrap_err();
+    assert!(problems[0].contains("params.required: now requires `new_required_parameter`"), "{problems:?}");
+    assert!(problems[1].contains("raise COMMAND_API_VERSION above 1"), "{problems:?}");
+    rewritten["command_api_version"] = json!(2);
+    let accepted = compare_snapshots(&base, &rewritten).unwrap();
+    assert_eq!(accepted, vec![problems[0].clone()]);
+}
+
 /// The committed snapshot compared with itself passes: what the CI step checks on an unchanged
 /// snapshot.
 #[test]

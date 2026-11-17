@@ -252,7 +252,7 @@ same explicit decision with no failing test to prompt it; and they cannot tell
 whether a new default keeps the old behaviour. They also compare the code with
 the snapshot in the same commit, so a breaking change committed together with
 a rewritten snapshot passes them. For that case, CI on a pull request also
-compares the target branch's `command-contracts.json` with the pull request's,
+compares the merge base's `command-contracts.json` with the pull request's,
 with the same classifier (the `command_contracts_against_base` example of
 `pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
 command_contracts_against_base -- BASE.json HEAD.json`): it fails when a

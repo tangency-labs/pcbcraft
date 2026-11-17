@@ -56,6 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -67,11 +68,14 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          if git cat-file -e "$BASE_SHA:docs/schemas/command-contracts.json" 2>/dev/null; then
-            git show "$BASE_SHA:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
+          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          if git cat-file -e "$base:docs/schemas/command-contracts.json" 2>/dev/null; then
+            git show "$base:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
             cargo run --locked -q -p pcbcraft-engine --example command_contracts_against_base -- "$RUNNER_TEMP/base-command-contracts.json" docs/schemas/command-contracts.json
+          else
+            echo "No command contract snapshot at the merge base; checking the first snapshot against the catalog in workspace tests."
           fi
       - name: Check opt-in performance harness
         run: |
