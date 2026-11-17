@@ -61,7 +61,7 @@ pub struct Layer {
 }
 
 /// How a copper layer is used: routed signals, a plane, or both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CopperRole {
     Signal,
@@ -69,12 +69,35 @@ pub enum CopperRole {
     Mixed,
 }
 
+impl<'de> Deserialize<'de> for CopperRole {
+    /// Accept only the published string variants, not externally tagged maps.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "signal" => Ok(Self::Signal),
+            "plane" => Ok(Self::Plane),
+            "mixed" => Ok(Self::Mixed),
+            value => Err(serde::de::Error::unknown_variant(value, &["signal", "plane", "mixed"])),
+        }
+    }
+}
+
 /// Whether a specified thickness is the expected value or a guaranteed lower bound.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThicknessBasis {
     Nominal,
     Minimum,
+}
+
+impl<'de> Deserialize<'de> for ThicknessBasis {
+    /// Accept only the published string variants, not externally tagged maps.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "nominal" => Ok(Self::Nominal),
+            "minimum" => Ok(Self::Minimum),
+            value => Err(serde::de::Error::unknown_variant(value, &["nominal", "minimum"])),
+        }
+    }
 }
 
 /// Copper foil as ordered, before plating and processing. Either value may be known alone;

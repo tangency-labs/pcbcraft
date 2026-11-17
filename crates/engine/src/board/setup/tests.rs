@@ -4,6 +4,7 @@ use super::*;
 use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, persistence};
 use std::sync::Arc;
 
+mod enums;
 mod integers;
 
 /// The reader's reason for refusing the stack fields under any header but 23.
