@@ -671,8 +671,51 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
     for older in ["pcbcraft-board/3", "pcbcraft-board/5"] {
         refused_because(&with_header(&documents, "pcbcraft-board/23", older), STACK_REFUSAL);
     }
-    refused_because(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20"), "unsupported board format");
+    // Header 20 requires zones; a zone-bearing fixture below tests its stack-field refusal.
+    refused_because(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20"), "format 20 requires zones");
     refused_because(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23"), STACK_REFUSAL);
+}
+
+/// Zone outlines survive stack fields with or without an origin; clearing the stack fields
+/// restores the zone/origin format and byte-identical Undo/Redo snapshots.
+#[test]
+fn board_format_23_carries_zone_outlines() {
+    for with_origin in [false, true] {
+        let mut s = session(2);
+        apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+        let layer = s.project().unwrap().board_setup().unwrap().copper_stack().next().unwrap().layer;
+        let nets = s.project().unwrap().inspect_net_registry().unwrap();
+        apply(
+            &mut s,
+            crate::board::zones::ADD_ZONE,
+            json!({
+                "layer":layer,
+                "points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},{"x_nm":10_000_000,"y_nm":10_000_000},{"x_nm":0,"y_nm":10_000_000}],
+                "target":{"kind":"derived","anchor":nets["nets"][0]["anchor"]}
+            }),
+        );
+        if with_origin {
+            apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"origin":{"kind":"board_zero"}}));
+        }
+        let earlier_format = if with_origin { "pcbcraft-board/21" } else { "pcbcraft-board/20" };
+        let original = saved_board(&s, earlier_format);
+        let plain = setup(&s);
+        let mut candidate = plain.clone();
+        candidate["stackup"]["strata"][0]["role"] = json!("signal");
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+        let stacked = saved_board(&s, "pcbcraft-board/23");
+        refused_because(&with_header(&stacked, "pcbcraft-board/23", earlier_format), STACK_REFUSAL);
+        let path = persistence::test_board_path(&stacked);
+        let document: Value = serde_json::from_slice(&stacked[&path]).unwrap();
+        assert_eq!(document["zones"].as_array().unwrap().len(), 1);
+        assert_eq!(document.get("placement_origin").is_some(), with_origin);
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":plain}));
+        assert_eq!(saved_board(&s, earlier_format), original);
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(saved_board(&s, "pcbcraft-board/23"), stacked);
+        s.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(saved_board(&s, earlier_format), original);
+    }
 }
 
 /// Without a declared minimum, checks use the nominal finished thickness and say so.

@@ -199,7 +199,7 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
 /// Format 23 carries the stack fields together with a placement origin: a board with an origin,
 /// a copper role and a finished thickness saves as format 23, reopens with every value and
 /// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
-/// fields (header 20 is no board format; the setup tests show it refused). Removing the origin
+/// fields (header 20 requires zones, covered separately by the setup tests). Removing the origin
 /// keeps format 23; removing the stack fields instead falls back to format 21.
 #[test]
 fn stack_format_carries_the_placement_origin() {

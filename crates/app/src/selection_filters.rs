@@ -20,11 +20,23 @@ pub(super) struct Filters {
     pub tracks: bool,
     pub vias: bool,
     pub graphics: bool,
+    pub zones: bool,
 }
 
 impl Default for Filters {
     fn default() -> Self {
-        Self { symbols: true, wires: true, sheets: true, labels: true, no_connects: true, footprints: true, tracks: true, vias: true, graphics: true }
+        Self {
+            symbols: true,
+            wires: true,
+            sheets: true,
+            labels: true,
+            no_connects: true,
+            footprints: true,
+            tracks: true,
+            vias: true,
+            zones: true,
+            graphics: true,
+        }
     }
 }
 
@@ -81,7 +93,7 @@ impl Filters {
                 planned("pads", "Pads"),
                 row("tracks", "Tracks", self.tracks),
                 row("vias", "Vias", self.vias),
-                planned("zones", "Zones"),
+                row("zones", "Zones", self.zones),
                 planned("text", "Text"),
                 row("graphics", "Graphics", self.graphics),
                 planned("dimensions", "Dimensions"),
@@ -106,6 +118,7 @@ impl PcbApp {
                 (Workspace::Board, "footprints") => &mut next.footprints,
                 (Workspace::Board, "tracks") => &mut next.tracks,
                 (Workspace::Board, "vias") => &mut next.vias,
+                (Workspace::Board, "zones") => &mut next.zones,
                 (Workspace::Board, "graphics") => &mut next.graphics,
                 (_, "view" | "collapsed" | "open") => continue,
                 _ => return Err(format!("Selection filter `{key}` is unavailable in this workspace")),
@@ -140,6 +153,9 @@ impl PcbApp {
                     .map(|board| board.vias().iter().map(|via| via.id).collect())
                     .unwrap_or_default();
                 view.board.tracks.selected.retain(|id| if vias.contains(id) { next.vias } else { next.tracks });
+            }
+            if !next.zones {
+                view.board.zones.select(None);
             }
             if !next.graphics {
                 view.board.drawing.select(None);

@@ -2825,6 +2825,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcbcraft-geometry"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "pcbcraft-units",
+ "solidcore-ops",
+ "solidcore-step",
+]
+
+[[package]]
 name = "pcbcraft-mcp"
 version = "0.1.0"
 dependencies = [
@@ -3862,6 +3872,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcore-ops"
+version = "0.1.0"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
+dependencies = [
+ "solidcore",
+ "solidcore-convert",
+ "solidcore-record",
+]
+
+[[package]]
 name = "solidcore-record"
 version = "0.1.0"
 source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
@@ -3869,6 +3889,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "solidcore-step"
+version = "0.1.0"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
+dependencies = [
+ "solidcore",
+ "solidcore-convert",
+ "solidcore-ops",
+ "solidcore-record",
 ]
 
 [[package]]

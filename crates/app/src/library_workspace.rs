@@ -117,10 +117,18 @@ impl PcbApp {
     pub(super) fn library_workspace_frame(&mut self, ui: &mut egui::Ui, integrated: bool) {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let ctx = ui.ctx().clone();
+        let main = self.views.host == self.views.main;
+        // Assistant focus only withholds editing keys, so Ctrl+, below stays available.
+        #[cfg(not(target_arch = "wasm32"))]
+        if main {
+            self.assistant_shortcuts(&ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = main;
         let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
         let home = std::cell::Cell::new(false);
-        let mut preferences = false;
-        let mut help = None;
+        let mut picked = crate::Utilities::default();
+        let assistant = self.assistant_toolbar();
         shell::app_bar(
             ui,
             Some(("Parts Library", false)),
@@ -137,19 +145,14 @@ impl PcbApp {
                 });
             },
             |_| {},
-            |ui, _| {
-                help = menu::help(ui, crate::help_menu).flatten();
-                preferences = menu::quick_action(ui, menu::MenuIcon::Settings, "Preferences", "", true).clicked();
-            },
+            |ui, width| picked = crate::utilities(ui, width, assistant),
         );
         if home.get() {
             self.show_home();
         }
-        if preferences {
+        self.apply_utilities(&ctx, picked);
+        if enabled && !ctx.egui_wants_keyboard_input() && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
             self.open_preferences();
-        }
-        if let Some(help) = help {
-            self.help_action(&ctx, help);
         }
         ui.add_enabled_ui(enabled, |ui| {
             self.library_workspace_ribbon(ui);
@@ -172,6 +175,12 @@ impl PcbApp {
             }
             let area = ui.available_rect_before_wrap();
             self.editor_workspace(ui, area);
+            #[cfg(not(target_arch = "wasm32"))]
+            if main {
+                // An open part document gives the Assistant a document without a project.
+                let part = self.views.active.library.as_ref().is_some_and(|state| state.part_document.is_some());
+                self.host_assistant(&ctx, Some(area), enabled, part || self.session.project().is_some());
+            }
         });
         let dialog_host = self.arrangement_dialog_host().or_else(|| self.rule_dialog_host()).unwrap_or(self.views.main);
         if self.views.host == dialog_host {

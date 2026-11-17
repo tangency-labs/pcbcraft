@@ -69,6 +69,9 @@ browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, schematic grid outside paper, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
+Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
+same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
+bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).
 The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
 **Off**, **Dots** or **Lines** for all PCB views and windows. This choice is remembered
 between sessions and leaves snapping unchanged. **Grid opacity** fades visible grids
@@ -723,7 +726,9 @@ stroke. Esc cancels unfinished geometry before exiting the tool.
 On copper, these tools create conductive linework: a rectangle outline becomes
 four connected segments. It participates in connectivity, short checks, DRC and
 fabrication and uses the ordinary copper selection/editing tools. Filled copper
-zones remain a planned Route subtool. Non-copper shapes remain independent
+zones use **Layout → Route → Zone** to draw
+[editable zone outlines](copper-zone-outlines.md), with fill and refill remaining
+separate follow-ups. Non-copper shapes remain independent
 editable graphics: select a line, drag a vertex or segment, use M to move it, or
 Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
 fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics
