@@ -713,7 +713,8 @@ fn board_format_23_carries_zone_outlines() {
             }),
         );
         if with_origin {
-            apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"origin":{"kind":"board_zero"}}));
+            let board = s.project().unwrap().board_target().unwrap().board;
+            apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"board":board,"origin":{"kind":"board_zero"}}));
         }
         let earlier_format = if with_origin { "pcbcraft-board/21" } else { "pcbcraft-board/20" };
         let original = saved_board(&s, earlier_format);
