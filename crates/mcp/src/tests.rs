@@ -467,6 +467,10 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
 /// Empty boards also expose a compatibility layer derived from their distinct board IDs.
 /// Check each occurrence's sheet/use references before normalizing its independently allocated IDs.
 fn without_sheet_identity(mut state: Value) -> Value {
+    if let Some(project) = state["project"].as_object_mut() {
+        assert_eq!(project["id"].as_str().unwrap().len(), 36);
+        project.insert("id".into(), json!("<independent-project>"));
+    }
     if let Some(registry) = state["project"].get_mut("net_registry") {
         let scope = registry["scope"].clone();
         let records = registry["records"].as_array_mut().unwrap();
@@ -780,7 +784,6 @@ fn resolve_counterparts_preserves_legacy_cross_probe_and_returns_complete_sets()
     let project = setup.project().unwrap();
     let component = project.components().next().unwrap().id();
     let terminal = project.symbols()[0].terminals()[0].inspect();
-    let project_id = project.id();
     let sheet = project.sheet_target().id();
     let package = setup.project().unwrap().footprint_catalog().into_iter().find(|package| package.id == "sot23").unwrap();
     setup
@@ -798,6 +801,8 @@ fn resolve_counterparts_preserves_legacy_cross_probe_and_returns_complete_sets()
         .unwrap();
     let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
     let before = body(&call(&mut server, "inspect_project", json!({})));
+    let project_id = before["project"]["id"].clone();
+    assert!(project_id.as_str().is_some(), "qualified query inputs must be discoverable through inspection");
     let source = json!({"kind":"terminal","project":project_id,"sheet":sheet,"symbol":terminal["symbol"],"terminal":terminal["terminal"]});
     let params = json!({"source":source,"expected_revision":before["revision"]});
     let response = call(&mut server, "resolve_counterparts", params.clone());

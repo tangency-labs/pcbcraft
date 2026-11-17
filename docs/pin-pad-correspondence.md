@@ -28,7 +28,8 @@ bounded by the existing project, symbol-unit and footprint-pad limits.
 ## MCP
 
 The read-only `resolve_counterparts` tool is shared by headless and live dispatch.
-Pass `expected_revision` from `inspect_project` and one qualified `source`:
+Pass `expected_revision` from `inspect_project.revision`, the project UUID from
+`inspect_project.project.id`, and one qualified `source`:
 
 ```json
 {
