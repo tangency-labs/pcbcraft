@@ -8,7 +8,7 @@
   "packaged-browser.json": "30908a01a25df707d40201b107a41fefb7dd8536eb64141afc44699eba3e8bdf",
   "README.md": "2d1293e7e0c0165786dd3f9956920e982bfa1e5433cfd1b5d97de56a660d0069",
   "fixture/project.json": "6d0daeb14a73a25f80945fafdd79024d3dc747c9186240a18d7e7579ed4672cc",
-  "pour-controls/README.md": "91b28b3a9e17e78de750b6060927abbe3ec4514b85c86ad7279313e66fe9444c",
+  "pour-controls/README.md": "fc7f078a0a27ac76b6e72aee0725668b5473093e8257854694706a3fafcd3166",
   "pour-controls/after-pre-repaint-fix-sources.json": "062bf0d64d052455d1c2b7c7559a2a038810f2d9129081d939b5ee6a53a5deea",
   "pour-controls/after.json": "0efd25cf7831f942571f5f48984f42aba4e68271c19b6e0a75b604a514161ee7",
   "pour-controls/before.json": "66cd63956eaa66ab1c97da11ccebf7fdc5b68a7bc465dbf0ccefc321b461d402",
@@ -21,5 +21,6 @@
   "fixture/library/footprints/basic-components/capacitor-0603.r4.json": "a0c0aefd0018090a435fb43ff18c8102e340fe3f395642cf7720245e27c1b856",
   "fixture/library/footprints/basic-components/led-0402.r4.json": "1878d04a151c348e5d6525de1227457d5176bcb52e332957b46f3835723a700c",
   "fixture/boards/board-fc2ca1ffe608/board.json": "25dd8b3490326f892f27ad3ebec9eaccb1869ec790295eab62b64dcf4ebb7e35",
-  "fixture/boards/board-fc2ca1ffe608/instances.json": "d44cc579236b2769ac99f4b9d8270626ba42c89d2bc2eea8aefb369a290ea795"
+  "fixture/boards/board-fc2ca1ffe608/instances.json": "d44cc579236b2769ac99f4b9d8270626ba42c89d2bc2eea8aefb369a290ea795",
+  "pour-controls/latest-main-browser.json": "c96267159a684532652ca291b2a6a1d60462d536799c4f2e8ac8e87adb7a4ce5"
 }

@@ -42,3 +42,24 @@ After that rebase, the full workspace suite passed 2,172 tests (12 ignored),
 with workspace all-target Clippy, native/browser builds and the same actual
 browser remove/repour pixel oracle passing. No new timing replay was added;
 the earlier timing sample retains its stated source and measurement limits.
+
+Main advanced again during verification, and GitHub still reported a conflict.
+The second rebase uses 1128e3e, retaining recovery observers and whole-library
+export. The conflict was confined to capability documentation. A focused
+regression checks that both shared command entry points leave pour/remove out
+of recovery edit notifications, preserve native bytes/revision, and still
+report a subsequent authored edit. The earlier full workspace and browser
+results above describe the first rebase; the second rebase is checked with
+affected engine/storage/app suites and current native/browser builds, without
+another timing replay.
+
+On that second base, 797 engine tests, 82 storage tests (one ignored) and
+1,057 app tests (ten ignored) passed, along with workspace all-target Clippy
+and the native build. Browser packaging initially refused an inherited
+NO_COLOR=1 setting before compilation; the corrected invocation removes it.
+The corrected offline package also exposes the cached wasm-bindgen 0.2.130
+and wasm-opt version 123 tools on PATH. Packaging then passed, and the
+[second-base browser oracle](latest-main-browser.json) passed actual menu
+remove/repour pixel assertions, two successful worker completions and zero page
+errors. The failed environment/tool-discovery invocations remain in the local
+verification record; they were not Rust compilation or application failures.

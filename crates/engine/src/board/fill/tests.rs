@@ -439,3 +439,34 @@ fn current_part_group_records_survive_pour_remove_and_worker_transport() {
     assert_eq!(reopened.part_groups(), s.project().unwrap().part_groups());
     assert_eq!(crate::persistence::encode_documents(reopened).unwrap(), native);
 }
+
+/// Recovery observers record authored edits, while shared pour/remove commands only change
+/// derived authority. Both command entry points leave the journal baseline and revision intact.
+#[test]
+fn derived_pour_commands_do_not_report_recoverable_edits() {
+    #[derive(Debug, Default)]
+    struct Log(std::sync::Mutex<Vec<String>>);
+    impl crate::edits::EditObserver for Log {
+        /// A snapshot notification is separate from the command log checked here.
+        fn opened(&self, _project: Arc<crate::Project>) {}
+
+        /// Retain command identities so an unexpected derived edit cannot hide behind a count.
+        fn committed(&self, edit: crate::edits::CommittedEdit) {
+            self.0.lock().unwrap().push(edit.command);
+        }
+    }
+    let mut s = fixture(Connection::Solid, 0);
+    let log = Arc::new(Log::default());
+    s.observe_edits(Some(log.clone()));
+    let native = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    for command in [REFILL_ZONES, UNFILL_ZONES] {
+        s.apply(command, &json!({})).unwrap();
+        s.execute(command, &json!({})).unwrap();
+    }
+    assert_eq!(s.revision(), revision);
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), native);
+    assert!(log.0.lock().unwrap().is_empty());
+    s.apply("project.rename", &json!({"name":"Recovery still observes edits"})).unwrap();
+    assert_eq!(*log.0.lock().unwrap(), ["project.rename"]);
+}
