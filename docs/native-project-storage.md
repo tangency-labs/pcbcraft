@@ -272,7 +272,7 @@ Project format `pcbcraft-project/36` adds a required nonempty `assembly_profiles
 catalog and supports the earlier project fields, including optional parameters,
 net classes, generated net numbers and an optional part-group catalog. When groups are present, expanded or compact memberships retain their existing instance headers and representation under project format 36. The catalog has identity-sorted `heads`
 (`profile`, positive content `revision`, `removed`) and `revisions`, sorted by
-profile UUID and content revision. Each pinned record has `format:
+profile UUID and content revision. An optional `revision_watermarks` list contains identity-sorted `{profile, revision}` reservations strictly above the corresponding authored head, or for identities whose pin has been undone. Its IDs are non-nil, revisions positive, and identities unique; the existing 64-identity limit counts the union of heads and reservations. Earlier files without this field derive their issued revisions from their heads. Each pinned record has `format:
 "pcbcraft-assembly-profile/1"`, non-nil `id`, and `content`. Schema and content
 versions are distinct. Content includes a positive 32-bit `revision`, `name`,
 `provenance` (`authored`, or `imported` with a `source` hint), optional `vendor`
@@ -296,9 +296,9 @@ The project retains at most 64 identities (including retired watermarks), 128
 content revisions and 4096 corrections across retained revisions. An edit retires
 identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
-cleaned revisions. Immutable revision payloads are shared with Undo snapshots.
+cleaned revisions. Undo/Redo preserve the greatest issued revision in this project history without retaining undone payloads or changing restored board adoptions. A watermark-only catalog remains in format 36 after Save/Open, retaining the folder and occurrence metadata required by that envelope. Opening another saved copy uses that copy’s own recorded lineage; no cross-file issuance registry is provided. Immutable revision payloads are shared with Undo snapshots.
 No external file or network is needed after adoption. Projects without catalog
-identities keep their earlier encoding; retirement watermarks keep format 36
+identities keep their earlier encoding; retirement and Undo watermarks keep format 36
 necessary even after the last unused payload is released. See the
 [shared commands](mcp.md#assembly-output-profiles) for pin/preview/adopt behaviour.
 

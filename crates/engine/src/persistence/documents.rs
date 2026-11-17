@@ -401,7 +401,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
-    if profile_format != project.assembly_profiles.is_some() || project.assembly_profiles.as_ref().is_some_and(|c| c.heads.is_empty()) {
+    if profile_format != project.assembly_profiles.is_some() || project.assembly_profiles.as_ref().is_some_and(|c| c.is_empty()) {
         return Err("project.json: assembly profiles require project format 36 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
@@ -1614,7 +1614,7 @@ impl DocumentsEncoder {
                         }
                     };
                     p.assembly_profiles.validate(&p.board.assembly_profiles)?;
-                    let has_profiles = !p.assembly_profiles.heads.is_empty();
+                    let has_profiles = !p.assembly_profiles.is_empty();
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
                     }

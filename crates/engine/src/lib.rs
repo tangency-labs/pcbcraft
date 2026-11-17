@@ -3997,8 +3997,8 @@ impl Session {
         Ok(())
     }
 
-    /// Restore authored content and advance the revision, retaining the allocation watermark
-    /// from the state being left when both snapshots belong to the same project.
+    /// Restore authored content and advance the revision, retaining allocation and profile-revision
+    /// watermarks from the state being left when both snapshots belong to the same project.
     fn step(&mut self, forward: bool) {
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         if let Some(state) = from.pop() {
@@ -4010,7 +4010,8 @@ impl Session {
             // The state just left is now at the end of the opposite history stack.
             let prior = if forward { self.undo.last() } else { self.redo.last() }.and_then(Option::as_ref);
             if let Some(prior) = prior.filter(|prior| prior.same_document(&project)) {
-                self.project = Some(Project::with_allocation_watermark(project, prior.numeric_id_high_water));
+                let project = Project::with_allocation_watermark(project, prior.numeric_id_high_water);
+                self.project = Some(Project::with_assembly_profile_watermarks(project, prior));
             }
         }
     }
@@ -4036,6 +4037,7 @@ fn fresh_id() -> Result<uuid::Uuid, CommandError> {
 fn assert_same_content(expected: &Arc<Project>, actual: &Arc<Project>) {
     assert!(actual.numeric_id_high_water.unwrap_or(0) >= expected.numeric_id_high_water.unwrap_or(0));
     let expected = Project::with_allocation_watermark(expected.clone(), actual.numeric_id_high_water);
+    let expected = Project::with_assembly_profile_watermarks(expected, actual);
     assert_eq!(persistence::encode_documents(expected).unwrap(), persistence::encode_documents(actual.clone()).unwrap());
 }
 

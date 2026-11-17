@@ -421,7 +421,7 @@ An existing ID and content revision is a no-op only for identical content;
 different content is a conflict. New content must exceed that identity's revision
 watermark. `content: null` retires the named identity without changing existing
 adoptions. Reusing an already cleaned revision is refused, even with identical
-content; choose a greater revision instead.
+content; choose a greater revision instead. Undo/Redo also retain issued revision watermarks. An undone pin whose payload is no longer present cannot reuse that revision, even after Save/Open; a higher revision is required. This reservation is local to the saved project lineage, not a global registry across independently edited copies.
 
 `pcb.preview_assembly_profile` requires `board`, `expected_revision`, `profile`
 and `revision` (a pinned content revision, or null to clear that board's adoption).
@@ -434,11 +434,11 @@ board's rows use.
 Each edit is one undo step and repeated unchanged adoptions are no-ops. Pinning on
 a supported older project adopts the folder, occurrence and allocation metadata
 required by the catalog's saved format in that same undo step; existing project,
-board and object identities and registered storage roots are preserved.
+board and object identities and registered storage roots are preserved. Undo restores profile choices but keeps revision reservations and the storage metadata needed to save them.
 
 Inspection exposes project `assembly_profiles` (identity watermarks and pinned
 revisions) and board `assembly_profiles` (explicit revision adoptions), sorted by
-identity. Limits are 64 identities including retired ones, 128 retained revisions
+identity. Limits are 64 identities including retired and watermark-only ones, 128 retained revisions
 and 4096 corrections across retained revisions. Cleanup on edits releases only
 unadopted superseded or retired payloads; adopted revisions survive retirement,
 offline save/reopen and Undo/Redo. Undo shares immutable payloads. Profiles change

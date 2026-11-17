@@ -534,11 +534,11 @@ fn largest_allowed_profile_catalog_serializes_under_two_mebibytes() {
     refused_because(catalog.validate(&adoptions), "128 revisions");
 }
 
-/// Project/36 pins profiles and board/22 adopts them; malformed records and dangling adoptions fail.
+/// Project/36 pins profiles and board/22 adopts them; Undo retains only issuance metadata beyond restored content.
 #[test]
-fn profile_format_round_trips_and_undo_restores_previous_bytes() {
+fn profile_format_round_trips_and_undo_restores_authored_content() {
     let (mut s, _) = placed();
-    let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    let original = s.snapshot().unwrap();
     let board = s.project().unwrap().board_target().unwrap().board;
     s.apply(SET_RULES, &json!({"board":board,"expected_revision":s.revision(),"rules":crate::board::rules::Values::default()})).unwrap();
     let before_profiles = s.snapshot().unwrap();
@@ -589,7 +589,119 @@ fn profile_format_round_trips_and_undo_restores_previous_bytes() {
     }
     crate::assert_same_content(&before_profiles, &s.snapshot().unwrap());
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
+    crate::assert_same_content(&original, &s.snapshot().unwrap());
+}
+
+/// Undo must not let a branching edit reuse an issued revision, including after Save/Open.
+#[test]
+fn issued_revisions_survive_undo_branching_and_reopen() {
+    for reopen in [false, true] {
+        let (mut s, _) = fixture();
+        let id = Uuid::from_u128(123);
+        pin(&mut s, Some(id), content(json!({"name":"Issued"}), 2)).unwrap();
+        let issued = encode_documents(s.snapshot().unwrap()).unwrap();
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(s.project().unwrap().assembly_profiles.heads.is_empty());
+        if reopen {
+            let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+            s.open_snapshot(decode_documents(&saved).unwrap());
+            assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+        }
+        let before = s.snapshot().unwrap();
+        invalid_because(pin(&mut s, Some(id), content(json!({"name":"Different"}), 2)), "revision conflict");
+        invalid_because(pin(&mut s, Some(id), content(json!({"name":"Earlier"}), 1)), "revision conflict");
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        if !reopen {
+            s.apply("edit.redo", &Value::Null).unwrap();
+            assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), issued);
+            s.apply("edit.undo", &Value::Null).unwrap();
+        }
+        pin(&mut s, Some(id), content(json!({"name":"New revision"}), 3)).unwrap();
+        let branched = encode_documents(s.snapshot().unwrap()).unwrap();
+        s.apply("edit.undo", &Value::Null).unwrap();
+        invalid_because(pin(&mut s, Some(id), content(json!({"name":"Reused branch"}), 3)), "revision conflict");
+        s.apply("edit.redo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), branched);
+        assert_eq!(encode_documents(decode_documents(&issued).unwrap()).unwrap(), issued, "older saves retain their original content");
+    }
+}
+
+/// Undoing a newer pin restores the old adopted rows while reserving the undone revision.
+#[test]
+fn issued_revision_floor_preserves_older_adoption_and_redo() {
+    let (mut s, [footprint, _, _]) = placed();
+    let id = Uuid::from_u128(124);
+    let first = content(json!({"name":"First","corrections":[{"library":LIBRARY,"definition":"resistor-0402","rotation":90}]}), 1);
+    pin(&mut s, Some(id), first.clone()).unwrap();
+    adopt(&mut s, id, Some(1)).unwrap();
+    let first_row = view(&s).placement_row(&footprint, Some(id)).unwrap();
+    let second = content(json!({"name":"Second","corrections":[{"library":LIBRARY,"definition":"resistor-0402","rotation":180}]}), 2);
+    pin(&mut s, Some(id), second.clone()).unwrap();
+    adopt(&mut s, id, Some(2)).unwrap();
+    let adopted = encode_documents(s.snapshot().unwrap()).unwrap();
+    for _ in 0..2 {
+        s.apply("edit.undo", &Value::Null).unwrap();
+    }
+    assert_eq!(view(&s).placement_row(&footprint, Some(id)).unwrap(), first_row);
+    assert_eq!(s.project().unwrap().assembly_profiles.heads[0].revision, 1);
+    assert_eq!(s.project().unwrap().assembly_profiles.revision_watermarks, [Adoption { profile: id, revision: 2 }]);
+    let before = s.snapshot().unwrap();
+    assert_eq!(pin(&mut s, Some(id), first).unwrap(), s.revision(), "an exact retry of retained content is still a no-op");
+    invalid_because(pin(&mut s, Some(id), second.clone()), "revision conflict");
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    let saved = encode_documents(before).unwrap();
+    let mut reopened = Session::default();
+    reopened.open_snapshot(crate::persistence::decode_packed(&crate::persistence::encode_packed(s.snapshot().unwrap()).unwrap()).unwrap().project);
+    invalid_because(pin(&mut reopened, Some(id), second), "revision conflict");
+    assert_eq!(encode_documents(reopened.snapshot().unwrap()).unwrap(), saved);
+    for _ in 0..2 {
+        s.apply("edit.redo", &Value::Null).unwrap();
+    }
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), adopted);
+    for _ in 0..2 {
+        s.apply("edit.undo", &Value::Null).unwrap();
+    }
+    pin(&mut s, Some(id), content(json!({"name":"Third"}), 3)).unwrap();
+    assert!(s.project().unwrap().assembly_profiles.revision_watermarks.is_empty());
+    assert_eq!(view(&s).placement_row(&footprint, Some(id)).unwrap(), first_row);
+}
+
+/// Reserved-only identities count toward the existing limit and malformed saved floors are refused.
+#[test]
+fn revision_watermarks_are_bounded_and_validated() {
+    let (mut s, _) = fixture();
+    for index in 0..MAX_PROFILES {
+        pin(&mut s, Some(Uuid::from_u128(1000 + index as u128)), content(json!({"name":"Temporary"}), 1)).unwrap();
+        s.apply("edit.undo", &Value::Null).unwrap();
+    }
+    let before = s.snapshot().unwrap();
+    assert!(before.assembly_profiles.heads.is_empty());
+    assert_eq!(before.assembly_profiles.revision_watermarks.len(), MAX_PROFILES);
+    invalid_because(pin(&mut s, Some(Uuid::from_u128(9999)), content(json!({"name":"Extra"}), 1)), "64 assembly profile identities");
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    let docs = encode_documents(before).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+    let entry: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
+    for (marks, reason) in [
+        (json!([{"profile":Uuid::nil(),"revision":1}]), "revision watermarks"),
+        (json!([{"profile":Uuid::from_u128(1),"revision":0}]), "revision watermarks"),
+        (json!([{"profile":Uuid::from_u128(1),"revision":1},{"profile":Uuid::from_u128(1),"revision":2}]), "revision watermarks"),
+        (json!([{"profile":Uuid::from_u128(2),"revision":1},{"profile":Uuid::from_u128(1),"revision":1}]), "revision watermarks"),
+    ] {
+        let mut altered = docs.clone();
+        let mut bad = entry.clone();
+        bad["assembly_profiles"]["revision_watermarks"] = marks;
+        altered.insert("project.json".into(), serde_json::to_vec(&bad).unwrap());
+        refused_because(decode_documents(&altered), reason);
+    }
+    pin(&mut s, Some(Uuid::from_u128(1000)), content(json!({"name":"Available"}), 2)).unwrap();
+    let mut catalog = s.project().unwrap().assembly_profiles.as_ref().clone();
+    catalog.revision_watermarks.insert(0, Adoption { profile: Uuid::from_u128(1000), revision: 2 });
+    refused_because(catalog.validate(&[]), "above their authored heads");
+    catalog.revision_watermarks[0].revision = 1;
+    refused_because(catalog.validate(&[]), "above their authored heads");
+    catalog.revision_watermarks = (0..=MAX_PROFILES).map(|n| Adoption { profile: Uuid::from_u128(2000 + n as u128), revision: 1 }).collect();
+    refused_because(catalog.validate(&[]), "64 assembly profile identities");
 }
 
 /// A profile adoption without an origin or rules survives an offline save and reopen.
@@ -701,7 +813,8 @@ fn assembly_profiles_preserve_expanded_and_compact_group_memberships() {
         }
 
         s.apply("edit.undo", &Value::Null).unwrap();
-        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
+        crate::assert_same_content(&grouped, &s.snapshot().unwrap());
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap()[&instance_path], original[&instance_path]);
         s.apply("edit.redo", &Value::Null).unwrap();
         assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
     }
@@ -777,7 +890,7 @@ fn removal_and_cleanup_preserve_adoptions_and_undo_redo() {
     assert_eq!(first.assembly_profiles.revisions[0].content.revision, 1, "cleanup cannot mutate history");
 }
 
-/// Pinning alone migrates supported legacy metadata, preserves identities and undoes in one step.
+/// Pinning alone migrates supported legacy metadata; Undo restores choices while retaining issued revision metadata.
 fn legacy_pin_round_trip(project: Arc<Project>) {
     let mut s = Session::default();
     s.open_snapshot(project);
@@ -812,8 +925,9 @@ fn legacy_pin_round_trip(project: Arc<Project>) {
     let restored = s.snapshot().unwrap();
     crate::assert_same_content(&before, &restored);
     assert!(restored.assembly_profiles.heads.is_empty());
-    assert_eq!(restored.layout_root(), before.layout_root());
-    assert_eq!(restored.has_sheet_occurrences(), before.has_sheet_occurrences());
+    assert_eq!(restored.layout_root(), pinned.layout_root());
+    assert!(restored.has_sheet_occurrences(), "issued revision metadata remains saveable after Undo");
+    assert_eq!(restored.assembly_profiles.revision_watermarks, [Adoption { profile: id, revision: 1 }]);
     let restored_documents = encode_documents(restored).unwrap();
     assert_eq!(encode_documents(decode_documents(&restored_documents).unwrap()).unwrap(), restored_documents);
     s.apply("edit.redo", &Value::Null).unwrap();

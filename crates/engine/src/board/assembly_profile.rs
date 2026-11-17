@@ -9,7 +9,10 @@ use super::{
 use crate::{CommandError, Project, Session, schematic::Point};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 /// Pin an immutable profile revision, or retire its identity without invalidating adoptions.
@@ -136,6 +139,9 @@ pub struct ProfileHead {
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     pub heads: Vec<ProfileHead>,
+    /// Issued revisions above the current authored heads, retained across Undo and saved locally.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revision_watermarks: Vec<Adoption>,
     #[serde(serialize_with = "serialize_revisions", deserialize_with = "deserialize_revisions")]
     pub revisions: Vec<Arc<AssemblyProfile>>,
 }
@@ -260,13 +266,54 @@ impl AssemblyProfile {
 }
 
 impl Catalog {
+    /// Whether there is neither authored content nor reserved revision identity to persist.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.heads.is_empty() && self.revision_watermarks.is_empty()
+    }
+
+    /// Highest issued revision, including a revision whose authored pin has been undone.
+    fn issued_revision(&self, id: Uuid) -> u32 {
+        self.heads
+            .iter()
+            .filter(|head| head.profile == id)
+            .map(|head| head.revision)
+            .chain(self.revision_watermarks.iter().filter(|mark| mark.profile == id).map(|mark| mark.revision))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Merge issuance from the state being left, keeping only floors above the restored heads.
+    /// Payloads and authored availability remain those of the restored snapshot.
+    fn retained_watermarks(&self, previous: &Self) -> Vec<Adoption> {
+        let mut issued = BTreeMap::<Uuid, u32>::new();
+        for (id, revision) in self
+            .revision_watermarks
+            .iter()
+            .map(|mark| (mark.profile, mark.revision))
+            .chain(previous.revision_watermarks.iter().map(|mark| (mark.profile, mark.revision)))
+            .chain(previous.heads.iter().map(|head| (head.profile, head.revision)))
+        {
+            issued.entry(id).and_modify(|value| *value = (*value).max(revision)).or_insert(revision);
+        }
+        issued
+            .into_iter()
+            .filter(|(id, revision)| self.heads.iter().find(|head| head.profile == *id).is_none_or(|head| head.revision < *revision))
+            .map(|(profile, revision)| Adoption { profile, revision })
+            .collect()
+    }
+
     /// Resolve an exact immutable revision. No lookup ever substitutes a newer revision.
     pub fn get(&self, adoption: &Adoption) -> Option<&AssemblyProfile> {
         self.revisions.iter().find(|r| r.id == adoption.profile && r.content.revision == adoption.revision).map(Arc::as_ref)
     }
     /// Validate bounds, canonical identities, retained revisions and every board reference.
     pub fn validate(&self, adoptions: &[Adoption]) -> Result<(), String> {
-        if self.heads.len() > MAX_PROFILES || self.revisions.len() > MAX_REVISIONS {
+        if self.heads.len() > MAX_PROFILES || self.revision_watermarks.len() > MAX_PROFILES || self.revisions.len() > MAX_REVISIONS {
+            return Err(format!("A project may retain at most {MAX_PROFILES} assembly profile identities and {MAX_REVISIONS} revisions."));
+        }
+        let identities: BTreeSet<_> =
+            self.heads.iter().map(|head| head.profile).chain(self.revision_watermarks.iter().map(|mark| mark.profile)).collect();
+        if identities.len() > MAX_PROFILES || self.revisions.len() > MAX_REVISIONS {
             return Err(format!("A project may retain at most {MAX_PROFILES} assembly profile identities and {MAX_REVISIONS} revisions."));
         }
         if self.heads.windows(2).any(|p| p[0].profile >= p[1].profile)
@@ -274,6 +321,15 @@ impl Catalog {
             || self.revisions.windows(2).any(|p| (p[0].id, p[0].content.revision) >= (p[1].id, p[1].content.revision))
         {
             return Err("Assembly profile identities and revisions must be non-nil, positive, unique and sorted.".into());
+        }
+        if self.revision_watermarks.windows(2).any(|pair| pair[0].profile >= pair[1].profile)
+            || self.revision_watermarks.iter().any(|mark| {
+                mark.profile.is_nil()
+                    || mark.revision == 0
+                    || self.heads.iter().any(|head| head.profile == mark.profile && head.revision >= mark.revision)
+            })
+        {
+            return Err("Assembly profile revision watermarks must be non-nil, positive, sorted, unique and above their authored heads.".into());
         }
         if self.revisions.iter().map(|r| r.content.corrections.len()).sum::<usize>() > MAX_CORRECTIONS {
             return Err(format!("The assembly profiles of one project may carry at most {MAX_CORRECTIONS} corrections together."));
@@ -309,6 +365,32 @@ impl Catalog {
 }
 
 impl Project {
+    /// Retain issued revisions across same-project history without retaining undone profile payloads.
+    /// A watermark-only catalog keeps the storage/occurrence metadata needed to save it.
+    pub(crate) fn with_assembly_profile_watermarks(mut project: Arc<Self>, previous: &Self) -> Arc<Self> {
+        if previous.assembly_profiles.is_empty() || Arc::ptr_eq(&project.assembly_profiles, &previous.assembly_profiles) {
+            return project;
+        }
+        let watermarks = project.assembly_profiles.retained_watermarks(&previous.assembly_profiles);
+        if watermarks == project.assembly_profiles.revision_watermarks {
+            return project;
+        }
+        let next = Arc::make_mut(&mut project);
+        Arc::make_mut(&mut next.assembly_profiles).revision_watermarks = watermarks;
+        next.adopt_occurrence_metadata(previous);
+        if next.layout.is_none()
+            && let Some(layout) = &previous.layout
+        {
+            let same_board = next.board_target() == previous.board_target();
+            next.layout = Some(crate::persistence::layout::Layout { root: layout.root.clone(), folder: None });
+            next.refresh_board_folder();
+            if same_board && let Some(current) = &mut next.layout {
+                current.folder = layout.folder.clone();
+            }
+        }
+        project
+    }
+
     /// Pinned revisions and revision watermarks, independent of board adoption and display names.
     pub fn assembly_profiles(&self) -> &Catalog {
         &self.assembly_profiles
@@ -480,12 +562,12 @@ impl Session {
                         ))
                     };
                 }
+                if record.content.revision <= catalog.issued_revision(id) {
+                    return Err(CommandError::InvalidParams(
+                        "Assembly profile revision conflict: this revision was already issued, superseded or removed.".into(),
+                    ));
+                }
                 if let Some(head) = catalog.heads.iter_mut().find(|h| h.profile == id) {
-                    if record.content.revision <= head.revision {
-                        return Err(CommandError::InvalidParams(
-                            "Assembly profile revision conflict: this revision was already superseded or removed.".into(),
-                        ));
-                    }
                     head.revision = record.content.revision;
                     head.removed = false;
                 } else {
@@ -494,6 +576,7 @@ impl Session {
                 catalog.revisions.push(Arc::new(record));
                 catalog.revisions.sort_by_key(|r| (r.id, r.content.revision));
                 catalog.heads.sort_by_key(|h| h.profile);
+                catalog.revision_watermarks.retain(|mark| mark.profile != id);
             }
             None => {
                 let head = catalog

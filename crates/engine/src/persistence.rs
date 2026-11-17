@@ -535,7 +535,7 @@ impl Encoder {
             || project.board.rules.is_some()
             || project.board.placement_origin.is_some()
             || !project.board.assembly_profiles.is_empty()
-            || !project.assembly_profiles.heads.is_empty()
+            || !project.assembly_profiles.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
             || project.board.footprints().iter().any(|f| f.rotation != 0 || f.bottom || f.reference_offset.is_some() || f.reference_text.is_some())
