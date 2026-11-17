@@ -72,7 +72,7 @@ pub(super) fn publish(destination: &Path, documents: Documents, encoding: Encodi
 }
 
 /// On Windows, refuse a destination whose name before its first dot is a reserved device, such
-/// as `con.pc` or `aux`, ignoring ASCII case. The canonical `\\?\` parent would let it be
+/// as `con.pc`, `aux` or `COM¹.pc`, ignoring ASCII case. The canonical `\\?\` parent would let it be
 /// created, leaving a file or folder that ordinary Windows tools cannot open or delete, while
 /// opening it by its usual path reaches the device (#156). Other platforms accept these names.
 fn refuse_device_destination(destination: &Path) -> Result<(), String> {

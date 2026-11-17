@@ -82,25 +82,52 @@ fn conversion_refuses_overlap_existing_destinations_and_invalid_inputs() {
     assert!(!target.exists());
 }
 
-/// On Windows, a destination named like a device (`con.pc`, `AUX`, `nul.pc` ...) is refused
-/// before anything is created. The canonical parent would otherwise let the conversion write a
-/// file or folder that ordinary Windows tools cannot open or delete (#156).
+/// On Windows, ASCII and superscript-digit device names are refused for folders and archives,
+/// with or without extensions, before anything is created under the canonical parent (#156).
 #[cfg(windows)]
 #[test]
 fn windows_conversion_refuses_device_named_destinations() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("old");
-    source(&root);
+    let expected = source(&root);
+    let original = files(&root);
     let out = dir.path().join("out");
     fs::create_dir(&out).unwrap();
-    for (name, encoding) in
-        [("con.pc", Encoding::Zip), ("NUL.pc", Encoding::Zip), ("com1.pc", Encoding::Zip), ("aux", Encoding::Json), ("lpt9", Encoding::Json)]
-    {
-        let error = convert(&root, &out.join(name), encoding).unwrap_err();
-        assert!(error.contains("Windows reserves the name"), "{name}: {error}");
-        assert!(fs::read_dir(&out).unwrap().next().is_none(), "{name}: nothing is created");
+    for device in ["con", "NUL", "com1", "aux", "lpt9", "COM¹", "com²", "CoM³", "LPT¹", "lpt²", "LpT³"] {
+        for name in [device.to_owned(), format!("{device}.pc")] {
+            for encoding in [Encoding::Zip, Encoding::Json] {
+                let error = convert(&root, &out.join(&name), encoding).unwrap_err();
+                assert!(error.contains("Windows reserves the name"), "{name}: {error}");
+                assert!(fs::read_dir(&out).unwrap().next().is_none(), "{name}: nothing is created");
+                assert_eq!(files(&root), original, "{name}: source is unchanged");
+            }
+        }
     }
-    convert(&root, &out.join("console.pc"), Encoding::Zip).unwrap();
+    for name in ["console.pc", "COM¹-extra.pc"] {
+        let destination = out.join(name);
+        convert(&root, &destination, Encoding::Zip).unwrap();
+        assert_eq!(decode_packed(&fs::read(destination).unwrap()).unwrap().documents, expected);
+    }
+}
+
+/// Device names remain ordinary conversion destinations elsewhere; both forms reopen with
+/// the expected documents and leave the source unchanged.
+#[cfg(not(windows))]
+#[test]
+fn other_platforms_convert_superscript_device_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("old");
+    let expected = source(&root);
+    let original = files(&root);
+    for device in ["COM¹", "com²", "CoM³", "LPT¹", "lpt²", "LpT³"] {
+        let archive = dir.path().join(format!("{device}.pc"));
+        convert(&root, &archive, Encoding::Zip).unwrap();
+        assert_eq!(decode_packed(&fs::read(archive).unwrap()).unwrap().documents, expected);
+        let folder = dir.path().join(device);
+        convert(&root, &folder, Encoding::Json).unwrap();
+        assert_eq!(crate::load(&folder).unwrap(), expected);
+    }
+    assert_eq!(files(&root), original);
 }
 
 /// Pending recovery, an active writer and mixed entry points are never changed or recovered.

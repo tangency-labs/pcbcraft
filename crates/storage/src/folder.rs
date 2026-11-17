@@ -16,13 +16,12 @@ const TRANSACTION: &str = ".pcbcraft-save";
 const JOURNAL_LIMIT: usize = 4 * 1024 * 1024;
 /// Names that Windows reads as a device, not a file, when they come before the first dot of a
 /// file or folder name in a usual (not `\\?\`) path, so `C:\…\con.r2.json` means the console
-/// (#156). Document paths use only
-/// lowercase ASCII letters, digits and hyphens, so these are the only device names a path can
-/// hold. Checked with `GetFullPathNameW` on Windows 10: `com0`, `lpt0` and `com10` are ordinary
-/// names there.
-const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+/// (#156). Conversion destination names also allow Unicode, so include the superscript digits
+/// 1–3 Windows recognizes in COM/LPT device names. Document IDs are restricted to ASCII.
+/// Checked with `GetFullPathNameW` on Windows 10: `com0`, `lpt0` and `com10` are ordinary names.
+const WINDOWS_DEVICE_NAMES: [&str; 28] = [
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5",
-    "lpt6", "lpt7", "lpt8", "lpt9",
+    "lpt6", "lpt7", "lpt8", "lpt9", "com¹", "com²", "com³", "lpt¹", "lpt²", "lpt³",
 ];
 
 #[derive(Deserialize, Serialize)]
@@ -698,6 +697,20 @@ mod tests {
             "library/footprints/workshop/lpt0.r1.json",
         ] {
             assert_eq!(windows_device_name(path), None, "{path}");
+        }
+    }
+
+    /// Windows reserves the Latin-1 superscript digits 1–3 in COM/LPT names, including
+    /// mixed-case names with extensions. Similar prefixes and other digits stay ordinary.
+    #[test]
+    fn superscript_device_names_are_reserved() {
+        for device in ["COM¹", "com²", "CoM³", "LPT¹", "lpt²", "LpT³"] {
+            for path in [device.to_owned(), format!("{device}.pc"), format!("library/{device}/item.r1.json"), format!("{device}.tar.gz")] {
+                assert_eq!(windows_device_name(&path), Some(device), "{path}");
+            }
+        }
+        for name in ["COM¹-extra.pc", "LPT²backup", "COM¹0.pc", "COM⁰.pc", "COM⁴.pc", "LPT⁴.pc", "¹COM.pc"] {
+            assert_eq!(windows_device_name(name), None, "{name}");
         }
     }
 
