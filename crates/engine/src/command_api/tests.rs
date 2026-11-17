@@ -615,7 +615,7 @@ fn empty_reference_targets_cannot_disappear_without_a_diagnostic() {
                 let expected = format!(
                     "breaking: `schematic.synthetic` params: changed from {old} to {new} (schema contains a reference; target context is unknown)"
                 );
-                assert_eq!(changes, [expected.clone()], "{keyword} {container:?}");
+                assert_eq!(changes.as_slice(), std::slice::from_ref(&expected), "{keyword} {container:?}");
                 for section in SNAPSHOT_SECTIONS {
                     let mut base = json!({"command_api_version": 1, "commands": {}, "window_commands": {}});
                     base[*section] = json!({"schematic.synthetic": contract_of(&command(old.clone()))});
