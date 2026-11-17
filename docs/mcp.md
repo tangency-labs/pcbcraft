@@ -429,7 +429,8 @@ It returns the old/new adoption, changed corrections, bottom convention and actu
 affected placement rows before and after, plus an `acceptance` digest. It edits
 nothing. `pcb.adopt_assembly_profile` accepts the same parameters and that digest,
 recomputing the preview atomically. A stale revision or altered review is refused.
-Pinning is not adoption; only explicit adoption changes profile-adjusted rows.
+Pinning is not adoption; only explicit adoption changes which profile revision the
+board's rows use.
 Each edit is one undo step and repeated unchanged adoptions are no-ops. Pinning on
 a supported older project adopts the folder, occurrence and allocation metadata
 required by the catalog's saved format in that same undo step; existing project,

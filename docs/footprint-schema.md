@@ -261,9 +261,11 @@ offset is a point of the library footprint; the profile-adjusted row reports whe
 puts that point (mirrored and turned with the footprint, then measured in the row's
 convention) instead of the footprint origin. A +180 degree offset on a top part at
 30 degrees writes 210 degrees; on a bottom part at 30 degrees it writes 210 read
-from the top and 150 read from below. Generic rows, other packages and other
-profiles are unchanged. A board explicitly adopts an immutable project-pinned
-content revision; pinning a newer revision does not change an existing adoption.
+from the top and 150 read from below. Definition-specific corrections do not affect
+other packages. The selected convention applies to every bottom-side row in that
+profile; generic rows and other profiles are unchanged. A board explicitly adopts
+an immutable project-pinned content revision; pinning a newer revision does not
+change an existing adoption.
 
 ## Semantic validation
 

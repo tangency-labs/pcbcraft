@@ -1895,8 +1895,9 @@ impl DocumentsEncoder {
     }
 }
 
-/// Keep legacy bytes until newer authored data requires a newer format. Locked copper
-/// uses format 18 while an authored lock exists, unless board defaults require format 19.
+/// Keep legacy bytes until newer authored data requires a newer format. The highest applicable
+/// format wins: 22 for assembly-profile adoption, otherwise 21 for placement origin, 20 for zones,
+/// 19 for board rules, and 18 for locked copper.
 /// Format 19 requires validated rules and accepts earlier physical fields. Format 21
 /// requires a placement origin and accepts every earlier field, including rules. Format 22
 /// requires an assembly profile adoption and accepts every earlier field, including an origin. Independent

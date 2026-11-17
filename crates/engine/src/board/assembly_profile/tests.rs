@@ -116,8 +116,9 @@ fn placed() -> (Session, [String; 3]) {
 }
 
 /// A +180 degree offset for the 0402 resistor in one profile turns that profile's resistor rows by
-/// 180 degrees more, on both sides and under both bottom-side conventions. The generic rows,
-/// the capacitor and a profile without that offset are unchanged.
+/// 180 degrees more, on both sides and under both bottom-side conventions. The offset affects only
+/// that profile's resistor corrections; generic rows and other profiles are unchanged. The capacitor
+/// receives no correction but follows the selected bottom-side convention.
 #[test]
 fn half_turn_offset_changes_only_that_profile() {
     let (mut s, [top, bottom, capacitor]) = placed();
@@ -446,7 +447,7 @@ fn bad_requests_change_nothing() {
     .unwrap();
 }
 
-/// Last valid profile and correction counts pass; one more, duplicate ids and invalid revisions fail.
+/// Last valid profile and correction counts pass; one more or duplicate catalog identities fail.
 #[test]
 fn profile_and_project_limits() {
     let corrections = |count: usize| (0..count).map(|n| json!({"library":LIBRARY,"definition":format!("p{n:05}"),"rotation":90})).collect::<Vec<_>>();
@@ -877,7 +878,7 @@ fn content_revisions_share_unchanged_corrections_with_history() {
     crate::assert_same_content(&third, &s.snapshot().unwrap());
 }
 
-/// The schema snapshot is the actual catalog schema, also checked with a real JSON Schema validator.
+/// The command schema matches its checked-in snapshot and accepts equivalent numeric spellings.
 #[test]
 fn command_numeric_spellings_match_the_schema_snapshot() {
     assert_eq!(schema(), serde_json::from_str::<Value>(include_str!("content-schema.json")).unwrap());
