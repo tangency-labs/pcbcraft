@@ -1,4 +1,4 @@
-use super::*;
+use super::{faults::Fault, *};
 use pcbcraft_engine::{DRAW_WIRE, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, schematic::GRID_NM};
 use serde_json::json;
 use std::{
@@ -438,12 +438,10 @@ fn a_failed_snapshot_at_the_limit_keeps_the_old_pair() {
     place_and_append(&mut session, &mut journal).1.unwrap();
     let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
     journal.rebase_after = journal.journal_bytes;
-    // A folder that does not exist makes publishing the new snapshot fail; the open journal
-    // file is still appended to.
-    journal.dir = dir.path().join("missing");
+    // Publishing the new snapshot fails before its rename; the open journal is still appended to.
+    faults::arm(dir.path(), Fault::Publish, 1);
     let (second, result) = place_and_append(&mut session, &mut journal);
-    journal.dir = dir.path().to_path_buf();
-    assert!(result.unwrap_err().contains("could not be renewed"));
+    assert!(result.unwrap_err().contains("could not be renewed: The recovery file could not be staged."));
     assert_eq!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
     let recovered = recover(dir.path(), "entry").unwrap();
     assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (second, 2, None));
@@ -488,7 +486,7 @@ fn a_failed_flush_after_the_snapshot_rename_adopts_the_new_snapshot() {
     place_and_append(&mut session, &mut journal).1.unwrap();
     let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
     journal.rebase_after = journal.journal_bytes;
-    faults::fail_flush(dir.path(), 1);
+    faults::arm(dir.path(), Fault::Flush, 1);
     let (second, result) = place_and_append(&mut session, &mut journal);
     assert!(result.unwrap_err().contains("could not be flushed"));
     assert_ne!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
@@ -514,7 +512,7 @@ fn a_failed_flush_after_the_journal_rename_leaves_the_new_snapshot() {
     place_and_append(&mut session, &mut journal).1.unwrap();
     journal.rebase_after = journal.journal_bytes;
     // The first flush is the new snapshot's, the second the new journal's.
-    faults::fail_flush(dir.path(), 2);
+    faults::arm(dir.path(), Fault::Flush, 2);
     let (second, result) = place_and_append(&mut session, &mut journal);
     assert!(result.unwrap_err().contains("could not be flushed"));
     assert!(journal.file.is_none());
@@ -532,20 +530,22 @@ fn a_failed_flush_after_the_journal_rename_leaves_the_new_snapshot() {
     assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (fourth, 1, None));
 }
 
-/// A recorder whose first entry cannot be created, because the flush after its snapshot or
-/// after its journal fails, keeps that error for `sync`, releases the entry and creates it
-/// again from the next edit, so later edits are recovered.
+/// A recorder whose first snapshot fails, at the flush after its snapshot or after its journal,
+/// keeps that error for `sync` and keeps the entry's lock, so no other writer can take the
+/// entry; the next edit writes the snapshot again, and later edits are recovered.
 #[test]
 fn a_failed_first_flush_is_reported_and_later_edits_are_recovered() {
     for nth in [1, 2] {
         let dir = tempfile::tempdir().unwrap();
-        faults::fail_flush(dir.path(), nth);
+        faults::arm(dir.path(), Fault::Flush, nth);
         let recorder = Arc::new(JournalRecorder::start(dir.path().to_path_buf(), "entry".to_owned()).unwrap());
         let mut session = Session::default();
         session.apply("project.new", &json!({"name":"Before"})).unwrap();
         session.observe_edits(Some(recorder.clone()));
-        session.apply("project.rename", &json!({"name":"Recreated"})).unwrap();
         assert!(recorder.sync().unwrap_err().contains("could not be flushed"), "flush {nth}");
+        let second = EditJournal::create(dir.path(), "entry", Documents::new()).unwrap_err();
+        assert_eq!(second, "Recovery entry `entry` is in use by another session.", "flush {nth}");
+        session.apply("project.rename", &json!({"name":"Recreated"})).unwrap();
         session.apply("project.rename", &json!({"name":"After"})).unwrap();
         session.observe_edits(None);
         Arc::into_inner(recorder).unwrap().finish().unwrap();
@@ -565,7 +565,7 @@ fn a_record_write_cut_short_closes_the_journal() {
     let (first, result) = place_and_append(&mut session, &mut journal);
     result.unwrap();
     let before = journal_len(dir.path());
-    faults::tear_next_record(dir.path());
+    faults::arm(dir.path(), Fault::Tear, 1);
     let result = place_and_append(&mut session, &mut journal).1;
     assert!(result.unwrap_err().contains("cut short"));
     assert!(journal.file.is_none());
@@ -583,4 +583,94 @@ fn a_record_write_cut_short_closes_the_journal() {
     result.unwrap();
     let recovered = recover(dir.path(), "entry").unwrap();
     assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (fourth, 1, None));
+}
+
+/// Reopening the unchanged project after edits never puts the edits under a snapshot with the
+/// same content: the empty journal is written first and the snapshot on disk is kept, so
+/// recovery returns the project with no commands, also when the flush after that journal fails.
+/// If the new journal cannot be written at all, the old pair stays, as for any write that fails
+/// before its rename: recovery returns the last recorded state.
+#[test]
+fn reopening_the_unchanged_project_drops_its_edits() {
+    for fault in [None, Some(Fault::Flush), Some(Fault::Publish)] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+        let opened = encode_documents(session.snapshot().unwrap()).unwrap();
+        let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
+        place_and_append(&mut session, &mut journal).1.unwrap();
+        let (edited, result) = place_and_append(&mut session, &mut journal);
+        result.unwrap();
+        if let Some(fault) = fault {
+            faults::arm(dir.path(), fault, 1);
+        }
+        let result = journal.rebase(opened.clone());
+        assert_eq!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
+        let recovered = recover(dir.path(), "entry").unwrap();
+        match fault {
+            None => result.unwrap(),
+            Some(Fault::Flush) => assert_eq!(result.unwrap_err(), "The recovery folder could not be flushed."),
+            Some(_) => {
+                assert_eq!(result.unwrap_err(), "The recovery file could not be staged.");
+                assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (edited, 2, None));
+                continue;
+            }
+        }
+        assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (opened.clone(), 0, None));
+        let (next, result) = place_and_append(&mut session, &mut journal);
+        result.unwrap();
+        assert_eq!(recover(dir.path(), "entry").unwrap().documents, next);
+    }
+}
+
+/// A journal left behind by a failed rebase is stale. When the project returns to the content
+/// that journal names, the empty journal is written before the snapshot, so a crash between the
+/// two leaves the snapshot on disk under a journal recovery ignores.
+#[test]
+fn a_stale_journal_is_never_replayed_onto_a_snapshot_with_its_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    let opened = encode_documents(session.snapshot().unwrap()).unwrap();
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    let edited = encode_documents(session.snapshot().unwrap()).unwrap();
+    // The new snapshot is renamed into place; the new journal is not, so the journal on disk,
+    // naming the opened project, is stale.
+    faults::arm(dir.path(), Fault::Publish, 2);
+    assert_eq!(journal.rebase(edited.clone()).unwrap_err(), "The recovery file could not be staged.");
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.stop), (edited.clone(), Some(Stop::OtherSnapshot)));
+
+    // Back to the opened project. The empty journal comes first; the snapshot after it fails,
+    // standing in for a crash between the two renames.
+    faults::arm(dir.path(), Fault::Publish, 2);
+    assert_eq!(journal.rebase(opened.clone()).unwrap_err(), "The recovery file could not be staged.");
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (edited, 0, Some(Stop::OtherSnapshot)));
+    journal.rebase(opened.clone()).unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (opened, 0, None));
+}
+
+/// On Unix, removing the recovery folder leaves the open journal writable but unreachable. The
+/// next append reports it instead of succeeding, and later edits keep failing while no snapshot
+/// can be written, so `sync` reports the loss.
+#[cfg(unix)]
+#[test]
+fn a_removed_recovery_folder_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("recovery");
+    let (mut session, mut journal) = limited_journal(&folder, u64::MAX / 2);
+    place_and_append(&mut session, &mut journal).1.unwrap();
+    fs::remove_dir_all(&folder).unwrap();
+    let result = place_and_append(&mut session, &mut journal).1;
+    assert!(result.unwrap_err().starts_with("The recovery journal was removed"));
+    assert!(journal.file.is_none());
+    assert!(place_and_append(&mut session, &mut journal).1.unwrap_err().contains("No such file"));
+
+    let recorder = Arc::new(JournalRecorder::start(folder.clone(), "entry".to_owned()).unwrap());
+    session.observe_edits(Some(recorder.clone()));
+    recorder.sync().unwrap();
+    fs::remove_dir_all(&folder).unwrap();
+    session.apply("project.rename", &json!({"name":"Lost"})).unwrap();
+    session.observe_edits(None);
+    assert!(Arc::into_inner(recorder).unwrap().finish().unwrap_err().starts_with("The recovery journal was removed"));
 }

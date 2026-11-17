@@ -265,6 +265,10 @@ fn decode_record(payload: &[u8]) -> Result<(Record, WrittenDocuments), String> {
 /// the folder flush that makes the rename durable did not complete.
 fn publish(dir: &Path, path: &Path, bytes: &[u8]) -> Result<File, PublishError> {
     let before = |error: String| PublishError { replaced: false, message: error };
+    #[cfg(test)]
+    if faults::fails(dir, faults::Fault::Publish) {
+        return Err(before("The recovery file could not be staged.".to_owned()));
+    }
     let mut staged = tempfile::Builder::new().prefix(".recovery-").tempfile_in(dir).map_err(|e| before(e.to_string()))?;
     staged.write_all(bytes).map_err(|e| before(e.to_string()))?;
     staged.as_file().sync_all().map_err(|e| before(e.to_string()))?;
@@ -295,47 +299,45 @@ mod faults {
         sync::Mutex,
     };
 
-    /// Folders with the number of folder flushes after a rename still to pass before one fails.
-    static FLUSHES: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
-    /// Folders whose next record write stops after half its frame.
-    static TORN: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-
-    /// Make the `nth` folder flush after a rename in `dir` fail, counting from 1, once.
-    pub fn fail_flush(dir: &Path, nth: usize) {
-        assert!(nth > 0, "flushes are counted from 1");
-        FLUSHES.lock().unwrap().push((dir.to_path_buf(), nth));
+    /// What a switch makes fail.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Fault {
+        /// A publish, before its rename.
+        Publish,
+        /// The folder flush after a rename.
+        Flush,
+        /// A record write, after half its frame.
+        Tear,
     }
 
-    /// Count one folder flush in `dir`; true if it is the one to fail.
-    pub fn flush_fails(dir: &Path) -> bool {
-        let mut flushes = FLUSHES.lock().unwrap();
-        let Some(index) = flushes.iter().position(|(folder, _)| folder == dir) else {
+    /// Armed switches: the folder, the fault, and how many such calls still pass before one fails.
+    static ARMED: Mutex<Vec<(PathBuf, Fault, usize)>> = Mutex::new(Vec::new());
+
+    /// Make the `nth` call of kind `fault` in `dir` fail, counting from 1, once.
+    pub fn arm(dir: &Path, fault: Fault, nth: usize) {
+        assert!(nth > 0, "calls are counted from 1");
+        ARMED.lock().unwrap().push((dir.to_path_buf(), fault, nth));
+    }
+
+    /// Count one call of kind `fault` in `dir`; true if it is the one to fail.
+    pub fn fails(dir: &Path, fault: Fault) -> bool {
+        let mut armed = ARMED.lock().unwrap();
+        let Some(index) = armed.iter().position(|(folder, kind, _)| folder == dir && *kind == fault) else {
             return false;
         };
-        flushes[index].1 -= 1;
-        if flushes[index].1 > 0 {
+        armed[index].2 -= 1;
+        if armed[index].2 > 0 {
             return false;
         }
-        flushes.swap_remove(index);
+        armed.swap_remove(index);
         true
-    }
-
-    /// Make the next record write in `dir` stop after half its frame, once.
-    pub fn tear_next_record(dir: &Path) {
-        TORN.lock().unwrap().push(dir.to_path_buf());
-    }
-
-    /// True, once, if the record write in `dir` is the one to tear.
-    pub fn record_tears(dir: &Path) -> bool {
-        let mut torn = TORN.lock().unwrap();
-        torn.iter().position(|folder| folder == dir).map(|index| torn.swap_remove(index)).is_some()
     }
 }
 
 /// Flush `dir` after a rename into it.
 fn sync_after_rename(dir: &Path) -> Result<(), String> {
     #[cfg(test)]
-    if faults::flush_fails(dir) {
+    if faults::fails(dir, faults::Fault::Flush) {
         return Err("The recovery folder could not be flushed.".to_owned());
     }
     crate::folder::sync_dir(dir)
@@ -345,7 +347,7 @@ fn sync_after_rename(dir: &Path) -> Result<(), String> {
 #[cfg_attr(not(test), allow(unused_variables))]
 fn write_record(dir: &Path, file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(test)]
-    if faults::record_tears(dir) {
+    if faults::fails(dir, faults::Fault::Tear) {
         file.write_all(&bytes[..bytes.len() / 2])?;
         file.sync_data()?;
         return Err(std::io::Error::other("The record write was cut short."));
@@ -362,10 +364,11 @@ fn publish_snapshot(dir: &Path, id: &str, base: &Documents) -> Result<u64, Publi
 
 /// Publish `<id>.journal` holding only the header for the snapshot fingerprinted `base_sha256`,
 /// returning the open file and its size in bytes.
-fn publish_journal(dir: &Path, id: &str, base_sha256: &str) -> Result<(File, u64), String> {
-    let header = serde_json::to_vec(&Header { base_sha256: base_sha256.to_owned() }).map_err(|e| e.to_string())?;
+fn publish_journal(dir: &Path, id: &str, base_sha256: &str) -> Result<(File, u64), PublishError> {
+    let before = |message: String| PublishError { replaced: false, message };
+    let header = serde_json::to_vec(&Header { base_sha256: base_sha256.to_owned() }).map_err(|e| before(e.to_string()))?;
     let mut journal = MAGIC.to_vec();
-    journal.extend(frame(&header)?);
+    journal.extend(frame(&header).map_err(before)?);
     let file = publish(dir, &entry_file(dir, id, "journal"), &journal)?;
     Ok((file, u64::try_from(journal.len()).unwrap_or(u64::MAX)))
 }
@@ -383,12 +386,18 @@ pub struct EditJournal {
     id: String,
     /// Kept open and locked; released when the journal is dropped or the process ends.
     _lock: File,
-    /// The journal, open for appending. `None` after an append failed part-way or a new
-    /// snapshot was published without its journal; the next edit then starts a new snapshot
-    /// instead of appending.
+    /// The journal, open for appending. `None` before the first snapshot, after an append
+    /// failed part-way or the journal was removed, and after a rebase failed once something was
+    /// renamed into place; the next edit then starts a new snapshot instead of appending.
     file: Option<File>,
     documents: Documents,
     sha256: String,
+    /// Fingerprint of the snapshot file on disk, once one was renamed into place.
+    snapshot_sha256: Option<String>,
+    /// Size of that snapshot file in bytes.
+    snapshot_bytes: u64,
+    /// Fingerprint the header of the journal file on disk names, once one was renamed into place.
+    journal_sha256: Option<String>,
     /// Bytes in the journal file, header included.
     journal_bytes: u64,
     /// Journal size above which the next recorded edit starts a new snapshot.
@@ -402,24 +411,33 @@ impl EditJournal {
     /// an empty journal. Fails if the id is not a plain file stem, another writer holds the
     /// entry, or the folder cannot be written; nothing outside `dir` is touched.
     pub fn create(dir: &Path, id: &str, base: Documents) -> Result<Self, String> {
+        let mut journal = Self::lock(dir, id)?;
+        journal.rebase(base)?;
+        Ok(journal)
+    }
+
+    /// Take the lock of entry `id` in `dir` (creating the folder) without writing a snapshot: no
+    /// journal is open, so the first recorded state becomes the snapshot. The lock is held even
+    /// while snapshots fail, so the entry is never taken for one left by a crashed session.
+    fn lock(dir: &Path, id: &str) -> Result<Self, String> {
         if !valid_id(id) {
             return Err(format!("`{id}` is not a recovery entry id."));
         }
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let lock = open_lock_file(&entry_file(dir, id, "lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
-        let snapshot_bytes = publish_snapshot(dir, id, &base)?;
-        let sha256 = documents_sha256(&base);
-        let (file, journal_bytes) = publish_journal(dir, id, &sha256)?;
         Ok(Self {
             dir: dir.to_path_buf(),
             id: id.to_owned(),
             _lock: lock,
-            file: Some(file),
-            documents: base,
-            sha256,
-            journal_bytes,
-            rebase_after: rebase_limit(snapshot_bytes, REBASE_FLOOR_BYTES),
+            file: None,
+            documents: Documents::new(),
+            sha256: String::new(),
+            snapshot_sha256: None,
+            snapshot_bytes: 0,
+            journal_sha256: None,
+            journal_bytes: 0,
+            rebase_after: REBASE_FLOOR_BYTES,
             floor: REBASE_FLOOR_BYTES,
         })
     }
@@ -434,32 +452,76 @@ impl EditJournal {
         &self.sha256
     }
 
-    /// Replace the snapshot with `base` and start an empty journal. The snapshot is published
-    /// first: a crash in between leaves a journal naming the old snapshot, which recovery
-    /// ignores in favour of the new snapshot, already holding every recorded edit.
+    /// Replace the snapshot with `base` and start an empty journal. Recovery replays a journal
+    /// only onto a snapshot with the content its header names, so a snapshot with the same
+    /// content as the journal on disk is never put under that journal's records:
     ///
-    /// If the snapshot cannot be written, nothing on disk changes and the old snapshot and
-    /// journal stay valid; the size count is kept, so the next edit tries again. If the snapshot
-    /// was renamed into place but the folder could not be flushed, or the new journal cannot be
-    /// written, the new snapshot holds `base`: the old journal is closed, since recovery would
-    /// ignore anything appended to it, and the next edit starts another snapshot.
+    /// - Usually the journal on disk names other content. The snapshot is published first: a
+    ///   crash before the new journal leaves a journal recovery ignores, under a snapshot that
+    ///   already holds every recorded edit. If the snapshot cannot be written, nothing on disk
+    ///   changes and the old snapshot and journal stay valid; the size count is kept, so the next
+    ///   edit tries again.
+    /// - If the journal on disk names `base`'s content (an unchanged project reopened after
+    ///   edits, or a stale journal left by a failed rebase), the empty journal is published
+    ///   first, and the snapshot only if the one on disk differs. A crash in between leaves the
+    ///   old snapshot under a journal recovery ignores.
     ///
-    /// The old journal is closed before the new one is renamed over it, because Windows refuses
-    /// to replace a file that is open.
+    /// Once anything was renamed into place, a failure leaves no journal open and `base` as the
+    /// recorded state, and the next edit starts another snapshot. The old journal is closed
+    /// before a new one is renamed over it, because Windows refuses to replace an open file.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
+        let sha256 = documents_sha256(&base);
+        if self.journal_sha256.as_deref() == Some(sha256.as_str()) {
+            drop(self.file.take());
+            self.adopt(base, sha256);
+            let journal = self.publish_journal()?;
+            if self.snapshot_sha256.as_deref() != Some(self.sha256.as_str()) {
+                self.publish_snapshot()?;
+            }
+            return Ok(self.open(journal));
+        }
         let published = publish_snapshot(&self.dir, &self.id, &base);
         if let Err(PublishError { replaced: false, message }) = published {
             return Err(message);
         }
-        self.sha256 = documents_sha256(&base);
-        self.documents = base;
+        self.snapshot_sha256 = Some(sha256.clone());
         drop(self.file.take());
-        let snapshot_bytes = published?;
-        let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &self.sha256)?;
+        self.adopt(base, sha256);
+        self.snapshot_bytes = published?;
+        let journal = self.publish_journal()?;
+        Ok(self.open(journal))
+    }
+
+    /// Take `base`, fingerprinted `sha256`, as the recorded state.
+    fn adopt(&mut self, base: Documents, sha256: String) {
+        self.documents = base;
+        self.sha256 = sha256;
+    }
+
+    /// Publish the recorded state as the snapshot.
+    fn publish_snapshot(&mut self) -> Result<(), String> {
+        let published = publish_snapshot(&self.dir, &self.id, &self.documents);
+        if !matches!(published, Err(PublishError { replaced: false, .. })) {
+            self.snapshot_sha256 = Some(self.sha256.clone());
+        }
+        self.snapshot_bytes = published?;
+        Ok(())
+    }
+
+    /// Publish an empty journal for the recorded state, returning it and its size in bytes.
+    fn publish_journal(&mut self) -> Result<(File, u64), String> {
+        let published = publish_journal(&self.dir, &self.id, &self.sha256);
+        if !matches!(published, Err(PublishError { replaced: false, .. })) {
+            self.journal_sha256 = Some(self.sha256.clone());
+        }
+        Ok(published?)
+    }
+
+    /// Append to `journal` from now on, with the size limit set from the current snapshot.
+    fn open(&mut self, (file, journal_bytes): (File, u64)) {
         self.file = Some(file);
         self.journal_bytes = journal_bytes;
-        self.rebase_after = rebase_limit(snapshot_bytes, self.floor);
-        Ok(())
+        self.rebase_after = rebase_limit(self.snapshot_bytes, self.floor);
     }
 
     /// Record that `edit` produced `documents`, and flush the record to disk before returning.
@@ -480,6 +542,14 @@ impl EditJournal {
             // The journal may now end in a torn record; close it so nothing is appended past it.
             self.file = None;
             return Err(error.to_string());
+        }
+        // Writes to a journal whose folder was removed still succeed on Unix, into a file
+        // recovery can no longer find; report that instead of a record that cannot be recovered.
+        if let Err(error) = fs::metadata(entry_file(&self.dir, &self.id, "journal"))
+            && error.kind() == ErrorKind::NotFound
+        {
+            self.file = None;
+            return Err("The recovery journal was removed; edits are not recorded until a snapshot can be written.".to_owned());
         }
         self.journal_bytes = self.journal_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         self.documents = documents;
@@ -599,10 +669,8 @@ fn write(journal: &mut Option<EditJournal>, dir: &Path, id: &str, edit: Option<&
     match (journal.as_mut(), edit) {
         (Some(journal), Some(edit)) => journal.append(edit, documents),
         (Some(journal), None) => journal.rebase(documents),
-        (None, _) => {
-            *journal = Some(EditJournal::create(dir, id, documents)?);
-            Ok(())
-        }
+        // The lock is kept even if this first snapshot fails; the next state tries again.
+        (None, _) => journal.insert(EditJournal::lock(dir, id)?).rebase(documents),
     }
 }
 
