@@ -146,10 +146,13 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 /// - `properties`: an added parameter is compatible only when the old object refused unknown
 ///   names (`additionalProperties: false` and no `patternProperties`), since otherwise a call
 ///   could already pass that name with any value; whether it is required is `required`'s
-///   business. A removed parameter is breaking; common ones are compared in turn. In `$defs` and
-///   `definitions` an added name is compatible, a removed one breaking.
+///   business. A removed parameter is breaking; common ones are compared in turn.
+/// - `$defs`, `definitions`: an added name is compatible; a removed or changed one is breaking,
+///   since a definition may be used under `not` (or through `$ref` inside `not`, `if` or `else`),
+///   where loosening it refuses calls that were valid.
 /// - `default`: added, changed or dropped is breaking, since it may change what an omitted
-///   parameter means (a new parameter's default is part of the parameter added).
+///   parameter means (a new parameter's default is part of the parameter added). A schema that
+///   carries a `default` anywhere inside is never replaced by "accept anything" compatibly.
 /// - `required`: a newly required name is breaking; a name no longer required is compatible.
 /// - `type`: compatible when every old type is still allowed (`integer` within `number`) or the
 ///   keyword is dropped; narrowed or added is breaking.
@@ -218,13 +221,14 @@ fn accepts_all(value: Option<&Value>) -> bool {
 }
 
 /// Compare two schemas at `path`. Booleans and non-objects are compared as a whole: loosening to
-/// accept everything is compatible, anything else that differs is breaking.
+/// accept everything is compatible unless the old schema carries a `default` (dropping it may
+/// change what an omitted value means); anything else that differs is breaking.
 fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
     if old == new {
         return;
     }
     let (Some(old_object), Some(new_object)) = (old.as_object(), new.as_object()) else {
-        let loosened = old == &Value::Bool(false) || accepts_all(Some(new));
+        let loosened = old == &Value::Bool(false) || (accepts_all(Some(new)) && !has_default(old));
         walk.push(!loosened, path, format!("changed from {old} to {new}"));
         return;
     };
@@ -243,7 +247,7 @@ fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after
     let change = format!("changed from {} to {}", shown(before), shown(after));
     match key {
         "properties" => named(walk, path, before, after, closed),
-        "$defs" | "definitions" => named(walk, path, before, after, true),
+        "$defs" | "definitions" => definitions(walk, path, before, after),
         "required" => required(walk, path, before, after),
         "type" => {
             let compatible = match (types(before), types(after)) {
@@ -261,15 +265,13 @@ fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after
             walk.push(!compatible, path, change);
         }
         bound if LOWER_BOUNDS.contains(&bound) || UPPER_BOUNDS.contains(&bound) => {
-            let compatible = match (before.and_then(Value::as_f64), after.and_then(Value::as_f64)) {
-                (Some(old), Some(new)) => {
-                    if LOWER_BOUNDS.contains(&bound) {
-                        new <= old
-                    } else {
-                        new >= old
-                    }
-                }
-                (Some(_), None) => after.is_none(),
+            let compatible = match (before, after) {
+                (Some(old), Some(new)) => match number_order(new, old) {
+                    Some(order) if LOWER_BOUNDS.contains(&bound) => order.is_le(),
+                    Some(order) => order.is_ge(),
+                    None => false,
+                },
+                (Some(old), None) => old.is_number(),
                 _ => false,
             };
             walk.push(!compatible, path, change);
@@ -281,13 +283,75 @@ fn keyword(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, after
         "items" | "additionalProperties" => match (before, after) {
             (Some(old @ Value::Object(_)), Some(new @ Value::Object(_))) => schema(walk, path, old, new),
             _ => {
-                let loosened = before == Some(&Value::Bool(false)) || accepts_all(after);
+                let loosened = before == Some(&Value::Bool(false)) || (accepts_all(after) && !before.is_some_and(has_default));
                 walk.push(!loosened, path, change);
             }
         },
         "anyOf" | "oneOf" | "prefixItems" => alternatives(walk, path, key, before, after),
         whole if WHOLE.contains(&whole) => walk.push(true, path, change),
         _ => walk.push(true, path, change),
+    }
+}
+
+/// The order of two JSON numbers, exact: integers as integers (also beyond 2^53, where `f64`
+/// rounds), an integer against a fraction by its whole part first, two fractions as `f64` (which
+/// is how JSON fractions are read); `None` when either is not a number.
+fn number_order(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    let integer = |value: &Value| value.as_i64().map(i128::from).or_else(|| value.as_u64().map(i128::from));
+    match (integer(a), integer(b)) {
+        (Some(a), Some(b)) => Some(a.cmp(&b)),
+        (Some(a), None) => integer_against_fraction(a, b.as_f64()?),
+        (None, Some(b)) => integer_against_fraction(b, a.as_f64()?).map(std::cmp::Ordering::reverse),
+        (None, None) => a.as_f64()?.partial_cmp(&b.as_f64()?),
+    }
+}
+
+/// The exact order of an integer and a fraction read from JSON. Every `f64` beyond 2^53 is a
+/// whole number, so the fraction's whole part fits `i128` whenever it can equal the integer.
+fn integer_against_fraction(integer: i128, fraction: f64) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    if !fraction.is_finite() {
+        return None;
+    }
+    let whole = fraction.floor();
+    if whole >= 2f64.powi(100) {
+        return Some(Ordering::Less);
+    }
+    if whole < -(2f64.powi(100)) {
+        return Some(Ordering::Greater);
+    }
+    #[allow(clippy::cast_possible_truncation)] // whole is a whole number within +-2^100
+    let whole_part = whole as i128;
+    Some(match integer.cmp(&whole_part) {
+        Ordering::Equal if fraction > whole => Ordering::Less,
+        order => order,
+    })
+}
+
+/// Whether a schema carries a `default` keyword anywhere inside it.
+fn has_default(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.contains_key("default") || object.values().any(has_default),
+        Value::Array(items) => items.iter().any(has_default),
+        _ => false,
+    }
+}
+
+/// Compare two `$defs` or `definitions` maps: a name added is compatible; a name removed or a
+/// definition changed in any way is breaking, since a definition may be used under `not` (or
+/// through `$ref` inside `not`, `if` or `else`), where a loosening refuses calls that were valid.
+fn definitions(walk: &mut Walk, path: &str, before: Option<&Value>, after: Option<&Value>) {
+    let empty = Map::new();
+    let old = before.and_then(Value::as_object).unwrap_or(&empty);
+    let new = after.and_then(Value::as_object).unwrap_or(&empty);
+    for name in old.keys().chain(new.keys()).collect::<BTreeSet<_>>() {
+        let inner = format!("{path}.{name}");
+        match (old.get(name), new.get(name)) {
+            (Some(a), Some(b)) if a != b => walk.push(true, &inner, format!("changed from {a} to {b}")),
+            (None, Some(_)) => walk.push(false, &inner, "added".to_owned()),
+            (Some(_), None) => walk.push(true, &inner, "removed".to_owned()),
+            _ => {}
+        }
     }
 }
 
@@ -300,7 +364,7 @@ fn types(value: Option<&Value>) -> Option<BTreeSet<&str>> {
     }
 }
 
-/// Compare two maps of named schemas (`properties`, `$defs`, `definitions`): a name added is
+/// Compare two `properties` maps: a name added is
 /// compatible when `added_is_compatible` (else the old schema already accepted that name with any
 /// value, so it is breaking), a name removed breaking, common names compared as schemas.
 fn named(walk: &mut Walk, path: &str, before: Option<&Value>, after: Option<&Value>, added_is_compatible: bool) {

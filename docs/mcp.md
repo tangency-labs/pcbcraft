@@ -224,11 +224,15 @@ and label every difference:
   optional, enum values added, a type widened (`integer` to `number`
   included), a bound loosened, a `pattern`, `format`, `const`, `multipleOf`
   or `uniqueItems` dropped, `additionalProperties` or `items` loosened,
-  `anyOf` alternatives appended, `examples` changed;
+  `anyOf` alternatives appended, a `$defs` or `definitions` entry added,
+  `examples` changed;
 - breaking otherwise: a command or parameter removed, a parameter newly
   required, enum values removed, a type narrowed or added, a bound tightened or
   added, a `pattern`, `format`, `const` or `multipleOf` added or changed, a
-  `default` added, changed or dropped, a property added to an object that
+  `default` added, changed or dropped (also by replacing a schema that
+  carries one with one that accepts anything), a `$defs` or `definitions`
+  entry removed or changed in any way (a definition may be used under `not`,
+  where loosening it refuses calls), a property added to an object that
   accepted unknown names (a call may already pass that name with another
   value), any `oneOf` change (a value may then match two alternatives), any
   change under a keyword compared as a whole (`not`, `allOf`, `$ref`, `if`,

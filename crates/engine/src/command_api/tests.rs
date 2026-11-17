@@ -155,6 +155,13 @@ fn compatible_changes_are_labelled_compatible() {
         (p(json!({"type": "integer"})), p(json!({})), "params.properties.p.type: changed from \"integer\" to absent"),
         (p(json!({"minimum": 1})), p(json!({"minimum": 0})), "params.properties.p.minimum: changed from 1 to 0"),
         (p(json!({"maxLength": 8})), p(json!({"maxLength": 9})), "params.properties.p.maxLength: changed from 8 to 9"),
+        (
+            p(json!({"maximum": i64::MAX - 1})),
+            p(json!({"maximum": i64::MAX})),
+            "params.properties.p.maximum: changed from 9223372036854775806 to 9223372036854775807",
+        ),
+        (p(json!({"type": "boolean"})), p(json!(true)), "params.properties.p: changed from {\"type\":\"boolean\"} to true"),
+        (p(json!({"$defs": {}})), p(json!({"$defs": {"d": {"type": "string"}}})), "params.properties.p.$defs.d: added"),
         (p(json!({"maxItems": 8})), p(json!({})), "params.properties.p.maxItems: changed from 8 to absent"),
         (p(json!({"pattern": "^a$"})), p(json!({})), "params.properties.p.pattern: changed from \"^a$\" to absent"),
         (p(json!({"multipleOf": 2})), p(json!({})), "params.properties.p.multipleOf: changed from 2 to absent"),
@@ -212,6 +219,27 @@ fn breaking_changes_are_labelled_breaking() {
         (p(json!({})), p(json!({"type": "integer"})), "params.properties.p.type: changed from absent to \"integer\""),
         (p(json!({"minimum": 0})), p(json!({"minimum": 1})), "params.properties.p.minimum: changed from 0 to 1"),
         (p(json!({"maximum": 4})), p(json!({"maximum": 3})), "params.properties.p.maximum: changed from 4 to 3"),
+        (
+            p(json!({"maximum": i64::MAX})),
+            p(json!({"maximum": i64::MAX - 1})),
+            "params.properties.p.maximum: changed from 9223372036854775807 to 9223372036854775806",
+        ),
+        (
+            p(json!({"type": "boolean", "default": true})),
+            p(json!(true)),
+            "params.properties.p: changed from {\"default\":true,\"type\":\"boolean\"} to true",
+        ),
+        (
+            p(json!({"items": {"type": "string", "default": "a"}})),
+            p(json!({})),
+            "params.properties.p.items: changed from {\"default\":\"a\",\"type\":\"string\"} to absent",
+        ),
+        (
+            p(json!({"$defs": {"d": {"minimum": 1}}, "not": {"$ref": "#/$defs/d"}})),
+            p(json!({"$defs": {"d": {"minimum": 0}}, "not": {"$ref": "#/$defs/d"}})),
+            "params.properties.p.$defs.d: changed from {\"minimum\":1} to {\"minimum\":0}",
+        ),
+        (p(json!({"$defs": {"d": {}}})), p(json!({"$defs": {}})), "params.properties.p.$defs.d: removed"),
         (p(json!({})), p(json!({"maxItems": 3})), "params.properties.p.maxItems: changed from absent to 3"),
         (p(json!({})), p(json!({"pattern": "^a$"})), "params.properties.p.pattern: changed from absent to \"^a$\""),
         (p(json!({"format": "uuid"})), p(json!({"format": "date"})), "params.properties.p.format: changed from \"uuid\" to \"date\""),
@@ -302,6 +330,118 @@ fn breaking_changes_are_labelled_breaking() {
     let scoped = |scope: &str| json!({"scope": scope, "params": {"type": "object"}});
     let changes = compare("window.synthetic", &scoped("window"), &scoped("pane"));
     assert_eq!(changes, [Change { breaking: true, what: "`window.synthetic` scope: changed from \"window\" to \"pane\"".to_owned() }]);
+}
+
+/// Every row of the rule table in `compare`'s documentation (and docs/mcp.md), tried in every
+/// place a schema can sit: as a parameter, inside `items`, inside a schema-valued
+/// `additionalProperties` and as an `anyOf` alternative it keeps its label; under `oneOf`, `not`,
+/// `if`, `then`, `else`, `allOf` and in a `$defs` entry reached by `$ref` it is breaking.
+#[test]
+fn every_rule_holds_wherever_the_schema_sits() {
+    let open = |properties: Value| json!({"type": "object", "properties": properties});
+    let closed = |properties: Value| json!({"type": "object", "properties": properties, "additionalProperties": false});
+    let rows: Vec<(&str, Value, Value, bool)> = vec![
+        ("optional parameter added to a closed object", closed(json!({})), closed(json!({"q": {"type": "string", "default": "a"}})), false),
+        ("required parameter made optional", json!({"type": "object", "required": ["q"]}), json!({"type": "object", "required": []}), false),
+        ("enum value added", json!({"enum": ["a"]}), json!({"enum": ["a", "b"]}), false),
+        ("enum dropped", json!({"enum": ["a"]}), json!({}), false),
+        ("type widened", json!({"type": "string"}), json!({"type": ["string", "null"]}), false),
+        ("integer to number", json!({"type": "integer"}), json!({"type": "number"}), false),
+        ("type dropped", json!({"type": "integer"}), json!({}), false),
+        ("lower bound loosened", json!({"minimum": 1}), json!({"minimum": 0}), false),
+        ("upper bound loosened at the end of i64", json!({"maximum": i64::MAX - 1}), json!({"maximum": i64::MAX}), false),
+        ("upper bound loosened at the end of u64", json!({"maximum": u64::MAX - 1}), json!({"maximum": u64::MAX}), false),
+        ("lower bound loosened at the end of i64", json!({"minimum": i64::MIN + 1}), json!({"minimum": i64::MIN}), false),
+        ("bound dropped", json!({"maxItems": 3}), json!({}), false),
+        ("pattern dropped", json!({"pattern": "^a$"}), json!({}), false),
+        ("format dropped", json!({"format": "uuid"}), json!({}), false),
+        ("const dropped", json!({"const": 1}), json!({}), false),
+        ("multipleOf dropped", json!({"multipleOf": 2}), json!({}), false),
+        ("uniqueItems dropped", json!({"uniqueItems": true}), json!({}), false),
+        ("additionalProperties loosened", closed(json!({})), open(json!({})), false),
+        ("items loosened", json!({"items": {"maximum": 3}}), json!({"items": {"maximum": 4}}), false),
+        ("anyOf alternative appended", json!({"anyOf": [{"type": "string"}]}), json!({"anyOf": [{"type": "string"}, {"type": "null"}]}), false),
+        ("definition added", json!({"$defs": {}}), json!({"$defs": {"d": {}}}), false),
+        ("examples changed", json!({"examples": [1]}), json!({"examples": [2]}), false),
+        ("schema without a default made to accept anything", json!({"type": "boolean"}), json!(true), false),
+        ("false made to accept something", json!(false), json!({"type": "string"}), false),
+        ("parameter removed", closed(json!({"q": {}})), closed(json!({})), true),
+        ("parameter newly required", json!({"type": "object", "required": []}), json!({"type": "object", "required": ["q"]}), true),
+        ("enum value removed", json!({"enum": ["a", "b"]}), json!({"enum": ["a"]}), true),
+        ("enum added", json!({}), json!({"enum": ["a"]}), true),
+        ("type narrowed", json!({"type": "number"}), json!({"type": "integer"}), true),
+        ("type added", json!({}), json!({"type": "integer"}), true),
+        ("lower bound tightened", json!({"minimum": 0}), json!({"minimum": 1}), true),
+        ("upper bound tightened at the end of i64", json!({"maximum": i64::MAX}), json!({"maximum": i64::MAX - 1}), true),
+        ("upper bound tightened at the end of u64", json!({"maximum": u64::MAX}), json!({"maximum": u64::MAX - 1}), true),
+        ("lower bound tightened at the end of i64", json!({"minimum": i64::MIN}), json!({"minimum": i64::MIN + 1}), true),
+        (
+            "integer bound tightened to a fraction just below it",
+            json!({"maximum": 9_007_199_254_740_993_u64}),
+            json!({"maximum": 9_007_199_254_740_992.0}),
+            true,
+        ),
+        ("fraction bound tightened to an integer just inside it", json!({"minimum": 0.5}), json!({"minimum": 1}), true),
+        ("bound added", json!({}), json!({"maxItems": 3}), true),
+        ("pattern added", json!({}), json!({"pattern": "^a$"}), true),
+        ("format changed", json!({"format": "uuid"}), json!({"format": "date"}), true),
+        ("const changed", json!({"const": 1}), json!({"const": 2}), true),
+        ("multipleOf changed", json!({"multipleOf": 2}), json!({"multipleOf": 4}), true),
+        ("uniqueItems added", json!({}), json!({"uniqueItems": true}), true),
+        ("default added", json!({}), json!({"default": 1}), true),
+        ("default changed", json!({"default": 1}), json!({"default": 2}), true),
+        ("default dropped", json!({"default": 1}), json!({}), true),
+        ("default dropped by accepting anything", json!({"type": "boolean", "default": true}), json!(true), true),
+        ("nested default dropped by accepting anything", closed(json!({"q": {"default": 1}})), json!(true), true),
+        ("definition removed", json!({"$defs": {"d": {}}}), json!({"$defs": {}}), true),
+        ("definition loosened", json!({"$defs": {"d": {"minimum": 1}}}), json!({"$defs": {"d": {"minimum": 0}}}), true),
+        ("property added to an open object", open(json!({})), open(json!({"q": {}})), true),
+        ("additionalProperties tightened", open(json!({})), closed(json!({})), true),
+        ("anyOf alternative removed", json!({"anyOf": [{"type": "string"}, {"type": "null"}]}), json!({"anyOf": [{"type": "string"}]}), true),
+        ("oneOf alternative appended", json!({"oneOf": [{"type": "string"}]}), json!({"oneOf": [{"type": "string"}, {"type": "null"}]}), true),
+        ("oneOf alternative loosened", json!({"oneOf": [{"maxLength": 3}]}), json!({"oneOf": [{"maxLength": 4}]}), true),
+        ("not changed", json!({"not": {"type": "null"}}), json!({"not": {"type": "string"}}), true),
+        ("dependentRequired changed", json!({"dependentRequired": {"a": ["b"]}}), json!({"dependentRequired": {"a": ["b", "c"]}}), true),
+        ("unknown keyword added", json!({}), json!({"contains": {"type": "string"}}), true),
+        ("schema made to refuse everything", json!({"type": "string"}), json!(false), true),
+    ];
+    // A place: its name, how it wraps a schema, and whether any change there is breaking.
+    type Place = (&'static str, fn(Value) -> Value, bool);
+    let places: Vec<Place> = vec![
+        ("as a parameter", |s| json!({"type": "object", "properties": {"p": s}, "additionalProperties": false}), false),
+        ("inside items", |s| json!({"type": "object", "properties": {"p": {"type": "array", "items": s}}, "additionalProperties": false}), false),
+        (
+            "inside additionalProperties",
+            |s| json!({"type": "object", "properties": {"p": {"type": "object", "additionalProperties": s}}, "additionalProperties": false}),
+            false,
+        ),
+        ("as an anyOf alternative", |s| json!({"type": "object", "properties": {"p": {"anyOf": [s]}}, "additionalProperties": false}), false),
+        ("as a oneOf alternative", |s| json!({"type": "object", "properties": {"p": {"oneOf": [s]}}, "additionalProperties": false}), true),
+        ("under not", |s| json!({"type": "object", "properties": {"p": {"not": s}}, "additionalProperties": false}), true),
+        ("under if", |s| json!({"type": "object", "properties": {"p": {"if": s, "then": {}}}, "additionalProperties": false}), true),
+        ("under then", |s| json!({"type": "object", "properties": {"p": {"if": {}, "then": s}}, "additionalProperties": false}), true),
+        ("under else", |s| json!({"type": "object", "properties": {"p": {"if": {}, "else": s}}, "additionalProperties": false}), true),
+        ("under allOf", |s| json!({"type": "object", "properties": {"p": {"allOf": [s]}}, "additionalProperties": false}), true),
+        (
+            "in a $defs entry reached by $ref",
+            |s| json!({"type": "object", "$defs": {"d": s}, "properties": {"p": {"$ref": "#/$defs/d"}}, "additionalProperties": false}),
+            true,
+        ),
+        (
+            "in a $defs entry reached by $ref under not",
+            |s| json!({"type": "object", "$defs": {"d": s}, "properties": {"p": {"not": {"$ref": "#/$defs/d"}}}, "additionalProperties": false}),
+            true,
+        ),
+    ];
+    for (row, old, new, breaking) in &rows {
+        for (place, wrap, always_breaking) in &places {
+            let changes = compare("schematic.synthetic", &json!({"params": wrap(old.clone())}), &json!({"params": wrap(new.clone())}));
+            assert!(!changes.is_empty(), "{row} {place}: no change found");
+            let expected = *breaking || *always_breaking;
+            assert!(changes.iter().any(|change| change.breaking == expected), "{row} {place}: {changes:?}");
+            assert!(changes.iter().all(|change| change.breaking == expected), "{row} {place}: {changes:?}");
+        }
+    }
 }
 
 /// Every keyword the real catalog uses has its own rule in `compare`; any other keyword falls to
