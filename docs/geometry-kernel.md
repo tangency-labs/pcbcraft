@@ -122,10 +122,12 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 
 ## Qualification
 
-At SolidCraft revision `73bdb6c`. Unless a target is named, these are Linux
-qualification results, not native Windows, macOS or browser-runtime coverage.
+At SolidCraft revision `73bdb6c`. The table describes the qualification checks
+and the outcomes they require; measured samples retain their stated scope.
+Unless a target is named, runtime checks use Linux, not native Windows, macOS
+or a browser runtime.
 
-| Check | Result |
+| Check | Required outcome or recorded measurement |
 | --- | --- |
 | Licences, from each crate's manifest | `solidcore`, `solidcore-ops`, `solidcore-step`, `solidcore-convert` and `solidcore-record` are Apache-2.0 (the `solidcore/` workspace licence). Their other dependencies (serde, serde_json, thiserror, log and their proc-macro crates) are MIT OR Apache-2.0, with `memchr` Unlicense OR MIT, `zmij` MIT and `unicode-ident` (MIT OR Apache-2.0) AND Unicode-3.0. |
 | `cargo deny --locked check licenses sources bans` (cargo-deny 0.20.2, `deny.toml` unchanged) | bans ok, licenses ok, sources ok |
@@ -154,6 +156,8 @@ qualification results, not native Windows, macOS or browser-runtime coverage.
 | A small mapped-item tree that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | An expansion at its input-scaled work budget (1,233,000 steps for the synthetic file), and of one more | read; `model_unreadable` |
 | 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 1,024 placements and 1,000 relationships at their 2,211,000-step budget, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
+| Repeated mapped items with duplicate plain links to their target's companion | the companion list is counted once per target; placements keep their multiplicity and full link-scan charges retain the exact 2,173,000-step work boundary and first refusal |
+| 50,000 mapped uses and 50,000 related links, below the placement cap but over the work budget | `model_unreadable` with the work-budget reason; pre-count companion iterations do not multiply by the uses |
 | Alternating mapped targets and plain relationship companions at 32 and 33 levels; a 2,048-level acyclic route | read; `model_unreadable` from pre-count before dependency expansion; `model_unreadable` |
 | A shared mixed tail cached shallowly then reached deeper; combined occurrence/mapping paths | accepted at combined depth 32; `model_unreadable` at 33 |
 | 1,000 distinct products with the writer's two representations and two relationships per part, sharing one synthetic B-rep | one body in 1,000 placements; a small reader regression, not the body-heavy board measurement |
@@ -161,7 +165,7 @@ qualification results, not native Windows, macOS or browser-runtime coverage.
 | A surface model of 20,000 empty closed shells beside the block, both placed 32,768 times through mapped items | read in under 30 s: one body, 32,768 placements, the model refused |
 | Original qualification sample: 500 part instances of 16 pins, each part instance its own product (8,500 bodies, 21.1 MB) | read without error or refused item in 406 s, peak resident memory 944 MiB (debug build, Linux); historical measurement, not a timing bound |
 
-The automated checks are the unit tests in `crates/geometry/src/tests.rs` and
+The automated checks are the unit tests in `crates/geometry/src/` and
 the integration tests in `crates/geometry/tests/`.
 
 ### STEP fixtures

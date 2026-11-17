@@ -218,8 +218,9 @@ enum Node {
 }
 
 /// Counts what `solidcore_ops::placed_bodies` would emit without expanding anything: each
-/// definition and representation is counted once and its uses multiply, so a file that places a
-/// body 2^20 times through 20 levels of two mapped items costs 20 small sums. It follows the
+/// definition, representation and mapped target's companion set is counted once and its uses
+/// multiply, so a file that places a body 2^20 times through 20 levels of two mapped items costs
+/// 20 small sums. It follows the
 /// walk's rules: a definition walks every representation its shapes reach through relationships
 /// without a transformation, then its occurrences; a representation emits its bodies and walks
 /// each mapped item's representation and those related to it, each once for that item.
@@ -244,6 +245,10 @@ struct Expansion<'a> {
     children: Vec<Vec<usize>>,
     definitions: Vec<Node>,
     representations: Vec<Node>,
+    mapped_targets: Vec<Node>,
+    /// Actual companion iterations, separate from the walk's modelled work.
+    #[cfg(test)]
+    companion_visits: usize,
 }
 
 impl<'a> Expansion<'a> {
@@ -275,6 +280,9 @@ impl<'a> Expansion<'a> {
             children,
             definitions: vec![Node::Unseen; structure.definitions.len()],
             representations: vec![Node::Unseen; structure.representations.len()],
+            mapped_targets: vec![Node::Unseen; structure.representations.len()],
+            #[cfg(test)]
+            companion_visits: 0,
         }
     }
 
@@ -368,19 +376,43 @@ impl<'a> Expansion<'a> {
                         return Err(format!("missing representation map #{}", item.entity));
                     };
                     cost = cost.plus(Cost { work: structure.links.len() as u64, ..Cost::default() });
-                    // The mapped representation, then each related one, each once for this item.
-                    let mut walked = BTreeSet::new();
-                    let related = self.related.get(map.representation).cloned().unwrap_or_default();
-                    for target in std::iter::once(map.representation).chain(related) {
-                        if walked.insert(target) {
-                            cost = cost.plus(self.representation(target, depth + 1)?.nested());
-                        }
-                    }
+                    cost = cost.plus(self.mapped_target(map.representation, depth + 1)?.nested());
                 }
                 ItemKind::Other(_) => {}
             }
         }
         self.representations[representation] = Node::Done(cost);
+        Ok(cost)
+    }
+
+    /// Counts a mapped target and each plain companion once, in relationship order. Repeated
+    /// mapped items reuse this sum, not its neighbor list; their full link-scan charges remain
+    /// in `representation`. All companions share this depth, including on cached-height reuse.
+    fn mapped_target(&mut self, representation: usize, depth: usize) -> std::result::Result<Cost, String> {
+        check_depth(depth, 0)?;
+        match self.mapped_targets.get(representation) {
+            None => return Err(format!("missing representation #{representation}")),
+            Some(Node::Open) => return Err("mapped items form a cycle".into()),
+            Some(Node::Done(cost)) => {
+                check_depth(depth, cost.height)?;
+                return Ok(*cost);
+            }
+            Some(Node::Unseen) => {}
+        }
+        self.mapped_targets[representation] = Node::Open;
+        let related = self.related[representation].clone();
+        let mut walked = BTreeSet::new();
+        let mut cost = Cost::default();
+        for target in std::iter::once(representation).chain(related) {
+            #[cfg(test)]
+            {
+                self.companion_visits += 1;
+            }
+            if walked.insert(target) {
+                cost = cost.plus(self.representation(target, depth)?);
+            }
+        }
+        self.mapped_targets[representation] = Node::Done(cost);
         Ok(cost)
     }
 }
@@ -411,4 +443,36 @@ fn export_error(e: ExportError) -> GeometryError {
         _ => ErrorCode::OperationFailed,
     };
     GeometryError::new(code, format!("STEP write: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solidcore_record::step::product::Link;
+
+    /// Fifty thousand uses of a target with fifty thousand duplicate plain links enumerate
+    /// those links once, not uses times links, while retaining a body placement for every use.
+    #[test]
+    fn repeated_mapped_targets_count_their_companions_once() {
+        const USES: usize = 50_000;
+        const LINKS: usize = 50_000;
+        let exchange = solidcore_step::p21::parse(include_str!("../tests/fixtures/step/box.step")).unwrap();
+        let mut structure = solidcore_record::step::product::read(&exchange).unwrap();
+        assert_eq!(structure.representations.len(), 1);
+        let mut empty = structure.representations[0].clone();
+        empty.entity = 1000;
+        empty.items.clear();
+        structure.representations.push(empty);
+        structure.links.extend((0..LINKS).map(|i| Link { entity: 2000 + i as u64, rep_1: 1, rep_2: 0, transformation: None }));
+        let bodies_of = |entity| u64::from(entity == 159);
+        let mut expansion = Expansion::new(&structure, &bodies_of, u64::MAX);
+        let mut cost = Cost::default();
+        for _ in 0..USES {
+            cost = cost.plus(expansion.mapped_target(1, 1).unwrap());
+        }
+        assert_eq!(expansion.companion_visits, LINKS + 1);
+        assert_eq!(cost.placements, USES as u64);
+        assert_eq!(cost.work, 4 * USES as u64);
+        assert_eq!(cost.height, 0);
+    }
 }

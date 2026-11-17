@@ -335,6 +335,57 @@ fn relationships_scanned_for_each_mapped_item_count_in_the_bound() {
     assert!(error.to_string().contains(&format!("the assembly takes more than {budget} steps to expand")), "{error}");
 }
 
+/// A shallow root that repeats one mapped item. Its empty target has duplicate plain links to
+/// the block; those links must not multiply placements, but every use still scans them all.
+/// Extra placement references pad work without changing the parsed entity count.
+fn related_mapped_tree(uses: usize, links: usize, padding: usize) -> Vec<u8> {
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/step/box.step")).unwrap();
+    let items =
+        std::iter::repeat_n("#500003", uses).chain(std::iter::repeat_n("#167", padding)).chain(std::iter::once("#167")).collect::<Vec<_>>().join(",");
+    let mut lines = vec![
+        "#500001=SHAPE_REPRESENTATION('',(#167),#9);".to_string(),
+        "#500002=REPRESENTATION_MAP(#167,#500001);".to_string(),
+        "#500003=MAPPED_ITEM('',#500002,#167);".to_string(),
+        format!("#500004=SHAPE_REPRESENTATION('',({items}),#9);"),
+    ];
+    lines.extend((0..links).map(|i| format!("#{}=SHAPE_REPRESENTATION_RELATIONSHIP('','',#500001,#168);", 500_005 + i)));
+    let text = text.replacen("#169=SHAPE_DEFINITION_REPRESENTATION(#163,#168);", "#169=SHAPE_DEFINITION_REPRESENTATION(#163,#500004);", 1);
+    assert!(text.contains("(#163,#500004)"));
+    append_entities(&text, &lines).into_bytes()
+}
+
+/// Duplicate RELATED links and repeated mapped-item references preserve the exact work limit,
+/// its first refused step and placement multiplicity. A fifty-thousand-by-fifty-thousand case
+/// is refused by that work limit, not expanded or mistaken for too many body placements.
+#[test]
+fn related_companions_keep_the_work_bound_for_repeated_mapped_items() {
+    let links = 1_000;
+    let budget = work_budget(&related_mapped_tree(1, links, 0));
+    assert_eq!(budget, 2_173_000);
+    // Preliminary closure: 1 + links; definition: 2; root: 2 + uses + padding;
+    // each use scans links, walks the empty target (2 steps) and the block (3 steps).
+    let steps = |uses: u64| 5 + links as u64 + uses * (links as u64 + 6);
+    let uses = (budget - 5 - links as u64) / (links as u64 + 6);
+    let padding = usize::try_from(budget - steps(uses)).unwrap();
+    assert_eq!(steps(uses) + padding as u64, budget);
+    let exact = related_mapped_tree(usize::try_from(uses).unwrap(), links, padding);
+    let past = related_mapped_tree(usize::try_from(uses).unwrap(), links, padding + 1);
+    assert_eq!((work_budget(&exact), work_budget(&past)), (budget, budget));
+    let read = read_step(&exact).unwrap();
+    assert!(read.refused.is_empty());
+    assert_eq!((read.bodies.len(), read.placements.len()), (1, usize::try_from(uses).unwrap()));
+    let error = read_step(&past).unwrap_err();
+    assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains(&format!("the assembly takes more than {budget} steps to expand")), "{error}");
+
+    let huge = related_mapped_tree(50_000, 50_000, 0);
+    let budget = work_budget(&huge);
+    assert_eq!(budget, 51_173_000);
+    let error = read_step(&huge).unwrap_err();
+    assert_eq!(error.code(), pcbcraft_geometry::ErrorCode::ModelUnreadable, "{error}");
+    assert!(error.to_string().contains(&format!("the assembly takes more than {budget} steps to expand")), "{error}");
+}
+
 /// A surface model of many shells placed many times is read in time that does not grow with
 /// shells × uses: which bodies the model gives is worked out once, not at each placement. The
 /// block's representation also lists a model of 20,000 empty closed shells (refused), and the
