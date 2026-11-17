@@ -18,6 +18,7 @@ use super::{
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -47,6 +48,74 @@ pub struct Fabrication {
     pub origin: Resolved,
     /// The files in a fixed order with unique portable names.
     pub files: Vec<Output>,
+}
+
+/// Integrity of the exact bytes of one generated artifact, not a design-state identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Artifact {
+    pub name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+impl Artifact {
+    /// Describe bytes without normalizing their encoding, whitespace or line endings.
+    fn new(name: String, bytes: &[u8]) -> Self {
+        Self { name, size_bytes: bytes.len() as u64, sha256: format!("{:x}", Sha256::digest(bytes)) }
+    }
+}
+
+/// A derived integrity sidecar. It does not certify design freshness or release compatibility.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Manifest {
+    pub generator_version: String,
+    pub archive: Artifact,
+    pub files: Vec<Artifact>,
+}
+
+/// Immutable ZIP bytes and their member records, built together from captured outputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Archive {
+    bytes: Vec<u8>,
+    files: Vec<Artifact>,
+}
+
+impl Archive {
+    /// Pack the existing outputs unchanged and record every member's exact UTF-8 bytes.
+    /// ZIP failures return an error; no project or output file is edited.
+    pub fn new(outputs: &[Output]) -> Result<Self, String> {
+        Ok(Self {
+            bytes: zip(outputs)?,
+            files: outputs.iter().map(|output| Artifact::new(output.name.clone(), output.contents.as_bytes())).collect(),
+        })
+    }
+
+    /// The complete deterministic ZIP, with no manifest member added to it.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Bind this capture to its destination filename, including a save-dialog rename.
+    /// Renaming does not regenerate the board or any archive bytes.
+    pub fn manifest(&self, archive_name: &str) -> Manifest {
+        Manifest {
+            generator_version: env!("CARGO_PKG_VERSION").into(),
+            archive: Artifact::new(archive_name.into(), &self.bytes),
+            files: self.files.clone(),
+        }
+    }
+
+    /// Encode the sidecar deterministically as UTF-8 JSON with a final newline.
+    pub fn manifest_json(&self, archive_name: &str) -> Result<Vec<u8>, String> {
+        let mut bytes = serde_json::to_vec_pretty(&self.manifest(archive_name)).map_err(|error| error.to_string())?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+}
+
+/// The suggested archive name, using the same portable project-name rules as its members.
+pub fn archive_name(project: &str) -> String {
+    format!("{}-fabrication.zip", file_part(project))
 }
 
 /// Accumulates Gerber drawing operations and the circular apertures they use.
@@ -396,6 +465,12 @@ impl Session {
         self.fabrication(params).map(|fabrication| fabrication.files)
     }
 
+    /// Capture the addressed board's existing outputs and archive together without editing.
+    pub fn export_fabrication_archive(&self, params: &Value) -> Result<Archive, CommandError> {
+        let fabrication = self.fabrication(params)?;
+        Archive::new(&fabrication.files).map_err(CommandError::Unavailable)
+    }
+
     /// Generate the addressed board's fabrication files and the origin they use, without editing.
     fn fabrication(&self, params: &Value) -> Result<Fabrication, CommandError> {
         let project = self.open_project()?;
@@ -404,10 +479,13 @@ impl Session {
         view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// The execute result for MCP: every file's name and text, and the origin they use.
+    /// The execute result: file text, resolved origin and integrity of the same captured files.
+    /// The manifest names the suggested ZIP; clients choosing another name must rebind it.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
         let fabrication = self.fabrication(params)?;
-        Ok(json!({"files": fabrication.files, "origin": fabrication.origin}))
+        let archive = Archive::new(&fabrication.files).map_err(CommandError::Unavailable)?;
+        let name = archive_name(&self.open_project()?.name);
+        Ok(json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": archive.manifest(&name)}))
     }
 }
 

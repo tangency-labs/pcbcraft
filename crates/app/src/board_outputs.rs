@@ -1,9 +1,10 @@
-//! Fabrication output export: one archive of Gerber and drill files, saved off the editor loop.
+//! Fabrication output export: the existing Gerber/drill archive and an integrity sidecar.
 //!
-//! The archive bytes are built deterministically from the current snapshot on the UI thread;
+//! Both are captured deterministically on the UI thread;
 //! only the save dialog and filesystem write run on a worker. One export runs at
 //! a time. Dropping the application never joins the worker, and a worker that stops reports a
 //! disconnect instead of leaving the slot busy forever.
+use pcbcraft_engine::board::fabrication::Archive;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 /// How an export finished. Tests capture the archive instead of saving, and browser downloads
@@ -12,6 +13,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 pub(super) enum Outcome {
     Saved,
+    DownloadsRequested,
     Cancelled,
 }
 
@@ -21,7 +23,7 @@ pub(crate) struct Exports {
     pending: Option<Receiver<Result<Outcome, String>>>,
     /// Tests capture the archive instead of opening a save dialog.
     #[cfg(test)]
-    pub(super) captured: Option<(String, Vec<u8>)>,
+    pub(super) captured: Option<(String, Archive)>,
     #[cfg(test)]
     completion: Option<mpsc::SyncSender<Result<Outcome, String>>>,
 }
@@ -44,8 +46,9 @@ impl Exports {
         Some(result)
     }
 
-    /// Save the captured archive under a suggested name. Refuses while another export runs.
-    pub(super) fn start(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) -> Result<(), String> {
+    /// Save the captured archive and sidecar. Refuses while another export runs; neither
+    /// serialization nor publication rereads the live design.
+    pub(super) fn start(&mut self, ctx: &egui::Context, name: String, archive: Archive) -> Result<(), String> {
         if self.busy() {
             return Err("Finish the current fabrication export first.".into());
         }
@@ -53,7 +56,7 @@ impl Exports {
         #[cfg(test)]
         {
             let _ = ctx;
-            self.captured = Some((name, bytes));
+            self.captured = Some((name, archive));
             self.completion = Some(send);
         }
         #[cfg(not(test))]
@@ -63,13 +66,13 @@ impl Exports {
             std::thread::Builder::new()
                 .name("fabrication-export".into())
                 .spawn(move || {
-                    let _ = send.send(native(&name, &bytes));
+                    let _ = send.send(native(&name, &archive));
                     ctx.request_repaint();
                 })
                 .map_err(|e| e.to_string())?;
             #[cfg(target_arch = "wasm32")]
             {
-                let _ = send.send(download(&bytes, &name).map(|_| Outcome::Saved).map_err(|e| format!("Download failed: {e:?}")));
+                let _ = send.send(download_archive(&name, &archive));
                 ctx.request_repaint();
             }
         }
@@ -85,16 +88,32 @@ impl Exports {
     }
 }
 
-/// Ask where to save, then publish the archive atomically: a complete temporary file in the
-/// destination folder replaces the target only after it is written and synced.
+/// Ask where to save, then publish ZIP and sidecar sequentially, not as an atomic pair.
+/// Cancellation writes neither; any publication failure is reported rather than success.
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-fn native(name: &str, bytes: &[u8]) -> Result<Outcome, String> {
+fn native(name: &str, archive: &Archive) -> Result<Outcome, String> {
     let Some(path) = rfd::FileDialog::new().set_title("Save fabrication outputs").set_file_name(name).add_filter("Zip archive", &["zip"]).save_file()
     else {
         return Ok(Outcome::Cancelled);
     };
-    publish_archive(&path, bytes)?;
+    publish_package(&path, archive)?;
     Ok(Outcome::Saved)
+}
+
+/// Write the ZIP, then its `<archive filename>.manifest.json` companion. Each replacement
+/// is atomic individually. A sidecar failure can leave a new ZIP beside an old/missing sidecar;
+/// callers must report failure and consumers must compare the archive's size and digest.
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_package(path: &std::path::Path, archive: &Archive) -> Result<(), String> {
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or("The archive filename must be valid UTF-8 for its manifest.")?;
+    let manifest = archive.manifest_json(name)?;
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(".manifest.json");
+    publish_archive(path, archive.bytes())
+        .map_err(|error| format!("Sidecar not updated; archive publication failed (it may already be replaced): {error}"))?;
+    publish_archive(std::path::Path::new(&sidecar), &manifest).map_err(|error| {
+        format!("ZIP published, but its manifest failed; the pair is not confirmed complete. Retry the export or use a new destination: {error}")
+    })
 }
 
 /// Publish complete bytes with ordinary umask-filtered creation permissions on Unix, retaining
@@ -158,18 +177,22 @@ fn sync_directory(path: &std::path::Path) -> std::io::Result<()> {
 use wasm_bindgen::prelude::*;
 #[cfg(all(target_arch = "wasm32", not(test)))]
 #[wasm_bindgen(inline_js = "
-export function downloadFabrication(bytes,name){const url=URL.createObjectURL(new Blob([bytes],{type:'application/zip'}));const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+export function downloadFabrication(bytes,name,type){const url=URL.createObjectURL(new Blob([bytes],{type}));const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
 ")]
 extern "C" {
     #[wasm_bindgen(catch, js_name = downloadFabrication)]
-    fn download(bytes: &[u8], name: &str) -> Result<(), JsValue>;
+    fn download(bytes: &[u8], name: &str, media_type: &str) -> Result<(), JsValue>;
 }
 
-/// A file name for the archive from the project name, keeping only portable characters.
-pub(super) fn archive_name(project: &str) -> String {
-    let cleaned: String = project.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-    let base = if cleaned.trim_matches('_').is_empty() { "board".to_owned() } else { cleaned };
-    format!("{base}-fabrication.zip")
+/// Request both browser downloads from the capture. Browsers can silently block multiple
+/// downloads, so a successful request is not a confirmed filesystem save.
+#[cfg(all(target_arch = "wasm32", not(test)))]
+fn download_archive(name: &str, archive: &Archive) -> Result<Outcome, String> {
+    let manifest = archive.manifest_json(name)?;
+    download(archive.bytes(), name, "application/zip").map_err(|error| format!("ZIP download failed; manifest not requested: {error:?}"))?;
+    download(&manifest, &format!("{name}.manifest.json"), "application/json")
+        .map_err(|error| format!("ZIP download requested, but manifest download failed: {error:?}"))?;
+    Ok(Outcome::DownloadsRequested)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

@@ -813,6 +813,27 @@ umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
 
+Outputs also writes `<archive filename>.manifest.json` beside the ZIP, without
+adding members to or changing the existing archive. Its `generator_version`,
+`archive` record and ordered `files` list describe this capture. Each artifact
+record contains `name`, `size_bytes` and lowercase hexadecimal `sha256` of the
+exact bytes; member sizes refer to uncompressed UTF-8 content, including line
+endings. The archive record names the selected ZIP filename, even after a desktop
+save-dialog rename. The JSON has no wall clock; the same captured outputs and
+archive name give identical JSON. It is an integrity sidecar, not a design or
+release manifest: it does not establish source identity, configuration or DRC/ERC
+freshness and cannot authorize a synchronized release.
+
+Desktop publication replaces the ZIP first, then the sidecar, atomically per
+file but **not as a pair**. A sidecar error is reported as failure even if the ZIP
+is already present. An interruption or failed replacement can leave an old or
+missing sidecar beside a new ZIP. Compare the ZIP's filename, byte length and
+SHA-256 before relying on the sidecar; retry the export or choose a new
+destination to recover. Cancellation in the save dialog writes neither file.
+The browser requests two downloads and cannot confirm that either reached disk;
+allow multiple downloads and check that both arrived. Browser renaming may
+require keeping the original ZIP filename to match the sidecar.
+
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
 pads, tracks and vias on that net brighten in their own colors while the rest
 of the board dims. The status bar names the net. Each copper island takes the

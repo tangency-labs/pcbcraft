@@ -246,7 +246,17 @@ and one Excellon plated drill file. It needs a board setup and a closed Board Ou
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. One
 `execute` request generates the file contents once; `apply` still validates
-exportability without changing the project or revision.
+exportability without changing the project or revision. The additive
+`fabrication.manifest` describes the same captured files and the existing
+deterministic ZIP: `generator_version`, an `archive` record and ordered `files`
+records, each with `name`, `size_bytes` and lowercase hexadecimal `sha256`.
+ZIP size/digest cover compressed archive bytes; member records cover exact
+uncompressed UTF-8 bytes. The archive name is the suggested portable
+`<project>-fabrication.zip`; a client saving under another name must rebind that
+name in the sidecar. The engine's `Archive` helper builds the same ZIP and JSON
+from captured outputs without reading the live design again. This record provides
+byte integrity only, not source identity, configuration or check freshness.
+See [desktop/browser publication limits](editor-guide.md).
 
 `project.export_netlist` generates the project's netlist without editing it;
 `execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
