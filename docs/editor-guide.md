@@ -891,7 +891,11 @@ arrangement retained while definition panes are open.
 
 ## Opening and saving projects
 
-Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring
+Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**.
+On desktop, `pcbcraft <path>` opens one such target as the app starts; a failed
+open reports in the status bar and leaves Home usable. `pcbcraft` takes no
+options and at most one path, and a usage error exits before the window opens.
+Opening from PCB layout binds the incoming project's board before restoring
 its saved views, including split panes and detached windows.
 Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and

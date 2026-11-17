@@ -49,6 +49,9 @@ instances/2 for a board; opening or inspecting an older project does not promote
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.
+On desktop you can also name the project on the command line:
+`cargo run --locked -p pcbcraft -- crates/app/tests/fixtures/split/two-resistors`
+opens it as the app starts.
 Use **File → Save As… → Project folder…** to save your own copy in a new or empty
 folder outside the checkout before making changes. This keeps the tracked test
 fixture intact. **View → Fit** brings the circuit into view. On desktop, use the

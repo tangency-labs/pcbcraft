@@ -322,6 +322,10 @@ pub struct PcbApp {
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
     home: bool,
+    /// The project path the desktop command line asked to open, spent on the first drawn
+    /// frame; `None` keeps startup at Home.
+    #[cfg(not(target_arch = "wasm32"))]
+    startup_open: Option<std::path::PathBuf>,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
     /// Selection inspector visibility belongs to this native host.
@@ -458,6 +462,18 @@ impl PcbApp {
         self
     }
 
+    /// Open `path` through the ordinary project-file worker when this window first draws,
+    /// instead of waiting for a choice on Home. The path names a project folder, its
+    /// `project.json` or a `.pc` archive, the same targets recent projects reopen. The
+    /// ordinary completion path enters the workspace on success; on failure the status bar
+    /// reports the error and Home stays usable. The path is spent on that first frame either
+    /// way. Desktop only: the browser has no command line.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_startup_project(mut self, path: std::path::PathBuf) -> Self {
+        self.startup_open = Some(path);
+        self
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -587,6 +603,18 @@ impl PcbApp {
             self.dialog = Dialog::OpenLocation;
         }
         self.file_notice = None;
+    }
+
+    /// Start the open the desktop command line asked for, once, on the frame that first runs
+    /// the file poll; the path is spent whether or not the worker starts. Mirrors a
+    /// recent-project reopen: no picker or disk access runs on the editor thread, the
+    /// ordinary completion path adopts or reports the result, and a worker that cannot start
+    /// reports in the status bar. Only the native launcher sets a startup path.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_startup_open(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.startup_open.take() else { return };
+        self.file_notice = None;
+        self.message = self.files.open_path(path, self.session.revision(), ctx).err();
     }
 
     /// Start a save or download for the current snapshot and report setup failures.
@@ -2491,6 +2519,9 @@ impl PcbApp {
             Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
             Some(Err(error)) => self.message = Some(error),
         }
+        // The desktop command line's open starts once, before this frame's poll can report it.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.begin_startup_open(&ctx);
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
