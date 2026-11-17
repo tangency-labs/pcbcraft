@@ -985,6 +985,8 @@ other destinations create a new folder. On Windows, a destination named like a
 device, such as `con.pc`, `aux` or `COM1.pc`, is refused before anything is written.
 This includes `COM¹`–`COM³` and `LPT¹`–`LPT³`, with or without extensions and
 ignoring ASCII case, as specified by [Windows naming conventions](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions).
+Trailing ASCII spaces in the text before the first dot do not bypass the check:
+`NUL ` and `COM¹  .pc` are also refused. The check does not rename the destination.
 Other platforms accept these as ordinary destination names. Both forms validate
 all managed documents and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
 bytes. The entry point becomes project/16 with a board-folder registration and

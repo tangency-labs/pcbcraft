@@ -331,11 +331,13 @@ fn refuse_windows_device_names(documents: &Documents) -> Result<(), String> {
 
 /// Return the first part of a `/`-separated document path, such as `con` in
 /// `library/symbols/workshop/con.r2.json`, whose text before its first dot is one of
-/// [`WINDOWS_DEVICE_NAMES`], ignoring ASCII case. `None` means every part is an ordinary name.
+/// [`WINDOWS_DEVICE_NAMES`], ignoring ASCII case and trailing ASCII spaces in that stem.
+/// Return the stem without those spaces; `None` means no part matches a device name.
 pub(crate) fn windows_device_name(relative: &str) -> Option<&str> {
     relative
         .split('/')
         .map(|part| part.split_once('.').map_or(part, |(stem, _)| stem))
+        .map(|stem| stem.trim_end_matches(' '))
         .find(|stem| WINDOWS_DEVICE_NAMES.iter().any(|device| stem.eq_ignore_ascii_case(device)))
 }
 
@@ -711,6 +713,26 @@ mod tests {
         }
         for name in ["COM¹-extra.pc", "LPT²backup", "COM¹0.pc", "COM⁰.pc", "COM⁴.pc", "LPT⁴.pc", "¹COM.pc"] {
             assert_eq!(windows_device_name(name), None, "{name}");
+        }
+    }
+
+    /// Trailing ASCII spaces must not hide a device name, including before the first dot.
+    /// Internal spaces, ordinary prefixes and other Unicode whitespace do not select a device.
+    #[test]
+    fn trailing_spaces_do_not_hide_device_names() {
+        for (path, device) in [
+            ("NUL ", "NUL"),
+            ("aux   ", "aux"),
+            ("COM¹ ", "COM¹"),
+            ("lPt³  .pc", "lPt³"),
+            ("NUL .tar.gz", "NUL"),
+            ("library/COM²  /item.r1.json", "COM²"),
+            ("library/workshop/CoN .r2.json", "CoN"),
+        ] {
+            assert_eq!(windows_device_name(path), Some(device), "{path:?}");
+        }
+        for name in ["NUL-backup ", "COM¹0 ", "NU L ", "ordinary NUL ", "NUL\u{a0}", "COM¹\u{2003}.pc"] {
+            assert_eq!(windows_device_name(name), None, "{name:?}");
         }
     }
 
