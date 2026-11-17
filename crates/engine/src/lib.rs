@@ -30,7 +30,7 @@ pub mod schematic;
 pub mod selection;
 pub mod sheets;
 pub mod wire;
-pub use board::assembly_house::SET_ASSEMBLY_HOUSE;
+pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
@@ -157,10 +157,12 @@ enum ParamKind {
     RuleLength,
     BoardRules,
     PlacementOrigin,
-    /// An assembly house UUID from inspection.
-    AssemblyHouseId,
-    /// An assembly house profile, or null to remove the addressed house.
-    AssemblyHouse,
+    /// An assembly profile UUID from inspection.
+    AssemblyProfileId,
+    /// Immutable assembly profile content, or null to retire the addressed profile.
+    AssemblyProfile,
+    /// Positive content revision or null to clear a board adoption.
+    AssemblyProfileRevision,
     ClassRules,
     ClassSet,
     ClassId,
@@ -268,8 +270,9 @@ impl ParamKind {
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
-            Self::AssemblyHouseId => json!({"type":"string","format":"uuid"}),
-            Self::AssemblyHouse => board::assembly_house::schema(),
+            Self::AssemblyProfileId => json!({"type":"string","format":"uuid"}),
+            Self::AssemblyProfile => board::assembly_profile::schema(),
+            Self::AssemblyProfileRevision => json!({"type":["integer","null"],"minimum":1,"maximum":u32::MAX}),
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
@@ -558,10 +561,18 @@ impl ParamKind {
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::PlacementOrigin if board::origin::parse(value).is_ok() => Ok(()),
             Self::PlacementOrigin => Err("must be a board_zero, outline_lower_left or in-range point origin, or null to reset"),
-            Self::AssemblyHouseId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
-            Self::AssemblyHouseId => Err("must identify an assembly house by non-nil UUID"),
-            Self::AssemblyHouse if board::assembly_house::valid_profile(value) => Ok(()),
-            Self::AssemblyHouse => Err("must be a house profile with a name and valid, distinct package offsets, or null to remove the house"),
+            Self::AssemblyProfileId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
+            Self::AssemblyProfileId => Err("must identify an assembly profile by non-nil UUID"),
+            Self::AssemblyProfile if board::assembly_profile::valid_profile(value) => Ok(()),
+            Self::AssemblyProfile => {
+                Err("must be immutable profile content with a revision, name, provenance and valid corrections, or null to remove the profile")
+            }
+            Self::AssemblyProfileRevision
+                if value.is_null() || board::assembly_profile::integer(value).is_some_and(|n| n > 0 && n <= u32::MAX as i64) =>
+            {
+                Ok(())
+            }
+            Self::AssemblyProfileRevision => Err("must be a positive content revision or null"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
@@ -2047,24 +2058,51 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
-        id: SET_ASSEMBLY_HOUSE,
-        title: "Set Assembly House",
-        summary: "Create, replace or remove an assembly house profile in one undo step: its bottom-side convention and per-package rotation and centroid offsets for placement rows.",
+        id: SET_ASSEMBLY_PROFILE,
+        title: "Set Assembly Profile",
+        summary: "Pin immutable assembly output profile content in the project, or retire a profile without invalidating board adoptions.",
+        params: &[
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "profile", required: false, summary: "Profile UUID; omit to create an identity", kind: ParamKind::AssemblyProfileId },
+            Param {
+                name: "content",
+                required: true,
+                summary: "Immutable content with revision, name, provenance, optional vendor, bottom_side and corrections; null to retire",
+                kind: ParamKind::AssemblyProfile,
+            },
+        ],
+    },
+    Command {
+        id: PREVIEW_ASSEMBLY_PROFILE,
+        title: "Preview Assembly Profile Adoption",
+        summary: "Review changed corrections and actual placement values before adopting a pinned revision; read-only.",
         params: &[
             Param { required: true, ..BOARD },
-            EXPECTED_REVISION,
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "profile", required: true, summary: "Profile UUID", kind: ParamKind::AssemblyProfileId },
             Param {
-                name: "house",
-                required: false,
-                summary: "UUID of the house to replace or remove, from inspection; omit to create one",
-                kind: ParamKind::AssemblyHouseId,
-            },
-            Param {
-                name: "profile",
+                name: "revision",
                 required: true,
-                summary: "{\"name\":..,\"bottom_side\":\"viewed_from_top\"|\"viewed_from_bottom\",\"packages\":[{\"library\":..,\"definition\":..,\"rotation\":0-359,\"centroid\":{\"x_nm\":..,\"y_nm\":..}}]}, or null to remove the house",
-                kind: ParamKind::AssemblyHouse,
+                summary: "Pinned content revision, or null to clear the adoption",
+                kind: ParamKind::AssemblyProfileRevision,
             },
+        ],
+    },
+    Command {
+        id: ADOPT_ASSEMBLY_PROFILE,
+        title: "Adopt Assembly Profile",
+        summary: "Atomically accept a preview against the same project revision; only the addressed board changes.",
+        params: &[
+            Param { required: true, ..BOARD },
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "profile", required: true, summary: "Profile UUID", kind: ParamKind::AssemblyProfileId },
+            Param {
+                name: "revision",
+                required: true,
+                summary: "Pinned content revision, or null to clear the adoption",
+                kind: ParamKind::AssemblyProfileRevision,
+            },
+            Param { name: "acceptance", required: true, summary: "Acceptance digest from the preview", kind: ParamKind::LibraryDigest },
         ],
     },
     Command {
@@ -2370,6 +2408,8 @@ pub struct Project {
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
     parameters: Arc<parameters::Parameters>,
+    /// Immutable profile payloads are shared across project snapshots and history.
+    assembly_profiles: Arc<board::assembly_profile::Catalog>,
 }
 
 impl Project {
@@ -2790,7 +2830,9 @@ impl Session {
             | DELETE_FOOTPRINTS
             | SET_RULES
             | SET_PLACEMENT_ORIGIN
-            | SET_ASSEMBLY_HOUSE
+            | SET_ASSEMBLY_PROFILE
+            | PREVIEW_ASSEMBLY_PROFILE
+            | ADOPT_ASSEMBLY_PROFILE
             | SET_SILKSCREEN
             | board::zones::ADD_ZONE
             | board::zones::SET_ZONE
@@ -2862,12 +2904,13 @@ impl Session {
     /// with per-property provenance; inspecting these fields never authors defaults.
     /// Each board's `placement_origin` reports the saved origin and the resolved one outputs
     /// use, or null when an outline-attached origin has no outline to attach to.
-    /// Each board's `assembly_houses` lists its saved house profiles in creation order.
+    /// Project inspection includes pinned profiles; each board lists its exact adopted revisions.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_houses":board.assembly_houses()})).collect::<Vec<_>>(),
+                "assembly_profiles":p.assembly_profiles(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2947,6 +2990,10 @@ impl Session {
         }
         if id.starts_with("library.") {
             return self.library_command(id, params);
+        }
+        if id == PREVIEW_ASSEMBLY_PROFILE {
+            self.validate_project_command(id, params)?;
+            return self.preview_assembly_profile(params);
         }
         if id == EXPORT_FABRICATION {
             self.validate_project_command(id, params)?;
@@ -3032,7 +3079,8 @@ impl Session {
                 | SET_BOARD_SETUP
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
-                | SET_ASSEMBLY_HOUSE
+                | PREVIEW_ASSEMBLY_PROFILE
+                | ADOPT_ASSEMBLY_PROFILE
                 | SET_SILKSCREEN
                 | board::zones::ADD_ZONE
                 | board::zones::SET_ZONE
@@ -3105,7 +3153,8 @@ impl Session {
                 | DELETE_FOOTPRINTS
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
-                | SET_ASSEMBLY_HOUSE
+                | PREVIEW_ASSEMBLY_PROFILE
+                | ADOPT_ASSEMBLY_PROFILE
                 | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
@@ -3156,6 +3205,7 @@ impl Session {
                 net_registry: Arc::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
+                assembly_profiles: Arc::default(),
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3293,7 +3343,9 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_RULES => self.set_rules(params)?,
             SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
-            SET_ASSEMBLY_HOUSE => self.set_assembly_house(params)?,
+            SET_ASSEMBLY_PROFILE => self.set_assembly_profile(params)?,
+            ADOPT_ASSEMBLY_PROFILE => self.adopt_assembly_profile(params)?,
+            PREVIEW_ASSEMBLY_PROFILE => return Err(CommandError::Unavailable("Use execute for an assembly profile preview.".into())),
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             board::zones::ADD_ZONE | board::zones::SET_ZONE | board::zones::DELETE_ZONES => self.edit_zone(id, params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,

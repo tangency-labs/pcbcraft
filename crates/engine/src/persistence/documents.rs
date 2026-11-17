@@ -49,6 +49,7 @@ const CLASS_PROJECT_FORMAT: &str = "pcbcraft-project/20";
 const BINDING_PROJECT_FORMAT: &str = "pcbcraft-project/21";
 const PARAMETER_PROJECT_FORMAT: &str = "pcbcraft-project/22";
 const GENERATED_NET_PROJECT_FORMAT: &str = "pcbcraft-project/23";
+const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
@@ -74,7 +75,7 @@ const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
 const ZONE_BOARD_FORMAT: &str = "pcbcraft-board/20";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
-const HOUSE_BOARD_FORMAT: &str = "pcbcraft-board/22";
+const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -125,6 +126,8 @@ struct ProjectDocument {
     numeric_id_high_water: Option<u64>,
     #[serde(default, deserialize_with = "present")]
     parameters: Option<crate::parameters::Parameters>,
+    #[serde(default, deserialize_with = "present")]
+    assembly_profiles: Option<crate::board::assembly_profile::Catalog>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
 }
@@ -169,9 +172,10 @@ impl ProjectDocument {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | ASSEMBLY_PROFILE_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22 or 23"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23 or 36"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -250,6 +254,7 @@ pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | ASSEMBLY_PROFILE_PROJECT_FORMAT
     ) {
         return Ok(None);
     }
@@ -309,7 +314,7 @@ struct BoardDocument {
     #[serde(default, deserialize_with = "present")]
     placement_origin: Option<crate::board::origin::Origin>,
     #[serde(default, deserialize_with = "present")]
-    assembly_houses: Option<Vec<crate::board::assembly_house::House>>,
+    assembly_profiles: Option<Vec<crate::board::assembly_profile::Adoption>>,
     #[serde(default, deserialize_with = "present")]
     baseline: Option<crate::board::update::Baseline>,
     #[serde(default, deserialize_with = "present")]
@@ -360,8 +365,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 21
 /// requires a validated placement origin and may carry rules and every earlier field.
-/// Board format 22 requires at least one validated assembly house and may carry an origin,
-/// rules and every earlier field; older headers reject houses.
+/// Board format 22 requires explicit assembly profile adoptions and may carry an origin,
+/// rules and every earlier field; older headers reject adoptions. Project/36 pins revisions.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
@@ -369,6 +374,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
+    let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
+    if profile_format != project.assembly_profiles.is_some() || project.assembly_profiles.as_ref().is_some_and(|c| c.heads.is_empty()) {
+        return Err("project.json: assembly profiles require project format 36 and a nonempty identity catalog.".into());
+    }
+    let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
     let occurrences = matches!(
         project.format.as_str(),
@@ -379,6 +389,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | ASSEMBLY_PROFILE_PROJECT_FORMAT
     );
     let net_format = project.format == NET_PROJECT_FORMAT;
     let binding_format = project.format == BINDING_PROJECT_FORMAT;
@@ -386,15 +397,20 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
     let no_connect_format = matches!(
         project.format.as_str(),
-        NO_CONNECT_PROJECT_FORMAT | CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT | PARAMETER_PROJECT_FORMAT | GENERATED_NET_PROJECT_FORMAT
+        NO_CONNECT_PROJECT_FORMAT
+            | CLASS_PROJECT_FORMAT
+            | BINDING_PROJECT_FORMAT
+            | PARAMETER_PROJECT_FORMAT
+            | GENERATED_NET_PROJECT_FORMAT
+            | ASSEMBLY_PROFILE_PROJECT_FORMAT
     );
-    if !parameter_format && !generated_net_format && class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20, 21, 22 or 23, which requires a nonempty catalog.".into());
+    if !parameter_format && !generated_net_format && !profile_format && class_format != project.net_classes.is_some() {
+        return Err("Net-class catalog requires project format 20, 21, 22, 23 or 36, which requires a nonempty catalog.".into());
     }
-    if (!generated_net_format && parameter_format != project.parameters.is_some())
-        || (generated_net_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
+    if (!generated_net_format && !profile_format && parameter_format != project.parameters.is_some())
+        || ((generated_net_format || profile_format) && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
     {
-        return Err("Project parameters require project format 22 or 23, with a nonempty list.".into());
+        return Err("Project parameters require project format 22, 23 or 36, with a nonempty list.".into());
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
@@ -422,6 +438,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | ASSEMBLY_PROFILE_PROJECT_FORMAT
     );
     let foldered = project.layout_root.is_some();
     if !part_format
@@ -430,7 +447,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22 or 23.".into());
+        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23 or 36.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -463,24 +480,27 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | ASSEMBLY_PROFILE_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22 or 23".into());
+        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23 or 36".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23, no board and a nonempty bounded list".into());
+        return Err(
+            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 36, no board and a nonempty bounded list".into()
+        );
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22 or 23.".into());
+        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23 or 36.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 36".into());
     }
     if matches!(
         project.format.as_str(),
@@ -498,9 +518,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | ASSEMBLY_PROFILE_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22 or 23"));
+        return Err(format!(
+            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 36"
+        ));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -516,9 +539,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let optional_bindings = (parameter_format || generated_net_format)
+                let optional_bindings = (parameter_format || generated_net_format || profile_format)
                     && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
-                let expected = if generated_net_format {
+                let expected = if generated_net_format
+                    || (profile_format && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers))
+                {
                     GENERATED_NET_INSTANCES_FORMAT
                 } else if binding_format || optional_bindings {
                     BINDING_INSTANCES_FORMAT
@@ -545,19 +570,22 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
     let has_bindings =
         instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings);
-    if (!parameter_format && !generated_net_format && binding_format != has_bindings)
-        || ((parameter_format || generated_net_format) && has_bindings && net_classes.is_none())
+    if (!parameter_format && !generated_net_format && !profile_format && binding_format != has_bindings)
+        || ((parameter_format || generated_net_format || profile_format) && has_bindings && net_classes.is_none())
     {
         return Err("Net class assignments require project format 21 and instances format 3 when board-owned; the new envelope requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if generated_net_format != stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers)
-        || (generated_net_format && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
+    if (!profile_format && generated_net_format != stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers))
+        || ((generated_net_format || (profile_format && stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers)))
+            && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
-        return Err("Generated net numbers require project format 23 and instances format 4 when board-owned, with a number on every record.".into());
+        return Err(
+            "Generated net numbers require project format 23 or 36 and instances format 4 when board-owned, with a number on every record.".into()
+        );
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err("Net registry records require project format 17, 19, 20, 21, 22 or 23 and the corresponding instance vocabulary.".into());
+        return Err("Net registry records require project format 17, 19, 20, 21, 22, 23 or 36 and the corresponding instance vocabulary.".into());
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -686,6 +714,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
+        assembly_profiles: Arc::default(),
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -774,7 +803,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             zones: None,
             rules: None,
             placement_origin: None,
-            assembly_houses: None,
+            assembly_profiles: None,
             setup: None,
             silkscreen: None,
             assignments: None,
@@ -790,18 +819,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
-    let housed = board.format == HOUSE_BOARD_FORMAT;
-    if housed != board.assembly_houses.is_some() {
-        return Err("board.json: assembly houses require format 22, which requires at least one house.".into());
+    let profiled = board.format == PROFILE_BOARD_FORMAT;
+    if profiled != board.assembly_profiles.is_some() {
+        return Err("board.json: assembly profile adoptions require format 22, which requires at least one profile.".into());
     }
-    if let Some(houses) = &board.assembly_houses {
-        if houses.is_empty() {
-            return Err("board.json: an empty assembly_houses array is not allowed".into());
-        }
-        crate::board::assembly_house::validate_all(houses)?;
+    if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
+        return Err("board.json: an empty assembly_profiles array is not allowed".into());
     }
+    profile_catalog.validate(board.assembly_profiles.as_deref().unwrap_or_default())?;
     let originated = board.format == ORIGIN_BOARD_FORMAT;
-    if (originated && board.placement_origin.is_none()) || (!originated && !housed && board.placement_origin.is_some()) {
+    if (originated && board.placement_origin.is_none()) || (!originated && !profiled && board.placement_origin.is_some()) {
         return Err("board.json: a placement origin requires format 21 or later, and format 21 requires a placement origin.".into());
     }
     if let Some(origin) = &board.placement_origin {
@@ -809,13 +836,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let zoned = board.format == ZONE_BOARD_FORMAT;
     if (zoned && board.zones.is_none())
-        || (!zoned && !originated && !housed && board.zones.is_some())
+        || (!zoned && !originated && !profiled && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
         return Err("board.json: zones require format 20 or later and a nonempty array; format 20 requires zones.".into());
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
-    if (ruled && board.rules.is_none()) || (!ruled && !originated && !housed && !zoned && board.rules.is_some()) {
+    if (ruled && board.rules.is_none()) || (!ruled && !originated && !profiled && !zoned && board.rules.is_some()) {
         return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
     if let Some(rules) = &board.rules {
@@ -824,10 +851,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !ruled && !originated && !housed && !zoned && locked != authored_locks {
+    if !ruled && !originated && !profiled && !zoned && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || originated || housed || zoned;
+    let locked = locked || ruled || originated || profiled || zoned;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -858,7 +885,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
-            | HOUSE_BOARD_FORMAT
+            | PROFILE_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
     );
     if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
@@ -876,7 +903,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | LOCKED_COPPER_BOARD_FORMAT
                     | RULES_BOARD_FORMAT
                     | ORIGIN_BOARD_FORMAT
-                    | HOUSE_BOARD_FORMAT
+                    | PROFILE_BOARD_FORMAT
                     | ZONE_BOARD_FORMAT
             ))
     {
@@ -963,7 +990,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
-            | HOUSE_BOARD_FORMAT
+            | PROFILE_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
@@ -986,7 +1013,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | LOCKED_COPPER_BOARD_FORMAT
                 | RULES_BOARD_FORMAT
                 | ORIGIN_BOARD_FORMAT
-                | HOUSE_BOARD_FORMAT
+                | PROFILE_BOARD_FORMAT
                 | ZONE_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
@@ -1006,8 +1033,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (HOUSE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (HOUSE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
+        (PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, None) => None,
@@ -1106,7 +1133,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             selections.insert(component.id, reader.selection(record, symbol, documents, &mut used)?);
         }
     }
-    if (!class_format && !parameter_format && !generated_net_format && no_connect_format != (marker_count != 0))
+    if (!class_format && !parameter_format && !generated_net_format && !profile_format && no_connect_format != (marker_count != 0))
         || marker_count > crate::no_connect::MAX_MARKERS
     {
         return Err("Project format 19 requires nonempty bounded no-connect intent.".into());
@@ -1194,7 +1221,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
     Arc::make_mut(&mut project_data.board).rules = board.rules;
     Arc::make_mut(&mut project_data.board).placement_origin = board.placement_origin;
-    Arc::make_mut(&mut project_data.board).assembly_houses = board.assembly_houses.unwrap_or_default();
+    Arc::make_mut(&mut project_data.board).assembly_profiles = board.assembly_profiles.unwrap_or_default();
     Arc::make_mut(&mut project_data.board).outline = board.outline;
     for assignment in board.assignments.into_iter().flatten() {
         if !assignment.valid(project_data) || project_data.board.assignments.contains_key(&assignment.component) {
@@ -1225,6 +1252,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         project_data.net_classes = Arc::new(catalog);
     }
     project_data.parameters = Arc::new(project_parameters);
+    project_data.assembly_profiles = Arc::new(profile_catalog);
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
@@ -1445,6 +1473,8 @@ impl DocumentsEncoder {
                             (false, false) => format,
                         }
                     };
+                    p.assembly_profiles.validate(&p.board.assembly_profiles)?;
+                    let format = if p.assembly_profiles.heads.is_empty() { format } else { ASSEMBLY_PROFILE_PROJECT_FORMAT };
                     if has_metadata && p.numeric_id_high_water.is_none() {
                         return Err("component metadata requires an adopted numeric ID watermark".into());
                     }
@@ -1477,6 +1507,9 @@ impl DocumentsEncoder {
                             writeln!(self.bytes, "      {}{comma}", json(class)?).map_err(|e| e.to_string())?;
                         }
                         self.bytes.extend_from_slice(b"    ]\n  },\n");
+                    }
+                    if !p.assembly_profiles.heads.is_empty() {
+                        writeln!(self.bytes, "  \"assembly_profiles\": {},", json(p.assembly_profiles.as_ref())?).map_err(|e| e.to_string())?;
                     }
                     write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
@@ -1866,7 +1899,7 @@ impl DocumentsEncoder {
 /// uses format 18 while an authored lock exists, unless board defaults require format 19.
 /// Format 19 requires validated rules and accepts earlier physical fields. Format 21
 /// requires a placement origin and accepts every earlier field, including rules. Format 22
-/// requires an assembly house and accepts every earlier field, including an origin. Independent
+/// requires an assembly profile adoption and accepts every earlier field, including an origin. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,
@@ -1894,8 +1927,8 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         });
 
     if let Some(setup) = setup {
-        let format = if !board.assembly_houses.is_empty() {
-            HOUSE_BOARD_FORMAT
+        let format = if !board.assembly_profiles.is_empty() {
+            PROFILE_BOARD_FORMAT
         } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
         } else if !board.zones.is_empty() {
@@ -1958,8 +1991,8 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if !board.assembly_houses.is_empty() {
-            HOUSE_BOARD_FORMAT
+        let format = if !board.assembly_profiles.is_empty() {
+            PROFILE_BOARD_FORMAT
         } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
         } else if !board.zones.is_empty() {
@@ -2020,9 +2053,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         origin.validate()?;
         writeln!(bytes, "  \"placement_origin\": {},", serde_json::to_string(origin).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if !board.assembly_houses.is_empty() {
-        crate::board::assembly_house::validate_all(&board.assembly_houses)?;
-        writeln!(bytes, "  \"assembly_houses\": {},", serde_json::to_string(&board.assembly_houses).map_err(|e| e.to_string())?)
+    if !board.assembly_profiles.is_empty() {
+        project.assembly_profiles.validate(&board.assembly_profiles)?;
+        writeln!(bytes, "  \"assembly_profiles\": {},", serde_json::to_string(&board.assembly_profiles).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
     }
     if let Some(settings) = silkscreen {

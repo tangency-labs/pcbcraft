@@ -258,22 +258,41 @@ Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin wit
 stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
 in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier
 physical field, including optional zone outlines, and requires the origin record; older headers reject it. A board that
-also carries assembly houses saves as format 22 instead, which accepts the origin. Boards
+also adopts assembly output profiles saves as format 22 instead, which accepts the origin. Boards
 without an origin retain their earlier encoding and measure outputs from board zero;
 removing the origin restores the format required by the remaining data.
 
-Board format `pcbcraft-board/22` adds `assembly_houses`, a nonempty list of
-`pcbcraft-assembly-house/1` records in creation order: at most 64 houses, with at
-most 4096 package entries in all houses of the board together. Each has a stable non-nil
-UUID, a unique `name`, a required `bottom_side` (`viewed_from_top` or
-`viewed_from_bottom`) and optional `packages`, sorted by `library` then `definition`
-with one entry each. An entry's `rotation` (1 to 359; omitted when zero, and an explicit 0 or `null` is refused) and
-`centroid` (a nonzero `x_nm`/`y_nm` point within 100 mm of the footprint origin,
-never `null`) are optional, but each entry must change something: a nonzero rotation
-or a centroid. An empty `packages` array is never written and is refused. Format 22 requires at least one
-house and accepts a placement origin, board rules and every earlier physical field;
-older headers reject houses. Boards without houses retain their earlier encoding;
-removing the last house restores the format required by the remaining data.
+Project format `pcbcraft-project/36` adds a required nonempty `assembly_profiles`
+catalog and supports the earlier project fields, including optional parameters,
+net classes and generated net numbers. The catalog has identity-sorted `heads`
+(`profile`, positive content `revision`, `removed`) and `revisions`, sorted by
+profile UUID and content revision. Each pinned record has `format:
+"pcbcraft-assembly-profile/1"`, non-nil `id`, and `content`. Schema and content
+versions are distinct. Content includes a positive 32-bit `revision`, `name`,
+`provenance` (`authored`, or `imported` with a `source` hint), optional `vendor`
+metadata, required `bottom_side` (`viewed_from_top` or `viewed_from_bottom`) and
+optional nonempty `corrections` sorted by `library` then `definition`. Metadata
+strings are 1–64 characters without surrounding whitespace or controls. Active
+latest names are unique. Each correction has a rotation (1–359, omitted at zero,
+never explicit zero or null) and/or nonzero centroid (integer nanometres, each
+axis within 100 mm, never null). IDs, revisions and correction identities are
+unique; unknown fields are refused.
+
+Board format `pcbcraft-board/22` adds required nonempty `assembly_profiles`:
+identity-sorted `{profile, revision}` adoption records resolving exact pinned
+content. It supports optional origin, rules, zones and earlier fields. Older
+headers reject adoption records. Boards without adoptions retain their earlier
+encoding; removing the last adoption restores the remaining data's format.
+
+The project retains at most 64 identities (including retired watermarks), 128
+content revisions and 4096 corrections across retained revisions. An edit retires
+identities without invalidating adoptions; cleanup discards only unused
+superseded or retired payloads in that transaction. Watermarks prevent reuse of
+cleaned revisions. Immutable revision payloads are shared with Undo snapshots.
+No external file or network is needed after adoption. Projects without catalog
+identities keep their earlier encoding; retirement watermarks keep format 36
+necessary even after the last unused payload is released. See the
+[shared commands](mcp.md#assembly-output-profiles) for pin/preview/adopt behaviour.
 
 Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
 all board/19 fields, with board rules optional. A zone board with a placement
@@ -298,10 +317,10 @@ registry's retained identities.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22` or `/23` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, and version 23 adds net-owned generated numbers with optional project parameters |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23` or `/36` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, and version 23 adds net-owned generated numbers with optional project parameters; version 36 adds pinned immutable assembly output profiles |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/4` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, and version 4 adds generated net numbers; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/22` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds assembly house profiles |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/22` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 

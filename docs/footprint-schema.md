@@ -244,19 +244,20 @@ written as X 30 mm at 30 degrees from the top and X -30 mm at 330 degrees from
 below. Y is the same in both. Any rotation is reduced to 0 through 359, and both
 conventions are exact within the board coordinate range.
 
-Generic rows use `viewed_from_top`. An [assembly house](mcp.md#assembly-houses)
-profile names its own convention and may carry offsets per footprint definition,
-for packages whose zero orientation or centroid at that house differs from the
-library's, such as a connector whose reel orientation differs from the IPC-7351
+Generic rows use `viewed_from_top`. An adopted [assembly output profile](mcp.md#assembly-output-profiles)
+names its convention and carries corrections per footprint definition, for packages
+whose output zero orientation or centroid differs from the library's, such as a
+connector whose reel orientation differs from the IPC-7351
 zero component orientation. A rotation offset `o` is counterclockwise seen from the
 component side, so it adds on top-side rows and on bottom-side rows read from below,
 and subtracts on bottom-side rows read from the top, all modulo 360. A centroid
-offset is a point of the library footprint; the house row reports where the board
+offset is a point of the library footprint; the profile-adjusted row reports where the board
 puts that point (mirrored and turned with the footprint, then measured in the row's
 convention) instead of the footprint origin. A +180 degree offset on a top part at
 30 degrees writes 210 degrees; on a bottom part at 30 degrees it writes 210 read
-from the top and 150 read from below. Rows without a house, other packages and
-other houses are unchanged.
+from the top and 150 read from below. Generic rows, other packages and other
+profiles are unchanged. A board explicitly adopts an immutable project-pinned
+content revision; pinning a newer revision does not change an existing adoption.
 
 ## Semantic validation
 

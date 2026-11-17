@@ -393,35 +393,50 @@ are measured from board zero. Gerber writes exact nanometres; Excellon rounds ea
 millimetre value to three decimals from integer nanometres with halves going up, so
 moving the origin by whole micrometres shifts every written value by exactly that amount.
 
-## Assembly houses
+## Assembly output profiles
 
-`pcb.set_assembly_house` saves how one assembly house wants placement rows of a
-board written. It requires an explicit `board`, `expected_revision` and `profile`.
-Without `house` it creates a profile with a new UUID; with `house` (a UUID from
-inspection) it replaces that profile in place, keeping its UUID and position, or
-removes it when `profile` is `null`. A `null` `house` is refused rather than read as a
-new one. Each change is one undo step, and repeating the current profile changes
-nothing.
+`pcb.set_assembly_profile` pins immutable project-owned content. It requires
+`expected_revision` and `content`. Omit `profile` to create a UUID, or supply an
+existing or portable profile UUID. Content has a positive 32-bit `revision`, a
+`name`, and `provenance: {"kind":"authored"}` or
+`{"kind":"imported","source":"<human source hint>"}`. The optional `vendor` is
+metadata, never a behaviour selector. Names, source hints and vendor metadata
+have 1–64 characters without surrounding whitespace or controls; available
+profiles have unique names. `bottom_side` defaults to `viewed_from_top`, or is
+`viewed_from_bottom`. The schema version (`pcbcraft-assembly-profile/1`) is
+independent of content revisions.
 
-A profile is `{"name":...,"bottom_side":...,"packages":[...]}`:
+Optional `corrections` has one entry per `library` and footprint `definition`,
+with a `rotation` (0–359 whole degrees, counterclockwise from the component side)
+and/or a nonzero `centroid` (`x_nm`, `y_nm` in library footprint coordinates, Y
+down, each within 100 mm). Each entry must change something. Commands sort entries
+and omit zero rotation; an empty array is refused. Integer-valued JSON decimal
+spellings are accepted. Corrections apply across definition revisions; legacy
+markers never match. See [placement conventions](footprint-schema.md#placement-output-conventions).
 
-- `name`: 1 to 64 characters, unique on the board, with no control characters and no
-  leading or trailing white space.
-- `bottom_side`: `viewed_from_top` (the default) or `viewed_from_bottom`; see
-  [placement output conventions](footprint-schema.md#placement-output-conventions).
-- `packages` (optional; up to 4096 in all profiles of a board together): one entry per footprint definition, each with
-  `library` and `definition` ids and at least one change. `rotation` is 0 to 359 whole
-  degrees from the library zero orientation to the house's, counterclockwise seen
-  from the component side. `centroid` is a nonzero point in library footprint
-  coordinates (nanometres, Y down, as pad centers are given), at most 100 mm from the
-  footprint origin on each axis. An offset applies to every revision of the
-  definition; legacy marker footprints have no definition and never match.
+An existing ID and content revision is a no-op only for identical content;
+different content is a conflict. New content must exceed that identity's revision
+watermark. `content: null` retires the named identity without changing existing
+adoptions. Reusing an already cleaned revision is refused, even with identical
+content; choose a greater revision instead.
 
-A board holds at most 64 profiles. An edit that would exceed either bound is refused
-as invalid parameters and changes nothing. Board inspection lists them under
-`assembly_houses` in creation order, with packages sorted by library and definition.
-Profiles change no board geometry and no fabrication output; boards without them keep
-their earlier encoding.
+`pcb.preview_assembly_profile` requires `board`, `expected_revision`, `profile`
+and `revision` (a pinned content revision, or null to clear that board's adoption).
+It returns the old/new adoption, changed corrections, bottom convention and actual
+affected placement rows before and after, plus an `acceptance` digest. It edits
+nothing. `pcb.adopt_assembly_profile` accepts the same parameters and that digest,
+recomputing the preview atomically. A stale revision or altered review is refused.
+Pinning is not adoption; only explicit adoption changes profile-adjusted rows.
+Each edit is one undo step and repeated unchanged adoptions are no-ops.
+
+Inspection exposes project `assembly_profiles` (identity watermarks and pinned
+revisions) and board `assembly_profiles` (explicit revision adoptions), sorted by
+identity. Limits are 64 identities including retired ones, 128 retained revisions
+and 4096 corrections across retained revisions. Cleanup on edits releases only
+unadopted superseded or retired payloads; adopted revisions survive retirement,
+offline save/reopen and Undo/Redo. Undo shares immutable payloads. Profiles change
+no board geometry or fabrication output. No placement exporter, import/export
+wrapper or profile-management UI is provided here.
 
 ## Saved board defaults
 
