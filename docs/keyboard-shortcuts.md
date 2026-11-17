@@ -12,7 +12,8 @@ schematic workspace: each placement key below was pressed in a live session and
 the resulting tool, dialog or status-bar hint was observed, and M/G/X/R/E/Q/
 Delete/Undo/unit-switching were exercised on a placed symbol. The in-app
 Shortcuts page reads "The keys PCBCraft answers to. They can't be changed yet."
-macOS uses **⌘** wherever **Ctrl** is shown below; the browser build omits the
+For command chords, macOS uses **⌘** where **Ctrl** is shown below. Wire grid
+bypass still uses physical **Ctrl**, as noted in its row. The browser build omits the
 desktop-only project keys noted in the table and has not been separately
 verified for this inventory.
 
@@ -89,7 +90,7 @@ selection action.
 
 | Key | Action | Conditions |
 | --- | --- | --- |
-| M | Move, disconnecting | With several items or a single wire selected: picks the group up, leaving attached wiring in place — the pointer must be on the canvas to provide the move origin. With a symbol selected or hovered (selection of at most one): picks that symbol up, leaving its wiring; a selected symbol moves regardless of pointer position. No active tool. On a net label or sheet symbol: moves that item. Compare **G**. |
+| M | Move, disconnecting | With several items or a single wire selected: picks the group up, leaving attached wiring in place — the pointer must be on the canvas to provide the move origin. With a symbol selected or hovered (selection of at most one): picks that symbol up, leaving its wiring; a selected symbol moves regardless of pointer position and takes priority over a different hovered symbol. No active tool. On a net label or sheet symbol: moves that item. Compare **G**. |
 | G | Grab, keeping connections | Picks up a multi-item selection, a hovered wire reshape handle, or a hovered symbol while retaining external wiring; click to place. Pointer must be over the canvas; no active tool (or a wire tool that has not started). |
 | R | Rotate | While a placement or move tool is active: rotates the preview 90°. While placing a net label: rotates the label. Hovering a symbol field: rotates the field about its anchor. Hovering a net label: rotates the label. Otherwise rotates the hovered or selected symbol 90° counterclockwise. |
 | X | Mirror horizontally | Mirrors the hovered or selected symbol across its center; wiring stays attached. No active tool. |
@@ -122,7 +123,7 @@ listed beside it.
 | --- | --- | --- |
 | Project keys (Ctrl+N/O/S/Shift+S/,,/Q) | `PcbApp::shortcuts` → `new_project`, `open_project_file`, `save_project_file`, `open_preferences`, `request_project_close` | — |
 | Undo/Redo (Ctrl+Z/Y) | `PcbApp::shortcuts` → `session.available` + `run` on `edit.undo`/`edit.redo` | — |
-| Clipboard (Ctrl+C/X/V/Shift+V, Ctrl+D) | `clipboard_shortcuts` → `copy_clipboard`, `request_clipboard`, `duplicate_clipboard` in `clipboard.rs` | — (board clipboard is covered in `tests/board_tracks.rs`; the schematic chords have no focused test) |
+| Clipboard (Ctrl+C/X/V/Shift+V, Ctrl+D) | `clipboard_shortcuts` → `copy_clipboard`, `request_clipboard`, `duplicate_clipboard` in [clipboard.rs](../crates/app/src/clipboard.rs) | [clipboard/tests.rs](../crates/app/src/clipboard/tests.rs): `copy_between_independent_instances_uses_system_clipboard_events` and `paste_options_and_duplicate_share_the_validated_path` cover OS events and handlers/options, rather than physical key chords |
 | Grid (N, Shift+N) | `PcbApp::shortcuts` → `cycle_grid` | `tests/grid_spacing.rs` (`grid_keys_step_through_the_presets`) |
 | Units (Ctrl+U) | `PcbApp::shortcuts` → `preferences.units.toggled` | `tests/display_units.rs` |
 | A, P | `PcbApp::shortcuts` → `parts.focus_search` / `parts.focus_power` (`parts_browser.rs`) | — |
@@ -139,7 +140,7 @@ listed beside it.
 | Delete/Backspace | `PcbApp::shortcuts` → `delete_selection`; labels/sheets route through `net_labels.rs`/`hierarchy.rs` `Action::Delete` | — |
 | Esc layers | `workspace_panels.rs` `take_panel_escape` → `parts_browser.rs` `take_escape` → `PcbApp::shortcuts` tool cancel → `select` clear | `tests/selection_move.rs` (`group_m_cancels_on_escape_…`) |
 | Alt+Backspace | `PcbApp::shortcuts` → `leave_sheet` (`hierarchy.rs`) | `tests/hierarchy.rs` |
-| Wire Space/Backspace/Enter | `PcbApp::shortcuts` sets `wire_draft` flags; `schematic_canvas/wires.rs` `preview` consumes them (finish requires the pointer's in-canvas target) | `tests/tool_modes.rs` (Enter finish, right-click cancel) |
+| Wire Space/Backspace/Enter | `PcbApp::shortcuts` toggles `wire_draft.horizontal_first` for Space, calls `Draft::back` for Backspace, and sets `finish_requested` for Enter; [schematic_canvas/wires.rs](../crates/app/src/schematic_canvas/wires.rs) `pick` consumes the finish request using the pointer's in-canvas target | `tests/tool_modes.rs` (Enter finish, right-click cancel) |
 | Ctrl grid bypass | `schematic_canvas/wires.rs` `preview` reads `input.modifiers.ctrl` | — |
 | Double-click | `schematic_canvas.rs` (`EditField`/`Edit`), `hierarchy.rs` `Action::Enter` | `tests/hierarchy.rs` |
 
