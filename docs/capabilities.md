@@ -177,6 +177,11 @@ do not yet provide comparison or connections.
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
+The shared `library.available_revisions` query lists existing instances with newer
+loaded native revisions, including through live/headless MCP with `inspect: false`.
+It preserves project pins and history, reports missing/conflicting/unresolved
+sources explicitly, and makes no compatibility or adoption decision; see
+[query available revisions](native-library-sources.md#query-available-revisions).
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

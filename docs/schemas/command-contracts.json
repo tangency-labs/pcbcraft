@@ -3,6 +3,7 @@
   "commands": {
     "edit.redo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "edit.undo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
+    "library.available_revisions": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "library.list_sources": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "library.load_source": {"params":{"additionalProperties":false,"properties":{"documents":{"additionalProperties":{"maxLength":1048576,"type":"string"},"maxProperties":8192,"type":"object"},"source":{"maxLength":64,"minLength":1,"type":"string"}},"required":["source","documents"],"type":"object"}},
     "library.parse_quantity": {"params":{"additionalProperties":false,"properties":{"quantity":{"enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"],"type":"string"},"value":{"maxLength":128,"type":"string"}},"required":["quantity","value"],"type":"object"}},
