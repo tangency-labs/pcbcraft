@@ -102,7 +102,7 @@ pub struct ProfileContent {
     pub vendor: Option<String>,
     pub bottom_side: BottomSide,
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "listed")]
-    pub corrections: Vec<PackageCorrection>,
+    pub corrections: Arc<Vec<Arc<PackageCorrection>>>,
 }
 
 /// A portable, self-contained profile revision. The file wrapper is independent of this record.
@@ -156,7 +156,7 @@ fn deserialize_revisions<'de, D: serde::Deserializer<'de>>(deserializer: D) -> R
 }
 
 /// Canonical correction records never contain an explicit zero rotation or an empty list.
-fn listed<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<PackageCorrection>, D::Error> {
+fn listed<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Arc<Vec<Arc<PackageCorrection>>>, D::Error> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct SavedCorrection {
@@ -171,20 +171,21 @@ fn listed<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Packa
     if saved.is_empty() {
         return Err(serde::de::Error::custom("an empty corrections array is not allowed"));
     }
-    saved
+    let corrections = saved
         .into_iter()
         .map(|entry| {
             if entry.rotation == Some(0) {
                 return Err(serde::de::Error::custom("a zero rotation is omitted, never written"));
             }
-            Ok(PackageCorrection {
+            Ok(Arc::new(PackageCorrection {
                 library: entry.library,
                 definition: entry.definition,
                 rotation: entry.rotation.unwrap_or(0),
                 centroid: entry.centroid,
-            })
+            }))
         })
-        .collect()
+        .collect::<Result<Vec<_>, D::Error>>()?;
+    Ok(Arc::new(corrections))
 }
 
 /// Validate bounded metadata without surrounding whitespace or control characters.
@@ -194,6 +195,22 @@ fn valid_text(text: &str) -> bool {
 }
 
 impl ProfileContent {
+    /// Share unchanged corrections across content revisions; a metadata-only edit shares the list too.
+    fn share_corrections(&mut self, previous: &Self) {
+        if self.corrections == previous.corrections {
+            self.corrections = previous.corrections.clone();
+            return;
+        }
+        for correction in Arc::make_mut(&mut self.corrections) {
+            let key = (&correction.library, &correction.definition);
+            if let Ok(index) = previous.corrections.binary_search_by(|c| (&c.library, &c.definition).cmp(&key))
+                && previous.corrections[index] == *correction
+            {
+                *correction = previous.corrections[index].clone();
+            }
+        }
+    }
+
     /// Check exact integer revisions, bounded metadata and canonical, nonempty corrections.
     pub fn validate(&self) -> Result<(), String> {
         if self.revision == 0 {
@@ -212,7 +229,7 @@ impl ProfileContent {
         if self.corrections.len() > MAX_CORRECTIONS {
             return Err(format!("An assembly profile may carry at most {MAX_CORRECTIONS} corrections."));
         }
-        for correction in &self.corrections {
+        for correction in self.corrections.iter() {
             correction.validate()?;
         }
         if self.corrections.windows(2).any(|pair| (&pair[0].library, &pair[0].definition) >= (&pair[1].library, &pair[1].definition)) {
@@ -238,7 +255,7 @@ impl AssemblyProfile {
             .corrections
             .binary_search_by(|c| (c.library.as_str(), c.definition.as_str()).cmp(&key))
             .ok()
-            .map(|i| &self.content.corrections[i])
+            .map(|i| self.content.corrections[i].as_ref())
     }
 }
 
@@ -399,6 +416,9 @@ fn parse(value: &Value) -> Result<Option<ProfileContent>, String> {
             normalize_number(revision);
         }
         if let Some(corrections) = object.get_mut("corrections").and_then(Value::as_array_mut) {
+            if corrections.len() > MAX_CORRECTIONS {
+                return Err(format!("An assembly profile may carry at most {MAX_CORRECTIONS} corrections."));
+            }
             for correction in corrections.iter_mut().filter_map(Value::as_object_mut) {
                 if let Some(rotation) = correction.get_mut("rotation") {
                     normalize_number(rotation);
@@ -417,7 +437,7 @@ fn parse(value: &Value) -> Result<Option<ProfileContent>, String> {
         }
     }
     let mut profile: ProfileContent = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    profile.corrections.sort_by(|a, b| (&a.library, &a.definition).cmp(&(&b.library, &b.definition)));
+    Arc::make_mut(&mut profile.corrections).sort_by(|a, b| (&a.library, &a.definition).cmp(&(&b.library, &b.definition)));
     profile.validate()?;
     Ok(Some(profile))
 }
@@ -440,7 +460,12 @@ impl Session {
         let content = parse(&params["content"]).map_err(CommandError::InvalidParams)?;
         let catalog = Arc::make_mut(&mut candidate.assembly_profiles);
         match content {
-            Some(content) => {
+            Some(mut content) => {
+                if let Some(head) = catalog.heads.iter().find(|head| head.profile == id)
+                    && let Some(previous) = catalog.get(&Adoption { profile: id, revision: head.revision })
+                {
+                    content.share_corrections(&previous.content);
+                }
                 let record = AssemblyProfile { format: FORMAT.into(), id, content };
                 let adoption = Adoption { profile: id, revision: record.content.revision };
                 if let Some(existing) = catalog.get(&adoption) {
@@ -524,7 +549,13 @@ impl Session {
         let mut corrections = Vec::new();
         for (library, definition) in keys {
             let lookup = |profile: Option<&AssemblyProfile>| {
-                profile.and_then(|p| p.content.corrections.iter().find(|c| &c.library == library && &c.definition == definition)).cloned()
+                profile.and_then(|p| {
+                    p.content
+                        .corrections
+                        .binary_search_by(|c| (&c.library, &c.definition).cmp(&(library, definition)))
+                        .ok()
+                        .map(|index| p.content.corrections[index].clone())
+                })
             };
             let old = lookup(previous);
             let new = lookup(proposed);

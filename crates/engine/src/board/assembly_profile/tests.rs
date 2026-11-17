@@ -246,7 +246,12 @@ fn profiles_leave_fabrication_and_legacy_markers_alone() {
             provenance: Provenance::Authored,
             vendor: None,
             bottom_side: BottomSide::ViewedFromTop,
-            corrections: vec![PackageCorrection { library: LIBRARY.into(), definition: definition.into(), rotation: 90, centroid: None }],
+            corrections: Arc::new(vec![Arc::new(PackageCorrection {
+                library: LIBRARY.into(),
+                definition: definition.into(),
+                rotation: 90,
+                centroid: None,
+            })]),
         },
     };
     assert!(profile.validate().is_ok());
@@ -277,7 +282,9 @@ fn profiles_are_edited_in_one_undo_step() {
     assert_eq!(view(&s).assembly_profiles(), &[Adoption { profile: id, revision: 1 }]);
     let inspected = s.inspect();
     assert_eq!(inspected["project"]["boards"][0]["assembly_profiles"], json!([{"profile":id,"revision":1}]));
-    assert_eq!(inspected["project"]["assembly_profiles"]["revisions"][0]["content"], c);
+    let mut canonical = c.clone();
+    canonical["bottom_side"] = json!("viewed_from_top");
+    assert_eq!(inspected["project"]["assembly_profiles"]["revisions"][0]["content"], canonical);
     s.apply("edit.undo", &Value::Null).unwrap();
     crate::assert_same_content(&pinned, &s.snapshot().unwrap());
     s.apply("edit.undo", &Value::Null).unwrap();
@@ -422,29 +429,42 @@ fn largest_allowed_profile_catalog_serializes_under_two_mebibytes() {
     for h in 0..MAX_PROFILES {
         let id = Uuid::from_u128(h as u128 + 1);
         catalog.heads.push(ProfileHead { profile: id, revision: u32::MAX, removed: false });
-        catalog.revisions.push(Arc::new(AssemblyProfile {
-            format: FORMAT.into(),
-            id,
-            content: ProfileContent {
-                revision: u32::MAX,
-                name: format!("{h:02}{}", "\u{10ffff}".repeat(MAX_NAME_CHARS - 2)),
-                vendor: Some("\u{10ffff}".repeat(MAX_NAME_CHARS)),
-                provenance: Provenance::Imported { source: "\u{10ffff}".repeat(MAX_NAME_CHARS) },
-                bottom_side: BottomSide::ViewedFromBottom,
-                corrections: (0..MAX_CORRECTIONS / MAX_PROFILES)
-                    .map(|n| PackageCorrection {
-                        library: format!("{h:05}{}", "x".repeat(59)),
-                        definition: format!("{n:05}{}", "x".repeat(59)),
-                        rotation: 359,
-                        centroid: Some(Point { x_nm: -MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }),
-                    })
-                    .collect(),
-            },
-        }));
+        for revision in [u32::MAX - 1, u32::MAX] {
+            catalog.revisions.push(Arc::new(AssemblyProfile {
+                format: FORMAT.into(),
+                id,
+                content: ProfileContent {
+                    revision,
+                    name: format!("{h:02}{}", "\u{10ffff}".repeat(MAX_NAME_CHARS - 2)),
+                    vendor: Some("\u{10ffff}".repeat(MAX_NAME_CHARS)),
+                    provenance: Provenance::Imported { source: "\u{10ffff}".repeat(MAX_NAME_CHARS) },
+                    bottom_side: BottomSide::ViewedFromBottom,
+                    corrections: Arc::new(
+                        (0..MAX_CORRECTIONS / MAX_REVISIONS)
+                            .map(|n| {
+                                Arc::new(PackageCorrection {
+                                    library: format!("{h:05}{}", "x".repeat(59)),
+                                    definition: format!("{n:05}{}", "x".repeat(59)),
+                                    rotation: 359,
+                                    centroid: Some(Point { x_nm: -MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }),
+                                })
+                            })
+                            .collect(),
+                    ),
+                },
+            }));
+        }
     }
-    catalog.validate(&[]).unwrap();
+    let adoptions: Vec<_> = catalog.heads.iter().map(|head| Adoption { profile: head.profile, revision: head.revision - 1 }).collect();
+    catalog.validate(&adoptions).unwrap();
+    assert_eq!(catalog.revisions.len(), MAX_REVISIONS);
+    assert_eq!(catalog.revisions.iter().map(|r| r.content.corrections.len()).sum::<usize>(), MAX_CORRECTIONS);
     let bytes = serde_json::to_vec_pretty(&catalog).unwrap().len();
     assert!(bytes < crate::persistence::MAX_DOCUMENT_BYTES / 8, "{bytes}");
+    let mut extra = (*catalog.revisions[0]).clone();
+    extra.content.revision -= 1;
+    catalog.revisions.insert(0, Arc::new(extra));
+    refused_because(catalog.validate(&adoptions), "128 revisions");
 }
 
 /// Project/36 pins profiles and board/22 adopts them; malformed records and dangling adoptions fail.
@@ -585,4 +605,140 @@ fn removal_and_cleanup_preserve_adoptions_and_undo_redo() {
     s.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), retired);
     assert_eq!(first.assembly_profiles.revisions[0].content.revision, 1, "cleanup cannot mutate history");
+}
+
+/// Metadata-only revisions share correction lists; changing one correction shares every intact sibling.
+#[test]
+fn content_revisions_share_unchanged_corrections_with_history() {
+    let (mut s, _) = fixture();
+    let id = Uuid::from_u128(91);
+    let initial = content(
+        json!({"name":"First","corrections":[
+            {"library":LIBRARY,"definition":"capacitor-0402","rotation":90},
+            {"library":LIBRARY,"definition":"resistor-0402","rotation":180}
+        ]}),
+        1,
+    );
+    pin(&mut s, Some(id), initial.clone()).unwrap();
+    let first = s.snapshot().unwrap();
+    let mut metadata = initial;
+    metadata["revision"] = json!(2);
+    metadata["name"] = json!("Renamed");
+    pin(&mut s, Some(id), metadata.clone()).unwrap();
+    let second = s.snapshot().unwrap();
+    let a = &first.assembly_profiles.revisions[0].content.corrections;
+    let b = &second.assembly_profiles.revisions[0].content.corrections;
+    assert!(Arc::ptr_eq(a, b), "metadata edits do not copy the correction list");
+    metadata["revision"] = json!(3);
+    metadata["corrections"][1]["rotation"] = json!(270);
+    pin(&mut s, Some(id), metadata).unwrap();
+    let third = s.snapshot().unwrap();
+    let c = &third.assembly_profiles.revisions[0].content.corrections;
+    assert!(!Arc::ptr_eq(b, c));
+    assert!(Arc::ptr_eq(&b[0], &c[0]));
+    assert!(!Arc::ptr_eq(&b[1], &c[1]));
+    assert_eq!(a[1].rotation, 180, "old snapshots remain immutable");
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&second, &s.snapshot().unwrap());
+    s.apply("edit.redo", &Value::Null).unwrap();
+    crate::assert_same_content(&third, &s.snapshot().unwrap());
+}
+
+/// The schema snapshot is the actual catalog schema, also checked with a real JSON Schema validator.
+#[test]
+fn command_numeric_spellings_match_the_schema_snapshot() {
+    assert_eq!(schema(), serde_json::from_str::<Value>(include_str!("content-schema.json")).unwrap());
+    for (number, expected) in [
+        ("1.0", Some(1)),
+        ("1e0", Some(1)),
+        ("-0", Some(0)),
+        ("1.5", None),
+        ("1e-1", None),
+        ("4294967295.0", Some(u32::MAX as i64)),
+        ("9007199254740993", Some(9007199254740993)),
+        ("9223372036854775806", Some(i64::MAX - 1)),
+        ("9223372036854775807", Some(i64::MAX)),
+        ("18446744073709551615", None),
+    ] {
+        assert_eq!(integer(&serde_json::from_str::<Value>(number).unwrap()), expected, "{number}");
+    }
+    for spelling in ["1.0", "1e0", "4294967295.0"] {
+        let (mut s, _) = fixture();
+        let id = Uuid::from_u128(92);
+        let number: Value = serde_json::from_str(spelling).unwrap();
+        let profile = json!({"name":"Numeric","revision":number,"provenance":{"kind":"authored"},"corrections":[
+            {"library":LIBRARY,"definition":"resistor-0402","rotation":serde_json::from_str::<Value>("-0").unwrap(),"centroid":{"x_nm":serde_json::from_str::<Value>("1e0").unwrap(),"y_nm":serde_json::from_str::<Value>("-0").unwrap()}}
+        ]});
+        crate::ParamKind::AssemblyProfile.validate(&profile).unwrap();
+        pin(&mut s, Some(id), profile).unwrap();
+        let board = s.project().unwrap().board_target().unwrap().board;
+        let mut adoption = json!({"board":board,"expected_revision":s.revision(),"profile":id,"revision":number});
+        let preview = s.execute(PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap();
+        adoption["acceptance"] = preview["acceptance"].clone();
+        s.apply(ADOPT_ASSEMBLY_PROFILE, &adoption).unwrap();
+        assert_eq!(view(&s).assembly_profiles()[0].revision, integer(&number).unwrap() as u32);
+        let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    }
+    for bad in ["0", "-0", "-1", "1.5", "4294967296", "9007199254740993", "18446744073709551615"] {
+        let (mut s, _) = fixture();
+        let mut profile = content(json!({"name":"Bad"}), 1);
+        profile["revision"] = serde_json::from_str(bad).unwrap();
+        let before = s.snapshot().unwrap();
+        invalid_because(pin(&mut s, None, profile), "immutable profile content");
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+}
+
+/// Required saved fields, unique identities and references are enforced without masking errors.
+#[test]
+fn saved_catalog_and_adoption_edges_are_refused() {
+    let (mut s, _) = fixture();
+    set(&mut s, Some(Uuid::from_u128(1)), json!({"name":"One"})).unwrap();
+    set(&mut s, Some(Uuid::from_u128(2)), json!({"name":"Two"})).unwrap();
+    let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&docs);
+    let project: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
+    let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
+    let check = |key: &str, value: Value, reason: &str| {
+        let mut altered = docs.clone();
+        altered.insert(key.into(), serde_json::to_vec(&value).unwrap());
+        refused_because(decode_documents(&altered), reason);
+    };
+    let mut missing = project.clone();
+    missing["assembly_profiles"]["revisions"][0]["content"].as_object_mut().unwrap().remove("bottom_side");
+    check("project.json", missing, "bottom_side");
+    let mut nil = project.clone();
+    nil["assembly_profiles"]["heads"][0]["profile"] = json!(Uuid::nil());
+    check("project.json", nil, "non-nil");
+    let mut duplicate = project.clone();
+    duplicate["assembly_profiles"]["revisions"][1]["id"] = json!(Uuid::from_u128(1));
+    check("project.json", duplicate, "unique and sorted");
+    let mut names = project.clone();
+    names["assembly_profiles"]["revisions"][1]["content"]["name"] = json!("One");
+    check("project.json", names, "names must be unique");
+    let mut no_catalog = project.clone();
+    no_catalog.as_object_mut().unwrap().remove("assembly_profiles");
+    check("project.json", no_catalog, "assembly profiles require");
+    for (adoptions, reason) in [(json!([]), "empty assembly_profiles"), (Value::Null, "null")] {
+        let mut bad = board.clone();
+        bad["assembly_profiles"] = adoptions;
+        check(&path, bad, reason);
+    }
+    let mut older = board.clone();
+    older["format"] = json!("pcbcraft-board/21");
+    check(&path, older, "adoptions require format 22");
+    let mut omitted = board.clone();
+    omitted.as_object_mut().unwrap().remove("assembly_profiles");
+    check(&path, omitted, "adoptions require format 22");
+    let mut duplicates = board;
+    duplicates["assembly_profiles"][1] = duplicates["assembly_profiles"][0].clone();
+    check(&path, duplicates, "unique, sorted");
+    let before = s.snapshot().unwrap();
+    invalid_because(pin(&mut s, None, content(json!({"name":"One"}), 1)), "names must be unique");
+    invalid_because(
+        s.apply(SET_ASSEMBLY_PROFILE, &json!({"profile":null,"content":content(json!({"name":"Null"}),1),"expected_revision":s.revision()})),
+        "non-nil UUID",
+    );
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
