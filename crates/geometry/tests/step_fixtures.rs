@@ -379,8 +379,11 @@ fn fixture_splices_and_reader_payloads_support_lf_and_crlf() {
             }
         }
     }
-    assert!(std::panic::catch_unwind(|| append_entities("not a STEP footer", &[])).is_err());
-    assert!(std::panic::catch_unwind(|| append_entities("ENDSEC;\nEND-ISO-10303-21;\nENDSEC;\nEND-ISO-10303-21;", &[])).is_err());
+    for broken in ["not a STEP footer", "ENDSEC;\nEND-ISO-10303-21;\nENDSEC;\nEND-ISO-10303-21;"] {
+        let error = std::panic::catch_unwind(|| append_entities(broken, &[])).unwrap_err();
+        let message = error.downcast_ref::<String>().unwrap();
+        assert!(message.contains("one data-section footer"), "{message}");
+    }
 }
 
 /// Alternating mapped targets and plain relationship companions, ending in the block. Each
