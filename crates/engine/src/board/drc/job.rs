@@ -24,6 +24,7 @@ pub struct CheckJob {
     report: Option<Report>,
     zone_worker: Option<super::super::fill::FillJob>,
     zone_problems: Option<Vec<super::super::fill::Problem>>,
+    zone_fill: Option<std::sync::Arc<super::super::fill::Fill>>,
 }
 
 impl Session {
@@ -61,6 +62,7 @@ impl Session {
             report: None,
             zone_worker,
             zone_problems: None,
+            zone_fill: None,
         })
     }
 }
@@ -72,10 +74,13 @@ impl CheckJob {
         self.zone_worker.as_mut().map(|job| job.worker_request_with_diagnostics(Some(self.source.effective.values)))
     }
 
-    /// Accept same-source zone geometry/diagnostics before resuming incremental checking.
+    /// Retain validated same-source material and diagnostics before resuming checking. A
+    /// calculation refusal becomes an unavailable-zone finding; malformed or stale input fails.
     pub fn accept_browser_zones(&mut self, response: &str) -> Result<(), String> {
         let job = self.zone_worker.as_mut().ok_or("No isolated checker zone work was requested.")?;
-        self.zone_problems = Some(job.accept_worker_diagnostics(response)?);
+        let (fill, problems) = job.accept_worker_diagnostics(response)?;
+        self.zone_fill = fill;
+        self.zone_problems = Some(problems);
         Ok(())
     }
 
@@ -189,10 +194,11 @@ impl CheckJob {
                     if let Some(problems) = self.zone_problems.take() {
                         BoardView::add_zone_problems(problems, &mut self.found);
                     } else {
-                        view.check_zones(g, rules, &mut self.found);
+                        let (fill, problems) = super::super::fill::diagnostics_with_fill(view, g, rules);
+                        self.zone_fill = fill;
+                        BoardView::add_zone_problems(problems, &mut self.found);
                     }
-                    let fill = view.filled_zones().and_then(Result::ok);
-                    let members = fill.as_ref().map_or(&g.members, |fill| &fill.members);
+                    let members = self.zone_fill.as_ref().map_or(&g.members, |fill| &fill.members);
                     view.check_shorts(&g.lands, members, &g.items, &mut self.found);
                 }
             }
@@ -248,8 +254,7 @@ impl CheckJob {
                 }
             }
             6 => {
-                let fill = view.filled_zones().and_then(Result::ok);
-                let copper = fill.as_ref().map_or(&self.copper, |fill| &fill.copper);
+                let copper = self.zone_fill.as_ref().map_or(&self.copper, |fill| &fill.copper);
                 if let Some(r) = view.ratsnest_with_copper(copper) {
                     for l in r.lines {
                         self.found.push(Violation {

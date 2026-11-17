@@ -482,3 +482,132 @@ fn derived_pour_commands_do_not_report_recoverable_edits() {
     s.apply("project.rename", &json!({"name":"Recovery still observes edits"})).unwrap();
     assert_eq!(*log.0.lock().unwrap(), ["project.rename"]);
 }
+
+/// A valid-source kernel refusal is an unavailable-zone finding, while malformed, foreign,
+/// missing-diagnostics and invalid-geometry responses cannot resume a browser check.
+#[test]
+fn browser_fill_failure_continues_other_checks_but_invalid_responses_fail() {
+    let mut s = fixture(Connection::Solid, 0);
+    let ids: Vec<_> = view(&s).drawings().iter().map(|d| d.id).collect();
+    for id in ids {
+        s.apply(crate::DELETE_DRAWING, &json!({"drawing":id,"expected_revision":s.revision()})).unwrap();
+    }
+    let params = json!({});
+    let mut job = s.design_check_job(&params).unwrap();
+    let request = job.browser_zone_request().unwrap().unwrap();
+    let response = super::worker::execute(&request);
+    let wire: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert!(wire["result"]["Err"].as_str().unwrap().contains("closed Board Outline"));
+    for invalid in ["not JSON".to_owned(), {
+        let mut other = wire.clone();
+        other["source"] = json!("foreign");
+        other.to_string()
+    }] {
+        assert!(job.accept_browser_zones(&invalid).is_err());
+    }
+    job.accept_browser_zones(&response).unwrap();
+    while !job.step(7) {}
+    let report = job.take_report().unwrap();
+    assert!(report.counts.get(&super::super::drc::Kind::ZoneFillUnavailable).copied().unwrap_or(0) > 0);
+    assert!(report.counts.get(&super::super::drc::Kind::Unconnected).copied().unwrap_or(0) > 0);
+    assert_eq!(json!(report), s.check_design(&params).unwrap());
+
+    let s = fixture(Connection::Solid, 0);
+    let mut job = s.design_check_job(&params).unwrap();
+    let request = job.browser_zone_request().unwrap().unwrap();
+    let response = super::worker::execute(&request);
+    let wire: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let mut missing = wire.clone();
+    missing["diagnostics"] = serde_json::Value::Null;
+    assert!(job.accept_browser_zones(&missing.to_string()).unwrap_err().contains("omitted checker diagnostics"));
+    let mut broken = wire.clone();
+    broken["result"]["Ok"]["members"] = json!([[999999999]]);
+    assert!(job.accept_browser_zones(&broken.to_string()).is_err());
+    s.prepare_zone_fill(view(&s).target, true).unwrap();
+    assert!(job.accept_browser_zones(&response).is_err());
+}
+
+/// Incremental phases use the material accepted with zone diagnostics even after the shared
+/// slot is replaced. Hosts still reject jobs whose live authority has been revoked.
+#[test]
+fn incremental_checks_retain_the_fill_used_for_zone_diagnostics() {
+    for browser in [false, true] {
+        let s = fixture(Connection::Solid, 0);
+        let params = json!({});
+        let mut job = s.design_check_job(&params).unwrap();
+        if browser {
+            let request = job.browser_zone_request().unwrap().unwrap();
+            job.accept_browser_zones(&super::worker::execute(&request)).unwrap();
+        }
+        while job.progress().stage != "Copper clearance" {
+            assert!(!job.step(32));
+        }
+        let expected = s.check_design(&params).unwrap();
+        s.prepare_zone_fill(view(&s).target, true).unwrap();
+        assert!(view(&s).filled_zones().is_none());
+        while !job.step(32) {}
+        assert_eq!(json!(job.take_report().unwrap()), expected, "browser={browser}");
+    }
+}
+
+/// A stricter diagnostic threshold checks retained foreign-zone material without regenerating it.
+#[test]
+fn stricter_diagnostics_detect_foreign_zone_island_clearance() {
+    let mut s = fixture(Connection::Solid, 0);
+    let (net, layer) = (view(&s).zones()[0].net, view(&s).zones()[0].layer);
+    let geometry = BoardGeometry::new(view(&s));
+    let other = obstacles(view(&s), &geometry).unwrap().into_iter().find(|o| o.pad && o.net.is_some() && o.net != Some(net)).unwrap();
+    let target = view(&s).net_class_target_for_copper(&other.object.name).unwrap().unwrap();
+    let points =
+        [[8_000_000, 5_000_000], [16_000_000, 5_000_000], [16_000_000, 15_000_000], [8_000_000, 15_000_000]].map(|[x_nm, y_nm]| Point { x_nm, y_nm });
+    s.apply(ADD_ZONE,&json!({"target":target,"layer":layer,"points":points,"options":Options{priority:1,connection:Connection::Solid,..Options::default()},"expected_revision":s.revision()})).unwrap();
+    let v = view(&s);
+    let fill = v.fill_for_check().unwrap();
+    let native = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let minimum = diagnostics(v, &BoardGeometry::new(v), v.effective_rules().values);
+    assert!(!minimum.iter().any(|p| p.message.contains("another zone's clearance")));
+    let stricter = diagnostics(v, &BoardGeometry::new(v), super::super::rules::Values { clearance_nm: 500_000, ..v.effective_rules().values });
+    let pair = stricter.iter().find(|p| p.message.contains("another zone's clearance")).expect("foreign material gap must be checked");
+    assert!(matches!(pair.kind, ProblemKind::Clearance));
+    assert!(v.zones().iter().any(|z| z.id == pair.zone));
+    assert!(v.zones().iter().any(|z| pair.items.contains(&z.id.to_string())));
+    assert!(Arc::ptr_eq(&fill, &v.filled_zones().unwrap().unwrap()));
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), native);
+}
+
+/// Main's synthetic via membership stays electrically and physically valid through pours,
+/// native material-report format 25 and isolated fill transport.
+#[test]
+fn assigned_via_only_net_joins_its_zone_and_survives_report_worker_transport() {
+    let mut s = fixture(Connection::Solid, 0);
+    let zone = view(&s).zones()[0].clone();
+    s.apply(super::super::zones::DELETE_ZONES, &json!({"zones":[zone.id],"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::net_labels::ADD, &json!({"name":"Via only fill","style":"global","x_nm":-90_000_000,"y_nm":0,"expected_revision":s.revision()}))
+        .unwrap();
+    let registry = s.project().unwrap().inspect_net_registry().unwrap();
+    let target =
+        json!({"kind":"derived","anchor":registry["nets"].as_array().unwrap().iter().find(|n|n["name"]=="Via only fill").unwrap()["anchor"]});
+    s.apply(crate::ADD_VIA, &json!({"at":{"x_nm":12_000_000,"y_nm":20_000_000},"target":target,"expected_revision":s.revision()})).unwrap();
+    s.apply(ADD_ZONE,&json!({"layer":zone.layer,"target":target,"points":zone.points,"options":Options{connection:Connection::Solid,..Options::default()},"expected_revision":s.revision()})).unwrap();
+    let via = view(&s).vias().last().unwrap().clone();
+    let mut setup = serde_json::to_value(view(&s).setup().unwrap()).unwrap();
+    let mut material = serde_json::to_value(super::super::materials::Material::new("Worker reports".into()).unwrap()).unwrap();
+    material["cti"] = json!([{"cti_v":175,"material_group":"IIIa","basis":"minimum","source":{"document":"Synthetic report"}}]);
+    setup.as_object_mut().unwrap().entry("materials").or_insert_with(|| json!([])).as_array_mut().unwrap().push(material);
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":s.revision()})).unwrap();
+    let bytes = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    assert!(bytes.values().any(|b| String::from_utf8_lossy(b).contains("pcbcraft-board/25")));
+    let mut job = s.prepare_zone_fill(view(&s).target, true).unwrap();
+    let request = job.worker_request().unwrap();
+    let fill = job.accept_worker_response(&super::worker::execute(&request)).unwrap().unwrap();
+    let v = view(&s);
+    let geometry = BoardGeometry::new(v);
+    assert_eq!(
+        obstacles(v, &geometry).unwrap().iter().find(|o| o.object.name == via.id.to_string()).unwrap().net,
+        Some(via.net_assignment.unwrap().net)
+    );
+    let index = geometry.lands.len() + v.tracks().len() + v.vias().iter().position(|v| v.id == via.id).unwrap();
+    assert!(fill.zones.iter().any(|z| z.islands.iter().any(|i| i.contacts.contains(&index))));
+    assert_eq!(v.copper_nets().get(&via.id).map(String::as_str), Some("Via only fill"));
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+}

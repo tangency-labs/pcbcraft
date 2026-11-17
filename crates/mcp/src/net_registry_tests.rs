@@ -473,3 +473,51 @@ fn zone_commands_share_live_and_headless_authority() {
     }
     assert!(editor.session.project().unwrap().boards().next().unwrap().zones().is_empty());
 }
+
+/// Headless/live adapters discover and execute the same via policies, including modal and stale refusal.
+#[test]
+fn via_net_assignment_is_shared_by_live_and_headless_clients() {
+    let mut setup = Session::default();
+    apply(&mut setup, "project.new", json!({"create_board":true}));
+    apply(&mut setup, pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    apply(&mut setup, pcbcraft_engine::net_labels::ADD, json!({"name":"GND","style":"global","x_nm":0,"y_nm":0}));
+    let row = setup.project().unwrap().inspect_net_registry().unwrap()["nets"][0].clone();
+    let target = json!({"kind":"derived","anchor":row["anchor"]});
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut session = Session::default();
+    session.open_snapshot(snapshot.clone());
+    let mut editor = OpenEditor { session, blocked: false };
+    let commands = headless.call("engine.commands", json!({})).unwrap();
+    assert!(commands.as_array().unwrap().iter().any(|c| c["id"] == pcbcraft_engine::SET_VIA_NET));
+    let request = json!({"command":pcbcraft_engine::ADD_VIA,"params":{"at":{"x_nm":10_000_000,"y_nm":10_000_000},"target":target,"expected_revision":editor.session.revision()}});
+    editor.blocked = true;
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    editor.blocked = false;
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    let headless_result = headless.call("engine.execute", request).unwrap();
+    for result in [&live, &headless_result] {
+        let via = &result["project"]["boards"][0]["vias"][0];
+        assert_eq!(via["assignment_mode"], "explicit");
+        assert_eq!(via["net_state"], "active");
+        assert_eq!(via["net"], "GND");
+        assert_eq!(via["connected_to_pad"], false);
+    }
+    for (live_client, result) in [(true, live), (false, headless_result)] {
+        let id = &result["project"]["boards"][0]["vias"][0]["id"];
+        let request = json!({"command":pcbcraft_engine::SET_VIA_NET,"params":{"vias":[id],"automatic":true,"expected_revision":result["revision"]}});
+        let cleared = if live_client {
+            call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap()
+        } else {
+            headless.call("engine.execute", request.clone()).unwrap()
+        };
+        assert_eq!(cleared["project"]["boards"][0]["vias"][0]["assignment_mode"], "automatic");
+        let stale = if live_client {
+            call_editor(&mut editor, &json!({"method":"engine.execute","params":request}))
+        } else {
+            headless.call("engine.execute", request)
+        };
+        assert!(stale.is_err());
+    }
+}

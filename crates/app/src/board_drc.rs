@@ -65,6 +65,7 @@ fn label(kind: Kind) -> &'static str {
         Kind::ZoneDisconnected => "Disconnected zone island",
         Kind::ZoneFillUnavailable => "Zone fill unavailable",
         Kind::NetClassConflict => "Conflicting net-class rules",
+        Kind::ViaNetUnresolved => "Unresolved via net",
         Kind::UnsupportedNetClasses => "Unsupported net-class rules",
         Kind::Short => "Short",
         Kind::Clearance => "Clearance",

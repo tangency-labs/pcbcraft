@@ -113,6 +113,8 @@ pub(super) struct State {
     pub(super) tool: bool,
     /// Place › Via: each click places one standalone via until Esc or right-click.
     pub(super) via_tool: bool,
+    pub(super) via_target: Option<pcbcraft_engine::nets::ClassTarget>,
+    pub(super) via_choices: Option<(BoardTarget, u64, Vec<crate::board_net_choice::NetChoice>)>,
     pub(super) width_nm: i64,
     pub(super) via_diameter_nm: i64,
     pub(super) via_drill_nm: i64,
@@ -155,6 +157,8 @@ impl Default for State {
             via_drill_override: None,
             tool: false,
             via_tool: false,
+            via_target: None,
+            via_choices: None,
             width_nm: DEFAULT_WIDTH_NM,
             via_diameter_nm: DEFAULT_VIA_DIAMETER_NM,
             via_drill_nm: DEFAULT_VIA_DRILL_NM,
@@ -213,7 +217,8 @@ impl State {
         via: bool,
     ) -> Result<(i64, Option<Arc<Applied>>), CommandError> {
         let base = board.effective_rules().values;
-        let policy = board.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions());
+        let policy = if via && let Some(target) = &self.via_target { board.via_target_rules(target)? } else { board.route_rules_at(at, layer)? }
+            .filter(|policy| policy.has_dimensions());
         let clearance = if let Some(policy) = &policy {
             if via {
                 (self.via_diameter_nm, self.via_drill_nm) = policy.via_sizes(self.via_diameter_override, self.via_drill_override)?;
@@ -237,6 +242,14 @@ impl State {
         self.class_defaults = policy.is_some();
         Ok((clearance, policy.map(Arc::new)))
     }
+    /// Refresh the shared board-net chooser once per source revision, outside repeated form painting.
+    pub(super) fn refresh_net_choices(&mut self, board: BoardView<'_>, revision: u64) {
+        if self.via_choices.as_ref().is_none_or(|(b, r, _)| *b != board.target || *r != revision) {
+            self.via_choices =
+                Some((board.target, revision, board.inspect_zone_nets().map(|rows| crate::board_net_choice::net_choices(&rows)).unwrap_or_default()));
+        }
+    }
+
     /// Refresh preferred sizes when switching boards or changing saved rules. Explicit local
     /// size choices survive ordinary edits; a rule change resets them and invalidates drafts.
     pub(super) fn sync_rules(&mut self, board: BoardView<'_>) {
@@ -245,6 +258,10 @@ impl State {
             return;
         }
         let target_changed = self.rules_source.as_ref().is_some_and(|(target, _)| *target != key.0);
+        if target_changed {
+            self.via_target = None;
+            self.via_choices = None;
+        }
         if target_changed || key.1.is_some() || self.rules_source.as_ref().is_some_and(|(_, rules)| rules.is_some()) {
             let values = board.effective_rules().values;
             self.width_nm = values.preferred_track_width_nm;
@@ -278,6 +295,8 @@ impl State {
         self.committed_move = None;
         self.tool = false;
         self.via_tool = false;
+        self.via_target = None;
+        self.via_choices = None;
         self.draft = None;
         self.delete_requested = false;
         self.finish_requested = false;
@@ -754,11 +773,12 @@ pub(super) fn interact(
                 segments: Vec::new(),
                 vias: vec![at],
             });
-            out.command = Some(Command::new(
-                source,
-                pcbcraft_engine::ADD_VIA,
-                json!({"at":at,"via_diameter_nm":state.via_diameter_nm,"via_drill_nm":state.via_drill_nm,"expected_revision":source.revision}),
-            ));
+            let mut params =
+                json!({"at":at,"via_diameter_nm":state.via_diameter_nm,"via_drill_nm":state.via_drill_nm,"expected_revision":source.revision});
+            if let Some(target) = &state.via_target {
+                params["target"] = json!(target);
+            }
+            out.command = Some(Command::new(source, pcbcraft_engine::ADD_VIA, params));
         }
         return out;
     }

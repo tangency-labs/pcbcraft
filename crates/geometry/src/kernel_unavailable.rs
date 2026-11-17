@@ -21,13 +21,24 @@ pub(crate) fn bounds(body: &KernelBody) -> Result<([f64; 3], [f64; 3])> {
     match *body {}
 }
 
+/// Never called, since no [`KernelBody`] exists.
+pub(crate) fn transformed(body: &KernelBody, _matrix: &[[f64; 4]; 4]) -> Result<KernelBody> {
+    match *body {}
+}
+
 /// Never reached with a body, since none exists: always `kernel_unavailable`.
 pub(crate) fn write(_part_name: &str, _bodies: &[(&str, &KernelBody)]) -> Result<String> {
     Err(unavailable("STEP write"))
 }
 
-/// The named bodies read from a file, and the solid items refused.
-pub(crate) type Read = (Vec<(String, KernelBody)>, Vec<RefusedItem>);
+/// What a file holds: its named bodies, their placements and the solid items refused. Never
+/// built without a kernel.
+#[allow(dead_code)]
+pub(crate) struct Read {
+    pub(crate) bodies: Vec<(String, KernelBody)>,
+    pub(crate) placements: Vec<(usize, [[f64; 4]; 4])>,
+    pub(crate) refused: Vec<RefusedItem>,
+}
 
 /// No STEP text can be read: always `kernel_unavailable`.
 pub(crate) fn read(_text: &str) -> Result<Read> {

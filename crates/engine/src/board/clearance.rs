@@ -345,26 +345,26 @@ impl BoardGeometry {
         merged: Vec<Vec<usize>>,
     ) -> Self {
         let project = view.project();
-        let baseline = project.board.baseline.as_ref();
-        let accepted = baseline.map(|b| b.terminal_net_index());
-        let graph = baseline.is_none().then(|| project.electrical_connectivity());
-        let pad_nets: Vec<Option<usize>> = lands
+        let intent = project.board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership(project, &lands, view.tracks().len(), view.vias(), &intent);
+        let names: Vec<Option<String>> = members
             .iter()
-            .map(|land| {
-                let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
-                let (component, terminal) = project.board.component_pin_for(pad)?;
-                if let Some(accepted) = &accepted {
-                    accepted.get(&(component, terminal)).copied()
-                } else {
-                    graph.as_ref()?.net_index_for(project.component_terminal(component, terminal)?)
+            .map(|nodes| {
+                let unresolved = nodes
+                    .iter()
+                    .filter_map(|n| n.checked_sub(lands.len() + view.tracks().len()).and_then(|i| view.vias().get(i)))
+                    .any(|v| v.net_assignment.is_some_and(|a| project.via_net_state(a) != "active"));
+                let nets: BTreeSet<_> = nodes.iter().filter_map(|n| intrinsic[*n]).collect();
+                if unresolved || nets.len() != 1 {
+                    return None;
                 }
+                intent.names.get(nets.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
             })
             .collect();
-        let names: Vec<Option<String>> = members.iter().map(|nodes| nodes.iter().find_map(|node| lands.get(*node)?.net.clone())).collect();
         let members = merged;
         let mut node_nets = vec![Vec::new(); lands.len() + view.tracks().len() + view.vias().len()];
         for nodes in &members {
-            let nets: Vec<_> = nodes.iter().filter_map(|node| pad_nets.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
+            let nets: Vec<_> = nodes.iter().filter_map(|node| intrinsic.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
             for &node in nodes {
                 node_nets[node] = nets.clone();
             }
@@ -378,7 +378,7 @@ impl BoardGeometry {
                 contour: land.contour(),
                 layers: land.layers.clone(),
                 island,
-                intended_nets: pad_nets[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
+                intended_nets: intrinsic[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
                 net: land.net.clone().or_else(|| names[island].clone()),
                 at,
             });

@@ -292,7 +292,11 @@ impl PcbApp {
                 shortcut: &fill_shortcut,
                 enabled: enabled
                     && !editing
-                    && self.session.project().and_then(|p| p.board_target().and_then(|t| p.board_view(t))).is_some_and(|v| !v.zones().is_empty()),
+                    && self
+                        .session
+                        .project()
+                        .and_then(|p| self.views.active.board.target.and_then(|t| p.board_view(t)))
+                        .is_some_and(|v| !v.zones().is_empty()),
                 active: false,
                 menu_check: None,
             },
@@ -306,7 +310,7 @@ impl PcbApp {
                     && self
                         .session
                         .project()
-                        .and_then(|p| p.board_target().and_then(|t| p.board_view(t)))
+                        .and_then(|p| self.views.active.board.target.and_then(|t| p.board_view(t)))
                         .is_some_and(|v| !v.zones().is_empty() && v.zone_fill_enabled()),
                 active: false,
                 menu_check: None,
@@ -366,6 +370,29 @@ impl PcbApp {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         self.active_layer_field(ui, compact);
         self.board_size_controls(ui, enabled, compact);
+        if self.views.active.board.tracks.via_tool {
+            let revision = self.session.revision();
+            if let Some(project) = self.session.project() {
+                let state = &mut self.views.active.board.tracks;
+                if let Some(board) = project.board_target() {
+                    if let Some(view) = project.board_view(board) {
+                        state.refresh_net_choices(view, revision);
+                    }
+                    let choices = &state.via_choices.as_ref().map(|(_, _, c)| c.as_slice()).unwrap_or_default();
+                    let current = state.via_target.as_ref().map_or_else(
+                        || "Automatic".to_owned(),
+                        |target| choices.iter().find(|c| &c.target == target).map_or_else(|| "Selected net".into(), |c| c.label.clone()),
+                    );
+                    let response =
+                        workspace::ribbon_field(ui, "Via net", compact, |ui| crate::board_net_choice::trigger(ui, "Via placement net", &current));
+                    if response.clicked()
+                        && let Some(source) = self.views.active.input(&self.session)
+                    {
+                        self.begin_via_net_choice(source, crate::board_net_choice::Destination::Placement);
+                    }
+                }
+            }
+        }
     }
 
     /// Analysis keeps physical checks board-gated while shared class authoring needs only a project.
@@ -762,5 +789,34 @@ impl PcbApp {
             self.begin_board_setup(id);
             self.repaint_editors(ui.ctx());
         }
+    }
+}
+
+#[cfg(test)]
+mod zone_menu_tests {
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    /// The real Route controls address the focused view; an unavailable target cannot inherit
+    /// the default board's pours. Render the ribbon directly so frame binding cannot repair it.
+    #[test]
+    fn pour_actions_follow_the_focused_board_target() {
+        let mut fixture = crate::tests::fill_harness();
+        let app = std::mem::take(fixture.state_mut());
+        let mut h = Harness::builder()
+            .with_context_setup(pcbcraft_chrome::install)
+            .with_size(egui::vec2(1200., 700.))
+            .build_ui_state(|ui, app: &mut crate::PcbApp| app.board_route_tools(ui), app);
+        h.run();
+        h.get_by_label("Route menu").click();
+        h.run();
+        assert!(!h.get_by_label("Pour copper").accesskit_node().is_disabled());
+        assert!(!h.get_by_label("Remove pours").accesskit_node().is_disabled());
+        h.state_mut().views.active.board.target = None;
+        h.run();
+        assert!(h.get_by_label("Pour copper").accesskit_node().is_disabled());
+        assert!(h.get_by_label("Remove pours").accesskit_node().is_disabled());
     }
 }

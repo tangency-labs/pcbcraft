@@ -8,7 +8,10 @@ use std::sync::{Arc, Mutex, TryLockError};
 
 /// Whether an existing shared command can use copper preparation; no new router policy is implied.
 pub fn is_copper_edit(command: &str) -> bool {
-    matches!(command, ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS)
+    matches!(
+        command,
+        super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
+    )
 }
 
 #[derive(Default)]
@@ -242,11 +245,11 @@ impl CopperEditJob {
                 if let (Some(builder), Some(lands), Some(candidate)) = (self.builder.take(), &self.lands, &self.candidate) {
                     let (copper, members) = builder.finish(lands, &candidate.board.tracks, &candidate.board.vias);
                     if let Some((a, b)) =
-                        short_from_members(lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
+                        short_from_members(candidate, lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
                     {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
-                    if candidate.has_dimensional_net_classes() {
+                    if candidate.has_dimensional_net_classes() || candidate.board.vias.iter().any(|v| v.net_assignment.is_some()) {
                         self.builder = Some(IslandBuilder::pad_contacts(lands, &candidate.board.tracks, &candidate.board.vias, &members));
                         self.class_islands = Some((copper, members));
                     }
@@ -266,6 +269,9 @@ impl CopperEditJob {
                     let view =
                         candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
+                    if let Some((a, b)) = short_from_members(candidate, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
+                        return Err(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")));
+                    }
                     let geometry = crate::board::clearance::BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
                     let context = crate::board::class_rules::NetRules::new(view, self.context.source.effective.clone())?
                         .map(|rules| rules.capture(view, &geometry))

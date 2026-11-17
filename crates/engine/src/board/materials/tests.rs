@@ -6,6 +6,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 mod invalid;
+mod reports;
 
 /// Supply a fresh revision through the public command path.
 fn apply(s: &mut Session, command: &str, mut params: Value) {

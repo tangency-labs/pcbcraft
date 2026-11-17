@@ -451,3 +451,6 @@ pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, crate::lib
         })
         .collect()
 }
+
+/// Explicit via assignments and accepted physical membership projection.
+pub mod via_nets;

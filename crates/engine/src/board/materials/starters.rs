@@ -48,6 +48,10 @@ impl StarterMaterial {
             source: None,
             tg: Vec::new(),
             dielectric: Vec::new(),
+            thermal_conductivity: Vec::new(),
+            cte: Vec::new(),
+            dielectric_strength: Vec::new(),
+            cti: Vec::new(),
         };
         super::validate_catalog(&mut [material.clone()]).map_err(CommandError::InvalidParams)?;
         Ok(material)

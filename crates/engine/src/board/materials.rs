@@ -6,10 +6,14 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 mod electrical;
+mod insulation;
 mod starters;
+mod thermal;
 pub use starters::StarterMaterial;
 pub(crate) mod schema;
 pub use electrical::{DielectricReport, DielectricValueKind, MeasurementAxis};
+pub use insulation::{CtiReport, DielectricStrengthReport, MaterialGroup};
+pub use thermal::{CteReport, TgRegion, ThermalConductivityReport};
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +96,18 @@ pub struct Material {
     /// Frequency/condition-specific dielectric reports; absence supplies no Dk or Df default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dielectric: Vec<DielectricReport>,
+    /// Conductivity reports by axis and condition; absence is unknown, never zero.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thermal_conductivity: Vec<ThermalConductivityReport>,
+    /// Expansion reports by axis and region; absence is unknown, never zero.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cte: Vec<CteReport>,
+    /// Breakdown reports, each tied to its specimen thickness.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dielectric_strength: Vec<DielectricStrengthReport>,
+    /// Comparative tracking index and material group reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cti: Vec<CtiReport>,
 }
 
 impl Material {
@@ -108,6 +124,10 @@ impl Material {
             source: None,
             tg: Vec::new(),
             dielectric: Vec::new(),
+            thermal_conductivity: Vec::new(),
+            cte: Vec::new(),
+            dielectric_strength: Vec::new(),
+            cti: Vec::new(),
         };
         validate_catalog(&mut [material.clone()]).map_err(crate::CommandError::InvalidParams)?;
         Ok(material)
@@ -115,6 +135,12 @@ impl Material {
     /// Address this exact embedded definition without resolving a name or a latest revision.
     pub fn reference(&self) -> MaterialRef {
         MaterialRef { id: self.id, revision: self.revision }
+    }
+
+    /// Whether this definition carries a thermal conductivity, thermal expansion, dielectric
+    /// strength or tracking report, which older board and profile versions cannot hold.
+    pub(crate) fn has_thermal_or_insulation_reports(&self) -> bool {
+        !self.thermal_conductivity.is_empty() || !self.cte.is_empty() || !self.dielectric_strength.is_empty() || !self.cti.is_empty()
     }
 }
 
@@ -227,6 +253,10 @@ pub(crate) fn validate_catalog(materials: &mut [Material]) -> Result<BTreeSet<Ma
             return Err("duplicate Tg report".to_owned());
         }
         electrical::validate_reports(&mut material.dielectric)?;
+        thermal::validate_conductivity(&mut material.thermal_conductivity)?;
+        thermal::validate_cte(&mut material.cte)?;
+        insulation::validate_strength(&mut material.dielectric_strength)?;
+        insulation::validate_cti(&mut material.cti)?;
     }
     materials.sort_by_key(Material::reference);
     Ok(keys)

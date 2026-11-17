@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["apps/*", "crates/*"]
-exclude = ["vendor/eframe"]
+exclude = ["vendor/eframe", "vendor/solidcore-ops"]
 
 [workspace.package]
 version = "0.1.0"
@@ -62,3 +62,7 @@ eframe = { path = "vendor/eframe" }
 # Shared viewport callbacks require SolidCraft's published renderer fixes.
 egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+
+# Narrow backport of upstream STEP composition fixes; see vendor/solidcore-ops/PATCH.md.
+[patch."https://github.com/tangency-labs/solidcraft.git"]
+solidcore-ops = { path = "vendor/solidcore-ops" }

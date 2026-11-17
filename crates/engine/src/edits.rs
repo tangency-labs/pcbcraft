@@ -127,4 +127,44 @@ mod tests {
         session.observe_edits(Some(log.clone()));
         assert_eq!(*log.0.lock().unwrap(), [("opened Open".to_owned(), 0)]);
     }
+
+    /// Synchronous copper dispatch reports each publication once; no-ops and rejections are
+    /// silent, while direct prepared commits retain their own single notification.
+    #[test]
+    fn synchronous_copper_and_direct_prepared_edits_report_once() {
+        use crate::board::track::tests::{routed_fixture, view};
+        let mut session = routed_fixture();
+        let log = Arc::new(Log::default());
+        session.observe_edits(Some(log.clone()));
+        let add = json!({"at":{"x_nm":-20_000_000,"y_nm":-20_000_000},"expected_revision":session.revision()});
+        let added = session.apply(crate::ADD_VIA, &add).unwrap();
+        let id = view(&session).vias()[0].id;
+        let registry = session.project().unwrap().inspect_net_registry().unwrap();
+        let set = json!({"vias":[id],"target":{"kind":"derived","anchor":registry["nets"][0]["anchor"]},"expected_revision":session.revision()});
+        let assigned = session.apply(crate::SET_VIA_NET, &set).unwrap();
+        let expected = vec![
+            (format!("opened {}", session.project().unwrap().name), 0),
+            (crate::ADD_VIA.to_owned(), added),
+            (crate::SET_VIA_NET.to_owned(), assigned),
+        ];
+        assert_eq!(*log.0.lock().unwrap(), expected);
+        assert_eq!(*log.1.lock().unwrap(), [add, set.clone()]);
+        let mut noop = set;
+        noop["expected_revision"] = json!(session.revision());
+        assert_eq!(session.apply(crate::SET_VIA_NET, &noop).unwrap(), assigned);
+        assert!(session.apply(crate::SET_VIA_NET, &json!({"vias":[],"automatic":true,"expected_revision":assigned})).is_err());
+        assert_eq!(*log.0.lock().unwrap(), expected);
+        let automatic = json!({"vias":[id],"automatic":true,"expected_revision":assigned});
+        let mut job = session.prepare_copper_edit(crate::SET_VIA_NET, &automatic).unwrap();
+        while !job.step(1024) {}
+        let cleared = session.commit_copper_edit(job.take_result().unwrap().unwrap()).unwrap();
+        assert_eq!(log.0.lock().unwrap().last(), Some(&(crate::SET_VIA_NET.to_owned(), cleared)));
+        assert_eq!(log.0.lock().unwrap().len(), expected.len() + 1);
+        let mut noop = automatic;
+        noop["expected_revision"] = json!(cleared);
+        let mut job = session.prepare_copper_edit(crate::SET_VIA_NET, &noop).unwrap();
+        while !job.step(1024) {}
+        assert_eq!(session.commit_copper_edit(job.take_result().unwrap().unwrap()).unwrap(), cleared);
+        assert_eq!(log.0.lock().unwrap().len(), expected.len() + 1);
+    }
 }

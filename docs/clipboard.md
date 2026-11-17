@@ -219,7 +219,11 @@ Mixed Delete and Cut are one undo step and retain schematic components.
 Track/via lock flags survive Copy, Duplicate and Paste on the new object IDs.
 Existing source copper remains protected, and Cut/Delete refuse the whole
 selection if removing any locked object would be required. Lock-bearing board
-fragments use `pcbcraft-clipboard/3`; older readers refuse that extension.
+fragments use `pcbcraft-clipboard/3`; older readers refuse that extension. Explicit
+via targets use `pcbcraft-clipboard/4`, retaining the earlier vocabulary and
+same-board scoped assignments. Cross-project assignment remapping is unavailable;
+a foreign destination refuses the whole paste. See [via net assignments](via-net-assignments.md).
+
 
 Pasting copied footprints opens **PCB Paste Options**, where each source circuit
 has an explicit destination schematic sheet and independent schematic X/Y anchor.

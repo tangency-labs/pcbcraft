@@ -1,7 +1,10 @@
 //! Command discovery for material records; semantic adoption still uses shared validation.
 use super::electrical::{MAX_FREQUENCY_HZ, MAX_REPORTS};
 use super::{MAX_LENGTH_NM, MAX_MATERIALS, MAX_PLIES_PER_GAP, MAX_TEMPERATURE_MILLI_C, MAX_TG_REPORTS, MIN_TEMPERATURE_MILLI_C};
+use super::{insulation, thermal};
 use serde_json::{Value, json};
+
+const INTEGER_TOKENS: &str = "Readers require parsed integer-kind JSON numbers; decimal/exponent spellings (including -0) are refused even when JSON Schema considers their values integral.";
 
 /// Require bounded text; whitespace and control characters are checked during adoption.
 fn text(max: usize) -> Value {
@@ -29,6 +32,10 @@ pub(crate) fn catalog() -> Value {
             "id":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX},
             "name":text(80),"family":text(80),"manufacturer":text(80),"product":text(80),"source":source(),
             "dielectric": dielectric(),
+            "thermal_conductivity": thermal_conductivity(),
+            "cte": cte(),
+            "dielectric_strength": dielectric_strength(),
+            "cti": cti(),
             "tg":{"type":"array","maxItems":MAX_TG_REPORTS,"items":{
                 "type":"object","additionalProperties":false,"required":["temperature_milli_c","method","basis","source"],"properties":{
                     "temperature_milli_c":{"type":"integer","minimum":MIN_TEMPERATURE_MILLI_C,"maximum":MAX_TEMPERATURE_MILLI_C},
@@ -56,6 +63,66 @@ fn dielectric() -> Value {
             "axis":{"enum":["x","y","z"]},"glass_construction":text(80),
             "resin_content_ppm":{"type":"integer","minimum":1,"maximum":999_999},
             "specimen_thickness_nm":{"type":"integer","minimum":1,"maximum":MAX_LENGTH_NM}
+        }
+    }})
+}
+
+/// Report basis, shared by every material report kind.
+fn basis() -> Value {
+    json!({"enum":["typical","minimum","maximum","measured"]})
+}
+
+/// Temperatures share the Tg report range.
+fn temperature() -> Value {
+    json!({"type":"integer","minimum":MIN_TEMPERATURE_MILLI_C,"maximum":MAX_TEMPERATURE_MILLI_C,"description":INTEGER_TOKENS})
+}
+
+/// Conductivity in mW/(m·K); an absent axis is not an isotropy claim.
+fn thermal_conductivity() -> Value {
+    json!({"type":"array","maxItems":thermal::MAX_REPORTS,"items":{
+        "type":"object","additionalProperties":false,"required":["conductivity_mw_per_m_k","basis","source"],
+        "properties":{
+            "conductivity_mw_per_m_k":{"type":"integer","minimum":1,"maximum":thermal::MAX_CONDUCTIVITY_MW_PER_M_K,"description":INTEGER_TOKENS},
+            "axis":{"enum":["x","y","z"]},"temperature_milli_c":temperature(),"method":text(80),
+            "basis":basis(),"source":source()
+        }
+    }})
+}
+
+/// Expansion in ppb/K; a temperature range names both ends.
+fn cte() -> Value {
+    json!({"type":"array","maxItems":thermal::MAX_REPORTS,"items":{
+        "type":"object","additionalProperties":false,"required":["cte_ppb_per_k","basis","source"],
+        "dependentRequired":{"from_milli_c":["to_milli_c"],"to_milli_c":["from_milli_c"]},
+        "properties":{
+            "cte_ppb_per_k":{"type":"integer","minimum":thermal::MIN_CTE_PPB_PER_K,"maximum":thermal::MAX_CTE_PPB_PER_K,"description":INTEGER_TOKENS},
+            "axis":{"enum":["x","y","z"]},"region":{"enum":["below_tg","above_tg"]},
+            "from_milli_c":temperature(),"to_milli_c":temperature(),"method":text(80),
+            "basis":basis(),"source":source()
+        }
+    }})
+}
+
+/// Breakdown voltage at a required specimen thickness.
+fn dielectric_strength() -> Value {
+    json!({"type":"array","maxItems":insulation::MAX_REPORTS,"items":{
+        "type":"object","additionalProperties":false,"required":["breakdown_v","specimen_thickness_nm","basis","source"],
+        "properties":{
+            "breakdown_v":{"type":"integer","minimum":1,"maximum":insulation::MAX_BREAKDOWN_V,"description":INTEGER_TOKENS},
+            "specimen_thickness_nm":{"type":"integer","minimum":1,"maximum":MAX_LENGTH_NM,"description":INTEGER_TOKENS},
+            "axis":{"enum":["x","y","z"]},"method":text(80),"basis":basis(),"source":source()
+        }
+    }})
+}
+
+/// CTI in volts and/or the IEC 60664-1 material group; both must agree when given.
+fn cti() -> Value {
+    json!({"type":"array","maxItems":insulation::MAX_REPORTS,"items":{
+        "type":"object","additionalProperties":false,"required":["basis","source"],
+        "anyOf":[{"required":["cti_v"]},{"required":["material_group"]}],
+        "properties":{
+            "cti_v":{"type":"integer","minimum":1,"maximum":insulation::MAX_CTI_V,"description":INTEGER_TOKENS},
+            "material_group":{"enum":["I","II","IIIa","IIIb"]},"method":text(80),"basis":basis(),"source":source()
         }
     }})
 }

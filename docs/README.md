@@ -27,12 +27,13 @@ before treating an older plan as implemented behavior.
 
 | Topic | Guides |
 | --- | --- |
-| Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) |
+| Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) · [Schematic keyboard shortcuts](keyboard-shortcuts.md) |
 | Net names, labels and power symbols | [Named nets and power symbols](net-labels.md) |
 | Sheet hierarchy and interfaces | [Hierarchical sheets](hierarchical-sheets.md) |
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
 | Intentional unused connections | [No-connect markers](no-connect-markers.md) |
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
+| Explicit via nets | [Placement, Properties and storage](via-net-assignments.md) |
 | Copper-zone outline authoring | [Zone drawing, editing and storage](copper-zone-outlines.md) |
 | Board rules and materials | [Board rules](board-rules.md) · [Materials and dielectric construction](board-materials.md) |
 | Create classes, assign nets and inspect effective rules | [Shared net-class editor](net-class-editor.md) |

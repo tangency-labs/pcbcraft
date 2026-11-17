@@ -10,7 +10,7 @@ use pcbcraft_engine::{
 };
 
 /// Extend the accepted ratsnest fixture through shared setup/drawing/zone commands.
-fn board() -> Harness<'static, PcbApp> {
+pub(crate) fn board() -> Harness<'static, PcbApp> {
     let mut h = super::board_ratsnest::board(true);
     let edit = |h: &mut Harness<'_, PcbApp>, id: &str, mut value: Value| {
         value["expected_revision"] = json!(h.state().session.revision());

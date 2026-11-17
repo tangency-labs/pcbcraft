@@ -134,6 +134,16 @@ fn obstacles(view: BoardView<'_>, geometry: &BoardGeometry) -> Result<Vec<Obstac
                 .or_insert(Some(*id));
         }
     }
+    for (id, index) in project.board_intent_memberships().ids {
+        membership
+            .entry(index)
+            .and_modify(|previous| {
+                if *previous != Some(id) {
+                    *previous = None;
+                }
+            })
+            .or_insert(Some(id));
+    }
     let class_rules = super::class_rules::NetRules::new(view, view.effective_rules()).map_err(|e| e.to_string())?;
     let pads: BTreeSet<_> = geometry.lands.iter().map(|land| format!("{}:{}", land.key.0, land.key.1)).collect();
     Ok(geometry
@@ -301,6 +311,7 @@ fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Re
     let (copper, members) = super::track::islands(&lands, view.tracks(), view.vias());
     let mut fill = Fill { board: view.target, zones: Vec::new(), problems: Vec::new(), copper, members };
     if view.zones().is_empty() {
+        join_contacts(&geometry, &mut fill, canceled)?;
         return Ok(Arc::new(fill));
     }
     let board = board_region(view)?;
@@ -399,8 +410,19 @@ pub(super) fn diagnostics(view: BoardView<'_>, geometry: &BoardGeometry, rules: 
     if view.zones().is_empty() {
         return Vec::new();
     }
-    let inspect = || -> Result<Vec<Problem>, String> {
+    diagnostics_with_fill(view, geometry, rules).1
+}
+
+/// Keep analytic findings and the corresponding physical connectivity in one captured result.
+/// A failed fill yields an unavailable-zone finding and no conductive fallback material.
+pub(super) fn diagnostics_with_fill(view: BoardView<'_>, geometry: &BoardGeometry, rules: super::rules::Values) -> (Option<Arc<Fill>>, Vec<Problem>) {
+    if view.zones().is_empty() {
+        return (view.filled_zones().and_then(Result::ok), Vec::new());
+    }
+    let mut captured = None;
+    let inspect = |captured: &mut Option<Arc<Fill>>| -> Result<Vec<Problem>, String> {
         let filled = view.fill_for_check()?;
+        *captured = Some(filled.clone());
         let mut problems = filled.problems.clone();
         let objects = obstacles(view, geometry)?;
         let board = board_region(view)?;
@@ -416,6 +438,20 @@ pub(super) fn diagnostics(view: BoardView<'_>, geometry: &BoardGeometry, rules: 
                         at: authored.points[0],
                         items: Vec::new(),
                     });
+                }
+                for other in filled.zones.iter().filter(|other| other.id > zone.id && other.net != zone.net && other.layer == zone.layer) {
+                    let clearance = rules.clearance_nm.max(zone.clearance_nm - CLEARANCE_RESERVE_NM).max(other.clearance_nm - CLEARANCE_RESERVE_NM);
+                    for foreign in &other.islands {
+                        if !clip(&island.region, &foreign.region.offset(clearance).map_err(|e| e.to_string())?, Operation::Intersection)?.is_empty() {
+                            problems.push(Problem {
+                                kind: ProblemKind::Clearance,
+                                zone: zone.id,
+                                message: "Filled copper violates another zone's clearance.".into(),
+                                at: authored.points[0],
+                                items: vec![other.id.to_string()],
+                            });
+                        }
+                    }
                 }
                 for other in objects.iter().filter(|o| o.net != Some(zone.net) && o.object.layers.contains(&zone.layer)) {
                     let clearance = rules.clearance_nm.max(other.clearance_nm).max(zone.clearance_nm - CLEARANCE_RESERVE_NM);
@@ -433,10 +469,17 @@ pub(super) fn diagnostics(view: BoardView<'_>, geometry: &BoardGeometry, rules: 
         }
         Ok(problems)
     };
-    match inspect() {
+    let problems = match inspect(&mut captured) {
         Ok(problems) => problems,
-        Err(message) => {
-            vec![Problem { kind: ProblemKind::Unavailable, zone: view.zones()[0].id, message, at: view.zones()[0].points[0], items: Vec::new() }]
-        }
-    }
+        Err(message) => unavailable(view, message),
+    };
+    (captured, problems)
+}
+
+/// Associate a valid-source calculation failure with authored zone intent, without inventing copper.
+pub(super) fn unavailable(view: BoardView<'_>, message: String) -> Vec<Problem> {
+    view.zones()
+        .first()
+        .map(|zone| vec![Problem { kind: ProblemKind::Unavailable, zone: zone.id, message, at: zone.points[0], items: Vec::new() }])
+        .unwrap_or_default()
 }

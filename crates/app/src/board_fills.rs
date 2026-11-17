@@ -63,13 +63,15 @@ impl State {
 
     /// Revoke obsolete work immediately and expose only a complete result with current source
     /// authority. Capacity failures may retry; geometry failures wait for an edit or explicit refill.
-    fn poll(&mut self, session: &Session, target: Option<BoardTarget>, zones: bool, ctx: &egui::Context) -> bool {
-        if !zones || target.is_none() {
-            if self.requested.take().is_some() {
-                self.queue.cancel();
-            }
-        } else if let Some(target) = target
-            && self.requested.as_ref().is_none_or(|s| s.target() != target || !s.is_current(session))
+    fn poll(&mut self, session: &Session, target: Option<BoardTarget>, zones: bool, schedule: bool, ctx: &egui::Context) -> bool {
+        let obsolete = self.requested.as_ref().is_some_and(|source| Some(source.target()) != target || !source.is_current(session));
+        if (!zones || target.is_none() || obsolete) && self.requested.take().is_some() {
+            self.queue.cancel();
+        }
+        if schedule
+            && zones
+            && self.requested.is_none()
+            && let Some(target) = target
         {
             self.notice = self.submit(session, target, false).err();
         }
@@ -139,16 +141,21 @@ impl crate::PcbApp {
     }
 
     /// Automatic refill follows committed source changes, not pointer previews. Per-board
-    /// deduplication avoids duplicate source calculations in split views.
+    /// deduplication limits new submissions; every view still drains its owned queue.
     pub(super) fn poll_zone_fills(&mut self, ctx: &egui::Context) {
-        let mut owners = BTreeSet::new();
+        let mut owners = std::collections::BTreeMap::new();
+        for view in self.views.all_mut() {
+            if let Some(target) = view.board.target
+                && view.board.fills.requested.as_ref().is_some_and(|source| source.target() == target && source.is_current(&self.session))
+            {
+                owners.entry(target).or_insert(view.id());
+            }
+        }
         for view in self.views.all_mut() {
             let target = view.board.target;
-            if target.is_some_and(|t| !owners.insert(t)) {
-                continue;
-            }
+            let schedule = target.is_some_and(|t| *owners.entry(t).or_insert(view.id()) == view.id());
             let zones = target.and_then(|t| self.session.project()?.board_view(t)).is_some_and(|v| !v.zones().is_empty() && v.zone_fill_enabled());
-            if view.board.fills.poll(&self.session, target, zones, ctx) {
+            if view.board.fills.poll(&self.session, target, zones, schedule, ctx) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(if view.board.fills.queue.busy() { 8 } else { 250 }));
             }
         }
@@ -187,6 +194,49 @@ pub(super) fn paint(
                 .collect();
             mesh.indices = island.mesh.triangles.iter().flatten().copied().collect();
             p.add(egui::Shape::mesh(mesh));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    /// Changing which pane is first must not strand the previous owner's ready result or failure.
+    #[test]
+    fn switching_active_view_drains_every_owned_fill_queue() {
+        for failure in [false, true] {
+            let mut h = crate::tests::fill_harness();
+            let ctx = egui::Context::default();
+            let app = h.state_mut();
+            let original = app.views.active.id();
+            app.split_editors(&ctx, true);
+            let peer = app.views.all_mut().find(|v| v.id() != original).unwrap().id();
+            let target = app.views.view(original).unwrap().board.target.unwrap();
+            app.views.view_mut(peer).unwrap().board.target = Some(target);
+            if failure {
+                let drawings: Vec<_> = app.session.project().unwrap().board_view(target).unwrap().drawings().iter().map(|d| d.id).collect();
+                for drawing in drawings {
+                    app.session
+                        .apply(pcbcraft_engine::DELETE_DRAWING, &json!({"drawing":drawing,"expected_revision":app.session.revision()}))
+                        .unwrap();
+                }
+            }
+            let job = app.session.prepare_zone_fill(target, true).unwrap();
+            app.views.view_mut(original).unwrap().board.fills.submit_job(job);
+            app.views.bind(peer);
+            let before = app.views.view(original).unwrap().board.fills.queue.completed;
+            for _ in 0..32 {
+                app.poll_zone_fills(&ctx);
+                if !app.views.view(original).unwrap().board.fills.queue.busy() {
+                    break;
+                }
+            }
+            let old = &app.views.view(original).unwrap().board.fills;
+            assert!(!old.queue.busy(), "non-first owner remains pending");
+            assert!(old.queue.completed > before);
+            assert_eq!(old.notice.is_some(), failure);
+            assert_eq!(app.views.view(peer).unwrap().board.fills.queue.completed, 0, "focus changes must not duplicate current-source work");
         }
     }
 }

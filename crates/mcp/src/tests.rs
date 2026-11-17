@@ -652,6 +652,39 @@ fn list_commands_filters() {
     assert_eq!(all[0]["id"], "edit.undo");
 }
 
+/// `list_commands` reports the command API version, the revision of the whole catalog (the same
+/// with or without a filter, and equal to `catalog_revision` of the unfiltered list) and the
+/// capabilities. `describe_command` and the catalog resource agree with the list, and the listed
+/// contracts match the committed snapshot.
+#[test]
+fn discovery_reports_the_api_version_and_catalog_revision() {
+    use pcbcraft_engine::command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision, check_snapshot};
+    let mut s = server();
+    body(&call(&mut s, "execute", json!({"command": "project.new"})));
+    let listed = call(&mut s, "list_commands", json!({}));
+    let commands = body(&listed);
+    let about: Value = serde_json::from_str(listed["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(about, listed["structuredContent"]);
+    let revision = catalog_revision(commands.as_array().unwrap());
+    assert_eq!(about, json!({"command_api_version": COMMAND_API_VERSION, "catalog_revision": revision, "capabilities": CAPABILITIES}));
+    assert!(about["capabilities"].as_array().unwrap().contains(&json!("command_api")));
+    let filtered = call(&mut s, "list_commands", json!({"filter": "undo"}));
+    assert!(body(&filtered).as_array().unwrap().len() < commands.as_array().unwrap().len());
+    assert_eq!(filtered["structuredContent"]["catalog_revision"], json!(revision));
+    for command in commands.as_array().unwrap() {
+        assert!(command.get("version").is_none(), "{command}");
+        assert_eq!(&body(&call(&mut s, "describe_command", json!({"command": command["id"]}))), command);
+    }
+    let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
+    assert_eq!(check_snapshot(&snapshot, "commands", commands.as_array().unwrap(), COMMAND_API_VERSION), Ok(()));
+    let reply = rpc(&mut s, "resources/read", json!({"uri": "pcbcraft://commands"}));
+    let resource: Value = serde_json::from_str(reply["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(resource, commands);
+    let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
+    assert_eq!(failed["isError"], true);
+    assert!(failed.get("structuredContent").is_none());
+}
+
 #[test]
 fn resources_read_the_project_and_catalog() {
     let mut s = server();

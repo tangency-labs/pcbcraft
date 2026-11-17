@@ -525,6 +525,12 @@ impl BoardSetup {
             })
     }
 
+    /// Whether saving needs the board format that carries thermal conductivity, thermal
+    /// expansion, dielectric strength or tracking reports on a material.
+    pub(crate) fn requires_report_format(&self) -> bool {
+        self.materials.iter().any(Material::has_thermal_or_insulation_reports)
+    }
+
     /// Whether saving needs the board format that carries copper roles, base copper, copper
     /// thickness qualifiers or the declared finished board thickness.
     pub(crate) fn requires_stack_format(&self) -> bool {

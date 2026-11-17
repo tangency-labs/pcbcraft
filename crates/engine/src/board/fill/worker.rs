@@ -59,7 +59,7 @@ fn digest(target: BoardTarget, documents: &BTreeMap<String, String>, diagnostics
 
 /// Validated same-source worker material plus optional checker preparation.
 struct Accepted {
-    fill: Arc<Fill>,
+    fill: Result<Arc<Fill>, String>,
     diagnostics: Option<Vec<Problem>>,
 }
 
@@ -87,12 +87,20 @@ impl FillJob {
     /// Accept only the identically addressed request, validating all region profiles and mesh
     /// indices before the captured slot can become ready. The host still checks live authority.
     pub fn accept_worker_response(&mut self, response: &str) -> Result<Option<Arc<Fill>>, String> {
-        self.accept_response(response).map(|accepted| Some(accepted.fill))
+        self.accept_response(response)?.fill.map(Some)
     }
 
-    /// Publish a complete fill and return its same-source analytic diagnostic findings.
-    pub(crate) fn accept_worker_diagnostics(&mut self, response: &str) -> Result<Vec<Problem>, String> {
-        self.accept_response(response)?.diagnostics.ok_or_else(|| "Fill worker omitted checker diagnostics.".into())
+    /// Return validated same-source geometry and diagnostics, or a recoverable calculation
+    /// failure. Malformed geometry, missing successful diagnostics and stale sources still fail.
+    pub(crate) fn accept_worker_diagnostics(&mut self, response: &str) -> Result<(Option<Arc<Fill>>, Vec<Problem>), String> {
+        let accepted = self.accept_response(response)?;
+        match accepted.fill {
+            Ok(fill) => Ok((Some(fill), accepted.diagnostics.ok_or("Fill worker omitted checker diagnostics.")?)),
+            Err(message) => {
+                let view = self.source.snapshot.board_view(self.source.target).ok_or("Missing fill source board.")?;
+                Ok((None, super::unavailable(view, message)))
+            }
+        }
     }
 
     /// Decode once, validate source/geometry, and publish only to this captured source slot.
@@ -108,12 +116,12 @@ impl FillJob {
         if response.version != 1 || self.worker_hash.as_ref() != Some(&response.source) {
             return Err("Obsolete or foreign fill worker response.".into());
         }
-        let result = response
-            .result
-            .and_then(|wire| decode_fill(wire, self.source.snapshot.board_view(self.source.target).ok_or("Missing fill source board.")?))
-            .map(Arc::new);
+        let result = match response.result {
+            Ok(wire) => Ok(Arc::new(decode_fill(wire, self.source.snapshot.board_view(self.source.target).ok_or("Missing fill source board.")?)?)),
+            Err(message) => Err(message),
+        };
         let _ = self.slot.set(result.clone());
-        result.map(|fill| Accepted { fill, diagnostics: response.diagnostics })
+        Ok(Accepted { fill: result, diagnostics: response.diagnostics })
     }
 }
 

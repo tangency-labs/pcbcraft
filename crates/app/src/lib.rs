@@ -248,6 +248,7 @@ enum Dialog {
     BoardUpdate(Box<board_update::Edit>),
     LayerColor(board_appearance::Edit),
     Zone(Box<board_zones::Edit>),
+    ViaNet(Box<board_net_choice::Edit>),
     /// Custom tool dimensions and optional reusable presets, independent of board setup.
     RoutingSize(board_presets::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
@@ -998,7 +999,7 @@ impl PcbApp {
             workspace::RibbonLayout {
                 workspaces: workspace::Workspaces { entries: &entries, ..WORKSPACES },
                 quick: &quick,
-                pinned_fields: if board { 3 } else { 0 },
+                pinned_fields: if board { if self.views.active.board.tracks.via_tool { 4 } else { 3 } } else { 0 },
                 controls_label: "Layer & sizes",
             },
             |ui, section| match section {
@@ -2228,6 +2229,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
             Dialog::Zone(edit) => self.zone_dialog(ctx, *edit),
+            Dialog::ViaNet(edit) => self.via_net_dialog(ctx, *edit),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
@@ -2625,7 +2627,7 @@ impl PcbApp {
                 let ribbon = self.ribbon(ui);
                 self.views.sync(&self.session);
                 if !matches!(self.dialog, Dialog::None) {
-                    self.views.cancel_gestures();
+                    self.cancel_dialog_gestures();
                 }
                 if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| !self.views.active.accepts(drag.source, &self.session)) {
                     egui::DragAndDrop::clear_payload(&ctx);
@@ -2831,3 +2833,5 @@ impl eframe::App for PcbApp {
 
 #[cfg(test)]
 mod tests;
+
+mod board_net_choice;

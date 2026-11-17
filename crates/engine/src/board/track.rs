@@ -108,6 +108,9 @@ impl Track {
 #[serde(deny_unknown_fields)]
 pub struct Via {
     pub id: Uuid,
+    /// Authored scoped intent; omission follows contacted copper automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "super::via_nets::stored_assignment")]
+    pub net_assignment: Option<crate::nets::NetAddress>,
     /// Lock intent travels with this via through native save and clipboard copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
@@ -127,6 +130,7 @@ impl Via {
     /// Reject nil identities, out-of-range positions, and drills that do not fit inside the pad.
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
+            || self.net_assignment.is_some_and(|a| a.project.is_nil() || a.scope.id.is_nil() || a.net.is_nil())
             || !crate::wire::valid_point(&self.at)
             || !(MIN_VIA_DRILL_NM..self.diameter_nm).contains(&self.drill_nm)
             || self.diameter_nm > MAX_VIA_DIAMETER_NM
@@ -274,13 +278,13 @@ impl<'a> BoardView<'a> {
         carry(self, after, &BTreeSet::from([id.to_owned()]))
     }
 
-    /// The net each track and via carries: the net of the first pad in its copper island. Copper
-    /// that reaches no netted pad is absent. Nets are derived, never stored on the copper.
+    /// Resolve one unambiguous intended net per copper island, including explicit isolated vias.
+    /// Conflicting contacts expose no arbitrary display net; physical islands remain separate.
     pub fn copper_nets(self) -> BTreeMap<Uuid, String> {
         self.copper_with_nets().1
     }
 
-    /// Resolve physical islands and the net of each netted track or via in one connectivity pass.
+    /// Resolve physical islands and complete authored/contact-derived intent in one contact pass.
     pub fn copper_with_nets(self) -> (Copper, BTreeMap<Uuid, String>) {
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
@@ -288,9 +292,35 @@ impl<'a> BoardView<'a> {
             Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
             _ => islands(&lands, tracks, vias),
         };
-        let island_net: Vec<Option<String>> =
-            members.iter().map(|island| island.iter().find_map(|node| lands.get(*node).and_then(|land| land.net.clone()))).collect();
-        let nets = copper.tracks.iter().chain(&copper.vias).filter_map(|(id, island)| island_net[*island].clone().map(|net| (*id, net))).collect();
+        let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
+        let intent = self.project().board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership(self.project(), &lands, tracks.len(), vias, &intent);
+        let island_net: Vec<_> = members
+            .iter()
+            .map(|nodes| {
+                let unresolved = nodes
+                    .iter()
+                    .filter_map(|n| n.checked_sub(lands.len() + tracks.len()).and_then(|i| vias.get(i)))
+                    .any(|v| v.net_assignment.is_some_and(|a| self.project().via_net_state(a) != "active"));
+                let ids: BTreeSet<_> = nodes.iter().filter_map(|n| intrinsic[*n]).collect();
+                if unresolved || ids.len() != 1 {
+                    return None;
+                }
+                intent.names.get(ids.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
+            })
+            .collect();
+        let mut nets = BTreeMap::new();
+        for (nodes, name) in members.iter().zip(island_net) {
+            let Some(name) = name else { continue };
+            for node in nodes {
+                if let Some(index) = node.checked_sub(lands.len()) {
+                    let id = tracks.get(index).map(|t| t.id).or_else(|| index.checked_sub(tracks.len()).and_then(|i| vias.get(i)).map(|v| v.id));
+                    if let Some(id) = id {
+                        nets.insert(id, name.clone());
+                    }
+                }
+            }
+        }
         (copper, nets)
     }
 }
@@ -530,12 +560,13 @@ pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, f
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
-    let (_, members) = build_islands(&lands, tracks, vias, !footprints.is_empty());
-    short_from_members(&lands, tracks, vias, &members, added, footprints)
+    let (_, members) = build_islands(&lands, tracks, vias, !footprints.is_empty() || vias.iter().any(|v| v.net_assignment.is_some()));
+    short_from_members(project, &lands, tracks, vias, &members, added, footprints)
 }
 
 /// Apply the existing short policy to completed contact groups, without recomputing islands.
 fn short_from_members(
+    project: &Project,
     lands: &[Land],
     tracks: &[Track],
     vias: &[Via],
@@ -552,10 +583,21 @@ fn short_from_members(
         let via = index.and_then(|index| index.checked_sub(tracks.len())).and_then(|index| vias.get(index)).map(|via| via.id);
         track.or(via).is_some_and(|id| added.contains(&id))
     };
+    let intent = project.board_intent_memberships();
+    let intrinsic = super::via_nets::node_membership(project, lands, tracks.len(), vias, &intent);
     members.iter().filter(|island| island.iter().any(|node| is_added(*node))).find_map(|island| {
-        let mut nets = island.iter().filter_map(|node| lands.get(*node)?.net.clone());
+        let mut nets = island.iter().filter_map(|node| intrinsic[*node]);
         let first = nets.next()?;
-        nets.find(|net| *net != first).map(|second| (first, second))
+        let second = nets.find(|net| *net != first)?;
+        let name = |id| {
+            intent
+                .names
+                .get(&id)
+                .cloned()
+                .or_else(|| island.iter().find_map(|n| (intrinsic[*n] == Some(id)).then(|| lands.get(*n)?.net.clone()).flatten()))
+                .unwrap_or_else(|| format!("net {}", id + 1))
+        };
+        Some((name(first), name(second)))
     })
 }
 
@@ -716,6 +758,9 @@ impl Session {
 /// Edit a private candidate; omitted creation sizes use source-contact class preferences or
 /// board defaults. Preparation validates final membership and explicit hard limits before publication.
 fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+    let promoted = if command == ADD_VIA && params.get("target").is_some() { Some(project.with_via_target(&params["target"])?) } else { None };
+    let original = project;
+    let project = promoted.as_ref().map_or(project, |(p, _)| p);
     let effective = project.board.rules.as_ref().map_or_else(super::rules::Values::default, |rules| rules.values);
     let needs_defaults = match command {
         ADD_TRACKS => {
@@ -738,7 +783,13 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         } else {
             (param(params, "at")?, None)
         };
-        view.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions())
+        if let Some((_, address)) = &promoted {
+            let resolved = project.resolve_net_assignment(*address)?;
+            Some(super::class_rules::Applied { nets: vec![*address], bindings: resolved.bindings, resolution: resolved.resolution })
+                .filter(|p| p.has_dimensions())
+        } else {
+            view.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions())
+        }
     } else {
         None
     };
@@ -804,7 +855,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
                 layer = change.layer;
                 let id = crate::fresh_id()?;
                 added.insert(id);
-                vias.push(Via { id, locked: false, at: pair[0], diameter_nm, drill_nm });
+                vias.push(Via { id, net_assignment: None, locked: false, at: pair[0], diameter_nm, drill_nm });
             }
             let id = crate::fresh_id()?;
             added.insert(id);
@@ -817,7 +868,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
             }
             let id = crate::fresh_id()?;
             added.insert(id);
-            vias.push(Via { id, locked: false, at: points[change.at], diameter_nm, drill_nm });
+            vias.push(Via { id, net_assignment: None, locked: false, at: points[change.at], diameter_nm, drill_nm });
         }
     } else if command == ADD_VIA {
         let at: Point = param(params, "at")?;
@@ -835,7 +886,32 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
             Some(policy) => policy.via_sizes(explicit_diameter, explicit_drill)?,
             None => (explicit_diameter.unwrap_or(effective.preferred_via_diameter_nm), explicit_drill.unwrap_or(effective.preferred_via_drill_nm)),
         };
-        vias.push(Via { id, locked: false, at, diameter_nm, drill_nm });
+        vias.push(Via { id, net_assignment: promoted.as_ref().map(|(_, a)| *a), locked: false, at, diameter_nm, drill_nm });
+    } else if command == super::via_nets::SET_VIA_NET {
+        let changed = ids(params, "vias", |id| vias.iter().any(|v| v.id == *id))?;
+        if changed.is_empty()
+            || (params.get("target").is_some() && params.get("automatic").is_some())
+            || params.get("target").is_some() == (params.get("automatic") == Some(&json!(true)))
+        {
+            return Err(CommandError::InvalidParams("Choose a target or automatic:true for existing vias.".into()));
+        }
+        let (next, assignment) = if let Some(target) = params.get("target") {
+            let (next, address) = project.with_via_target(target)?;
+            (next, Some(address))
+        } else {
+            (project.clone(), None)
+        };
+        for via in vias.iter_mut().filter(|v| changed.contains(&v.id)) {
+            via.net_assignment = assignment;
+        }
+        let mut next = next;
+        std::sync::Arc::make_mut(&mut next.board).vias = vias;
+        protect_locked(original, &next)?;
+        let changed = changed
+            .into_iter()
+            .filter(|id| original.board.vias.iter().find(|v| v.id == *id) != next.board.vias.iter().find(|v| v.id == *id))
+            .collect::<BTreeSet<_>>();
+        return Ok(((!changed.is_empty()).then_some(next), changed));
     } else if command == MOVE_TRACKS {
         let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
         let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;

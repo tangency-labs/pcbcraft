@@ -248,7 +248,7 @@ impl NetRules {
     pub(crate) fn new(view: BoardView<'_>, baseline: rules::Effective) -> Result<Option<Self>, CommandError> {
         let project = view.project();
         let terminals = project.classified_terminals()?;
-        if terminals.is_empty() {
+        if terminals.is_empty() && !view.vias().iter().any(|v| v.net_assignment.is_some()) {
             return Ok(None);
         }
         let accepted = project.board.baseline.as_ref().map(|baseline| baseline.terminal_net_index());
@@ -262,6 +262,14 @@ impl NetRules {
             };
             if let Some(membership) = membership {
                 by_membership.entry(membership).or_default().insert(id);
+            }
+        }
+        let intent = project.board_intent_memberships();
+        for via in view.vias() {
+            if let Some(address) = via.net_assignment.filter(|a| project.via_net_state(*a) == "active")
+                && let Some(member) = intent.ids.get(&address.net)
+            {
+                by_membership.entry(*member).or_default().insert(address.net);
             }
         }
         if by_membership.is_empty() {
