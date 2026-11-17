@@ -219,7 +219,9 @@ and label every difference. If either parameter schema contains `$ref`,
 `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively
 breaking: an unchanged reference may reach any target, including a property
 or array item used under `not` elsewhere. The classifier does not resolve
-reference targets or their polarity. Without references, the rules are:
+reference targets or their polarity. If unequal referenced schemas produce no
+child diagnostic (for example, removing an empty map that is a reference
+target), it reports the whole schema as breaking. Without references, the rules are:
 
 - compatible, when every call the old schema accepted is still accepted: a
   command added, an optional parameter added to an object that refuses

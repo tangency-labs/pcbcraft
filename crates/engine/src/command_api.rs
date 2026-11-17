@@ -144,8 +144,9 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 /// A difference is compatible when every call valid under `old` stays valid with the same meaning
 /// as far as the schema can tell; otherwise it is breaking. If either parameter schema contains
 /// `$ref`, `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively breaking:
-/// an unchanged reference can target any location, including one used under `not`. Without
-/// references the rules below apply by keyword, at every depth:
+/// an unchanged reference can target any location, including one used under `not`. Unequal
+/// referenced schemas with no child diagnostic are reported as a whole (an empty map can be
+/// a reference target too). Without references the rules below apply by keyword, at every depth:
 /// - `properties`: an added parameter is compatible only when the old object refused unknown
 ///   names (`additionalProperties: false` and no `patternProperties`), since otherwise a call
 ///   could already pass that name with any value; whether it is required is `required`'s
@@ -194,6 +195,13 @@ pub fn compare(id: &str, old: &Value, new: &Value) -> Vec<Change> {
             let first = changes.len();
             schema(&mut Walk { id, out: &mut changes }, key, old, new);
             if has_reference(old) || has_reference(new) {
+                if changes.len() == first {
+                    Walk { id, out: &mut changes }.push(
+                        true,
+                        key,
+                        format!("changed from {old} to {new} (schema contains a reference; target context is unknown)"),
+                    );
+                }
                 for change in &mut changes[first..] {
                     if !change.breaking {
                         change.breaking = true;

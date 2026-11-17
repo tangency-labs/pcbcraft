@@ -596,6 +596,43 @@ fn unchanged_references_make_target_changes_breaking() {
     }
 }
 
+/// Empty maps can themselves be reference targets. Adding or removing their keyword produces
+/// no entry difference, but the unequal referenced schema must still be breaking, also nested
+/// through schema-valued keywords and after rewriting either snapshot section.
+#[test]
+fn empty_reference_targets_cannot_disappear_without_a_diagnostic() {
+    for keyword in ["properties", "$defs", "definitions"] {
+        for container in [None, Some("items"), Some("additionalProperties")] {
+            let inner = json!({keyword: {}});
+            let (mut with, mut without, pointer) = match container {
+                Some(container) => (json!({container: inner}), json!({container: {}}), format!("#/{container}/{keyword}")),
+                None => (inner, json!({}), format!("#/{keyword}")),
+            };
+            with["$ref"] = json!(pointer);
+            without["$ref"] = json!(pointer);
+            for (old, new) in [(&with, &without), (&without, &with)] {
+                let changes = differences(old.clone(), new.clone());
+                let expected = format!(
+                    "breaking: `schematic.synthetic` params: changed from {old} to {new} (schema contains a reference; target context is unknown)"
+                );
+                assert_eq!(changes, [expected.clone()], "{keyword} {container:?}");
+                for section in SNAPSHOT_SECTIONS {
+                    let mut base = json!({"command_api_version": 1, "commands": {}, "window_commands": {}});
+                    base[*section] = json!({"schematic.synthetic": contract_of(&command(old.clone()))});
+                    let mut head = base.clone();
+                    head[*section] = json!({"schematic.synthetic": contract_of(&command(new.clone()))});
+                    assert_eq!(check_snapshot(&head, section, &[command(new.clone())], 1), Ok(()));
+                    let problems = compare_snapshots(&base, &head).unwrap_err();
+                    assert_eq!(problems[0], expected);
+                    assert!(problems[1].contains("raise COMMAND_API_VERSION above 1"), "{problems:?}");
+                    head["command_api_version"] = json!(2);
+                    assert_eq!(compare_snapshots(&base, &head), Ok(vec![expected.clone()]));
+                }
+            }
+        }
+    }
+}
+
 /// Every keyword the real catalog uses has its own rule in `compare`; any other keyword falls to
 /// "unknown, so breaking". This keeps the list in `compare`'s documentation true of the catalog.
 #[test]
