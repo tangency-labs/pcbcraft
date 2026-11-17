@@ -81,7 +81,7 @@ fn adopt(s: &mut Session, id: Uuid, revision: Option<u32>) -> Result<u64, Comman
 
 /// Pin a fresh content revision and explicitly adopt it, for the placement-transform fixtures.
 fn set(s: &mut Session, profile: Option<Uuid>, value: Value) -> Result<u64, CommandError> {
-    let id = profile.unwrap_or_else(Uuid::new_v4);
+    let id = profile.map_or_else(crate::fresh_id, Ok)?;
     let revision = s.project().unwrap().assembly_profiles.heads.iter().find(|h| h.profile == id).map_or(1, |h| h.revision + 1);
     pin(s, Some(id), content(value, revision))?;
     adopt(s, id, Some(revision))
