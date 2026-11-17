@@ -296,8 +296,8 @@ fn solid_lines(text: &str) -> Vec<(u64, u64, String)> {
         .collect()
 }
 
-/// A surface model listing its closed shells out of entity order reads them back in ascending
-/// entity-number order.
+/// A surface model lists closed-shell references in reverse entity order; the reader expands
+/// those shells and returns them in ascending entity-number order.
 #[test]
 fn a_surface_model_with_shells_out_of_order_reads_back_in_entity_order() {
     let a = Body::cuboid("A", [0; 3], [1_000_000; 3]).unwrap();
