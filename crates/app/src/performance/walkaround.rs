@@ -13,7 +13,7 @@ const AIRWIRES: usize = 6;
 /// pad to pad, one free-space route along the channel recipe's corridor and one across the
 /// crowded diagonal region, all on front copper at the board's preferred or class width. Each
 /// complete plan is timed. Outside the timed boundary, every iteration must reproduce the
-/// first iteration's plans exactly, and on the first iteration each plan's points are committed
+/// first iteration's plans exactly, and on the first iteration each plan with at least two points is committed
 /// through the shared track command and the exhaustive pair reference must find no clearance
 /// violation or short about the new copper. Invalid fixtures or any disagreement fail the run.
 pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> Result<serde_json::Value> {
@@ -86,7 +86,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         "artifact_sha256":digest(artifact_json.as_bytes()),"project_sha256":artifact.project_sha256,"recipe":artifact.recipe,
         "iterations":iterations,"budget":DEFAULT_BUDGET,"outcomes":outcomes,
         "metrics":samples.into_iter().map(|(id,s)|Metric::new(&id,s)).collect::<Vec<_>>(),
-        "correctness":"identical plans on every iteration; first-iteration plans committed through pcb.add_tracks with no exhaustive clearance or short decision about the new copper",
+        "correctness":"identical plans on every iteration; first-iteration plans with at least two points committed through pcb.add_tracks with no exhaustive clearance or short decision about the new copper",
         "unmeasured":["editor preview and commit latency","physical input-to-visible latency","compositor presentation","browser runtime"]}))
 }
 

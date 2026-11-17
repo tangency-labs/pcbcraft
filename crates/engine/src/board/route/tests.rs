@@ -339,3 +339,143 @@ fn the_command_plans_without_editing_and_feeds_add_tracks() {
     add(&mut s, ADD_TRACKS, json!({"layer":layer,"width_nm":planned["width_nm"],"points":planned["points"]}));
     assert_eq!(s.revision(), revision + 1, "one undo step");
 }
+
+/// Board minimums apply to both the command's explicit operand and direct captured requests;
+/// omitted widths still select the authored preference and neither refusal edits the project.
+#[test]
+fn board_minimum_width_is_enforced_for_command_and_pure_planner() {
+    let mut s = board();
+    let board = view(&s).target.board;
+    add(
+        &mut s,
+        crate::board::rules::SET_RULES,
+        json!({"board":board,"rules":crate::board::rules::Values { min_track_width_nm:500000, preferred_track_width_nm:600000,..Default::default() }}),
+    );
+    let mut r = request(&s, p(1_000_000, 15_000_000), p(7_000_000, 15_000_000));
+    r.width_nm = 100_000;
+    let bytes = encode_documents(s.snapshot().unwrap()).unwrap();
+    let params = json!({"from":r.head,"to":r.target,"layer":r.layer,"width_nm":r.width_nm});
+    assert!(matches!(s.execute(PLAN_ROUTE, &params), Err(CommandError::InvalidParams(_))));
+    assert!(matches!(walkaround(&query(&s), &r, DEFAULT_BUDGET, &|| false), Err(CommandError::InvalidParams(_))));
+    let preferred = s.execute(PLAN_ROUTE, &json!({"from":r.head,"to":r.target,"layer":r.layer})).unwrap();
+    assert_eq!(preferred["route_plan"]["width_nm"], 600000);
+    assert_eq!(preferred["route_plan"]["outcome"]["kind"], "reached");
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Empty and head-only outputs round-trip as continuity hints, while malformed coordinates,
+/// excess vertices and singleton add_tracks paths retain their original validation failures.
+#[test]
+fn previous_accepts_empty_and_singleton_results_without_weakening_track_paths() {
+    let mut s = board();
+    let r = request(&s, p(1_000_000, 15_000_000), p(7_000_000, 15_000_000));
+    let base = json!({"from":r.head,"to":r.target,"layer":r.layer});
+    let incomplete = s.execute(PLAN_ROUTE, &json!({"from":r.head,"to":r.target,"layer":r.layer,"budget":1})).unwrap();
+    assert_eq!(incomplete["route_plan"]["outcome"]["kind"], "incomplete");
+    for previous in [json!([]), incomplete["route_plan"]["points"].clone()] {
+        let mut params = base.clone();
+        params["previous"] = previous;
+        assert_eq!(s.execute(PLAN_ROUTE, &params).unwrap()["route_plan"]["outcome"]["kind"], "reached");
+    }
+    for previous in [json!([{"x_nm":i64::MAX,"y_nm":0}]), json!(vec![r.head; 257]), json!([{"x_nm":0}])] {
+        let mut params = base.clone();
+        params["previous"] = previous;
+        assert!(s.execute(PLAN_ROUTE, &params).is_err());
+    }
+    assert!(s.apply(ADD_TRACKS, &json!({"layer":r.layer,"width_nm":WIDTH,"points":[r.head],"expected_revision":s.revision()})).is_err());
+}
+
+/// Two route legs individually touch different accepted nets away from their common elbow.
+/// Previous-plan reuse and a fresh search must validate their connected membership together.
+#[test]
+fn free_space_routes_cannot_bridge_nets_on_different_legs() {
+    let mut s = board();
+    let layer = copper_layers(&s)[0];
+    let a = pad(&s, "footprint-6", "2");
+    let b = pad(&s, "footprint-8", "1");
+    // Extend accepted copper down to well-separated points in free board space.
+    let contact_a = p(a.x_nm, 12_000_000);
+    let contact_b = p(0, 18_000_000);
+    add(&mut s, ADD_TRACKS, json!({"layer":layer,"width_nm":WIDTH,"points":[a,contact_a]}));
+    add(
+        &mut s,
+        ADD_TRACKS,
+        json!({"layer":layer,"width_nm":WIDTH,"points":[b,p(b.x_nm,6_000_000),p(-2_000_000,6_000_000),p(-2_000_000,18_000_000),contact_b]}),
+    );
+    let head = p(contact_a.x_nm + 3_000_000, contact_a.y_nm);
+    let elbow = p(contact_b.x_nm, contact_a.y_nm);
+    let target = p(contact_b.x_nm, contact_b.y_nm + 2_000_000);
+    let previous = vec![head, elbow, target];
+    let q = query(&s);
+    for leg in previous.windows(2) {
+        let result = q.probe(&Contour::segment(leg[0], leg[1], WIDTH).unwrap(), &[layer], None).unwrap();
+        assert!(!result.decisions.iter().any(|d| d.conflicting_nets), "each independent leg misses the short");
+    }
+    for continuity in [Vec::new(), previous.clone()] {
+        let mut r = request(&s, head, target);
+        r.posture = Posture::Orthogonal;
+        r.previous = continuity;
+        let planned = plan(&s, &r);
+        assert_ne!(planned.points, previous, "must not reuse the shorting path");
+        if planned.points.len() >= 2 {
+            let mut copy = Session::default();
+            copy.open_snapshot(s.snapshot().unwrap());
+            commit_and_agree(&mut copy, &planned, layer, WIDTH);
+        }
+    }
+}
+
+/// A sequence of separate obstacles exhausts the walk bound even with ample probe budget.
+/// Exhaustion must discard partial geometry rather than certify it as a blocked prefix.
+#[test]
+fn obstacle_search_exhaustion_returns_head_only_incomplete() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    add(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    for i in 1..=30 {
+        add(&mut s, ADD_VIA, json!({"at":p(i*10_000_000, 0),"via_diameter_nm":600000+i*200000,"via_drill_nm":300000}));
+    }
+    let r = request(&s, p(0, 0), p(315_000_000, 0));
+    let planned = s.plan_route(&query(&s), &r, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(planned.outcome, Outcome::Incomplete, "{planned:?}");
+    assert_eq!(planned.points, vec![r.head]);
+    assert_eq!(planned.blocker, None);
+    assert!(planned.probes < MAX_BUDGET, "search limit rather than probe budget");
+}
+
+/// A contact on a later leg gives the whole route its class requirements, including earlier
+/// legs near unrelated copper. Discarded previous-plan contacts cannot remain in search state.
+#[test]
+fn later_class_contact_revalidates_earlier_clearance_and_width() {
+    for (minimum, clearance) in [(100_000, 1_000_000), (400_000, 200_000)] {
+        let mut s = board();
+        let layer = copper_layers(&s)[0];
+        let b = pad(&s, "footprint-8", "1");
+        let target = view(&s).net_class_target_for_copper("footprint-8:1").unwrap().unwrap();
+        add(
+            &mut s,
+            crate::net_classes::CREATE,
+            json!({"name":"Late contact","rules":{
+            "clearance_nm":clearance,"min_track_width_nm":minimum,"preferred_track_width_nm":500000}}),
+        );
+        let class = s.project().unwrap().net_classes().definitions.iter().find(|c| c.name == "Late contact").unwrap().id;
+        add(&mut s, crate::nets::SET_CLASSES, json!({"target":target,"classes":[class]}));
+        // Approach the later route vertically from outside its elbow, then return to it.
+        let contact = p(0, 18_000_000);
+        add(
+            &mut s,
+            ADD_TRACKS,
+            json!({"layer":layer,"width_nm":500000,"points":[b,p(b.x_nm,6_000_000),p(-2_000_000,6_000_000),p(-2_000_000,18_000_000),contact]}),
+        );
+        add(&mut s, ADD_VIA, json!({"at":p(4_000_000,12_700_000),"via_diameter_nm":600000,"via_drill_nm":300000}));
+        let mut r = request(&s, p(20_000_000, 12_000_000), p(0, 20_000_000));
+        r.posture = Posture::Orthogonal;
+        r.previous = vec![r.head, p(0, r.head.y_nm), r.target];
+        let old = r.previous.clone();
+        let planned = plan(&s, &r);
+        assert_ne!(planned.points, old, "{minimum} / {clearance}: {planned:?}");
+        if planned.points.len() >= 2 {
+            commit_and_agree(&mut s, &planned, layer, WIDTH);
+        }
+    }
+}

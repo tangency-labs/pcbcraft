@@ -34,7 +34,7 @@ const HYSTERESIS: f64 = 0.1;
 
 /// Why a walk stopped before finishing.
 pub(super) enum Stop {
-    /// The probe budget ran out.
+    /// The probe budget or a search bound ran out.
     Exhausted,
     /// The caller's cancellation flag was raised.
     Canceled,
@@ -90,6 +90,9 @@ pub(super) struct Walker<'a> {
     own_islands: BTreeSet<usize>,
     /// Resolved membership of the head's copper (empty for free space).
     route_nets: Vec<usize>,
+    /// Complete membership/islands during final connected-path validation only. Search probes
+    /// must not inherit contacts from speculative detours, retries or discarded previous plans.
+    path_membership: Option<(Vec<usize>, BTreeSet<usize>)>,
     outline: drc::Outline,
     budget: usize,
     probes: usize,
@@ -122,6 +125,7 @@ impl<'a> Walker<'a> {
             intended_from: contacts.iter().copied().find(|i| !objects[*i].intended_nets.is_empty()),
             own_islands: contacts.iter().map(|i| objects[*i].island).collect(),
             route_nets,
+            path_membership: None,
             outline: view.outline_edges(),
             budget,
             probes: 0,
@@ -177,12 +181,7 @@ impl<'a> Walker<'a> {
         {
             return Ok(false);
         }
-        for leg in previous.windows(2) {
-            if !self.check(leg[0], leg[1])?.legal {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        Ok(self.confirm(previous.to_vec())?.points == previous)
     }
 
     /// Exactly check the leg `a`–`b` against captured copper and the board outline, charging
@@ -202,23 +201,33 @@ impl<'a> Walker<'a> {
         }
         self.probes += 1;
         let contour = Contour::capsule(a, b, self.half);
-        let results = self.query.probe(&contour, &self.layers, self.intended_from).map_err(Stop::Failed)?;
+        let results = match &self.path_membership {
+            Some((nets, _)) => self.query.probe_membership(&contour, &self.layers, nets, None),
+            None => self.query.probe(&contour, &self.layers, self.intended_from),
+        }
+        .map_err(Stop::Failed)?;
+        let (route_nets, own_islands) =
+            self.path_membership.as_ref().map_or((&self.route_nets, &self.own_islands), |(nets, islands)| (nets, islands));
         let objects = self.query.objects();
         let mut legal = true;
         let mut blockers = Vec::new();
         for decision in results.decisions.iter().filter(|d| d.clearance_violation || d.conflicting_nets) {
             let object = &objects[decision.second];
-            if !decision.conflicting_nets && self.own_islands.contains(&object.island) {
+            if !decision.conflicting_nets && own_islands.contains(&object.island) {
                 continue;
             }
             legal = false;
-            if !(self.route_nets.len() == 1 && object.intended_nets == self.route_nets) {
+            if !(route_nets.len() == 1 && &object.intended_nets == route_nets) {
                 blockers.push((decision.second, decision.clearance_nm));
             }
         }
+        let baseline = self.query.authority().rules().values;
+        let rules = results.probe_rules.as_ref().map_or(baseline, |rules| rules.hard_values(baseline));
+        if self.half * 2. < rules.min_track_width_nm as f64 {
+            legal = false;
+        }
         if !self.outline.polygons.is_empty() {
-            let baseline = self.query.authority().rules().values;
-            let edge = results.probe_rules.as_ref().map_or(baseline, |rules| rules.hard_values(baseline)).edge_clearance_nm;
+            let edge = rules.edge_clearance_nm;
             let (distance, crosses) = drc::edge_gap(&self.outline.edges, &contour);
             if !drc::contains(&self.outline.polygons, &contour) || crosses || distance < edge as f64 {
                 legal = false;
@@ -264,7 +273,7 @@ impl<'a> Walker<'a> {
         let mut first_block: Option<(Vec<Point>, Option<usize>)> = None;
         loop {
             let ended = if blocks >= MAX_BLOCKS {
-                true
+                return Err(Stop::Exhausted);
             } else {
                 blocks += 1;
                 let legs = elbow(cur, to, self.posture, flip);
@@ -335,7 +344,10 @@ impl<'a> Walker<'a> {
             if first_block.is_none() {
                 first_block = Some((points.clone(), blocker));
             }
-            let Some(branch) = branches.pop().filter(|_| retries < MAX_RETRIES) else { break };
+            if !branches.is_empty() && retries >= MAX_RETRIES {
+                return Err(Stop::Exhausted);
+            }
+            let Some(branch) = branches.pop() else { break };
             retries += 1;
             points = branch.points;
             points.extend(branch.round);
@@ -351,20 +363,73 @@ impl<'a> Walker<'a> {
         if reached {
             points = self.shortcut(&points, flipped)?;
         }
-        // Confirm every kept leg; keep the legal prefix should a hull entry have cut a corner.
-        let mut confirmed = vec![from];
-        for leg in points.windows(2) {
-            if self.check(leg[0], leg[1])?.legal {
-                confirmed.push(leg[1]);
-            } else {
-                confirmed.push(self.reach(leg[0], leg[1])?);
-                reached = false;
-                break;
-            }
+        let mut confirmed = self.confirm(points)?;
+        confirmed.reached &= reached && confirmed.points.last() == Some(&to);
+        if !confirmed.reached && confirmed.blocker.is_none() {
+            confirmed.blocker = blocker;
         }
-        let points = simplify(&confirmed);
-        let reached = reached && points.last() == Some(&to);
-        Ok(Walked { points, reached, blocker: if reached { None } else { blocker } })
+        Ok(confirmed)
+    }
+
+    /// Revalidate a complete connected path, including earlier legs, with the union of every
+    /// physical contact's membership and islands. If a leg fails, shorten to its legal prefix
+    /// and recompute membership: discarded contacts must not authorize that prefix. Speculative
+    /// search/reuse checks never retain this context or its cached clear legs.
+    fn confirm(&mut self, points: Vec<Point>) -> Result<Walked, Stop> {
+        let result = self.confirm_path(points);
+        self.path_membership = None;
+        self.clear.clear();
+        result
+    }
+
+    /// Trim failing legs until the entire prefix is legal under its own complete membership.
+    /// Each pass discards a segment or shortens its last leg; the explicit bound also covers
+    /// pathological changes in same-island exemptions while contacts disappear.
+    fn confirm_path(&mut self, mut points: Vec<Point>) -> Result<Walked, Stop> {
+        let mut reached = true;
+        let mut blocker = None;
+        for _ in 0..MAX_PATH_POINTS * 2 {
+            if points.len() > MAX_PATH_POINTS {
+                return Err(Stop::Exhausted);
+            }
+            let mut contacts = BTreeSet::new();
+            for leg in points.windows(2) {
+                if (self.cancel)() {
+                    return Err(Stop::Canceled);
+                }
+                let contour = Contour::capsule(leg[0], leg[1], self.half);
+                for index in self.query.candidates(&contour, &self.layers).map_err(Stop::Failed)? {
+                    if self.query.objects()[index].contour.gap(&contour) <= 0. {
+                        contacts.insert(index);
+                    }
+                }
+            }
+            let objects = self.query.objects();
+            let nets = contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
+            let islands = contacts.iter().map(|i| objects[*i].island).collect();
+            self.path_membership = Some((nets, islands));
+            self.clear.clear();
+            let mut trimmed = None;
+            for (index, leg) in points.windows(2).enumerate() {
+                let verdict = self.check(leg[0], leg[1])?;
+                if !verdict.legal {
+                    blocker = verdict.blockers.first().map(|b| b.0).or(blocker);
+                    let last = self.reach(leg[0], leg[1])?;
+                    trimmed = Some((index, last));
+                    break;
+                }
+            }
+            let Some((index, last)) = trimmed else {
+                return Ok(Walked { points, reached, blocker });
+            };
+            reached = false;
+            points.truncate(index + 1);
+            if points.last() != Some(&last) {
+                points.push(last);
+            }
+            points = simplify(&points);
+        }
+        Err(Stop::Exhausted)
     }
 
     /// Order the detours to try: the one on the previous result's side first unless the other
@@ -393,7 +458,7 @@ impl<'a> Walker<'a> {
     }
 
     /// Follow `hull` round from where `legs` enter it until an elbow to `to` leaves it, merging
-    /// copper met on the way. `None` when this sense meets a wall or no exit within bounds.
+    /// copper met on the way. `None` when this sense meets a wall or has no exit; exhausted merge bounds propagate.
     fn detour(&mut self, legs: &[Point], mut hull: Hull, first: usize, to: Point, ccw: bool, flip: bool) -> Result<Option<Detour>, Stop> {
         let mut members = vec![first];
         let mut excluded = false;
@@ -440,7 +505,7 @@ impl<'a> Walker<'a> {
             }
             return Ok(None);
         }
-        Ok(None)
+        Err(Stop::Exhausted)
     }
 
     /// Replace runs of corners with elbows where those are legal. Ends never move.

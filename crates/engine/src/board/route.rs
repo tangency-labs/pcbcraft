@@ -82,6 +82,9 @@ pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, canc
         return Err(CommandError::InvalidParams("Route points must be bounded board coordinates.".into()));
     }
     super::geometry::Contour::segment(request.head, request.target, request.width_nm)?;
+    if request.width_nm < query.authority().rules().values.min_track_width_nm {
+        return Err(CommandError::InvalidParams("Track width cannot weaken the board minimum.".into()));
+    }
     if !(1..=MAX_BUDGET).contains(&budget) {
         return Err(CommandError::InvalidParams(format!("A route budget must be from 1 to {MAX_BUDGET} probes.")));
     }
@@ -108,7 +111,7 @@ impl Session {
 
     /// Answer `pcb.plan_route` without changing revision, history or saved bytes. An omitted
     /// width uses the head contact's net-class preference or the board's preferred width; an
-    /// explicit width must satisfy applicable class minimums. A given `expected_revision` that
+    /// explicit width must satisfy board and applicable class minimums. A given `expected_revision` that
     /// is not current gives a stale outcome instead of a plan.
     pub(crate) fn route_plan_query(&self, params: &Value) -> Result<Value, CommandError> {
         let project = self.open_project()?;

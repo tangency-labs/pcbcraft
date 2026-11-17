@@ -150,6 +150,7 @@ enum ParamKind {
     DrawingPoints,
     DrawingId,
     TrackPath,
+    PreviousRoute,
     TrackWidth,
     TrackIds,
     LayerChanges,
@@ -262,6 +263,11 @@ impl ParamKind {
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
+            Self::PreviousRoute => {
+                let mut schema = board::track::path_schema();
+                schema["minItems"] = json!(0);
+                schema
+            }
             Self::LayerChanges => board::track::layer_changes_schema(),
             Self::TrackEnds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
@@ -504,6 +510,13 @@ impl ParamKind {
             {
                 Ok(())
             }
+            Self::PreviousRoute
+                if value
+                    .as_array()
+                    .is_some_and(|v| v.len() <= board::track::MAX_PATH_POINTS && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
+            {
+                Ok(())
+            }
             Self::TrackWidth if value.as_i64().is_some_and(|n| (board::track::MIN_WIDTH_NM..=board::track::MAX_WIDTH_NM).contains(&n)) => Ok(()),
             Self::TrackIds
                 if value.as_array().is_some_and(|ids| {
@@ -587,6 +600,7 @@ impl ParamKind {
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
             Self::TrackPath => Err("must contain 2–256 bounded vertices"),
+            Self::PreviousRoute => Err("must contain at most 256 bounded vertices"),
             Self::TrackWidth => Err("must be a track width from 10000 to 10000000 nanometers"),
             Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
             Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
@@ -2084,7 +2098,7 @@ const CATALOG: &[Command] = &[
                 name: "previous",
                 required: false,
                 summary: "The last plan's points for this gesture; kept while still legal, and its side is preferred",
-                kind: ParamKind::TrackPath,
+                kind: ParamKind::PreviousRoute,
             },
             Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 4096", kind: ParamKind::RouteBudget },
             Param {

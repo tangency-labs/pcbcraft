@@ -28,8 +28,11 @@ not; nothing is moved or shoved.
 Copper the head touches lends the route its intended membership and physical
 island, so the route may start on and run over it. Copper of the route's single
 resolved net is exempt as in DRC. All other copper, including copper of unknown
-membership, keeps its clearance; a route into an unconnected pad is therefore
-blocked rather than joining it.
+membership, keeps its clearance during search. Before returning a new or reused
+path, the planner combines all of its physical contacts and rechecks every leg
+with the resulting membership, width minimum and clearance rules. A failure trims
+the path to a legal prefix and recomputes its contacts; it cannot certify a route
+that joins distinct nets on different legs.
 
 ## Results
 
@@ -68,7 +71,7 @@ is not current. A caller adopting a plan later must check the authority again;
 `board`, `width_nm`, `posture` (`diagonal` or `orthogonal`), `flipped` (the elbow's
 other leg first), `previous`, `budget` and `expected_revision`. An omitted width
 uses the head contact's net-class preference or the board's preferred width; an
-explicit width must satisfy applicable class minimums. A given
+explicit width must satisfy board and applicable class minimums. A given
 `expected_revision` that is not current answers `stale`. `execute` returns
 `route_plan` with the resolved width and the plan, also with `inspect: false`;
 the revision, history and saved bytes do not change.
@@ -88,7 +91,8 @@ snap hysteresis and commit gesture are later #246 slices.
 plans over one captured query: the fixture's first six airwires, a free-space route
 along the channel recipe's corridor and one across the crowded diagonal region.
 Every iteration must reproduce the first iteration's plans exactly, and each first
-plan is committed through `pcb.add_tracks` and checked against the exhaustive pair
-reference outside the timed boundary. These are solver service costs, not editor
+plan with at least two points is committed through `pcb.add_tracks` and checked
+against the exhaustive pair reference outside the timed boundary. These are solver service costs, not editor
 preview or commit latency. The [#246 evidence](../tools/performance/baselines/issue246/README.md)
-records the first measurements.
+records the first measurements, and the [PR #376 follow-up](../tools/performance/baselines/issue246/review376/README.md)
+records the connected-path validation cost and corrected search-limit outcomes.
