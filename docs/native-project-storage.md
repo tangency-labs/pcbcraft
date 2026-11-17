@@ -283,10 +283,11 @@ See [board-materials.md](board-materials.md#thermal-and-insulation-reports).
 
 Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
 all board/19 fields, with board rules optional. A zone board with a placement
-origin uses format 21; with the stack fields it uses format 23, preserving the
-zone, origin and stack records. Removing a feature selects the format required by
-the remaining data. Without zones the encoder chooses
-the format required by the remaining content. An absent array in board/20, an
+origin needs at least format 21; stack fields need at least format 23, and thermal
+or insulation material reports select format 24. The encoder chooses the highest
+applicable format, preserving the zone, origin, stack and material records.
+Removing a feature selects the format required by the remaining data. Without
+zones the encoder chooses the format required by the remaining content. An absent array in board/20, an
 empty or null array in any supported format, or zones in a format below 20, is refused.
 Formats 23 and 24 can also carry zones alongside their stack fields and material
 reports; removing those fields restores format 21 if an origin remains, or 20

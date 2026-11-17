@@ -228,7 +228,7 @@ record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
-thickness use `pcbcraft-board/23` when one of them is present. Thermal
+thickness need at least `pcbcraft-board/23` when one of them is present. Thermal
 conductivity, thermal expansion, dielectric strength and CTI reports use
 `pcbcraft-board/24`, chosen only when one of them is present; it may also carry
 every format 23 field. Older headers refuse these reports, and a board without
