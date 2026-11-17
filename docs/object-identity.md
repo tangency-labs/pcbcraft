@@ -69,6 +69,7 @@ reported.
 | Pad | footprint plus pad number, `{"footprint":"footprint-N","pad":"1"}` | Owner token on a counter |
 | Track segment | `board.json` `tracks[]` | UUID |
 | Via | `board.json` `vias[]` | UUID |
+| Zone outline | `board.json` `zones[]` | UUID; vertices and fill settings are owned content |
 | Board drawing item | `board.json` `graphics.items[]` | UUID |
 | Layer | `board.json` `setup.layers[]` | UUID |
 | Rule set | `board.json` `rules` (one per board; its values have no id of their own) | UUID |
@@ -77,7 +78,7 @@ reported.
 
 The stackup, its dielectric strata, circuit uses and the project itself also carry
 UUIDs. Copper strata are addressed by their layer. Wire bends, drawing vertices,
-no-connect intent on pins and wire ends, package choices, accepted board
+zone vertices and fill settings, no-connect intent on pins and wire ends, package choices, accepted board
 connections, net anchors and class bindings belong to their owner and have no id
 of their own.
 

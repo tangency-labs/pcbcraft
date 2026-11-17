@@ -557,10 +557,14 @@ impl Session {
 /// Adopt required marker metadata and validate disposable geometry/assets before publication.
 /// Return the adopted candidate so the codec and transaction inspect the same occurrence IDs.
 /// The previous net registry can still name removed anchors; publication reconciles its successor.
+/// Validate zone geometry/references before omitting them with the temporary registry; the real
+/// candidate retains both, and publication rechecks zones against the reconciled identities.
 pub(crate) fn validate_candidate(mut project: Project) -> Result<Project, CommandError> {
     project.prepare_no_connect_metadata().map_err(invalid)?;
+    crate::board::zones::validate(&project).map_err(invalid)?;
     let mut geometry = project.clone();
     geometry.net_registry = Arc::default();
+    Arc::make_mut(&mut geometry.board).zones.clear();
     let documents = crate::persistence::encode_documents(Arc::new(geometry)).map_err(invalid)?;
     crate::persistence::decode_documents(&documents).map_err(invalid)?;
     Ok(project)
