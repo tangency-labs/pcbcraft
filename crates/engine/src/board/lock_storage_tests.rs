@@ -21,7 +21,7 @@ fn marker_fixture() -> Session {
     session
         .apply(
             crate::PLACE_FOOTPRINT,
-            &json!({"symbol":format!("symbol-{symbol}"),"definition":"generic-through-hole-2",
+            &json!({"symbol":symbol,"definition":"generic-through-hole-2",
         "pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
         )
         .unwrap();

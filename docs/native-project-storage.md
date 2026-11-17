@@ -284,8 +284,9 @@ silently losing them. See [the layout guide](pcb-layout-workflow.md#footprint-lo
 
 Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
 all board/19 fields, with board rules optional. A zone board with a placement
-origin uses format 21, preserving both records; removing either feature retains
-the other and selects its required format. Without zones the encoder chooses
+origin uses format 21, or format 25 when footprint locks are also present,
+preserving those records; removing a feature retains the others and selects
+their required format. Without zones the encoder chooses
 the format required by the remaining content. An absent array in board/20, an
 empty or null array in any supported format, or zones in a format below 20, is refused. Format 25 also accepts these records alongside footprint locks. Zones are
 UUID-sorted, one authored record per line, with `id`, `layer`, `net`, `points` and
