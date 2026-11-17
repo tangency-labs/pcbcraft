@@ -1855,7 +1855,7 @@ impl DocumentsEncoder {
 }
 
 /// Keep legacy bytes until newer authored data requires a newer format. Locked copper
-/// uses format 18 while an authored lock exists, unless board defaults require format 19.
+/// uses format 18 while an authored lock exists, unless other content requires a later format.
 /// Format 19 requires validated rules and accepts earlier physical fields. Format 21
 /// requires a placement origin and accepts every earlier field, including rules. Format 25
 /// requires an active footprint lock and retains all fields through format 21. Independent
