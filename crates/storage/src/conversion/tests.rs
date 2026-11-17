@@ -82,6 +82,82 @@ fn conversion_refuses_overlap_existing_destinations_and_invalid_inputs() {
     assert!(!target.exists());
 }
 
+/// On Windows, ASCII and superscript-digit device names are refused for folders and archives,
+/// with or without extensions or trailing ASCII spaces, before creating anything (#156).
+#[cfg(windows)]
+#[test]
+fn windows_conversion_refuses_device_named_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("old");
+    let expected = source(&root);
+    let original = files(&root);
+    let out = dir.path().join("out");
+    fs::create_dir(&out).unwrap();
+    for device in ["con", "NUL", "com1", "aux", "lpt9", "COM¹", "com²", "CoM³", "LPT¹", "lpt²", "LpT³"] {
+        for name in [device.to_owned(), format!("{device}.pc"), format!("{device} "), format!("{device}  .pc")] {
+            for encoding in [Encoding::Zip, Encoding::Json] {
+                let error = convert(&root, &out.join(&name), encoding).unwrap_err();
+                assert!(error.contains("Windows reserves the name"), "{name}: {error}");
+                assert!(fs::read_dir(&out).unwrap().next().is_none(), "{name}: nothing is created");
+                assert_eq!(files(&root), original, "{name}: source is unchanged");
+            }
+        }
+    }
+    for name in ["console.pc", "COM¹-extra.pc"] {
+        let destination = out.join(name);
+        convert(&root, &destination, Encoding::Zip).unwrap();
+        assert_eq!(decode_packed(&fs::read(destination).unwrap()).unwrap().documents, expected);
+    }
+}
+
+/// Device names remain ordinary conversion destinations elsewhere; both forms reopen with
+/// the expected documents and leave the source unchanged.
+#[cfg(not(windows))]
+#[test]
+fn other_platforms_convert_superscript_device_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("old");
+    let expected = source(&root);
+    let original = files(&root);
+    for device in ["COM¹", "com²", "CoM³", "LPT¹", "lpt²", "LpT³"] {
+        let archive = dir.path().join(format!("{device}.pc"));
+        convert(&root, &archive, Encoding::Zip).unwrap();
+        assert_eq!(decode_packed(&fs::read(archive).unwrap()).unwrap().documents, expected);
+        let folder = dir.path().join(device);
+        convert(&root, &folder, Encoding::Json).unwrap();
+        assert_eq!(crate::load(&folder).unwrap(), expected);
+    }
+    assert_eq!(files(&root), original);
+}
+
+/// Non-Windows conversion preserves trailing spaces in the chosen destination; both output
+/// forms reopen without changing source bytes or silently writing to a trimmed name.
+#[cfg(not(windows))]
+#[test]
+fn other_platforms_convert_device_names_with_trailing_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("old");
+    let expected = source(&root);
+    let original = files(&root);
+    for (encoding, output) in [(Encoding::Zip, "archives"), (Encoding::Json, "folders")] {
+        let out = dir.path().join(output);
+        fs::create_dir(&out).unwrap();
+        for name in ["NUL ", "COM¹ ", "LPT²  ", "nul  .pc"] {
+            let destination = out.join(name);
+            convert(&root, &destination, encoding).unwrap();
+            let documents = match encoding {
+                Encoding::Zip => decode_packed(&fs::read(&destination).unwrap()).unwrap().documents,
+                Encoding::Json => crate::load(&destination).unwrap(),
+            };
+            assert_eq!(documents, expected, "{name:?}");
+            if name.ends_with(' ') {
+                assert!(!out.join(name.trim_end_matches(' ')).exists(), "{name:?}: destination was not trimmed");
+            }
+        }
+    }
+    assert_eq!(files(&root), original);
+}
+
 /// Pending recovery, an active writer and mixed entry points are never changed or recovered.
 #[test]
 fn conversion_refuses_busy_recovery_pending_and_mixed_sources() {

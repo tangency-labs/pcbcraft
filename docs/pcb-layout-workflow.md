@@ -162,8 +162,10 @@ clearance enforcement and gesture integration remain later work.
 
 This is #57.
 
-**Problem.** **Place › Zone** and **Design › Refill zones** are planned. Ground
-planes and power pours are not possible.
+**Implemented first slice.** [Zone outline authoring](copper-zone-outlines.md)
+(#231) draws and edits single-layer, net-addressed outlines with saved fill intent.
+It creates no conductive fill. The fill, thermal, DRC and output behavior below
+remains the proposal for #232/#233; **Refill zones** is still planned.
 
 **Behavior.**
 - Drawing a zone works like a Board Outline rectangle or polygon on a copper

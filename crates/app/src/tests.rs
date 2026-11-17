@@ -9,6 +9,9 @@ use serde_json::{Value, json};
 
 use super::*;
 
+// The browser build has no Assistant, which both tests expect.
+#[cfg(not(target_arch = "wasm32"))]
+mod app_bar_utilities;
 mod board_colors;
 mod board_drawing;
 mod board_layers;
@@ -17,6 +20,7 @@ mod board_ratsnest;
 mod board_tracks;
 mod board_update;
 mod board_views;
+mod board_zones;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;
 mod display_units;

@@ -543,6 +543,9 @@ impl Encoder {
         if project.has_sheet_occurrences() {
             return Err("legacy diagnostic encoding cannot represent sheet occurrence identities; use split documents or a packed archive".into());
         }
+        if !project.board.zones.is_empty() {
+            return Err("legacy diagnostic encoding cannot represent zone intent; use split documents".into());
+        }
         if !project.parameters.is_empty() {
             return Err("legacy diagnostic encoding cannot represent project parameters; use split documents or a packed archive".into());
         }

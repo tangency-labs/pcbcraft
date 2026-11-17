@@ -262,3 +262,22 @@ fn committed_length(
     });
     committed
 }
+
+/// Zone dimensions reuse the same unit-aware, revision-bound commit policy as copper widths.
+pub(crate) fn zone_length(
+    ui: &mut Ui,
+    salt: (&str, impl std::hash::Hash + std::fmt::Debug),
+    value: i64,
+    unit: units::Unit,
+    revision: u64,
+) -> Option<i64> {
+    committed_length(
+        ui,
+        salt,
+        value,
+        pcbcraft_engine::board::track::MIN_WIDTH_NM..=pcbcraft_engine::board::track::MAX_WIDTH_NM,
+        unit,
+        revision,
+        false,
+    )
+}

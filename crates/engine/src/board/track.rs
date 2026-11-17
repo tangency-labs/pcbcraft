@@ -578,25 +578,14 @@ fn reframe(point: Point, from: &[Point; 4], to: &[Point; 4]) -> Point {
 /// the track stretches. An end whose pad no longer reaches the track's layer, such as an SMD
 /// pad flipped to the other side, stays where it was. Only tracks that change are returned.
 pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSet<String>) -> Vec<Track> {
-    let old: Vec<_> = lands(before)
-        .into_iter()
-        .filter(|land| moved.contains(&land.key.0))
-        .map(|land| {
-            let contour = land.contour();
-            (land, contour)
-        })
-        .collect();
+    let old = carrying_lands(before, moved);
     if old.is_empty() {
         return Vec::new();
     }
     let new: BTreeMap<(String, String), Land> =
         lands(after).into_iter().filter(|land| moved.contains(&land.key.0)).map(|land| (land.key.clone(), land)).collect();
     let follow = |end: Point, track: &Track| {
-        let half = track.width_nm as f64 / 2.;
-        let Some((land, _)) = old.iter().find(|(land, contour)| land.layers.contains(&track.layer) && contour.overlaps_segment(end, end, half))
-        else {
-            return end;
-        };
+        let Some(land) = carrier(&old, track, end) else { return end };
         match new.get(&land.key) {
             Some(moved) if moved.layers.contains(&track.layer) => reframe(end, &land.corners, &moved.corners),
             _ => end,
@@ -608,6 +597,37 @@ pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSe
         .filter_map(|track| {
             let (start, end) = (follow(track.start, track), follow(track.end, track));
             ((start, end) != (track.start, track.end)).then(|| Track { start, end, ..track.clone() })
+        })
+        .collect()
+}
+
+/// Capture moved pad contours once for contact-preserving footprint/group translation.
+fn carrying_lands(view: BoardView<'_>, moved: &BTreeSet<String>) -> Vec<(Land, PadContour)> {
+    lands(view)
+        .into_iter()
+        .filter(|land| moved.contains(&land.key.0))
+        .map(|land| {
+            let contour = land.contour();
+            (land, contour)
+        })
+        .collect()
+}
+
+/// Use the same physical pad overlap policy for individual poses and group translation.
+fn carrier<'a>(old: &'a [(Land, PadContour)], track: &Track, end: Point) -> Option<&'a Land> {
+    old.iter()
+        .find(|(land, contour)| land.layers.contains(&track.layer) && contour.overlaps_segment(end, end, track.width_nm as f64 / 2.))
+        .map(|(land, _)| land)
+}
+
+/// Capture which unselected track ends follow selected pads, outside pointer-motion frames.
+pub(super) fn carried_ends(view: BoardView<'_>, moved: &BTreeSet<String>) -> BTreeMap<Uuid, (bool, bool)> {
+    let old = carrying_lands(view, moved);
+    view.tracks()
+        .iter()
+        .filter_map(|track| {
+            let ends = (carrier(&old, track, track.start).is_some(), carrier(&old, track, track.end).is_some());
+            (ends.0 || ends.1).then_some((track.id, ends))
         })
         .collect()
 }

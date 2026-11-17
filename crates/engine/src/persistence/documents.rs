@@ -71,6 +71,7 @@ const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
+const ZONE_BOARD_FORMAT: &str = "pcbcraft-board/20";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
 const HOUSE_BOARD_FORMAT: &str = "pcbcraft-board/22";
@@ -301,6 +302,8 @@ impl From<&crate::wire::GeneratedLeg> for GeneratedLegRecord<'static> {
 #[serde(deny_unknown_fields)]
 struct BoardDocument {
     format: String,
+    #[serde(default, deserialize_with = "present")]
+    zones: Option<Vec<crate::board::zones::Zone>>,
     #[serde(default, deserialize_with = "present")]
     rules: Option<crate::board::rules::Settings>,
     #[serde(default, deserialize_with = "present")]
@@ -768,6 +771,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         BoardDocument {
             format: BOARD_FORMAT.into(),
+            zones: None,
             rules: None,
             placement_origin: None,
             assembly_houses: None,
@@ -803,8 +807,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
     }
+    let zoned = board.format == ZONE_BOARD_FORMAT;
+    if (zoned && board.zones.is_none())
+        || (!zoned && !originated && !housed && board.zones.is_some())
+        || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
+    {
+        return Err("board.json: zones require format 20 or later and a nonempty array; format 20 requires zones.".into());
+    }
     let ruled = board.format == RULES_BOARD_FORMAT;
-    if (ruled && board.rules.is_none()) || (!ruled && !originated && !housed && board.rules.is_some()) {
+    if (ruled && board.rules.is_none()) || (!ruled && !originated && !housed && !zoned && board.rules.is_some()) {
         return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
     if let Some(rules) = &board.rules {
@@ -813,10 +824,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !ruled && !originated && !housed && locked != authored_locks {
+    if !ruled && !originated && !housed && !zoned && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || originated || housed;
+    let locked = locked || ruled || originated || housed || zoned;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -848,6 +859,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | RULES_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
             | HOUSE_BOARD_FORMAT
+            | ZONE_BOARD_FORMAT
     );
     if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
@@ -865,6 +877,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | RULES_BOARD_FORMAT
                     | ORIGIN_BOARD_FORMAT
                     | HOUSE_BOARD_FORMAT
+                    | ZONE_BOARD_FORMAT
             ))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
@@ -951,6 +964,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | RULES_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
             | HOUSE_BOARD_FORMAT
+            | ZONE_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -973,6 +987,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | RULES_BOARD_FORMAT
                 | ORIGIN_BOARD_FORMAT
                 | HOUSE_BOARD_FORMAT
+                | ZONE_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -991,8 +1006,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (HOUSE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (HOUSE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
+        (HOUSE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (HOUSE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, None) => None,
@@ -1213,6 +1228,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
+    let mut zones = board.zones.unwrap_or_default();
+    zones.sort_by_key(|zone| zone.id);
+    Arc::make_mut(&mut project_data.board).zones = zones;
+    crate::board::zones::validate(project_data).map_err(|e| format!("board.json: {e}"))?;
     validate_watermark(&project)?;
     Ok(project)
 }
@@ -1855,6 +1874,7 @@ impl DocumentsEncoder {
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
 fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
+    crate::board::zones::validate(project)?;
     let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
@@ -1878,6 +1898,8 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
             HOUSE_BOARD_FORMAT
         } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
+        } else if !board.zones.is_empty() {
+            ZONE_BOARD_FORMAT
         } else if board.rules.is_some() {
             RULES_BOARD_FORMAT
         } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
@@ -1940,6 +1962,8 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
             HOUSE_BOARD_FORMAT
         } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
+        } else if !board.zones.is_empty() {
+            ZONE_BOARD_FORMAT
         } else if board.rules.is_some() {
             RULES_BOARD_FORMAT
         } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
@@ -2019,6 +2043,14 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
             record(bytes, &mut first, item)?;
         }
         bytes.extend_from_slice(b"    ]\n  },\n");
+    }
+    if !board.zones.is_empty() {
+        bytes.extend_from_slice(b"  \"zones\": [\n");
+        let mut first = true;
+        for zone in &board.zones {
+            record(bytes, &mut first, zone)?;
+        }
+        bytes.extend_from_slice(b"  ],\n");
     }
     if !board.tracks.is_empty() {
         bytes.extend_from_slice(b"  \"tracks\": [\n");

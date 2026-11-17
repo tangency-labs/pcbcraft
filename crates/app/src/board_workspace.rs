@@ -149,6 +149,7 @@ impl PcbApp {
         }
         workspace::ribbon_separator(ui);
 
+        let group_moving = self.views.active.board.movement.active();
         let selected = enabled && self.views.active.board.selection.len() == 1;
         let reference = enabled && self.views.active.board.reference.selected.is_some();
         // Move also starts a copper move when tracks or vias are selected and no footprint is.
@@ -157,9 +158,9 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Move,
                 label: "Move",
-                description: "Move selected footprint, text or copper",
+                description: "Move selected PCB items or text",
                 shortcut: "M",
-                enabled: (selected || reference || copper) && !editing,
+                enabled: enabled && (selected_items || reference || copper) && !editing,
                 active: editing,
                 menu_check: None,
             },
@@ -168,7 +169,7 @@ impl PcbApp {
                 label: "Rotate",
                 description: "Rotate selected footprint or text counterclockwise",
                 shortcut: "R",
-                enabled: selected || reference || editing,
+                enabled: !group_moving && (selected || reference || editing),
                 active: false,
                 menu_check: None,
             },
@@ -177,7 +178,7 @@ impl PcbApp {
                 label: "Flip",
                 description: "Flip footprint to the other side",
                 shortcut: "F",
-                enabled: selected || self.views.active.board.draft.is_some(),
+                enabled: !group_moving && (selected || self.views.active.board.draft.is_some()),
                 active: false,
                 menu_check: None,
             },
@@ -269,9 +270,17 @@ impl PcbApp {
                 active: self.views.active.board.tracks.via_tool,
                 menu_check: None,
             },
+            RibbonTool {
+                icon: ToolIcon::Zone,
+                label: "Zone",
+                description: "Draw zone outlines",
+                shortcut: "",
+                enabled: enabled && self.can_route() && !editing,
+                active: self.views.active.board.zones.tool.is_some(),
+                menu_check: None,
+            },
         ];
         let planned = [
-            planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)"),
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
             planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
@@ -279,6 +288,7 @@ impl PcbApp {
         match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
+            Some(2) => self.begin_zone(),
             _ => {}
         }
     }
@@ -488,6 +498,7 @@ impl PcbApp {
             return;
         }
         self.views.active.board.drawing.cancel();
+        self.views.active.board.zones.cancel();
         self.views.active.board.measure.cancel();
         self.views.active.board.tracks.start_via();
     }
@@ -509,6 +520,7 @@ impl PcbApp {
             return;
         }
         self.views.active.board.drawing.cancel();
+        self.views.active.board.zones.cancel();
         self.views.active.board.measure.cancel();
         self.views.active.board.tracks.start();
     }
@@ -517,6 +529,7 @@ impl PcbApp {
     /// returns selection and transform intent; validation and dispatch follow after its borrow ends.
     /// All board panes use the shared grid display preference without changing their cameras.
     /// Rejected drawing creation restores its captured gesture so the user can correct it.
+    /// An accepted zone creation renews its armed net choice for the next outline only.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
         let enabled = ui.is_enabled()
             && (crate::IN_BROWSER || ui.input(|input| input.focused))
@@ -534,6 +547,12 @@ impl PcbApp {
         }
         let highlighted = self.views.board_highlight_for(id, &self.session);
         let label = if self.views.is_split() { format!("PCB canvas {}", id.0 + 1) } else { "PCB canvas".to_owned() };
+        if self.board_move_ready(ui.ctx(), id, enabled)
+            && let Some(widget) = self.views.view(id).map(|v| v.widget_id())
+        {
+            ui.push_id(widget, |ui| shell::canvas(ui, |ui| self.board_move_canvas(ui, id, &label)));
+            return;
+        }
         if self.board_clipboard_ready(ui.ctx(), id, enabled)
             && let Some(widget) = self.views.view(id).map(|v| v.widget_id())
         {
@@ -584,6 +603,7 @@ impl PcbApp {
             || pick.edit.is_some()
             || pick.reference_edit.is_some()
             || pick.reference_pick.is_some()
+            || pick.zone_edit.is_some()
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
@@ -606,6 +626,20 @@ impl PcbApp {
             }
             if let Some(footprint) = pick.reference_pick {
                 self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(mut edit) = pick.zone_edit
+                && self.views.active.accepts(edit.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                edit.params["board"] = serde_json::json!(target.board);
+                self.run(edit.id, &edit.params);
+                if self.message.is_some() {
+                    edit.restore_rejected(&mut self.views.active.board.zones);
+                } else if edit.id == pcbcraft_engine::board::zones::ADD_ZONE {
+                    // Only this tool's accepted creation renews its chosen net; unrelated edits
+                    // leave the captured authority stale and cancel before another point starts.
+                    self.views.active.board.zones.zone_source = self.views.active.input(&self.session);
+                }
             }
             if let Some(mut edit) = pick.drawing_edit
                 && self.views.active.accepts(edit.source, &self.session)

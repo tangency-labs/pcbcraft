@@ -20,6 +20,7 @@ pub mod geometry;
 pub mod identity;
 mod library_migration;
 pub mod materials;
+pub mod movement;
 pub mod origin;
 pub mod outline;
 pub mod ratsnest;
@@ -34,6 +35,7 @@ pub(crate) mod transform;
 pub mod update;
 pub mod view;
 pub mod work;
+pub mod zones;
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;
@@ -286,6 +288,7 @@ pub fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 /// Board-local placements and immutable definitions, indexed independently from view state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Board {
+    pub(crate) zones: Vec<zones::Zone>,
     pub(crate) ownership: identity::Ownership,
     pub(crate) baseline: Option<Arc<update::Baseline>>,
     pub(crate) assignments: BTreeMap<u64, assignment::Assignment>,
