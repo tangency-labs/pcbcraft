@@ -1,20 +1,23 @@
 # Geometry kernel and STEP library
 
-`crates/geometry` (`pcbcraft-geometry`) is the one place PCBcraft builds solid
-bodies, reads and writes STEP (ISO 10303-21) files and measures them. It is the
+`crates/geometry` (`pcbcraft-geometry`) is the one place PCBcraft clips planar
+regions, builds solid bodies, reads and writes STEP (ISO 10303-21) files and measures them. It is the
 shared base for 3D board inspection and STEP assembly export
 ([#86](https://github.com/tangency-labs/pcbcraft/issues/86)). This page records
 which kernel it uses, why, how the dependency was qualified and what is still
-open. No command, panel or saved format uses the crate yet.
+open. No command, panel or saved format uses the crate yet. The planar adapter
+is the first implementation step for [zone fill #232](https://github.com/tangency-labs/pcbcraft/issues/232);
+it does not yet turn authored zone outlines into conductive copper.
 
 ## Choice
 
 The kernel is SolidCraft's `solidcore`, a Rust port of the SMLib and SM_API parts
-of NVIDIA's USD BRep. PCBcraft uses three crates from it:
+of NVIDIA's USD BRep. PCBcraft uses these crates from it:
 
 | Crate | Job |
 | --- | --- |
 | `solidcore` | B-rep solids (already in `Cargo.lock` through the Craft UI crates) |
+| `solidcore-record`, `solidcore-convert` | Private planar profile data and kernel conversion |
 | `solidcore-ops` | Modelling calls on kernel bodies: primitives, record conversion, bounding boxes, the session's panic guard |
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
 
@@ -45,32 +48,33 @@ Alternatives considered:
 
 ## Boundary
 
-`pcbcraft-geometry` is the only crate that depends on `solidcore-ops` or
-`solidcore-step`. `pcbcraft-engine` has no kernel dependency, so engine builds,
-engine tests and the browser editor do not pay for the kernel. The same API
-could later move into an engine module if that proves simpler.
+`pcbcraft-geometry` owns the modelling, planar record/conversion and STEP
+adapters. At this first step, `pcbcraft-engine` has no dependency on the crate;
+zone commands and the editor do not call its planar API yet. The existing UI
+toolkit dependency on SolidCore remains separate from this geometry boundary.
 
 - **Kernel-neutral API.** No kernel type appears in the public API. Callers use
-  `Body`, `BoundingBox`, `StepRead`, `RefusedItem` and `GeometryError`, so a
+  `Body`, `BoundingBox`, `StepRead`, `RefusedItem`, `planar::Regions` and `GeometryError`, so a
   kernel swap touches only this crate.
 - **Units.** Lengths are whole nanometres (`i64`), within
   `pcbcraft_units::MAX_LENGTH_NM` of zero. The kernel's millimetre floats are
-  converted at the boundary, each coordinate rounded once to the nearest
-  nanometre.
-- **Panic guard.** Every kernel operation the crate calls (make, measure, read,
-  write) runs under a guard that turns a panic into
+  converted at the boundary. Body measurements round coordinates once to the
+  nearest nanometre; derived planar boundaries retain their precision internally.
+- **Panic guard.** Every kernel operation the crate calls runs under a guard that turns a native unwinding panic into
   the error `kernel_internal`, adapted from SolidCraft's kernel boundary. The
   reader refuses only the solid whose conversion panicked and keeps the others
   (no test reaches this: no valid input makes that conversion panic).
   `kernel_crash_test()` lets a diagnostics command prove the guard works.
-  Dropping a body frees its kernel data outside the guard.
+  Dropping a body frees its kernel data outside the guard. A browser abort/trap
+  does not unwind and needs host isolation, as discussed below.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
   outside tests.
-- **Native only.** The kernel crates are target dependencies for
-  non-`wasm32` builds. On `wasm32` the crate compiles without them, no body can
-  be made, and every operation that reaches the kernel returns
+- **Native 3D and STEP.** The modelling and STEP crates are target dependencies for
+  non-`wasm32` builds. On `wasm32` the crate compiles without those modelling/STEP dependencies, no body can
+  be made, and every 3D/STEP operation that reaches that boundary returns
   `kernel_unavailable`; arguments refused before the kernel keep their codes. CI
-  runs these tests on `wasm32-wasip1`.
+  runs these tests on `wasm32-wasip1`. The separate planar adapter below links
+  `solidcore`, record and conversion on native and WebAssembly targets.
 - **No kernel data in projects.** A stored 3D model is its original STEP bytes by
   content hash, as the [3D model storage](library-sources.md#3d-model-storage)
   design proposes, or the dimensions a simple body was built from. Bodies, boxes
@@ -95,7 +99,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, or a malformed solid |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
-| `kernel_unavailable` | This build has no kernel (the browser) |
+| `kernel_unavailable` | The requested 3D/STEP operation is unavailable on this build |
 | `kernel_internal` | The kernel panicked; the panic was caught |
 
 ## Qualification
@@ -163,3 +167,52 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   distance, assembly export and placement types are not in the crate yet. They
   are added as new functions over the same `Body` type without changing the
   error codes or units.
+
+## Planar adapter for zone fill
+
+For #232 I selected the existing pin's planar geometry instead of adding
+`i_overlay`. `planar::Regions` holds immutable material regions and holes behind
+an opaque API. Input polygons and circle diameters use integer nanometres,
+including odd diameters with half-nanometre radii. Derived lines, arcs and
+free-form intersections retain their kernel precision through repeated operations;
+there is no intermediate integer polygon or project-file encoding.
+
+The adapter exposes Union, Difference and Intersection, in-plane offsets with
+round corners, analytic area with a numerical error bound, individual islands
+and point containment. An on-boundary/uncertain point remains `None`, rather than
+becoming a positive connectivity claim. Polygon callers supply simple outlines;
+zone authoring already validates crossings. The constructor normalizes winding
+and rejects repeated, degenerate, oversized or out-of-range input. Derived output
+also obeys the kernel's 8,192-segment budget and PCBcraft's coordinate limit;
+arc/control-hull bounds are deliberately conservative near that limit.
+
+Boolean call recipes adapt `solidcore-ops/src/prism.rs` at the pin, using the
+kernel's own profile conversion, planar-face construction, Boolean and region
+reader. Each operation owns a fresh kernel and temporary bodies; it does not
+use or configure the process-global ops session, so planar calculation cannot
+change a later STEP operation's fix flags. Regions are joined in balanced rounds,
+with each region's own holes removed before joining separate material islands.
+No clipping or offset algorithm is implemented in PCBcraft.
+
+The pinned ops wrapper fails when a successful Boolean leaves no faces because
+its public face query refuses an empty list. The adapter walks the completed
+result's topology first and returns empty material only when that walk proves
+there are no faces. It propagates failures from the Boolean and topology walk;
+it does not translate status 1001 or a generic kernel refusal into an empty fill.
+Tests cover identical/covering subtraction and disjoint/boundary-only intersection,
+as well as normal holes and split material.
+
+The same planar tests run natively and in the existing WASI CI job; 3D/STEP still
+report `kernel_unavailable` on WebAssembly. Native unwinding panics are caught by
+the shared guard. A browser `panic=abort` trap cannot be caught by Rust's guard,
+and neither stack exhaustion nor abort recovery is certified here. Fill-job
+integration must isolate that failure in its host and revoke obsolete authority.
+
+This adapter is a foundation, not completed zone fill. Thermal/spoke generation,
+board/rule/net projection, revision-keyed publication, conservative clearance
+allowances, canvas/ratsnest/DRC integration and cancellation remain in #232.
+The 0.1 nm loop/offset tolerance is an approximation setting, not a proof that
+rounded output contours meet clearance; later consumers must retain or bound
+that approximation explicitly. Gerber conversion remains #233 and must consume
+the same authoritative fill. The UI, authored native formats and saved project
+bytes are unchanged by this first step.

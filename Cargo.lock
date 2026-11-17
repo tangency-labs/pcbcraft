@@ -2830,7 +2830,10 @@ version = "0.1.0"
 dependencies = [
  "log",
  "pcbcraft-units",
+ "solidcore",
+ "solidcore-convert",
  "solidcore-ops",
+ "solidcore-record",
  "solidcore-step",
 ]
 

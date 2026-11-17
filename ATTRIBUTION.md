@@ -1672,6 +1672,15 @@ distributed builds, so the release notices file described under
 [Dependencies](#dependencies) must include it. No kernel source is copied into
 this repository.
 
+The planar adapter for #232 directly uses `solidcore`, `solidcore-record` and
+`solidcore-convert` from that same pin on native and WebAssembly. Its private
+call recipes in `crates/geometry/src/planar/kernel.rs` adapt
+`solidcore/crates/solidcore-ops/src/prism.rs` (Apache-2.0, solidcore contributors),
+keeping the kernel's clipping/offset algorithms and a separate immutable host
+API. The host additionally recognizes a successfully completed faceless Boolean
+as empty material before the public face query refuses it. No kernel pin,
+external EDA implementation or polygon dependency is added.
+
 
 ## Copper-zone outlines
 
