@@ -44,7 +44,9 @@ fn placements_need_no_kernel_until_a_body_is_moved() {
 
     let mut missing = StepRead::default();
     missing.placements.push(Placement { body: 0, transform: Transform::IDENTITY });
-    assert_eq!(missing.placed_bodies().unwrap_err().code(), ErrorCode::InvalidParams);
+    let error = missing.placed_bodies().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+    assert!(error.message().contains("placement of body 0 out of range"), "{error}");
 
     let a = BoundingBox { min_nm: [0, 0, 0], max_nm: [1, 1, 1] };
     let b = BoundingBox { min_nm: [-1, 2, 0], max_nm: [0, 3, 1] };
