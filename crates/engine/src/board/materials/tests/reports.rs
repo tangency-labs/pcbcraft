@@ -5,8 +5,9 @@ use crate::board::materials::{MaterialGroup, MeasurementAxis, TgRegion};
 
 /// Refuse a candidate at the current revision, so the refusal can only come from the setup
 /// itself: invalid parameters whose message contains `reason`, with the snapshot, history,
-/// revision and saved bytes unchanged.
+/// revision and saved bytes unchanged. The reason must not be empty.
 fn refuse(s: &mut Session, c: Value, reason: &str) {
+    assert!(!reason.is_empty(), "name the reason the refusal must give");
     let snapshot = s.snapshot().unwrap();
     let state = s.inspect();
     let saved = persistence::encode_documents(snapshot.clone()).unwrap();
@@ -27,6 +28,15 @@ fn saved(s: &Session, format: &str) -> persistence::Documents {
     assert_eq!(board["format"], format);
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
     documents
+}
+
+/// The base candidate is accepted, so a refusal of a variant comes from the one value the
+/// variant changes. The base is undone again.
+fn accept_and_undo(s: &mut Session, c: &Value) {
+    let revision = s.revision();
+    apply(s, SET_BOARD_SETUP, json!({"setup":c}));
+    assert_eq!(s.revision(), revision + 1);
+    s.apply("edit.undo", &json!({})).unwrap();
 }
 
 /// Saved documents that do not open, for the reason named.
@@ -130,7 +140,7 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_24() {
     assert_eq!(typed.thermal_conductivity[0].axis, Some(MeasurementAxis::Z));
     assert_eq!(typed.cte[0].region, Some(TgRegion::BelowTg));
     assert_eq!(typed.dielectric_strength[0].specimen_thickness_nm, 1_000_000);
-    assert_eq!(typed.cti[0].material_group, MaterialGroup::for_cti(175));
+    assert_eq!(typed.cti[0].material_group, Some(MaterialGroup::ThreeA));
     assert_eq!(typed.tg, snapshot.board_setup().unwrap().materials()[0].tg);
     assert_eq!(typed.dielectric, snapshot.board_setup().unwrap().materials()[0].dielectric);
 
@@ -170,33 +180,40 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_24() {
 fn reports_without_source_or_unit_are_refused() {
     let mut s = session();
     let base = reported(&s);
+    accept_and_undo(&mut s, &base);
     let revision = s.revision();
     let values =
         [("thermal_conductivity", "conductivity_mw_per_m_k"), ("cte", "cte_ppb_per_k"), ("dielectric_strength", "breakdown_v"), ("cti", "cti_v")];
     for (kind, value) in values {
-        for source in [None, Some(Value::Null), Some(json!({})), Some(json!({"document":""}))] {
+        for (source, reason) in [
+            (None, "missing field `source`"),
+            (Some(Value::Null), "invalid type: null, expected struct Source"),
+            (Some(json!({})), "missing field `document`"),
+            (Some(json!({"document":""})), "source document requires 1 to 200 characters"),
+        ] {
             let mut c = base.clone();
             let report = c["materials"][0][kind][0].as_object_mut().unwrap();
             match source {
                 Some(source) => report.insert("source".into(), source),
                 None => report.remove("source"),
             };
-            refuse(&mut s, c, "");
+            refuse(&mut s, c, reason);
         }
         let mut c = base.clone();
         let report = c["materials"][0][kind][0].as_object_mut().unwrap();
         let number = report.remove(value).unwrap();
         report.insert("value".into(), number);
-        refuse(&mut s, c.clone(), "value");
+        refuse(&mut s, c.clone(), "unknown field `value`");
+        // Fields are read in name order, so `unit` is the first unknown one here.
         c["materials"][0][kind][0]["unit"] = json!("SI");
-        refuse(&mut s, c, "");
+        refuse(&mut s, c, "unknown field `unit`");
         let mut c = base.clone();
         c["materials"][0][kind][0]["unit"] = json!("SI");
-        refuse(&mut s, c, "unit");
+        refuse(&mut s, c, "unknown field `unit`");
         if kind != "cti" {
             let mut c = base.clone();
             c["materials"][0][kind][0].as_object_mut().unwrap().remove(value);
-            refuse(&mut s, c, value);
+            refuse(&mut s, c, &format!("missing field `{value}`"));
         }
     }
     let mut c = base.clone();
@@ -205,7 +222,7 @@ fn reports_without_source_or_unit_are_refused() {
     refuse(&mut s, c, "requires a CTI or a material group");
     let mut c = base;
     c["materials"][0]["dielectric_strength"][0].as_object_mut().unwrap().remove("specimen_thickness_nm");
-    refuse(&mut s, c, "specimen_thickness_nm");
+    refuse(&mut s, c, "missing field `specimen_thickness_nm`");
     assert_eq!(s.revision(), revision);
 }
 
@@ -215,6 +232,7 @@ fn reports_without_source_or_unit_are_refused() {
 fn report_bounds_and_contradictions() {
     let mut s = session();
     let base = reported(&s);
+    accept_and_undo(&mut s, &base);
     let accepted: &[(&str, Value)] = &[
         ("/thermal_conductivity/0/conductivity_mw_per_m_k", json!(1)),
         ("/thermal_conductivity/0/conductivity_mw_per_m_k", json!(10_000_000)),
@@ -245,41 +263,169 @@ fn report_bounds_and_contradictions() {
         c["materials"][0]["cti"][0]["cti_v"] = json!(cti);
         c["materials"][0]["cti"][0]["material_group"] = json!(group);
         apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
+        let stored = &setup(&s)["materials"][0]["cti"][0];
+        assert_eq!((stored["cti_v"].clone(), stored["material_group"].clone()), (json!(cti), json!(group)));
         s.apply("edit.undo", &json!({})).unwrap();
     }
     assert_eq!(MaterialGroup::for_cti(99), None);
-    let refused: &[(&str, Vec<Value>)] = &[
-        ("/thermal_conductivity", vec![Value::Null, json!({})]),
-        ("/thermal_conductivity/0/conductivity_mw_per_m_k", vec![json!(0), json!(10_000_001), json!(1.5), json!("1 W/(m K)"), Value::Null]),
-        ("/thermal_conductivity/0/axis", vec![json!("isotropic"), json!("through-plane"), Value::Null]),
-        ("/thermal_conductivity/0/temperature_milli_c", vec![json!(-273_150), json!(1_000_001), Value::Null]),
-        ("/thermal_conductivity/0/method", vec![json!(" "), json!("x".repeat(81)), Value::Null]),
-        ("/thermal_conductivity/0/basis", vec![json!("guaranteed"), Value::Null]),
-        ("/cte", vec![Value::Null]),
-        ("/cte/0/cte_ppb_per_k", vec![json!(-1_000_001), json!(10_000_001), json!(50.5), Value::Null]),
-        ("/cte/0/region", vec![json!("at_tg"), json!("below"), Value::Null]),
-        ("/cte/0/axis", vec![json!("isotropic"), Value::Null]),
-        ("/cte/0/method", vec![json!(" "), Value::Null]),
-        ("/cte/0/basis", vec![json!("guaranteed"), Value::Null]),
-        ("/cte/0/from_milli_c", vec![json!(110_000), json!(120_000), json!(-273_150), Value::Null]),
-        ("/cte/0/to_milli_c", vec![json!(50_000), json!(1_000_001), Value::Null]),
-        ("/dielectric_strength", vec![Value::Null]),
-        ("/dielectric_strength/0/breakdown_v", vec![json!(0), json!(10_000_001), json!(-1), json!("40 kV"), Value::Null]),
-        ("/dielectric_strength/0/specimen_thickness_nm", vec![json!(0), json!(100_000_001), Value::Null]),
-        ("/dielectric_strength/0/axis", vec![json!("parallel"), Value::Null]),
-        ("/dielectric_strength/0/method", vec![json!(" "), Value::Null]),
-        ("/dielectric_strength/0/basis", vec![json!("guaranteed"), Value::Null]),
-        ("/cti", vec![Value::Null]),
-        ("/cti/0/cti_v", vec![json!(0), json!(1001), json!(174), json!(400), Value::Null]),
-        ("/cti/0/material_group", vec![json!("IV"), json!("iiia"), json!("3a"), json!("IIIb"), Value::Null]),
-        ("/cti/0/method", vec![json!(""), Value::Null]),
-        ("/cti/0/basis", vec![json!("guaranteed"), Value::Null]),
+    // Each value differs from the accepted base in one place and names the refusal it must
+    // give. Explicit nulls are refused by type, so their message is the type that was expected.
+    let refused: &[(&str, Vec<(Value, &str)>)] = &[
+        (
+            "/thermal_conductivity",
+            vec![(Value::Null, "invalid type: null, expected a sequence"), (json!({}), "invalid type: map, expected a sequence")],
+        ),
+        (
+            "/thermal_conductivity/0/conductivity_mw_per_m_k",
+            vec![
+                (json!(0), "thermal conductivity must be 1 to 10,000,000 whole mW/(m·K)"),
+                (json!(10_000_001), "thermal conductivity must be 1 to 10,000,000 whole mW/(m·K)"),
+                (json!(1.5), "invalid type: floating point `1.5`, expected u32"),
+                (json!("1 W/(m K)"), "invalid type: string \"1 W/(m K)\", expected u32"),
+                (Value::Null, "invalid type: null, expected u32"),
+            ],
+        ),
+        (
+            "/thermal_conductivity/0/axis",
+            vec![
+                (json!("isotropic"), "unknown variant `isotropic`, expected one of `x`, `y`, `z`"),
+                (json!("through-plane"), "unknown variant `through-plane`, expected one of `x`, `y`, `z`"),
+                (Value::Null, "invalid type: null, expected string or map"),
+            ],
+        ),
+        (
+            "/thermal_conductivity/0/temperature_milli_c",
+            vec![
+                (json!(-273_150), "report temperature must be above absolute zero"),
+                (json!(1_000_001), "report temperature must be above absolute zero"),
+                (Value::Null, "invalid type: null, expected i64"),
+            ],
+        ),
+        (
+            "/thermal_conductivity/0/method",
+            vec![
+                (json!(" "), "thermal conductivity test method requires 1 to 80 characters"),
+                (json!("x".repeat(81)), "thermal conductivity test method requires 1 to 80 characters"),
+                (Value::Null, "invalid type: null, expected a string"),
+            ],
+        ),
+        (
+            "/thermal_conductivity/0/basis",
+            vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")],
+        ),
+        ("/cte", vec![(Value::Null, "invalid type: null, expected a sequence")]),
+        (
+            "/cte/0/cte_ppb_per_k",
+            vec![
+                (json!(-1_000_001), "thermal expansion must be -1,000,000 to 10,000,000 whole ppb/K"),
+                (json!(10_000_001), "thermal expansion must be -1,000,000 to 10,000,000 whole ppb/K"),
+                (json!(50.5), "invalid type: floating point `50.5`, expected i64"),
+                (Value::Null, "invalid type: null, expected i64"),
+            ],
+        ),
+        (
+            "/cte/0/region",
+            vec![
+                (json!("at_tg"), "unknown variant `at_tg`, expected `below_tg` or `above_tg`"),
+                (json!("below"), "unknown variant `below`, expected `below_tg` or `above_tg`"),
+                (Value::Null, "invalid type: null, expected string or map"),
+            ],
+        ),
+        (
+            "/cte/0/axis",
+            vec![
+                (json!("isotropic"), "unknown variant `isotropic`, expected one of `x`, `y`, `z`"),
+                (Value::Null, "invalid type: null, expected string or map"),
+            ],
+        ),
+        (
+            "/cte/0/method",
+            vec![(json!(" "), "thermal expansion test method requires 1 to 80 characters"), (Value::Null, "invalid type: null, expected a string")],
+        ),
+        ("/cte/0/basis", vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")]),
+        (
+            "/cte/0/from_milli_c",
+            vec![
+                (json!(110_000), "temperature range requires both ends, rising"),
+                (json!(120_000), "temperature range requires both ends, rising"),
+                (json!(-273_150), "temperature range requires both ends, rising"),
+                (Value::Null, "invalid type: null, expected i64"),
+            ],
+        ),
+        (
+            "/cte/0/to_milli_c",
+            vec![
+                (json!(50_000), "temperature range requires both ends, rising"),
+                (json!(1_000_001), "temperature range requires both ends, rising"),
+                (Value::Null, "invalid type: null, expected i64"),
+            ],
+        ),
+        ("/dielectric_strength", vec![(Value::Null, "invalid type: null, expected a sequence")]),
+        (
+            "/dielectric_strength/0/breakdown_v",
+            vec![
+                (json!(0), "dielectric strength must be 1 to 10,000,000 whole volts"),
+                (json!(10_000_001), "dielectric strength must be 1 to 10,000,000 whole volts"),
+                (json!(-1), "invalid value: integer `-1`, expected u32"),
+                (json!("40 kV"), "invalid type: string \"40 kV\", expected u32"),
+                (Value::Null, "invalid type: null, expected u32"),
+            ],
+        ),
+        (
+            "/dielectric_strength/0/specimen_thickness_nm",
+            vec![
+                (json!(0), "specimen thickness must be 1 to 100,000,000 whole nanometers"),
+                (json!(100_000_001), "specimen thickness must be 1 to 100,000,000 whole nanometers"),
+                (Value::Null, "invalid type: null, expected i64"),
+            ],
+        ),
+        (
+            "/dielectric_strength/0/axis",
+            vec![
+                (json!("parallel"), "unknown variant `parallel`, expected one of `x`, `y`, `z`"),
+                (Value::Null, "invalid type: null, expected string or map"),
+            ],
+        ),
+        (
+            "/dielectric_strength/0/method",
+            vec![(json!(" "), "dielectric strength test method requires 1 to 80 characters"), (Value::Null, "invalid type: null, expected a string")],
+        ),
+        (
+            "/dielectric_strength/0/basis",
+            vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")],
+        ),
+        ("/cti", vec![(Value::Null, "invalid type: null, expected a sequence")]),
+        (
+            "/cti/0/cti_v",
+            vec![
+                (json!(0), "CTI must be 1 to 1000 whole volts"),
+                (json!(1001), "CTI must be 1 to 1000 whole volts"),
+                (json!(174), "CTI 174 V lies outside the band of material group IIIa"),
+                (json!(400), "CTI 400 V lies outside the band of material group IIIa"),
+                (Value::Null, "invalid type: null, expected u32"),
+            ],
+        ),
+        (
+            "/cti/0/material_group",
+            vec![
+                (json!("IV"), "unknown variant `IV`, expected one of `I`, `II`, `IIIa`, `IIIb`"),
+                (json!("iiia"), "unknown variant `iiia`"),
+                (json!("3a"), "unknown variant `3a`"),
+                (json!("IIIb"), "CTI 175 V lies outside the band of material group IIIb"),
+                (Value::Null, "invalid type: null, expected string or map"),
+            ],
+        ),
+        (
+            "/cti/0/method",
+            vec![(json!(""), "tracking test method requires 1 to 80 characters"), (Value::Null, "invalid type: null, expected a string")],
+        ),
+        ("/cti/0/basis", vec![(json!("guaranteed"), "unknown variant `guaranteed`"), (Value::Null, "invalid type: null, expected string or map")]),
     ];
     for (path, values) in refused {
-        for value in values {
+        for (value, reason) in values {
             let mut c = base.clone();
             *c["materials"][0].pointer_mut(path).unwrap() = value.clone();
-            refuse(&mut s, c, "");
+            refuse(&mut s, c, reason);
         }
     }
     for (kind, remove) in [("cte", "from_milli_c"), ("cte", "to_milli_c")] {
