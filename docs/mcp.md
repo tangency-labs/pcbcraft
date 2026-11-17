@@ -404,6 +404,58 @@ are measured from board zero. Gerber writes exact nanometres; Excellon rounds ea
 millimetre value to three decimals from integer nanometres with halves going up, so
 moving the origin by whole micrometres shifts every written value by exactly that amount.
 
+## Assembly output profiles
+
+`pcb.set_assembly_profile` pins immutable project-owned content. It requires
+`expected_revision` and `content`. Omit `profile` to create a UUID, or supply an
+existing or portable profile UUID. Content has a positive 32-bit `revision`, a
+`name`, and `provenance: {"kind":"authored"}` or
+`{"kind":"imported","source":"<human source hint>"}`. The optional `vendor` is
+metadata, never a behaviour selector. Names, source hints and vendor metadata
+have 1–64 characters without surrounding whitespace or controls; available
+profiles have unique names. `bottom_side` defaults to `viewed_from_top`, or is
+`viewed_from_bottom`. The schema version (`pcbcraft-assembly-profile/1`) is
+independent of content revisions. The command currently requires a project with a
+board; it is unavailable in schematic-only projects even though the catalog is
+project-owned.
+
+Optional `corrections` has one entry per `library` and footprint `definition`,
+with a `rotation` (0–359 whole degrees, counterclockwise from the component side)
+and/or a nonzero `centroid` (`x_nm`, `y_nm` in library footprint coordinates, Y
+down, each within 100 mm). Each entry must change something. Commands sort entries
+and omit zero rotation; an empty array is refused. Integer-valued numbers already
+parsed by serde_json are accepted without further rounding. Digits beyond what
+the JSON parser keeps are not preserved. Corrections apply across definition revisions; legacy
+markers never match. See [placement conventions](footprint-schema.md#placement-output-conventions).
+
+An existing ID and content revision is a no-op only for identical content;
+different content is a conflict. New content must exceed that identity's revision
+watermark. `content: null` retires the named identity without changing existing
+adoptions. Reusing an already cleaned revision is refused, even with identical
+content; choose a greater revision instead. Undo/Redo also retain issued revision watermarks. An undone pin whose payload is no longer present cannot reuse that revision, even after Save/Open; a higher revision is required. This reservation is local to the saved project lineage, not a global registry across independently edited copies.
+
+`pcb.preview_assembly_profile` requires `board`, `expected_revision`, `profile`
+and `revision` (a pinned content revision, or null to clear that board's adoption).
+It returns the old/new adoption, changed corrections, bottom convention and actual
+affected placement rows before and after, plus an `acceptance` digest. It edits
+nothing. `pcb.adopt_assembly_profile` accepts the same parameters and that digest,
+recomputing the preview atomically. A stale revision or altered review is refused.
+Pinning is not adoption; only explicit adoption changes which profile revision the
+board's rows use.
+Each edit is one undo step and repeated unchanged adoptions are no-ops. Pinning on
+a supported older project adopts the folder, occurrence and allocation metadata
+required by the catalog's saved format in that same undo step; existing project,
+board and object identities and registered storage roots are preserved. Undo restores profile choices but keeps revision reservations and the storage metadata needed to save them.
+
+Inspection exposes project `assembly_profiles` (identity watermarks and pinned
+revisions) and board `assembly_profiles` (explicit revision adoptions), sorted by
+identity. Limits are 64 identities including retired and watermark-only ones, 128 retained revisions
+and 4096 corrections across retained revisions. Cleanup on edits releases only
+unadopted superseded or retired payloads; adopted revisions survive retirement,
+offline save/reopen and Undo/Redo. Undo shares immutable payloads. Profiles change
+no board geometry or fabrication output. No placement exporter, import/export
+wrapper or profile-management UI is provided here.
+
 ## Saved board defaults
 
 `pcb.set_rules` requires an explicit `board`, `expected_revision` and complete

@@ -534,12 +534,14 @@ impl Encoder {
             || !project.board.vias.is_empty()
             || project.board.rules.is_some()
             || project.board.placement_origin.is_some()
+            || !project.board.assembly_profiles.is_empty()
+            || !project.assembly_profiles.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
             || project.board.footprints().iter().any(|f| f.rotation != 0 || f.bottom || f.reference_offset.is_some() || f.reference_text.is_some())
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, board rules, placement origins, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, reference offsets or print overrides; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, board rules, placement origins, assembly profiles, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, reference offsets or print overrides; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
@@ -1052,6 +1054,7 @@ fn validate_with_hierarchy(
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
+        assembly_profiles: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: false,
