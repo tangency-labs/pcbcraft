@@ -4,6 +4,8 @@ use super::*;
 use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, persistence};
 use std::sync::Arc;
 
+mod integers;
+
 /// The reader's reason for refusing the stack fields under an older header.
 const STACK_REFUSAL: &str = "require board format 23";
 
@@ -82,8 +84,11 @@ fn reject_because(s: &mut Session, command: &str, params: Value, reason: &str) {
     let snapshot = s.snapshot().unwrap();
     let state = s.inspect();
     let saved = persistence::encode_documents(snapshot.clone()).unwrap();
-    let error = s.apply(command, &params).expect_err(&format!("accepted {params}")).to_string();
-    assert!(error.contains(reason), "{params}: expected {reason:?}, got {error:?}");
+    let error = s.apply(command, &params).expect_err(&format!("accepted {params}"));
+    assert!(
+        matches!(&error, CommandError::InvalidParams(message) if message.contains(reason)),
+        "{params}: expected InvalidParams naming {reason:?}, got {error:?}"
+    );
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     assert_eq!(s.inspect(), state);
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
@@ -671,9 +676,51 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
     for older in ["pcbcraft-board/3", "pcbcraft-board/5"] {
         refused_because(&with_header(&documents, "pcbcraft-board/23", older), STACK_REFUSAL);
     }
-    // Format 20 also refuses this board before the stack check, because it requires zones.
+    // Header 20 requires zones; a zone-bearing fixture below tests its stack-field refusal.
     refused_because(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20"), "format 20 requires zones");
     refused_because(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23"), STACK_REFUSAL);
+}
+
+/// Zone outlines survive stack fields with or without an origin; clearing the stack fields
+/// restores the zone/origin format and byte-identical Undo/Redo snapshots.
+#[test]
+fn board_format_23_carries_zone_outlines() {
+    for with_origin in [false, true] {
+        let mut s = session(2);
+        apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+        let layer = s.project().unwrap().board_setup().unwrap().copper_stack().next().unwrap().layer;
+        let nets = s.project().unwrap().inspect_net_registry().unwrap();
+        apply(
+            &mut s,
+            crate::board::zones::ADD_ZONE,
+            json!({
+                "layer":layer,
+                "points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},{"x_nm":10_000_000,"y_nm":10_000_000},{"x_nm":0,"y_nm":10_000_000}],
+                "target":{"kind":"derived","anchor":nets["nets"][0]["anchor"]}
+            }),
+        );
+        if with_origin {
+            apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"origin":{"kind":"board_zero"}}));
+        }
+        let earlier_format = if with_origin { "pcbcraft-board/21" } else { "pcbcraft-board/20" };
+        let original = saved_board(&s, earlier_format);
+        let plain = setup(&s);
+        let mut candidate = plain.clone();
+        candidate["stackup"]["strata"][0]["role"] = json!("signal");
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+        let stacked = saved_board(&s, "pcbcraft-board/23");
+        refused_because(&with_header(&stacked, "pcbcraft-board/23", earlier_format), STACK_REFUSAL);
+        let path = persistence::test_board_path(&stacked);
+        let document: Value = serde_json::from_slice(&stacked[&path]).unwrap();
+        assert_eq!(document["zones"].as_array().unwrap().len(), 1);
+        assert_eq!(document.get("placement_origin").is_some(), with_origin);
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":plain}));
+        assert_eq!(saved_board(&s, earlier_format), original);
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(saved_board(&s, "pcbcraft-board/23"), stacked);
+        s.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(saved_board(&s, earlier_format), original);
+    }
 }
 
 /// Without a declared minimum, checks use the nominal finished thickness and say so.
@@ -695,43 +742,49 @@ fn invalid_copper_and_board_thickness_fields_never_change_state() {
     let mut s = session(2);
     let base = setup(&s);
     let mut invalid = vec![];
-    for (field, value) in [
-        ("thickness_tolerance_nm", json!(1_000)),
-        ("thickness_basis", json!("nominal")),
-        ("base_copper", json!({})),
-        ("base_copper", json!({"weight_milli_oz":0})),
-        ("base_copper", json!({"thickness_nm":0})),
-        ("base_copper", json!({"weight_milli_oz":1000,"grade":"rtf"})),
-        ("role", json!("ground")),
-        ("role", Value::Null),
+    for (field, value, reason) in [
+        ("thickness_tolerance_nm", json!(1_000), "copper tolerance requires a specified thickness"),
+        ("thickness_basis", json!("nominal"), "copper thickness basis requires a specified thickness"),
+        ("base_copper", json!({}), "base copper needs a weight or a foil thickness"),
+        ("base_copper", json!({"weight_milli_oz":0}), "base copper weight must be from"),
+        ("base_copper", json!({"thickness_nm":0}), "base copper foil thickness must be from"),
+        ("base_copper", json!({"weight_milli_oz":1000,"grade":"rtf"}), "unknown field `grade`"),
+        ("role", json!("ground"), "unknown variant `ground`"),
+        ("role", Value::Null, "invalid type: null"),
     ] {
         let mut candidate = base.clone();
         candidate["stackup"]["strata"][0][field] = value;
-        invalid.push(candidate);
+        invalid.push((candidate, reason));
     }
-    for (thickness, tolerance) in [(35_000, 35_000), (35_000, -1)] {
+    for (thickness, tolerance, reason) in [
+        (35_000, 35_000, "copper tolerance requires a specified thickness with positive lower"),
+        (35_000, -1, "copper tolerance requires a specified thickness with positive lower"),
+    ] {
         let mut candidate = base.clone();
         candidate["stackup"]["strata"][0]["thickness_nm"] = json!(thickness);
         candidate["stackup"]["strata"][0]["thickness_tolerance_nm"] = json!(tolerance);
-        invalid.push(candidate);
+        invalid.push((candidate, reason));
     }
-    for stackup in [
-        json!({"finished_thickness_tolerance_nm":160_000}),
-        json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":1_600_000}),
-        json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_001}),
-        json!({"finished_thickness_nm":0}),
-        json!({"declared_minimum_thickness_nm":0}),
-        json!({"finished_thickness_nm":Value::Null}),
+    for (stackup, reason) in [
+        (json!({"finished_thickness_tolerance_nm":160_000}), "board thickness tolerance requires a finished thickness"),
+        (
+            json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":1_600_000}),
+            "board thickness tolerance requires a finished thickness with positive lower",
+        ),
+        (json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_001}), "declared minimum board thickness cannot exceed"),
+        (json!({"finished_thickness_nm":0}), "finished board thickness must be a positive"),
+        (json!({"declared_minimum_thickness_nm":0}), "declared minimum board thickness must be a positive"),
+        (json!({"finished_thickness_nm":Value::Null}), "invalid type: null"),
     ] {
         let mut candidate = base.clone();
         for (field, value) in stackup.as_object().unwrap() {
             candidate["stackup"][field] = value.clone();
         }
-        invalid.push(candidate);
+        invalid.push((candidate, reason));
     }
-    for candidate in invalid {
+    for (candidate, reason) in invalid {
         let revision = s.revision();
-        reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate,"expected_revision":revision}));
+        reject_because(&mut s, SET_BOARD_SETUP, json!({"setup":candidate,"expected_revision":revision}), reason);
     }
 }
 

@@ -192,6 +192,11 @@ used and does not assign nets. Optional `base_copper` describes the foil as orde
 one is required. Neither is derived from the other, and neither changes the finished
 thickness.
 
+Base copper weight and foil thickness, copper tolerance, and the three board-thickness
+fields require parsed integer-kind numbers: decimal/exponent spellings (including `-0`)
+are refused even when JSON Schema considers their values integral, and the existing
+JSON parser does not promise lossless decimal precision.
+
 The stackup may declare the finished board thickness: `finished_thickness_nm`
 (nominal), a symmetric `finished_thickness_tolerance_nm`, which requires the
 nominal, and `declared_minimum_thickness_nm`, the lowest thickness the board is
