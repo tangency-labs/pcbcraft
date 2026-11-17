@@ -106,6 +106,37 @@ fn hierarchy_copy_and_cut_keep_part_groups_project_owned() {
     }
 }
 
+/// A hierarchy Cut retires a grouped root part before codec validation, preserving memberships
+/// of retained child and unrelated parts. Native reopen and Undo/Redo preserve authored content,
+/// allowing the existing allocation watermark to remain monotonic after Cut creates free ends.
+#[test]
+fn hierarchy_cut_prunes_retired_root_part_memberships_before_validation() {
+    let mut s = fixture();
+    apply(&mut s, crate::part_groups::CREATE, json!({"name":"Retained group"}));
+    let group = s.project().unwrap().part_groups().groups[0].id;
+    let root_part = s.project().unwrap().symbols()[0].component;
+    let grouped: Vec<_> = s.project().unwrap().part_instance_addresses().collect();
+    for part in grouped {
+        apply(&mut s, crate::part_groups::SET_GROUPS, json!({"part_instance":part,"groups":[group]}));
+    }
+    let before = s.snapshot().unwrap();
+    let retained: Vec<_> = before.part_group_memberships().iter().filter(|membership| membership.part_instance != root_part).collect();
+    let copied = s.execute(CUT, &selection(&s, true)).unwrap();
+    let fragment = Fragment::from_text(copied["clipboard"].as_str().unwrap()).unwrap();
+    assert!(fragment.project.part_groups().groups.is_empty());
+    assert!(fragment.project.part_group_memberships().is_empty());
+    let after = s.snapshot().unwrap();
+    assert!(!after.has_part_instance(root_part));
+    assert_eq!(after.part_groups(), before.part_groups());
+    assert_eq!(after.part_group_memberships().iter().collect::<Vec<_>>(), retained);
+    let after_documents = encode_documents(after).unwrap();
+    assert_eq!(encode_documents(decode_documents(&after_documents).unwrap()).unwrap(), after_documents);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after_documents);
+}
+
 /// A closed nested circuit duplicates independently with fresh sheet/component/interface IDs,
 /// exact internal connectivity, pinned mappings, one history step and native persistence.
 #[test]

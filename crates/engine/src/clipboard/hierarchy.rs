@@ -328,6 +328,7 @@ fn unique_sheet_name(source: &str, used: &mut BTreeSet<String>) -> Result<String
 impl Session {
     /// Cut root hierarchy objects while retaining unselected routes on both sides of interfaces.
     /// Child sheets become roots; their live content and board acceptance are retained for reuse.
+    /// Retired root parts lose group memberships before native-codec candidate validation.
     pub(super) fn cut_schematic_hierarchy(&mut self, params: &Value, objects: &BTreeSet<String>) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| invalid("invalid selection"))?;
@@ -392,6 +393,7 @@ impl Session {
         }
         next.sheet_index = root;
         next.named_graph = Arc::default();
+        next.prune_part_group_memberships();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         let next = validate_candidate(next)?;
         self.change(next)?;

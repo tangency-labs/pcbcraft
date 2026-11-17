@@ -138,6 +138,10 @@ output, an unchanged save after reopening is byte-identical in either
 representation. Accepted noncanonical input, such as reversed catalog entries,
 may normalize when saved.
 
+The [bounded membership-history comparison](../tools/performance/baselines/part-groups/README.md)
+records observed process memory and edit timings before and after per-instance
+sharing, with exact Undo/Redo checks and explicit measurement limits.
+
 ### Clipboard boundary
 
 Copy and Cut exclude project-owned part-group catalogs and memberships from flat
