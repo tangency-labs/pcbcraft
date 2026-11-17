@@ -142,7 +142,10 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 /// Every difference between the `old` and `new` contract of the command `id`, labelled.
 ///
 /// A difference is compatible when every call valid under `old` stays valid with the same meaning
-/// as far as the schema can tell; otherwise it is breaking. By keyword, at every depth:
+/// as far as the schema can tell; otherwise it is breaking. If either parameter schema contains
+/// `$ref`, `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively breaking:
+/// an unchanged reference can target any location, including one used under `not`. Without
+/// references the rules below apply by keyword, at every depth:
 /// - `properties`: an added parameter is compatible only when the old object refused unknown
 ///   names (`additionalProperties: false` and no `patternProperties`), since otherwise a call
 ///   could already pass that name with any value; whether it is required is `required`'s
@@ -186,7 +189,18 @@ pub fn compare(id: &str, old: &Value, new: &Value) -> Vec<Change> {
             continue;
         }
         if key == "params" {
-            schema(&mut Walk { id, out: &mut changes }, key, before.unwrap_or(&Value::Bool(true)), after.unwrap_or(&Value::Bool(true)));
+            let old = before.unwrap_or(&Value::Bool(true));
+            let new = after.unwrap_or(&Value::Bool(true));
+            let first = changes.len();
+            schema(&mut Walk { id, out: &mut changes }, key, old, new);
+            if has_reference(old) || has_reference(new) {
+                for change in &mut changes[first..] {
+                    if !change.breaking {
+                        change.breaking = true;
+                        change.what.push_str(" (schema contains a reference; target context is unknown)");
+                    }
+                }
+            }
         } else {
             Walk { id, out: &mut changes }.push(true, key, format!("changed from {} to {}", shown(before), shown(after)));
         }
@@ -326,6 +340,19 @@ fn integer_against_fraction(integer: i128, fraction: f64) -> Option<std::cmp::Or
         Ordering::Equal if fraction > whole => Ordering::Less,
         order => order,
     })
+}
+
+/// Whether a schema contains a reference at any depth. Reference strings alone do not reveal
+/// their targets' polarity; even a target in `properties` can be reached through `not` elsewhere.
+/// Looking inside data values too can only cause conservative breaking labels.
+fn has_reference(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.keys().any(|key| matches!(key.as_str(), "$ref" | "$dynamicRef" | "$recursiveRef")) || object.values().any(has_reference)
+        }
+        Value::Array(items) => items.iter().any(has_reference),
+        _ => false,
+    }
 }
 
 /// Whether a schema carries a `default` keyword anywhere inside it.

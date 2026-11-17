@@ -335,12 +335,13 @@ fn breaking_changes_are_labelled_breaking() {
 /// Every row of the rule table in `compare`'s documentation (and docs/mcp.md), tried in every
 /// place a schema can sit: as a parameter, inside `items`, inside a schema-valued
 /// `additionalProperties` and as an `anyOf` alternative it keeps its label; under `oneOf`, `not`,
-/// `if`, `then`, `else`, `allOf` and in a `$defs` entry reached by `$ref` it is breaking.
+/// `if`, `then`, `else`, `allOf` and anywhere in a schema containing a reference it is breaking.
+/// Referenced targets include definitions, properties, array items and alternatives.
 #[test]
 fn every_rule_holds_wherever_the_schema_sits() {
     let open = |properties: Value| json!({"type": "object", "properties": properties});
     let closed = |properties: Value| json!({"type": "object", "properties": properties, "additionalProperties": false});
-    let rows: Vec<(&str, Value, Value, bool)> = vec![
+    let mut rows: Vec<_> = vec![
         ("optional parameter added to a closed object", closed(json!({})), closed(json!({"q": {"type": "string", "default": "a"}})), false),
         ("required parameter made optional", json!({"type": "object", "required": ["q"]}), json!({"type": "object", "required": []}), false),
         ("enum value added", json!({"enum": ["a"]}), json!({"enum": ["a", "b"]}), false),
@@ -358,9 +359,19 @@ fn every_rule_holds_wherever_the_schema_sits() {
         ("const dropped", json!({"const": 1}), json!({}), false),
         ("multipleOf dropped", json!({"multipleOf": 2}), json!({}), false),
         ("uniqueItems dropped", json!({"uniqueItems": true}), json!({}), false),
+        ("uniqueItems set false", json!({"uniqueItems": true}), json!({"uniqueItems": false}), false),
+        ("uniqueItems false added", json!({}), json!({"uniqueItems": false}), false),
+        ("uniqueItems false dropped", json!({"uniqueItems": false}), json!({}), false),
+        ("uniqueItems false made true", json!({"uniqueItems": false}), json!({"uniqueItems": true}), true),
         ("additionalProperties loosened", closed(json!({})), open(json!({})), false),
         ("items loosened", json!({"items": {"maximum": 3}}), json!({"items": {"maximum": 4}}), false),
         ("anyOf alternative appended", json!({"anyOf": [{"type": "string"}]}), json!({"anyOf": [{"type": "string"}, {"type": "null"}]}), false),
+        ("prefixItems child loosened", json!({"prefixItems": [{"maximum": 3}]}), json!({"prefixItems": [{"maximum": 4}]}), false),
+        ("prefixItems child tightened", json!({"prefixItems": [{"maximum": 4}]}), json!({"prefixItems": [{"maximum": 3}]}), true),
+        ("prefixItems child appended", json!({"prefixItems": [{}]}), json!({"prefixItems": [{}, {}]}), true),
+        ("prefixItems child removed", json!({"prefixItems": [{}, {}]}), json!({"prefixItems": [{}]}), true),
+        ("prefixItems keyword added", json!({}), json!({"prefixItems": [{}]}), true),
+        ("prefixItems keyword dropped", json!({"prefixItems": [{}]}), json!({}), true),
         ("definition added", json!({"$defs": {}}), json!({"$defs": {"d": {}}}), false),
         ("examples changed", json!({"examples": [1]}), json!({"examples": [2]}), false),
         ("schema without a default made to accept anything", json!({"type": "boolean"}), json!(true), false),
@@ -404,10 +415,96 @@ fn every_rule_holds_wherever_the_schema_sits() {
         ("dependentRequired changed", json!({"dependentRequired": {"a": ["b"]}}), json!({"dependentRequired": {"a": ["b", "c"]}}), true),
         ("unknown keyword added", json!({}), json!({"contains": {"type": "string"}}), true),
         ("schema made to refuse everything", json!({"type": "string"}), json!(false), true),
-    ];
+    ]
+    .into_iter()
+    .map(|(name, old, new, breaking)| (name.to_owned(), old, new, breaking))
+    .collect();
+    for keyword in ["items", "additionalProperties"] {
+        for (route, old, new, breaking) in [
+            ("false to schema", Some(json!(false)), Some(json!({"maximum": 3})), false),
+            ("schema to true", Some(json!({"maximum": 3})), Some(json!(true)), false),
+            ("schema to absent", Some(json!({"maximum": 3})), None, false),
+            ("true to schema", Some(json!(true)), Some(json!({"maximum": 3})), true),
+            ("absent to schema", None, Some(json!({"maximum": 3})), true),
+            ("false to true", Some(json!(false)), Some(json!(true)), false),
+            ("true to false", Some(json!(true)), Some(json!(false)), true),
+            ("false to absent", Some(json!(false)), None, false),
+            ("absent to false", None, Some(json!(false)), true),
+            ("schema to false", Some(json!({"maximum": 3})), Some(json!(false)), true),
+            ("true to absent", Some(json!(true)), None, false),
+            ("absent to true", None, Some(json!(true)), false),
+            ("default to true", Some(json!({"default": 1})), Some(json!(true)), true),
+            ("default to absent", Some(json!({"default": 1})), None, true),
+            ("nested default to true", Some(json!({"properties": {"q": {"default": 1}}})), Some(json!(true)), true),
+        ] {
+            let wrap = |value: Option<Value>| value.map_or_else(|| json!({}), |inner| json!({keyword: inner}));
+            rows.push((format!("{keyword} {route}"), wrap(old), wrap(new), breaking));
+        }
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        for (route, old, new, breaking) in [
+            ("child loosened", json!({keyword: [{"maximum": 3}]}), json!({keyword: [{"maximum": 4}]}), keyword == "oneOf"),
+            ("child tightened", json!({keyword: [{"maximum": 4}]}), json!({keyword: [{"maximum": 3}]}), true),
+            ("child appended", json!({keyword: [{"type": "string"}]}), json!({keyword: [{"type": "string"}, {"type": "null"}]}), keyword == "oneOf"),
+            ("child removed", json!({keyword: [{"type": "string"}, {"type": "null"}]}), json!({keyword: [{"type": "string"}]}), true),
+            ("keyword added", json!({}), json!({keyword: [{}]}), true),
+            ("keyword dropped", json!({keyword: [{}]}), json!({}), true),
+        ] {
+            rows.push((format!("{keyword} {route}"), old, new, breaking));
+        }
+    }
+    for keyword in ["$defs", "definitions"] {
+        for (route, old, new, breaking) in [
+            ("entry added", json!({keyword: {}}), json!({keyword: {"d": {}}}), false),
+            ("entry removed", json!({keyword: {"d": {}}}), json!({keyword: {}}), true),
+            ("entry changed", json!({keyword: {"d": {"maximum": 3}}}), json!({keyword: {"d": {"maximum": 4}}}), true),
+        ] {
+            rows.push((format!("{keyword} {route}"), old, new, breaking));
+        }
+    }
+    for &keyword in LOWER_BOUNDS.iter().chain(UPPER_BOUNDS.iter()) {
+        let (narrow, wide) =
+            if LOWER_BOUNDS.contains(&keyword) { (json!({keyword: 2}), json!({keyword: 1})) } else { (json!({keyword: 1}), json!({keyword: 2})) };
+        rows.push((format!("{keyword} loosened"), narrow.clone(), wide.clone(), false));
+        rows.push((format!("{keyword} tightened"), wide.clone(), narrow.clone(), true));
+        rows.push((format!("{keyword} added"), json!({}), narrow.clone(), true));
+        rows.push((format!("{keyword} dropped"), narrow, json!({}), false));
+    }
+    for (keyword, before, after) in [
+        ("pattern", json!("^a$"), json!("^b$")),
+        ("format", json!("uuid"), json!("date")),
+        ("const", json!(1), json!(2)),
+        ("multipleOf", json!(2), json!(4)),
+    ] {
+        rows.push((format!("{keyword} added"), json!({}), json!({keyword: before.clone()}), true));
+        rows.push((format!("{keyword} changed"), json!({keyword: before.clone()}), json!({keyword: after}), true));
+        rows.push((format!("{keyword} dropped"), json!({keyword: before}), json!({}), false));
+    }
+    for (keyword, before, after) in [
+        ("not", json!({"type": "string"}), json!({"type": "null"})),
+        ("allOf", json!([{ "type": "string" }]), json!([{ "type": "null" }])),
+        ("$ref", json!("#/$defs/a"), json!("#/$defs/b")),
+        ("if", json!({"type": "string"}), json!({"type": "null"})),
+        ("then", json!({"type": "string"}), json!({"type": "null"})),
+        ("else", json!({"type": "string"}), json!({"type": "null"})),
+        ("patternProperties", json!({"^q$": {"type": "string"}}), json!({"^q$": {"type": "null"}})),
+        ("dependentRequired", json!({"a": ["b"]}), json!({"a": ["c"]})),
+        ("dependentSchemas", json!({"a": {"required": ["b"]}}), json!({"a": {"required": ["c"]}})),
+        ("dependencies", json!({"a": ["b"]}), json!({"a": ["c"]})),
+    ] {
+        rows.push((format!("{keyword} added"), json!({}), json!({keyword: before.clone()}), true));
+        rows.push((format!("{keyword} changed"), json!({keyword: before.clone()}), json!({keyword: after}), true));
+        rows.push((format!("{keyword} dropped"), json!({keyword: before}), json!({}), true));
+    }
+    rows.push(("unknown keyword changed".to_owned(), json!({"contains": {"type": "string"}}), json!({"contains": {"type": "null"}}), true));
+    rows.push(("unknown keyword dropped".to_owned(), json!({"contains": {"type": "string"}}), json!({}), true));
+    rows.push(("examples added".to_owned(), json!({}), json!({"examples": [1]}), false));
+    rows.push(("examples dropped".to_owned(), json!({"examples": [1]}), json!({}), false));
     // A place: its name, how it wraps a schema, and whether any change there is breaking.
     type Place = (&'static str, fn(Value) -> Value, bool);
     let places: Vec<Place> = vec![
+        ("as the parameter schema", |s| s, false),
+        ("inside prefixItems", |s| json!({"type": "array", "prefixItems": [s]}), false),
         ("as a parameter", |s| json!({"type": "object", "properties": {"p": s}, "additionalProperties": false}), false),
         ("inside items", |s| json!({"type": "object", "properties": {"p": {"type": "array", "items": s}}, "additionalProperties": false}), false),
         (
@@ -432,6 +529,26 @@ fn every_rule_holds_wherever_the_schema_sits() {
             |s| json!({"type": "object", "$defs": {"d": s}, "properties": {"p": {"not": {"$ref": "#/$defs/d"}}}, "additionalProperties": false}),
             true,
         ),
+        (
+            "in a property reached by $ref under not",
+            |s| json!({"type": "object", "properties": {"p": s, "q": {"not": {"$ref": "#/properties/p"}}}}),
+            true,
+        ),
+        (
+            "in items reached by $ref under not",
+            |s| json!({"type": "object", "properties": {"p": {"type": "array", "items": s}, "q": {"not": {"$ref": "#/properties/p/items"}}}}),
+            true,
+        ),
+        (
+            "in prefixItems reached by $ref under not",
+            |s| json!({"type": "object", "properties": {"p": {"type": "array", "prefixItems": [s]}, "q": {"not": {"$ref": "#/properties/p/prefixItems/0"}}}}),
+            true,
+        ),
+        (
+            "in an alternative reached by $ref under not",
+            |s| json!({"type": "object", "properties": {"p": {"anyOf": [s]}, "q": {"not": {"$ref": "#/properties/p/anyOf/0"}}}}),
+            true,
+        ),
     ];
     for (row, old, new, breaking) in &rows {
         for (place, wrap, always_breaking) in &places {
@@ -440,6 +557,41 @@ fn every_rule_holds_wherever_the_schema_sits() {
             let expected = *breaking || *always_breaking;
             assert!(changes.iter().any(|change| change.breaking == expected), "{row} {place}: {changes:?}");
             assert!(changes.iter().all(|change| change.breaking == expected), "{row} {place}: {changes:?}");
+        }
+    }
+}
+
+/// An unchanged reference can target a schema outside definitions, under negation elsewhere.
+/// Both a loosened string bound and a loosened integer bound must therefore fail base comparison
+/// at the same API version, in either section, even after the head snapshot is rewritten.
+#[test]
+fn unchanged_references_make_target_changes_breaking() {
+    // These changes reject previously valid {p: "a", q: "abcd"} and {p: 1, q: 0} respectively.
+    for (old_target, new_target, path) in [
+        (json!({"type": "string", "maxLength": 3}), json!({"type": "string", "maxLength": 4}), "maxLength"),
+        (json!({"type": "integer", "minimum": 1}), json!({"type": "integer", "minimum": 0}), "minimum"),
+    ] {
+        for reference in ["$ref", "$dynamicRef", "$recursiveRef"] {
+            let params = |target: Value| json!({"type": "object", "properties": {"p": target, "q": {"not": {reference: "#/properties/p"}}}});
+            let old = params(old_target.clone());
+            let new = params(new_target.clone());
+            let changes = compare("schematic.synthetic", &contract_of(&command(old.clone())), &contract_of(&command(new.clone())));
+            assert_eq!(changes.len(), 1, "{reference}: {changes:?}");
+            assert!(changes[0].breaking, "{reference}: {changes:?}");
+            assert!(changes[0].what.contains(&format!("params.properties.p.{path}:")), "{reference}: {changes:?}");
+            assert!(changes[0].what.ends_with("schema contains a reference; target context is unknown)"), "{reference}: {changes:?}");
+            for section in SNAPSHOT_SECTIONS {
+                let mut base = json!({"command_api_version": 1, "commands": {}, "window_commands": {}});
+                base[*section] = json!({"schematic.synthetic": contract_of(&command(old.clone()))});
+                let mut head = base.clone();
+                head[*section] = json!({"schematic.synthetic": contract_of(&command(new.clone()))});
+                assert_eq!(check_snapshot(&head, section, &[command(new.clone())], 1), Ok(()));
+                let problems = compare_snapshots(&base, &head).unwrap_err();
+                assert_eq!(problems[0], changes[0].to_string());
+                assert!(problems[1].contains("raise COMMAND_API_VERSION above 1"), "{problems:?}");
+                head["command_api_version"] = json!(2);
+                assert_eq!(compare_snapshots(&base, &head), Ok(vec![changes[0].to_string()]));
+            }
         }
     }
 }
@@ -554,7 +706,7 @@ fn prose_is_not_part_of_the_contract() {
 
 /// The keys of `dependentRequired`, `dependentSchemas` and `dependencies` name parameters, so a
 /// parameter called `title`, `summary` or `description` there is part of the contract, and a
-/// changed constraint there is breaking (the classifier has no rule for these keywords).
+/// changed constraint there is breaking under these keywords' whole-value comparison rule.
 #[test]
 fn dependency_maps_keep_parameter_names() {
     let original = crate::command(crate::SET_SYMBOL_FIELDS).unwrap().to_json();

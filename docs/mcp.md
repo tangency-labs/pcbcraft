@@ -215,7 +215,11 @@ command in `commands` (project commands) and `window_commands` (window and
 `title`, `summary` and `description` of the command and its schemas, with
 object keys sorted (values of `const`, `default`, `enum` and `examples` are
 kept whole). The engine and app tests compare the described commands with it
-and label every difference:
+and label every difference. If either parameter schema contains `$ref`,
+`$dynamicRef` or `$recursiveRef`, every difference in it is conservatively
+breaking: an unchanged reference may reach any target, including a property
+or array item used under `not` elsewhere. The classifier does not resolve
+reference targets or their polarity. Without references, the rules are:
 
 - compatible, when every call the old schema accepted is still accepted: a
   command added, an optional parameter added to an object that refuses
@@ -225,7 +229,7 @@ and label every difference:
   included), a bound loosened, a `pattern`, `format`, `const`, `multipleOf`
   or `uniqueItems` dropped, `additionalProperties` or `items` loosened,
   `anyOf` alternatives appended, a `$defs` or `definitions` entry added,
-  `examples` changed;
+  `examples` changed, or an equal-length `prefixItems` child loosened;
 - breaking otherwise: a command or parameter removed, a parameter newly
   required, enum values removed, a type narrowed or added, a bound tightened or
   added, a `pattern`, `format`, `const` or `multipleOf` added or changed, a
@@ -234,7 +238,8 @@ and label every difference:
   entry removed or changed in any way (a definition may be used under `not`,
   where loosening it refuses calls), a property added to an object that
   accepted unknown names (a call may already pass that name with another
-  value), any `oneOf` change (a value may then match two alternatives), any
+  value), a changed `prefixItems` length or a tightened child, any `oneOf`
+  change (a value may then match two alternatives), any
   change under a keyword compared as a whole (`not`, `allOf`, `$ref`, `if`,
   `then`, `else`, `patternProperties`, `dependentRequired`,
   `dependentSchemas`, `dependencies`), and any change under a keyword without
