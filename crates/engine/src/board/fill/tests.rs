@@ -416,15 +416,25 @@ fn explicit_pour_respects_board_edge_clearance_after_removal() {
     assert_eq!(material.contains([-4_399_997, 0]).unwrap(), Some(true));
 }
 
-/// Current project-owned group records survive pouring/removal and the same native-document
-/// worker transport. Metadata-only groups do not become another electrical connectivity graph.
+/// Current part-group records and adopted assembly profiles survive pouring/removal and the
+/// same native-document worker transport without becoming another connectivity graph.
 #[test]
-fn current_part_group_records_survive_pour_remove_and_worker_transport() {
+fn current_project_metadata_survives_pour_remove_and_worker_transport() {
     let mut s = fixture(Connection::Solid, 0);
     s.apply(crate::part_groups::CREATE, &json!({"name":"Power section","expected_revision":s.revision()})).unwrap();
     let group = s.project().unwrap().part_groups().groups[0].id;
     let part = s.project().unwrap().symbols()[0].component_id();
     s.apply(crate::part_groups::SET_GROUPS, &json!({"part_instance":part,"groups":[group],"expected_revision":s.revision()})).unwrap();
+    let profile = crate::fresh_id().unwrap();
+    s.apply(
+        crate::SET_ASSEMBLY_PROFILE,
+        &json!({"profile":profile,"content":{"revision":1,"name":"Assembly","provenance":{"kind":"authored"}},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let mut adoption = json!({"board":view(&s).target.board,"profile":profile,"revision":1,"expected_revision":s.revision()});
+    let preview = s.execute(crate::PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap();
+    adoption["acceptance"] = preview["acceptance"].clone();
+    s.apply(crate::ADOPT_ASSEMBLY_PROFILE, &adoption).unwrap();
     let native = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let revision = s.revision();
     s.execute(REFILL_ZONES, &json!({})).unwrap();
@@ -437,6 +447,8 @@ fn current_part_group_records_survive_pour_remove_and_worker_transport() {
     assert_eq!(s.revision(), revision);
     let reopened = crate::persistence::decode_documents(&native).unwrap();
     assert_eq!(reopened.part_groups(), s.project().unwrap().part_groups());
+    assert_eq!(reopened.assembly_profiles, s.project().unwrap().assembly_profiles);
+    assert_eq!(reopened.board.assembly_profiles, s.project().unwrap().board.assembly_profiles);
     assert_eq!(crate::persistence::encode_documents(reopened).unwrap(), native);
 }
 
