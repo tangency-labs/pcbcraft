@@ -827,7 +827,7 @@ fn footprint_hotkeys_and_ribbon_preserve_exact_quarter_turns() {
     h.key_press(Key::R);
     h.run();
     assert_eq!(placement(&h)["rotation"], 0);
-    click(&mut h, "Move selected footprint, text or copper");
+    click(&mut h, "Move selected PCB items or text");
     assert!(h.state().views.active.board.draft.is_some());
     h.key_press(Key::Escape);
     h.run();
