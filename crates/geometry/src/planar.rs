@@ -8,6 +8,7 @@
 use pcbcraft_units::{MAX_LENGTH_NM, NM_PER_MM};
 use solidcore::{primitive::primitive_creation::p1::offset_profile, prism::profile};
 use solidcore_record::{Loop2, Plane, Region2, Vec2};
+use std::sync::{Arc, OnceLock};
 
 use crate::{ErrorCode, GeometryError, Result, guard::guard};
 
@@ -46,11 +47,27 @@ pub struct DisplayMesh {
 
 /// A set of planar regions with holes. No kernel type crosses this boundary.
 ///
-/// Cloning copies derived profile data, not a live kernel session or mutable B-rep. Sets can
-/// therefore be captured in immutable worker results without sharing kernel ownership.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Cloning copies profile data and shares a lazily prepared operand. Operations copy that
+/// operand under a short lock into their own kernel; they never edit the cached body.
+/// The cache follows this derived value's lifetime and is excluded from worker transport.
+#[derive(Clone, Default)]
 pub struct Regions {
     regions: Vec<Region2>,
+    prepared: Arc<OnceLock<Result<Option<kernel::Prepared>>>>,
+}
+
+impl std::fmt::Debug for Regions {
+    /// Keep disposable kernel topology out of profile diagnostics.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Regions").field("regions", &self.regions).finish()
+    }
+}
+
+impl PartialEq for Regions {
+    /// Preparation does not change material identity.
+    fn eq(&self, other: &Self) -> bool {
+        self.regions == other.regions
+    }
 }
 
 impl Regions {
@@ -115,7 +132,7 @@ impl Regions {
         if !(1..=1_000_000).contains(&chord_nm) {
             return Err(invalid("display chord tolerance must be 1–1000000 nm"));
         }
-        guard("planar display mesh", || kernel::display_mesh(&self.regions, chord_nm))
+        guard("planar display mesh", || kernel::display_mesh(self, chord_nm))
     }
     /// Construct an implicitly closed polygon from bounded, distinct integer-nanometre vertices.
     /// Winding is normalized; fewer than three vertices, repeated/zero edges, indeterminate
@@ -142,7 +159,7 @@ impl Regions {
                 kp.outer = kp.outer.reversed();
             }
             profile::check_regions(std::iter::once(&kp), TOLERANCE_MM).map_err(|e| invalid(&format!("{e:?}")))?;
-            Ok(Self { regions: vec![solidcore_convert::record_region2(&kp)] })
+            Ok(Self { regions: vec![solidcore_convert::record_region2(&kp)], ..Self::default() })
         })
     }
 
@@ -158,7 +175,7 @@ impl Regions {
         if center_nm.iter().any(|v| v.unsigned_abs() as f64 + radius_nm > MAX_LENGTH_NM as f64) {
             return Err(invalid("circle exceeds the supported coordinate range"));
         }
-        Ok(Self { regions: vec![Region2 { outer: Loop2::circle(center, radius_nm / NM_PER_MM as f64), holes: Vec::new() }] })
+        Ok(Self { regions: vec![Region2 { outer: Loop2::circle(center, radius_nm / NM_PER_MM as f64), holes: Vec::new() }], ..Self::default() })
     }
 
     /// Whether this result contains no material. Empty material is a successful Boolean result.
@@ -173,13 +190,17 @@ impl Regions {
 
     /// Owned individual regions, retaining holes, for island filtering and connectivity.
     pub fn islands(&self) -> impl Iterator<Item = Self> + '_ {
-        self.regions.iter().cloned().map(|region| Self { regions: vec![region] })
+        self.regions.iter().cloned().map(
+            |region| {
+                if self.regions.len() == 1 { self.clone() } else { Self { regions: vec![region], ..Self::default() } }
+            },
+        )
     }
 
     /// Clip two immutable operands, preserving curved boundaries. Kernel profile/resource
     /// refusals or failed operations return an error, never a partial set of material.
     pub fn boolean(&self, other: &Self, operation: Operation) -> Result<Self> {
-        guard("planar Boolean", || checked(kernel::boolean(&self.regions, &other.regions, operation).map_err(kernel_error)?))
+        guard("planar Boolean", || kernel::boolean(self, other, operation))
     }
 
     /// Unite a batch in balanced kernel rounds, converting each source region once. Holes
@@ -189,7 +210,7 @@ impl Regions {
             let regions = inputs.iter().flat_map(|input| input.regions.iter().cloned()).collect();
             let input = checked(regions)?;
             let mut kernel = kernel::context();
-            checked(kernel::union(&mut kernel, &input.regions).map_err(kernel_error)?)
+            kernel::union(&mut kernel, &input.regions)
         })
     }
 
@@ -239,7 +260,7 @@ impl Regions {
                 regions.extend(kernel::read(&kernel, &body).map_err(kernel_error)?);
             }
             let expanded = checked(regions)?;
-            checked(kernel::union(&mut kernel, &expanded.regions).map_err(kernel_error)?)
+            kernel::union(&mut kernel, &expanded.regions)
         })
     }
 
@@ -304,7 +325,7 @@ fn checked(regions: Vec<Region2>) -> Result<Regions> {
     if regions.iter().flat_map(Region2::loops).flat_map(|lp| &lp.segs).any(|s| !bounded_segment(s)) {
         return Err(GeometryError::new(ErrorCode::OperationFailed, "planar result exceeds the supported coordinate range"));
     }
-    Ok(Regions { regions })
+    Ok(Regions { regions, ..Regions::default() })
 }
 
 /// Conservatively bound defining coordinates. Positive rational weights keep a free-form

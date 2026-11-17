@@ -1681,6 +1681,11 @@ API. The host additionally recognizes a successfully completed faceless Boolean
 as empty material before the public face query refuses it. No kernel pin,
 external EDA implementation or polygon dependency is added.
 
+Repeated planar queries use the same pin's independent-body copy API,
+`solidcore::topology::brep::p3::brep_copy` (Apache-2.0, solidcore contributors),
+to reuse prepared operands without sharing mutable Boolean operands. The
+host's source-owned cache and synchronization are original PCBcraft code.
+
 
 ## Copper-zone outlines
 

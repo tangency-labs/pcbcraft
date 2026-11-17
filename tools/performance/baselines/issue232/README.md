@@ -38,3 +38,8 @@ Assigned-via integration (#369), routing integration (#248), class pour intent
 The [explicit pour/remove follow-up](pour-controls/README.md) records physical
 unfill/resume, board-edge acceptance, current authority, the completion-repaint
 fix and its separately bounded checks/navigation sample.
+
+The later [supplied-demo fill-delay investigation](fill-speed/README.md) isolates
+calculation from capture/connectivity reads and compares the original and
+prepared-operand paths under the same optimized profile. It records the separate
+development-build effect and retains the single-board/three-sample limits.

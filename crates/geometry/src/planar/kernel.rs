@@ -13,7 +13,32 @@ use solidcore::{
 };
 use solidcore_record::{Plane, Region2};
 
-use super::{Operation, TOLERANCE_MM};
+use super::{Operation, Regions, TOLERANCE_MM};
+use std::sync::Mutex;
+
+/// One immutable prepared operand. Copying may populate kernel geometry memos, so concurrent
+/// readers serialize only the independent-body copy, never the Boolean or meshing work.
+pub(super) struct Prepared {
+    body: Mutex<Brep>,
+}
+
+/// Build material/holes once, preserving the existing operand construction and error semantics.
+fn prepare(regions: &[Region2]) -> crate::Result<Option<Prepared>> {
+    operand(&mut context(), regions).map(|body| body.map(|body| Prepared { body: Mutex::new(body) })).map_err(super::kernel_error)
+}
+
+/// Copy a prepared operand into a fresh operation context. Never reuse poisoned topology after
+/// an unwound copy, and never let an operation mutate another reader's source body.
+fn copy_operand(kernel: &mut Kernel, regions: &Regions) -> crate::Result<Option<Brep>> {
+    if regions.is_empty() {
+        return Ok(None);
+    }
+    let prepared = regions.prepared.get_or_init(|| prepare(&regions.regions)).as_ref().map_err(Clone::clone)?;
+    let Some(prepared) = prepared else { return Ok(None) };
+    let body =
+        prepared.body.lock().map_err(|_| crate::GeometryError::new(crate::ErrorCode::KernelInternal, "planar operand copy was interrupted"))?;
+    solidcore::topology::brep::p3::brep_copy(kernel, &body).map(Some).map_err(super::kernel_error)
+}
 
 /// PCB model units are millimetres, so configure the B-rep/intersection defaults as well as
 /// the profile reader. Passing a loop tolerance alone leaves the default 10 nm body tolerance.
@@ -30,28 +55,36 @@ pub(super) fn context() -> Kernel {
 }
 
 /// Clip material using a fresh kernel and propagate every error before returning any result.
-pub(super) fn boolean(a: &[Region2], b: &[Region2], operation: Operation) -> Result<Vec<Region2>> {
+pub(super) fn boolean(a: &Regions, b: &Regions, operation: Operation) -> crate::Result<Regions> {
     if a.is_empty() || b.is_empty() {
-        return Ok(match operation {
-            Operation::Union => a.iter().chain(b).cloned().collect(),
-            Operation::Difference => a.to_vec(),
+        return super::checked(match operation {
+            Operation::Union => a.regions.iter().chain(&b.regions).cloned().collect(),
+            Operation::Difference => a.regions.clone(),
             Operation::Intersection => Vec::new(),
         });
     }
     let mut kernel = context();
-    let Some(a) = operand(&mut kernel, a)? else {
-        return Err(refused("nonempty operand has no material"));
+    let Some(a) = copy_operand(&mut kernel, a)? else {
+        return Err(super::kernel_error(refused("nonempty operand has no material")));
     };
-    let Some(b) = operand(&mut kernel, b)? else {
-        return Err(refused("nonempty operand has no material"));
+    let Some(b) = copy_operand(&mut kernel, b)? else {
+        return Err(super::kernel_error(refused("nonempty operand has no material")));
     };
     let operation = match operation {
         Operation::Union => Boolean2d::Union,
         Operation::Difference => Boolean2d::Difference,
         Operation::Intersection => Boolean2d::Intersection,
     };
-    let body = combine(&mut kernel, a, b, operation)?;
-    read(&kernel, &body)
+    let body = combine(&mut kernel, a, b, operation).map_err(super::kernel_error)?;
+    finish(&kernel, body)
+}
+
+/// Validate analytic output before retaining its already constructed operand. The body belongs
+/// only to this new value, so subsequent queries need no profile-to-topology reconstruction.
+fn finish(kernel: &Kernel, body: Brep) -> crate::Result<Regions> {
+    let regions = super::checked(read(kernel, &body).map_err(super::kernel_error)?)?;
+    let _ = regions.prepared.set(Ok(Some(Prepared { body: Mutex::new(body) })));
+    Ok(regions)
 }
 
 /// Read analytic loops, accepting empty material only after the topology walk proves it has
@@ -66,10 +99,10 @@ pub(super) fn read(kernel: &Kernel, body: &Brep) -> Result<Vec<Region2>> {
 
 /// Convert each completed offset region once, then combine its owned sheet in balanced
 /// rounds. Previously a left fold rebuilt every earlier region on every added island.
-pub(super) fn union(kernel: &mut Kernel, regions: &[Region2]) -> Result<Vec<Region2>> {
-    match operand(kernel, regions)? {
-        Some(body) => read(kernel, &body),
-        None => Ok(Vec::new()),
+pub(super) fn union(kernel: &mut Kernel, regions: &[Region2]) -> crate::Result<Regions> {
+    match operand(kernel, regions).map_err(super::kernel_error)? {
+        Some(body) => finish(kernel, body),
+        None => Ok(Regions::default()),
     }
 }
 
@@ -131,9 +164,9 @@ fn operand(kernel: &mut Kernel, regions: &[Region2]) -> Result<Option<Brep>> {
 
 /// Produce complete display triangles from the same analytic region sheet. The mesher's
 /// refusal/cap reports are checked before handing a mesh to the canvas.
-pub(super) fn display_mesh(regions: &[Region2], chord_nm: i64) -> crate::Result<super::DisplayMesh> {
+pub(super) fn display_mesh(regions: &Regions, chord_nm: i64) -> crate::Result<super::DisplayMesh> {
     let mut kernel = context();
-    let Some(mut body) = operand(&mut kernel, regions).map_err(super::kernel_error)? else {
+    let Some(mut body) = copy_operand(&mut kernel, regions)? else {
         return Ok(super::DisplayMesh::default());
     };
     let fail = |e: String| crate::GeometryError::new(crate::ErrorCode::OperationFailed, e);
@@ -153,4 +186,29 @@ pub(super) fn display_mesh(regions: &[Region2], chord_nm: i64) -> crate::Result<
 /// An unsupported topology construction is explicit instead of an inferred empty region.
 fn refused(reason: &'static str) -> SolidError {
     SolidError::Unsupported { operation: "pcbcraft::planar", reason }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// An interrupted copy poisons only that derived operand; an independently decoded source
+    /// still works. A caught kernel unwind must never authorize reuse of possibly changed memos.
+    #[test]
+    fn poisoned_operand_is_refused_without_poisoning_an_independent_source() {
+        let region = Regions::polygon(&[[0, 0], [1_000_000, 0], [1_000_000, 1_000_000], [0, 1_000_000]]).unwrap();
+        let result = region.boolean(&region, Operation::Intersection).unwrap();
+        let bytes = result.worker_bytes().unwrap();
+        let prepared = result.prepared.get().unwrap().as_ref().unwrap().as_ref().unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = prepared.body.lock().unwrap();
+                panic!("simulated interrupted operand copy");
+            }))
+            .is_err()
+        );
+        assert_eq!(result.boolean(&region, Operation::Intersection).unwrap_err().code(), crate::ErrorCode::KernelInternal);
+        let independent = Regions::from_worker_bytes(&bytes).unwrap();
+        assert!(!independent.boolean(&region, Operation::Intersection).unwrap().is_empty());
+    }
 }

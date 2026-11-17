@@ -209,3 +209,46 @@ fn nanometre_clearance_guard_survives_clipping_near_the_boundary() {
     let forbidden = Regions::circle([0, 0], 1_400_000).unwrap();
     assert!(copper.boolean(&forbidden, Operation::Intersection).unwrap().is_empty());
 }
+
+/// Independent kernel copies preserve holes and a separate island inside a hole; warming,
+/// cloning and serializing a source never adopt a Boolean operation's changed material.
+#[test]
+fn prepared_operands_preserve_nested_material_and_transport() {
+    let outer = rectangle(0, 0, 10 * MM, 10 * MM);
+    let void = rectangle(2 * MM, 2 * MM, 6 * MM, 6 * MM);
+    let ring = outer.boolean(&void, Operation::Difference).unwrap();
+    let center = rectangle(4 * MM, 4 * MM, 2 * MM, 2 * MM);
+    let nested = ring.boolean(&center, Operation::Union).unwrap();
+    let bytes = nested.worker_bytes().unwrap();
+    let clone = nested.clone();
+    area_is(&clone.boolean(&void, Operation::Intersection).unwrap(), 4.);
+    area_is(&clone.boolean(&center, Operation::Difference).unwrap(), 64.);
+    area_is(&nested, 68.);
+    assert_eq!(nested.worker_bytes().unwrap(), bytes);
+    let decoded = Regions::from_worker_bytes(&bytes).unwrap();
+    assert_eq!(nested, decoded);
+    area_is(&decoded.boolean(&void, Operation::Intersection).unwrap(), 4.);
+    assert!(!clone.display_mesh(5_000).unwrap().triangles.is_empty());
+    assert_eq!(clone.worker_bytes().unwrap(), bytes);
+}
+
+/// Concurrent consumers may populate geometry memos, but each operation owns an independent
+/// body and kernel. Sharing a prepared source must not change its represented material.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn prepared_operands_support_concurrent_independent_operations() {
+    let source = rectangle(0, 0, 10 * MM, 10 * MM).boolean(&Regions::circle([5 * MM, 5 * MM], 2 * MM).unwrap(), Operation::Difference).unwrap();
+    let bytes = source.worker_bytes().unwrap();
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let source = &source;
+            scope.spawn(move || {
+                let probe = rectangle(0, 0, MM, MM);
+                area_is(&source.boolean(&probe, Operation::Intersection).unwrap(), 1.);
+                assert!(source.boolean(&Regions::circle([5 * MM, 5 * MM], MM).unwrap(), Operation::Intersection).unwrap().is_empty());
+            });
+        }
+    });
+    assert_eq!(source.worker_bytes().unwrap(), bytes);
+    area_is(&source, 100. - std::f64::consts::PI);
+}

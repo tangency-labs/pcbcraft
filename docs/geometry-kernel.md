@@ -196,6 +196,17 @@ change a later STEP operation's fix flags. Regions are joined in balanced rounds
 with each region's own holes removed before joining separate material islands.
 No clipping or offset algorithm is implemented in PCBcraft.
 
+Each immutable region value retains its prepared operand, including already
+constructed Boolean/union output. Clones share that disposable cache; separate
+worker payloads contain only analytic profiles and prepare their own operands.
+Repeated thermal/contact queries use the kernel's independent-body copy API,
+rather than repeatedly rebuilding and subtracting the same holes. A mutex
+protects copy-time geometry memos; Boolean and meshing work runs on the owned
+copy after releasing it. An interrupted copy makes that operand unavailable,
+while an independently decoded source remains usable. The cache follows the
+derived value's lifetime, has no project/history reference and is excluded from
+equality, diagnostics and serialization.
+
 The pinned ops wrapper fails when a successful Boolean leaves no faces because
 its public face query refuses an empty list. The adapter walks the completed
 result's topology first and returns empty material only when that walk proves
