@@ -51,6 +51,7 @@ supported versions and deferred work before extending a format or consumer.
 | Persistent net records | [Sparse net registry](net-registry-storage.md) |
 | Netlist export | [JSON netlist format](netlist-format.md) · [Schema](schemas/netlist-v1.schema.json) |
 | Object identities | [Identity inventory](object-identity.md) |
+| Pin/pad correspondence | [Complete counterparts and unavailable states](pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |
 | Part groups | [Catalog, membership and storage](part-groups.md) |
 | Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md) · [Machine-readable schemas](schemas/) |
