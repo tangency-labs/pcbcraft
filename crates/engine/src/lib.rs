@@ -3221,11 +3221,12 @@ impl Session {
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
     /// A command that advances the revision is reported to the edit observer once it has
-    /// been adopted; failures, no-ops and queries are not reported.
+    /// been adopted; failures, no-ops and queries are not reported. Copper commands report
+    /// from their prepared publication path, which also serves direct prepared commits.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let before = self.revision;
         let revision = self.apply_command(id, params)?;
-        if revision != before {
+        if revision != before && !board::track::preparation::is_copper_edit(id) {
             self.report_committed(id, params);
         }
         Ok(revision)

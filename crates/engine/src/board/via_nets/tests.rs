@@ -214,6 +214,47 @@ fn native_assignment_accepts_optional_extended_stack_in_format_24() {
     assert_eq!(encode_documents(decode_documents(&original).unwrap()).unwrap(), original);
 }
 
+/// Via intent coexists with pinned assembly adoptions, with or without extended stack fields;
+/// clearing intent restores the published profile/stack envelope without losing its content.
+#[test]
+fn native_assignment_retains_profiles_and_optional_stack_in_format_24() {
+    use crate::board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
+    for extended_stack in [false, true] {
+        let mut s = routed_fixture();
+        let target = targets(&s).remove(0);
+        let id = via(&mut s, None, -30_000_000);
+        if extended_stack {
+            let mut setup = serde_json::to_value(view(&s).setup().unwrap()).unwrap();
+            setup["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+            run(&mut s, crate::SET_BOARD_SETUP, json!({"setup":setup})).unwrap();
+        }
+        run(&mut s, SET_ASSEMBLY_PROFILE, json!({"content":{"name":"Via compatibility","revision":1,"provenance":{"kind":"authored"}}})).unwrap();
+        let profile = s.project().unwrap().assembly_profiles().heads[0].profile;
+        let mut adoption = json!({"board":view(&s).target.board,"profile":profile,"revision":1,"expected_revision":s.revision()});
+        adoption["acceptance"] = s.execute(PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap()["acceptance"].clone();
+        run(&mut s, ADOPT_ASSEMBLY_PROFILE, adoption).unwrap();
+        let legacy = encode_documents(s.snapshot().unwrap()).unwrap();
+        let format = if extended_stack { "pcbcraft-board/23" } else { "pcbcraft-board/22" };
+        let key = legacy.iter().find(|(_, b)| String::from_utf8_lossy(b).contains(format)).unwrap().0.clone();
+        assert_eq!(encode_documents(decode_documents(&legacy).unwrap()).unwrap(), legacy);
+        run(&mut s, SET_VIA_NET, json!({"vias":[id],"target":target})).unwrap();
+        let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert!(String::from_utf8_lossy(&assigned[&key]).contains("pcbcraft-board/24"));
+        let reopened = decode_documents(&assigned).unwrap();
+        assert_eq!(reopened.board.assembly_profiles, s.project().unwrap().board.assembly_profiles);
+        assert_eq!(reopened.assembly_profiles(), s.project().unwrap().assembly_profiles());
+        assert_eq!(encode_documents(reopened).unwrap(), assigned);
+        let mut old_header = assigned.clone();
+        old_header.insert(key.clone(), String::from_utf8(assigned[&key].clone()).unwrap().replace("pcbcraft-board/24", format).into_bytes());
+        assert!(decode_documents(&old_header).is_err());
+        run(&mut s, SET_VIA_NET, json!({"vias":[id],"automatic":true})).unwrap();
+        let cleared = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(cleared[&key], legacy[&key]);
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), assigned);
+    }
+}
+
 /// Same-board clipboard copies retain intent; foreign destinations cannot silently reuse IDs.
 #[test]
 fn clipboard_same_board_preserves_assignment_and_foreign_paste_is_atomic() {

@@ -29,6 +29,22 @@ fn choose(h: &mut Harness<'_, PcbApp>, field: &str, option: &str) {
         click(h, &format!("Choose net {option}"));
     }
     click(h, "Use net");
+    if field == "Via net" {
+        settle_properties(h);
+    }
+}
+
+/// Wait for an existing-via Properties edit, including no-ops, to leave preparation before
+/// inspecting state or sending Undo. A pre-existing via does not imply publication is complete.
+fn settle_properties(h: &mut Harness<'_, PcbApp>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().views.active.board.tracks.committing() {
+        assert!(std::time::Instant::now() < deadline, "via Properties edit did not publish: {:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    h.run();
+    assert_eq!(h.state().message, None);
 }
 /// Wait only for the already submitted bounded native preparation, without sending further input.
 fn settle(h: &mut Harness<'_, PcbApp>) {
@@ -105,6 +121,11 @@ fn via_assignment_cancel_and_project_replacement_preserve_authority() {
     h.key_press(Key::Escape);
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.state_mut().start_via();
+    h.run();
+    choose(&mut h, "Via placement net", "GND");
+    assert!(h.state().views.active.board.tracks.via_tool);
+    assert!(h.state().views.active.board.tracks.via_target.is_some());
     h.state_mut().run("project.new", &json!({"create_board":true}));
     h.run();
     assert!(!h.state().views.active.board.tracks.via_tool);
@@ -173,5 +194,48 @@ fn via_net_properties_reject_replaced_selection() {
     h.state_mut().views.active.board.tracks.selected.clear();
     h.run();
     assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A focus-loss width commit wins a same-frame net-button click; reopening after publication
+/// captures the resulting revision, so neither the numeric edit nor a stale chooser can win later.
+#[test]
+fn width_commit_precedes_same_frame_via_net_picker() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    ground(&mut h);
+    h.state_mut().start_via();
+    h.run();
+    place(&mut h);
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":layer,"width_nm":250_000,
+        "points":[{"x_nm":15_000_000,"y_nm":10_000_000},{"x_nm":20_000_000,"y_nm":10_000_000}],"expected_revision":revision}),
+    );
+    let via = vias(&h)[0].id;
+    let track = super::board_tracks::tracks(&h)[0].id;
+    h.state_mut().views.active.board.tracks.selected = std::collections::BTreeSet::from([track, via]);
+    h.state_mut().views.active.board.properties_collapsed = false;
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    click(&mut h, "Selected track width");
+    h.get_by_label("Selected track width").type_text("0.4");
+    h.run();
+    click(&mut h, "Via net");
+    assert!(matches!(h.state().dialog, Dialog::None), "finish the numeric commit before opening a modal");
+    settle_properties(&mut h);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(super::board_tracks::tracks(&h)[0].width_nm, 400_000);
+    let resized = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    choose(&mut h, "Via net", "GND");
+    assert!(vias(&h)[0].net_assignment.is_some());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), resized);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

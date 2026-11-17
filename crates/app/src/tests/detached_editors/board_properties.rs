@@ -97,6 +97,13 @@ fn detached_via_net_properties_share_intent_without_leaking_placement_state() {
     child_click_at(&mut h, &peer, automatic);
     let confirm = child_rect(&peer, "Use net").center();
     child_click_at(&mut h, &peer, confirm);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().views.view(views[1]).unwrap().board.tracks.committing() {
+        assert!(std::time::Instant::now() < deadline, "detached net edit did not publish: {:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    h.run();
     let project = h.state().session.project().unwrap();
     assert!(project.boards().next().unwrap().vias()[0].net_assignment.is_none());
     assert_eq!(child_value(&peer, "Via net").as_deref(), Some("Automatic"));

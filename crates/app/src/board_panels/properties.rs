@@ -77,6 +77,7 @@ pub(super) enum CopperAction {
 /// Returns at most one command or a net-chooser request. The caller adds the board and `revision`
 /// to commands and captures the selection for chooser requests. Length drafts belong to `view`,
 /// `revision` and the whole selection.
+/// Committed numeric fields take priority over a simultaneous net-chooser request.
 /// Mixed track widths show the first width and set all of them; vias
 /// of different sizes show "Mixed" and stay read-only, since each via field sends both sizes.
 pub(super) fn copper_properties(
@@ -161,7 +162,12 @@ pub(super) fn copper_properties(
         };
         ui.label("Net");
         if ui.add_enabled_ui(!any_locked, |ui| crate::board_net_choice::trigger(ui, "Via net", &current)).inner.clicked() {
-            return Some(CopperAction::ChooseViaNet(vias.iter().map(|v| v.id).collect()));
+            // Focus loss may have committed Width earlier in this frame. Publish that edit
+            // first; a subsequent click opens the chooser against its resulting revision.
+            return Some(match edit {
+                Some((command, params)) => CopperAction::Command(command, params),
+                None => CopperAction::ChooseViaNet(vias.iter().map(|v| v.id).collect()),
+            });
         }
         ui.end_row();
     }
