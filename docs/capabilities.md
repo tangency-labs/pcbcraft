@@ -34,6 +34,11 @@ obstacles for routing and design checks. They have no copper or net. Boards
 containing them cannot yet produce fabrication outputs; a separate non-plated
 drill file remains future work.
 
+The engine's [object-query parser](object-queries.md) provides bounded boolean
+syntax, text selectors and exact numeric property comparisons with byte-offset
+diagnostics. It is a Rust API only; query evaluation, object selection, paging,
+area predicates and search UI are not implemented by this parser.
+
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
 are returned with a disposable session-local token. Preview does not dirty the
