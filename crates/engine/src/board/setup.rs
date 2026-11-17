@@ -652,13 +652,16 @@ impl BoardSetup {
         let name = json!({"type":"string", "minLength":1, "maxLength":MAX_NAME});
         let thickness = json!({"type":"integer", "minimum":1, "maximum":MAX_THICKNESS_NM});
         let tolerance = json!({"type":"integer", "minimum":0, "maximum":MAX_THICKNESS_NM});
+        let integer_tokens = "The native reader requires parsed integer-kind numbers; decimal/exponent spellings (including -0) are refused, although JSON Schema counts integral values such as 1.0 as integers.";
+        let stack_thickness = json!({"type":"integer", "minimum":1, "maximum":MAX_THICKNESS_NM, "description":integer_tokens});
+        let stack_tolerance = json!({"type":"integer", "minimum":0, "maximum":MAX_THICKNESS_NM, "description":integer_tokens});
         let base_copper = json!({"type":"object", "additionalProperties":false, "minProperties":1, "properties":{
-            "weight_milli_oz":{"type":"integer", "minimum":1, "maximum":MAX_COPPER_WEIGHT_MILLI_OZ}, "thickness_nm":thickness
+            "weight_milli_oz":{"type":"integer", "minimum":1, "maximum":MAX_COPPER_WEIGHT_MILLI_OZ, "description":integer_tokens}, "thickness_nm":stack_thickness
         }});
         let copper = json!({"type":"object", "additionalProperties":false, "required":["kind","layer"], "properties":{
             "kind":{"const":"copper"}, "layer":id, "thickness_nm":thickness,
             "role":{"type":"string", "enum":["signal","plane","mixed"]}, "base_copper":base_copper,
-            "thickness_tolerance_nm":tolerance, "thickness_basis":{"type":"string", "enum":["nominal","minimum"]}
+            "thickness_tolerance_nm":stack_tolerance, "thickness_basis":{"type":"string", "enum":["nominal","minimum"]}
         }});
         json!({"type":"object", "additionalProperties":false, "required":["layers","stackup"], "properties": {
             "materials":materials::schema::catalog(),
@@ -669,7 +672,7 @@ impl BoardSetup {
                 }
             }},
             "stackup":{"type":"object", "additionalProperties":false, "required":["id","strata"], "properties":{
-                "finished_thickness_nm":thickness, "finished_thickness_tolerance_nm":tolerance, "declared_minimum_thickness_nm":thickness,
+                "finished_thickness_nm":stack_thickness, "finished_thickness_tolerance_nm":stack_tolerance, "declared_minimum_thickness_nm":stack_thickness,
                 "id":id, "strata":{"type":"array", "minItems":3, "maxItems":2*MAX_COPPER-1, "items":{"oneOf":[
                     copper,
                     {"type":"object", "additionalProperties":false, "required":["kind","id"], "properties":{

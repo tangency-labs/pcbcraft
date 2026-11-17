@@ -4,6 +4,8 @@ use super::*;
 use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, persistence};
 use std::sync::Arc;
 
+mod integers;
+
 /// The reader's reason for refusing the stack fields under any header but 23.
 const STACK_REFUSAL: &str = "require board format 23";
 
@@ -82,8 +84,11 @@ fn reject_because(s: &mut Session, command: &str, params: Value, reason: &str) {
     let snapshot = s.snapshot().unwrap();
     let state = s.inspect();
     let saved = persistence::encode_documents(snapshot.clone()).unwrap();
-    let error = s.apply(command, &params).expect_err(&format!("accepted {params}")).to_string();
-    assert!(error.contains(reason), "{params}: expected {reason:?}, got {error:?}");
+    let error = s.apply(command, &params).expect_err(&format!("accepted {params}"));
+    assert!(
+        matches!(&error, CommandError::InvalidParams(message) if message.contains(reason)),
+        "{params}: expected InvalidParams naming {reason:?}, got {error:?}"
+    );
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     assert_eq!(s.inspect(), state);
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
@@ -737,43 +742,49 @@ fn invalid_copper_and_board_thickness_fields_never_change_state() {
     let mut s = session(2);
     let base = setup(&s);
     let mut invalid = vec![];
-    for (field, value) in [
-        ("thickness_tolerance_nm", json!(1_000)),
-        ("thickness_basis", json!("nominal")),
-        ("base_copper", json!({})),
-        ("base_copper", json!({"weight_milli_oz":0})),
-        ("base_copper", json!({"thickness_nm":0})),
-        ("base_copper", json!({"weight_milli_oz":1000,"grade":"rtf"})),
-        ("role", json!("ground")),
-        ("role", Value::Null),
+    for (field, value, reason) in [
+        ("thickness_tolerance_nm", json!(1_000), "copper tolerance requires a specified thickness"),
+        ("thickness_basis", json!("nominal"), "copper thickness basis requires a specified thickness"),
+        ("base_copper", json!({}), "base copper needs a weight or a foil thickness"),
+        ("base_copper", json!({"weight_milli_oz":0}), "base copper weight must be from"),
+        ("base_copper", json!({"thickness_nm":0}), "base copper foil thickness must be from"),
+        ("base_copper", json!({"weight_milli_oz":1000,"grade":"rtf"}), "unknown field `grade`"),
+        ("role", json!("ground"), "unknown variant `ground`"),
+        ("role", Value::Null, "invalid type: null"),
     ] {
         let mut candidate = base.clone();
         candidate["stackup"]["strata"][0][field] = value;
-        invalid.push(candidate);
+        invalid.push((candidate, reason));
     }
-    for (thickness, tolerance) in [(35_000, 35_000), (35_000, -1)] {
+    for (thickness, tolerance, reason) in [
+        (35_000, 35_000, "copper tolerance requires a specified thickness with positive lower"),
+        (35_000, -1, "copper tolerance requires a specified thickness with positive lower"),
+    ] {
         let mut candidate = base.clone();
         candidate["stackup"]["strata"][0]["thickness_nm"] = json!(thickness);
         candidate["stackup"]["strata"][0]["thickness_tolerance_nm"] = json!(tolerance);
-        invalid.push(candidate);
+        invalid.push((candidate, reason));
     }
-    for stackup in [
-        json!({"finished_thickness_tolerance_nm":160_000}),
-        json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":1_600_000}),
-        json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_001}),
-        json!({"finished_thickness_nm":0}),
-        json!({"declared_minimum_thickness_nm":0}),
-        json!({"finished_thickness_nm":Value::Null}),
+    for (stackup, reason) in [
+        (json!({"finished_thickness_tolerance_nm":160_000}), "board thickness tolerance requires a finished thickness"),
+        (
+            json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":1_600_000}),
+            "board thickness tolerance requires a finished thickness with positive lower",
+        ),
+        (json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_001}), "declared minimum board thickness cannot exceed"),
+        (json!({"finished_thickness_nm":0}), "finished board thickness must be a positive"),
+        (json!({"declared_minimum_thickness_nm":0}), "declared minimum board thickness must be a positive"),
+        (json!({"finished_thickness_nm":Value::Null}), "invalid type: null"),
     ] {
         let mut candidate = base.clone();
         for (field, value) in stackup.as_object().unwrap() {
             candidate["stackup"][field] = value.clone();
         }
-        invalid.push(candidate);
+        invalid.push((candidate, reason));
     }
-    for candidate in invalid {
+    for (candidate, reason) in invalid {
         let revision = s.revision();
-        reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate,"expected_revision":revision}));
+        reject_because(&mut s, SET_BOARD_SETUP, json!({"setup":candidate,"expected_revision":revision}), reason);
     }
 }
 
