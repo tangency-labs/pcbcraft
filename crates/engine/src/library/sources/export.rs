@@ -1,5 +1,5 @@
 //! Whole-library export reuses the original native documents of one loaded source.
-use super::Catalog;
+use super::{Catalog, Kind, MAX_SOURCE_BYTES, Reference};
 use serde_json::json;
 use std::collections::BTreeSet;
 
@@ -14,29 +14,34 @@ pub struct Export {
 
 impl Catalog {
     /// Bundle the original documents of one available source without changing it. Records from
-    /// other libraries are never collected: dependencies on them are reported, and a dependency
-    /// that does not resolve through the catalog's resolver is reported as unavailable.
+    /// other libraries are never collected: dependencies on them are reported, and each declared
+    /// dependency that isn't available in the catalog is reported. A bundle larger than Add
+    /// library accepts is an error.
     pub fn export_bundle(&self, source: &str) -> Result<Export, String> {
         let native = self.sources.get(source).filter(|_| self.source_available(source)).ok_or("Choose an available library to export.")?;
         let mut external = BTreeSet::new();
         let mut unavailable = Vec::new();
         for item in &native.items {
-            let mut libraries = Vec::new();
-            let resolved = if let Some(binding) = item.symbol().and_then(|symbol| symbol.category.clone()) {
-                self.category(&binding.definition).map(|category| libraries.push(category.library.clone()))
-            } else if let Some(reference) = item.part().map(|part| part.reference()).or_else(|| item.manufacturer_part().map(|m| m.part.clone())) {
-                self.resolve_part(&reference).map(|part| {
-                    libraries.push(part.definition.library.clone());
-                    libraries.extend(part.symbol.iter().map(|symbol| symbol.library.clone()));
-                    libraries.extend(part.category.iter().map(|category| category.library.clone()));
-                    libraries.extend(part.footprints.values().map(|footprint| footprint.library.clone()));
-                })
-            } else {
-                Ok(())
-            };
-            match resolved {
-                Ok(()) => external.extend(libraries.into_iter().filter(|library| *library != native.library)),
-                Err(error) => unavailable.push(format!("{}: {error}", item.file)),
+            // Check each declared reference on its own, so one missing dependency can't hide the others.
+            let mut references: Vec<(Reference, Kind)> = Vec::new();
+            if let Some(binding) = item.symbol().and_then(|symbol| symbol.category.clone()) {
+                references.push((binding.definition, Kind::Category));
+            }
+            if let Some(part) = item.part() {
+                references.extend(part.symbol.iter().map(|symbol| (symbol.clone(), Kind::Symbol)));
+                references.extend(part.category.iter().map(|binding| (binding.definition.clone(), Kind::Category)));
+                references.extend(part.packages.values().map(|package| (package.footprint.clone(), Kind::Footprint)));
+            }
+            if let Some(record) = item.manufacturer_part() {
+                references.push((record.part.clone(), Kind::Part));
+            }
+            for (reference, kind) in references {
+                if reference.library != native.library {
+                    external.insert(reference.library.clone());
+                }
+                if let Err(error) = self.exact(&reference, kind) {
+                    unavailable.push(format!("{}: {error}", item.file));
+                }
             }
         }
         let mut report = format!("Exported {} ({} items).", native.name, native.items.len());
@@ -56,6 +61,10 @@ impl Catalog {
         let bundle = json!({"format": "pcbcraft-library-bundle/1", "documents": native.documents});
         let mut bytes = serde_json::to_vec_pretty(&bundle).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
+        // Escaping can grow the text past what Add library accepts; refuse rather than write it.
+        if bytes.len() > MAX_SOURCE_BYTES * 2 {
+            return Err(format!("This library's bundle would exceed {} MiB, the most Add library accepts.", MAX_SOURCE_BYTES * 2 / (1 << 20)));
+        }
         Ok(Export { file_name: format!("{}.library.json", native.library), bytes, report })
     }
 }
@@ -114,8 +123,24 @@ mod tests {
         install(&mut catalog, "orders", &orders);
         let report = catalog.export_bundle("orders").unwrap().report;
         assert!(report.contains("install separately: parts-demo."), "{report}");
+        catalog.remove("demo").unwrap();
+        let report = catalog.export_bundle("orders").unwrap().report;
+        assert!(report.contains("install separately: parts-demo. Unavailable dependencies: manufacturer-parts/"), "{report}");
+        install(&mut catalog, "demo", &documents(""));
         install(&mut catalog, "demo", &documents("footprints/resistor-0603.json"));
         let report = catalog.export_bundle("demo").unwrap().report;
-        assert!(report.contains("Unavailable dependencies: parts/resistor.json:"), "{report}");
+        assert!(report.contains("Unavailable dependencies: parts/resistor.json: Unavailable Footprint"), "{report}");
+    }
+
+    /// Files that load as individual problems can still escape past the transport limit.
+    #[test]
+    fn export_refuses_a_bundle_add_library_would_reject() {
+        let mut documents = documents("");
+        for index in 0..12 {
+            documents.insert(format!("symbols/padding-{index}.json"), "\0".repeat(super::super::MAX_FILE_BYTES));
+        }
+        let mut catalog = Catalog::default();
+        install(&mut catalog, "demo", &documents);
+        assert!(catalog.export_bundle("demo").unwrap_err().contains("most Add library accepts"));
     }
 }
