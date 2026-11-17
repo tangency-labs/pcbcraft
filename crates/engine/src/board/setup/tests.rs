@@ -4,7 +4,7 @@ use super::*;
 use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, persistence};
 use std::sync::Arc;
 
-/// The reader's reason for refusing the stack fields under any header but 23.
+/// The reader's reason for refusing the stack fields under an older header.
 const STACK_REFUSAL: &str = "require board format 23";
 
 /// Start an ordinary project and initialize its board through the command catalog.
