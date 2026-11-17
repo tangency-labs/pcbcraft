@@ -1,0 +1,21 @@
+[package]
+name = "pcbcraft-geometry"
+description = "Solid bodies and STEP exchange behind a kernel-neutral API, implemented with SolidCraft's solidcore kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+pcbcraft-units = { workspace = true }
+
+# The kernel is qualified for native builds only; the browser build answers kernel_unavailable
+# (docs/geometry-kernel.md).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+solidcore-ops = { workspace = true }
+solidcore-step = { workspace = true }
