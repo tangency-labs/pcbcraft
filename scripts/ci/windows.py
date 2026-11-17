@@ -7,27 +7,13 @@ from pathlib import Path
 import shutil
 import subprocess
 
-APP_FILTERS = ("project_files::", "recent_projects::", "clipboard::", "library_workspace::",
-               "library_editors::", "part_documents::", "tests::save_changes::",
-               "tests::detached_editors::", "tests::editor_views::", "tests::native_canvas_shortcut::",
-               "tests::live_mcp::", "assistant::chat::tests::")
-ENGINE_FILTERS = ("persistence::", "clipboard::", "clipboard_text::", "library::")
-PACKAGES = ("pcbcraft-storage", "pcbcraft-mcp", "craft-control", "craft-agents",
-            "pcbcraft-units", "pcbcraft-geometry", "pcbcraft-cli", "pcbcraft-chrome")
-
-
-def commands(full: bool) -> list[list[str]]:
-    """Keep general coverage on full runs; PRs exercise native files, paths, UI and transport."""
+def commands() -> list[list[str]]:
+    """Run the complete suite only in an approved or full validation stage."""
     base = ["cargo", "test", "--locked", "--profile", "ci"]
-    if full:
-        return [["cargo", "clippy", "--locked", "--profile", "ci", "--workspace", "--all-targets", "--", "-D", "warnings"],
-                base + ["--workspace"],
-                ["cargo", "clippy", "--locked", "--profile", "ci", "-p", "pcbcraft-app", "--features", "performance-harness", "--all-targets", "--", "-D", "warnings"],
-                base + ["-p", "pcbcraft-app", "--features", "performance-harness", "performance::"]]
-    packages = [arg for package in PACKAGES for arg in ("-p", package)]
-    return [base + packages,
-            base + ["-p", "pcbcraft-engine", "--lib", "--", *ENGINE_FILTERS],
-            base + ["-p", "pcbcraft-app", "--lib", "--", *APP_FILTERS]]
+    return [["cargo", "clippy", "--locked", "--profile", "ci", "--workspace", "--all-targets", "--", "-D", "warnings"],
+            base + ["--workspace"],
+            ["cargo", "clippy", "--locked", "--profile", "ci", "-p", "pcbcraft-app", "--features", "performance-harness", "--all-targets", "--", "-D", "warnings"],
+            base + ["-p", "pcbcraft-app", "--features", "performance-harness", "performance::"]]
 
 
 def stage_lifecycle(destination: Path) -> None:
@@ -57,10 +43,9 @@ def stage_lifecycle(destination: Path) -> None:
 def main() -> None:
     """Propagate every command failure and publish an artifact only after selected tests pass."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--full", choices=("true", "false"), required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     args = parser.parse_args()
-    for command in commands(args.full == "true"):
+    for command in commands():
         print("Running: " + " ".join(command), flush=True)
         subprocess.run(command, check=True)
     stage_lifecycle(args.artifacts)

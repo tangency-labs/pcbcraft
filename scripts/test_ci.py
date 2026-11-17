@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci import check, policy as select, windows, window_smoke
+from ci import check, policy as select, qualification, windows, window_smoke
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -23,23 +23,16 @@ class SelectionTests(unittest.TestCase):
             selected = select.select(event, ["docs/editor-guide.md", "README.md", ".github/ISSUE_TEMPLATE/bug_report.yml"])
             self.assertFalse(any(selected.values()))
 
-    def test_shared_engine_keeps_native_web_and_wasi(self):
-        selected = select.select("pull_request", ["crates/engine/src/board/drc.rs"])
-        self.assertTrue(selected["native"] and selected["web"] and selected["wasi"])
-        self.assertFalse(selected["windows"])
-
-    def test_native_integration_selects_windows_without_the_general_suite(self):
-        for path in ("crates/storage/src/folder.rs", "crates/app/src/recent_projects.rs",
-                     "crates/engine/src/persistence/documents.rs", "apps/pcbcraft/src/main.rs"):
-            with self.subTest(path=path):
-                selected = select.select("pull_request", [path])
-                self.assertTrue(selected["windows"])
-                self.assertFalse(selected["windows_full"])
+    def test_code_selects_full_qualification_before_staging(self):
+        for path in ("crates/engine/src/board/drc.rs", "crates/storage/src/folder.rs",
+                     "crates/app/src/recent_projects.rs", "apps/pcbcraft/src/main.rs"):
+            self.assertEqual(select.select("pull_request", [path]), select.full())
 
     def test_configuration_and_unknown_paths_fail_closed(self):
         for path in ("Cargo.lock", "crates/app/Cargo.toml", "deny.toml", "scripts/ci/select.py",
                      "vendor/new-backend/file.rs", "docs/schemas/part.schema.json", "crates/new-crate/src/lib.rs",
-                     "future-configuration.toml", "../README.md", r"docs\guide.md"):
+                     "future-configuration.toml", "../README.md", r"docs\guide.md",
+                     "crates/geometry/tests/fixtures/step/new.step", "crates/app/assets/new.json"):
             with self.subTest(path=path):
                 self.assertEqual(select.select("pull_request", [path]), select.full())
 
@@ -49,21 +42,6 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select.select("pull_request", None), select.full())
         self.assertEqual(select.select("push", ["crates/engine/src/board/drc.rs"]), select.full())
 
-    def test_existing_windows_conditional_sources_select_windows(self):
-        for directory in ("crates", "apps"):
-            for source in (ROOT / directory).rglob("*.rs"):
-                text = source.read_text(encoding="utf-8")
-                if re.search(r"#\[cfg\([^]]*\bwindows\b", text):
-                    with self.subTest(source=str(source.relative_to(ROOT))):
-                        self.assertTrue(select.select("pull_request", [source.relative_to(ROOT).as_posix()])["windows"])
-
-    def test_windows_app_conditional_modules_keep_selected_test_families(self):
-        for source in (ROOT / "crates/app/src").rglob("*.rs"):
-            if not re.search(r"#\[cfg\([^]]*\bwindows\b", source.read_text(encoding="utf-8")):
-                continue
-            module = "::".join(source.relative_to(ROOT / "crates/app/src").with_suffix("").parts) + "::"
-            with self.subTest(module=module):
-                self.assertTrue(any(f in module or f.startswith(module) for f in windows.APP_FILTERS))
 
 
 class GitComparisonTests(unittest.TestCase):
@@ -109,7 +87,7 @@ class GitComparisonTests(unittest.TestCase):
         env = {**os.environ, "GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": str(payload), "GITHUB_OUTPUT": str(output)}
         result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/ci/policy.py")], cwd=self.repo, env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(set(output.read_text().splitlines()), {f"{key}=false" for key in select.OUTPUTS})
+        self.assertEqual(set(output.read_text().splitlines()), {f"{key}=false" for key in (*select.OUTPUTS, "quick")} | {"mode=docs"})
 
 
 class CompletionTests(unittest.TestCase):
@@ -117,16 +95,20 @@ class CompletionTests(unittest.TestCase):
 
     @staticmethod
     def needs(selected):
+        if "mode" not in selected:
+            selected = {**{key: str(value).lower() for key, value in selected.items()}, "quick": "false", "mode": "full" if any(selected.values()) else "docs"}
         return {**{name: {"result": "success"} for name in check.ALWAYS},
-                "changes": {"result": "success", "outputs": {k: str(v).lower() for k, v in selected.items()}},
-                **{name: {"result": "success" if selected[key] else "skipped"} for name, key in check.JOBS.items()}}
+                "changes": {"result": "success", "outputs": selected},
+                **{name: {"result": "success" if selected[key] == "true" else "skipped"} for name, key in check.JOBS.items()}}
 
     def test_documentation_skips_are_successful(self):
         self.assertEqual(check.failures(self.needs(select.select("pull_request", ["docs/editor-guide.md"]))), [])
 
     def test_selected_job_cannot_be_skipped_cancelled_or_missing(self):
         original = self.needs(select.full())
-        for name in check.JOBS:
+        for name, selection in check.JOBS.items():
+            if original["changes"]["outputs"][selection] != "true":
+                continue
             for status in ("skipped", "cancelled", "failure", None):
                 needs = copy.deepcopy(original)
                 needs[name]["result"] = status
@@ -144,20 +126,117 @@ class CompletionTests(unittest.TestCase):
             del needs["changes"]["outputs"][key]
             self.assertTrue(check.failures(needs), key)
 
+    def test_quick_feedback_does_not_claim_merge_readiness(self):
+        selected = select.plan("pull_request", {}, ["Cargo.toml"])
+        self.assertTrue(selected["quick"] == "true" and selected["mode"] == "quick")
+        self.assertIn("approved-for-ci", " ".join(check.failures(self.needs(selected))))
+
+    def test_qualification_cannot_skip_a_platform_or_lose_its_stage(self):
+        needs = self.needs(select.full())
+        needs["changes"]["outputs"]["windows"] = "false"
+        self.assertTrue(check.failures(needs))
+        needs = self.needs(select.full())
+        del needs["changes"]["outputs"]["mode"]
+        self.assertTrue(check.failures(needs))
+
+
+class StageTests(unittest.TestCase):
+    """Review approval gates test execution; unknown paths cannot bypass full qualification."""
+
+    def test_drafts_never_compile_even_with_approval(self):
+        selected = select.plan("pull_request", {"pull_request": {"draft": True, "labels": [{"name": select.APPROVAL}]}}, None)
+        self.assertEqual(selected["mode"], "draft")
+        self.assertFalse(any(selected[key] == "true" for key in (*select.OUTPUTS, "quick")))
+
+    def test_unapproved_code_config_and_unknown_paths_only_compile(self):
+        for paths in (["crates/app/src/lib.rs"], ["Cargo.toml"], ["new.fixture"], None):
+            selected = select.plan("pull_request", {}, paths)
+            self.assertEqual(selected["mode"], "quick")
+            self.assertEqual(selected["quick"], "true")
+            self.assertFalse(any(selected[key] == "true" for key in select.OUTPUTS))
+
+    def test_approval_and_later_pushes_require_every_platform(self):
+        for action in ("labeled", "synchronize", "ready_for_review"):
+            payload = {"action": action, "label": {"name": select.APPROVAL}, "pull_request": {"labels": [{"name": select.APPROVAL}]}}
+            selected = select.plan("pull_request", payload, ["crates/engine/src/board.rs"])
+            self.assertEqual(selected["mode"], "full")
+            self.assertTrue(all(selected[key] == "true" for key in select.OUTPUTS))
+            self.assertEqual(selected["quick"], "false")
+
+    def test_unrelated_labels_carry_proof_and_approval_removal_returns_to_quick(self):
+        payload = {"action": "labeled", "label": {"name": "enhancement"}, "pull_request": {"labels": [{"name": select.APPROVAL}]}}
+        self.assertEqual(select.plan("pull_request", payload, ["Cargo.toml"])["mode"], "carry")
+        payload = {"action": "unlabeled", "label": {"name": select.APPROVAL}, "pull_request": {"labels": []}}
+        self.assertEqual(select.plan("pull_request", payload, ["Cargo.toml"])["mode"], "quick")
+
+    def test_docs_need_no_approval_and_full_events_need_no_label(self):
+        self.assertEqual(select.plan("pull_request", {}, ["README.md"])["mode"], "docs")
+        for event in ("merge_group", "schedule", "workflow_dispatch", "push"):
+            selected = select.plan(event, {}, ["Cargo.toml"])
+            self.assertTrue(all(selected[key] == "true" for key in select.OUTPUTS))
+
+
+class QualificationTests(unittest.TestCase):
+    """A green quick run or another revision is never evidence of full qualification."""
+
+    def candidate(self, **updates):
+        return {"id": 10, "head_sha": "a" * 40, "display_title": "CI: " + "b" * 40,
+                "event": "pull_request", "status": "completed", "conclusion": "success", **updates}
+
+    def proof(self, runs, jobs=None):
+        if jobs is None:
+            jobs = [{"name": name, "conclusion": "success"} for name in qualification.FULL_JOBS]
+        return qualification.passing_run(runs, "a" * 40, "b" * 40, 99, lambda _: jobs)
+
+    def test_only_the_exact_head_and_merge_commit_can_carry(self):
+        self.assertEqual(self.proof([self.candidate()]), (True, False))
+        for updates in ({"head_sha": "c" * 40}, {"display_title": "CI: " + "c" * 40}, {"id": 99}, {"event": "push"}):
+            self.assertEqual(self.proof([self.candidate(**updates)]), (False, False))
+
+    def test_failed_missing_and_skipped_tests_cannot_carry(self):
+        for name in qualification.FULL_JOBS:
+            for status in ("skipped", "failure", "cancelled", None):
+                jobs = [{"name": job, "conclusion": status if job == name else "success"} for job in qualification.FULL_JOBS]
+                self.assertFalse(self.proof([self.candidate()], jobs)[0])
+        self.assertEqual(self.proof([self.candidate()], []), (False, False))
+
+    def test_waits_only_for_a_matching_running_candidate(self):
+        self.assertEqual(self.proof([self.candidate(status="in_progress", conclusion=None)]), (False, True))
+        self.assertEqual(self.proof([self.candidate(status="completed", conclusion="failure")]), (False, False))
+
+    def test_revoked_or_stale_approval_is_rejected(self):
+        env = {"GITHUB_REPOSITORY": "owner/repo", "CI_PR_NUMBER": "404", "CI_HEAD_SHA": "a" * 40}
+        current = {"head": {"sha": "a" * 40}, "labels": [{"name": select.APPROVAL}], "draft": False}
+        with patch.dict(os.environ, env), patch("ci.qualification.api", return_value=current):
+            qualification.require_current_approval()
+        for updates in ({"labels": []}, {"head": {"sha": "c" * 40}}, {"draft": True}):
+            with patch.dict(os.environ, env), patch("ci.qualification.api", return_value={**current, **updates}), self.assertRaises(RuntimeError):
+                qualification.require_current_approval()
+
+    def test_waiter_stops_on_failure_or_deadline(self):
+        env = {"GITHUB_REPOSITORY": "owner/repo", "CI_HEAD_SHA": "a" * 40, "GITHUB_SHA": "b" * 40, "GITHUB_RUN_ID": "99"}
+        for pending in (False, True):
+            with patch.dict(os.environ, env), patch("ci.qualification.require_current_approval"), patch("ci.qualification.api", return_value={"workflow_runs": []}), patch("ci.qualification.passing_run", return_value=(False, pending)), self.assertRaises(RuntimeError):
+                qualification.wait_for_pass(timeout=0)
+
+    def test_waiter_rechecks_approval_before_accepting_a_completed_run(self):
+        env = {"GITHUB_REPOSITORY": "owner/repo", "CI_HEAD_SHA": "a" * 40, "GITHUB_SHA": "b" * 40, "GITHUB_RUN_ID": "99"}
+        with patch.dict(os.environ, env), patch("ci.qualification.require_current_approval") as approval, patch("ci.qualification.api", return_value={"workflow_runs": []}), patch("ci.qualification.passing_run", side_effect=[(False, True), (True, False)]), patch("ci.qualification.time.sleep") as sleep, patch("builtins.print"):
+            qualification.wait_for_pass()
+        self.assertEqual(approval.call_count, 2)
+        sleep.assert_called_once_with(20)
+
+    def test_api_failure_never_becomes_a_passing_result(self):
+        env = {"GITHUB_REPOSITORY": "owner/repo", "CI_HEAD_SHA": "a" * 40, "GITHUB_SHA": "b" * 40, "GITHUB_RUN_ID": "99"}
+        with patch.dict(os.environ, env), patch("ci.qualification.require_current_approval"), patch("ci.qualification.api", side_effect=OSError("disconnected")), self.assertRaises(OSError):
+            qualification.wait_for_pass()
+
 
 class WindowsTests(unittest.TestCase):
     """Full validation remains available; the native smoke must actually run and finish."""
 
-    def test_targeted_suite_retains_storage_transport_and_native_families(self):
-        commands = windows.commands(False)
-        joined = " ".join(" ".join(c) for c in commands)
-        for expected in ("pcbcraft-storage", "pcbcraft-mcp", "craft-control", "persistence::", "project_files::", "recent_projects::", "clipboard::"):
-            self.assertIn(expected, joined)
-        self.assertNotIn("--workspace", joined)
-        self.assertTrue(all("ci" in c for c in commands))
-
     def test_full_suite_retains_workspace_lints_tests_and_harness(self):
-        commands = windows.commands(True)
+        commands = windows.commands()
         self.assertIn("--workspace", commands[0])
         self.assertIn("--workspace", commands[1])
         self.assertTrue(any("performance::" in c for c in commands))

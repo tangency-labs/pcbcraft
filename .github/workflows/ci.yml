@@ -1,10 +1,11 @@
-# General correctness runs on Linux. Native Windows integration is selected by changed paths;
-# main, merge groups, nightly and manual runs retain the complete Windows suite.
-# The existing required `checks` job always verifies selected jobs, including skipped/failing work.
+# Drafts skip builds; ordinary PR pushes run repository checks and a quick compile.
+# approved-for-ci runs full qualification before merge (this repository has no merge queue).
 name: CI
+run-name: "CI: ${{ github.sha }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'approved-for-ci' && ' (labels)' || '' }}"
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
   merge_group:
   push:
     branches: [main]
@@ -14,10 +15,12 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
   # PR pushes supersede their previous run. Main must finish to refresh the caches.
-  group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.run_attempt > 1 && format('-rerun-{0}', github.run_id) || '' }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.run_attempt > 1 && format('-rerun-{0}', github.run_id) || '' }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'approved-for-ci' && format('-label-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -28,9 +31,12 @@ env:
 
 jobs:
   changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
+      mode: ${{ steps.select.outputs.mode }}
+      quick: ${{ steps.select.outputs.quick }}
       native: ${{ steps.select.outputs.native }}
       windows: ${{ steps.select.outputs.windows }}
       windows_full: ${{ steps.select.outputs.windows_full }}
@@ -49,6 +55,7 @@ jobs:
         run: python -B scripts/ci/policy.py
 
   documentation-links:
+    needs: changes
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
@@ -61,6 +68,7 @@ jobs:
       - run: python -B scripts/check-markdown-links.py
 
   library-schemas:
+    needs: changes
     # Cheap repository/script checks always run, including on documentation-only PRs.
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -77,6 +85,29 @@ jobs:
       - run: python -B -m unittest discover -s scripts -p 'test_*.py'
       - run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
       - run: node scripts/test-native-library-picker.cjs
+
+  quick-compile:
+    needs: changes
+    if: needs.changes.outputs.quick == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS || '4' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: linux-native
+          cache-workspace-crates: true
+          save-if: false
+      - run: cargo fmt --all --check
+      - run: cargo check --locked --profile ci --workspace
 
   native-tests:
     needs: changes
@@ -150,8 +181,8 @@ jobs:
         run: python -B -m unittest discover -s scripts -p 'test_*.py'
       - name: Windows diagnostic-page regressions
         run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
-      - name: Selected Windows tests and native-window artifact
-        run: python -B scripts/ci/windows.py --full '${{ needs.changes.outputs.windows_full }}' --artifacts ci-artifacts
+      - name: Full Windows tests and native-window artifact
+        run: python -B scripts/ci/windows.py --artifacts ci-artifacts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-lifecycle
@@ -258,10 +289,10 @@ jobs:
 
   checks:
     # Preserve the required check name, including when docs intentionally skip every compiler job.
-    if: ${{ always() }}
-    needs: [changes, documentation-links, library-schemas, native-tests, windows-tests, windows-smoke, web, geometry-webassembly, licenses]
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, web, geometry-webassembly, licenses]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 5
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -272,3 +303,6 @@ jobs:
       - run: python -B scripts/ci/check.py
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}

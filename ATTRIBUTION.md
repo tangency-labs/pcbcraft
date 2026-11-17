@@ -521,10 +521,11 @@ asset or new dependency is introduced.
 
 ## Dependencies
 
-The CI profile and separation of Windows build/native-window smoke jobs follow
+The staged PR approval policy, CI profile and separation of Windows build/native-window smoke jobs follow
 SolidCraft's `Cargo.toml` and `.github/workflows/ci.yml` at revision
 `0f5a5e22d22492416af6009f59cd39facce2de75` (MIT OR Apache-2.0, SolidCraft
-contributors). PCBcraft's selection policy, Windows suite definitions, artifact
+contributors). PCBcraft adapts the policy to require full approval-stage validation
+because it has no merge queue. Its selection policy, Windows suite definitions, artifact
 staging, timeout/result checks and policy regressions are independently authored
 for this repository. The workflow retains existing pinned actions and adds the
 same pinned GitHub artifact upload/download actions used by that reference.

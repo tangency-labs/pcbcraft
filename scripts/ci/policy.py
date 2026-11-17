@@ -8,14 +8,9 @@ import re
 import subprocess
 
 OUTPUTS = ("native", "windows", "windows_full", "web", "wasi", "licenses")
+APPROVAL = "approved-for-ci"
 LIGHT_ROOT = frozenset({"README.md", "CONTRIBUTING.md", "VISION.md", "AGENTS.md",
                         "ATTRIBUTION.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE"})
-WINDOWS_PREFIXES = ("apps/pcbcraft/", "crates/app/", "crates/chrome/", "crates/storage/",
-                    "crates/mcp/", "crates/craft-control/", "crates/craft-agents/",
-                    "crates/engine/src/persistence", "crates/engine/src/library",
-                    "crates/engine/src/clipboard", "crates/engine/src/lib.rs")
-PACKAGES = frozenset({"app", "chrome", "engine", "geometry", "storage", "mcp", "units",
-                      "craft-control", "craft-agents"})
 
 
 def full() -> dict[str, bool]:
@@ -24,10 +19,9 @@ def full() -> dict[str, bool]:
 
 
 def select(event: str, paths: list[str] | None) -> dict[str, bool]:
-    """Known docs avoid builds; known code selects targets; configuration/unknown paths run all.
+    """Only recognized documentation avoids qualification; code and uncertainty require all.
 
-    Main validates all platforms after code lands because the repository need not use a merge
-    queue. PR Windows checks focus on native integration. Nightly/manual/merge groups run all.
+    Staging is applied separately so a feedback run never claims full validation.
     """
     if event not in {"pull_request", "push"} or paths is None:
         return full()
@@ -40,24 +34,36 @@ def select(event: str, paths: list[str] | None) -> dict[str, bool]:
             continue
         if path.startswith(".github/ISSUE_TEMPLATE/") or path in {".github/pull_request_template.md", ".github/CODEOWNERS", ".github/FUNDING.yml"}:
             continue
-        if path in {"Cargo.toml", "Cargo.lock", "deny.toml"} or path.endswith("/Cargo.toml"):
-            return full()
-        if path.startswith(("rust-toolchain", ".cargo/", ".github/workflows/", "scripts/", "vendor/")):
-            return full()
-        known = ((len(parts) > 2 and parts[0] == "crates" and parts[1] in PACKAGES)
-                 or (len(parts) > 2 and parts[0] == "apps" and parts[1] in {"pcbcraft", "pcbcraft-cli", "pcbcraft-web"}))
-        if not known:
-            return full()
-        result["native"] = True
-        # Compile/package the web app for shared/application code, retaining its current coverage.
-        result["web"] = True
-        if path.startswith(("crates/engine/", "crates/geometry/", "crates/units/")):
-            result["wasi"] = True
-        if path.startswith(WINDOWS_PREFIXES):
-            result["windows"] = True
-    if event == "push" and result["native"]:
+        # Without a merge queue, approval qualifies every platform for any non-documentation
+        # change. Sources, fixtures, manifests and unknown paths all reach this fallback.
         return full()
     return result
+
+
+def plan(event: str, payload: dict, paths: list[str] | None) -> dict[str, str]:
+    """Stage PR feedback separately from qualification; approval runs all without a merge queue.
+
+    Drafts do no compilation. Unrelated label events carry only an actual full pass for the
+    same head, instead of repeating builds or accepting skipped qualification jobs.
+    """
+    selected = select(event, paths)
+    mode = "full" if any(selected.values()) else "docs"
+    quick = False
+    if event == "pull_request":
+        pr = payload.get("pull_request", {})
+        approved = any(label.get("name") == APPROVAL for label in pr.get("labels", []))
+        action = payload.get("action")
+        if pr.get("draft"):
+            mode, selected = "draft", dict.fromkeys(OUTPUTS, False)
+        elif any(selected.values()):
+            if action in {"labeled", "unlabeled"} and payload.get("label", {}).get("name") != APPROVAL and approved:
+                mode, selected = "carry", dict.fromkeys(OUTPUTS, False)
+            elif approved:
+                mode, selected = "full", full()
+            else:
+                mode, selected, quick = "quick", dict.fromkeys(OUTPUTS, False), True
+    return {**{key: str(value).lower() for key, value in selected.items()},
+            "quick": str(quick).lower(), "mode": mode}
 
 
 def changed_paths(event: str, payload: dict, cwd: Path | None = None) -> list[str] | None:
@@ -83,10 +89,10 @@ def main() -> None:
     """Emit only fixed boolean keys to GitHub's output file; filenames never become commands."""
     event = os.environ["GITHUB_EVENT_NAME"]
     payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-    result = select(event, changed_paths(event, payload))
+    result = plan(event, payload, changed_paths(event, payload))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
         for key, value in result.items():
-            output.write(f"{key}={str(value).lower()}\n")
+            output.write(f"{key}={value}\n")
     print(json.dumps(result, sort_keys=True))
 
 

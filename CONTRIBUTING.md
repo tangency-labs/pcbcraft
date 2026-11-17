@@ -162,7 +162,7 @@ the behavior or failure path being changed. Verify the affected native/browser
 behavior when platform interaction changes; a passing check on one target does
 not establish behavior on another.
 
-Before submitting a code PR for review, run the broader workspace checks once
+Before requesting full CI approval for a code PR, run the broader workspace checks once
 after the coherent change is complete. These are submission checks, not a
 requirement before every local commit. Reuse results for unchanged code; after
 further edits, repeat affected checks and broaden them when shared behavior or a
@@ -178,9 +178,12 @@ cargo check --locked --profile ci -p pcbcraft-web --target wasm32-unknown-unknow
 The `ci` profile keeps debug assertions and overflow checks, uses line-table debug
 information for workspace code and optimizes dependencies. It leaves ordinary
 development/debugger builds unchanged. [Continuous integration](docs/continuous-integration.md)
-describes target selection, Windows coverage, cache ownership and optional runner
-labels. Full main, merge-group, nightly and manual runs retain the Windows suite;
-ordinary PRs select the native integration cases when relevant files change.
+describes the PR stages, Windows coverage, cache ownership and optional runner
+labels. Draft PRs skip CI. Ordinary code PR pushes receive repository checks and
+a quick compile; after review, `approved-for-ci` starts the full pre-merge suite.
+The `checks` result requires full qualification for code because this repository
+has no merge queue. Main, merge-group, nightly and manual runs also retain the
+full suite. Quick feedback alone does not establish merge readiness.
 
 The test suite includes loopback transport tests, so a sandbox that forbids local
 sockets cannot run the complete suite. Report that limitation rather than

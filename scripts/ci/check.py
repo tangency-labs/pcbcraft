@@ -3,7 +3,7 @@ import json
 import os
 
 JOBS = {"native-tests": "native", "windows-tests": "windows", "windows-smoke": "windows",
-        "web": "web", "geometry-webassembly": "wasi", "licenses": "licenses"}
+        "web": "web", "geometry-webassembly": "wasi", "licenses": "licenses", "quick-compile": "quick"}
 ALWAYS = ("changes", "documentation-links", "library-schemas")
 
 
@@ -19,6 +19,16 @@ def failures(needs: dict) -> list[str]:
             errors.append(f"missing/invalid selection: {key}")
     if outputs.get("windows_full") == "true" and outputs.get("windows") != "true":
         errors.append("full Windows validation was selected without its job")
+    mode = outputs.get("mode")
+    if mode not in {"docs", "quick", "full", "carry"}:
+        errors.append("missing/invalid CI stage")
+    full_keys = set(JOBS.values()) - {"quick"} | {"windows_full"}
+    if mode == "quick":
+        errors.append("Code changes need full qualification: add approved-for-ci after review.")
+    if mode == "full" and (any(outputs.get(key) != "true" for key in full_keys) or outputs.get("quick") != "false"):
+        errors.append("qualification requires every platform check")
+    if mode in {"docs", "carry"} and any(outputs.get(key) != "false" for key in full_keys | {"quick"}):
+        errors.append("non-build stages cannot select compiler jobs")
     for name, selection in JOBS.items():
         result = needs.get(name, {}).get("result")
         allowed = {"success"} if outputs.get(selection) == "true" else {"success", "skipped"}
@@ -28,7 +38,14 @@ def failures(needs: dict) -> list[str]:
 
 
 if __name__ == "__main__":
-    errors = failures(json.loads(os.environ["CI_NEEDS"]))
+    needs = json.loads(os.environ["CI_NEEDS"])
+    errors = failures(needs)
+    if not errors and needs["changes"]["outputs"]["mode"] == "full" and os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+        from qualification import require_current_approval
+        require_current_approval()
+    if not errors and needs["changes"]["outputs"]["mode"] == "carry":
+        from qualification import wait_for_pass
+        wait_for_pass()
     if errors:
         raise SystemExit("\n".join(errors))
     print("All selected checks passed.")

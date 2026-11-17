@@ -1,96 +1,85 @@
 # Continuous integration
 
-CI keeps the full native correctness suite on Linux for code changes and selects
-Windows integration work by changed paths. Main code pushes, merge groups, the
-daily 06:23 UTC schedule and manual runs execute the full validation set. The
-same workflow serves draft and ready PRs. The existing `checks` result remains
-the final status: it fails when a selected job fails, is cancelled, is missing or
-is unexpectedly skipped. A failure in selection or a cheap repository check
-also fails that result.
+PRs use staged validation so development pushes do not repeat the complete test
+suite. Drafts skip CI jobs. A ready PR runs repository checks and, for code
+changes, `cargo check --workspace` and formatting. It skips test execution,
+Clippy, Windows, browser packaging and WASI at this stage. Adding the
+`approved-for-ci` label starts full qualification; later pushes retain that
+approval and run full qualification again. Remove the label to return to quick
+feedback while revising a change.
 
-## Job selection
+## Qualification and merge readiness
 
-| Change/event | Validation |
+| Stage/event | Work |
 | --- | --- |
-| Known root Markdown/license files, Markdown under `docs/`, issue templates | Markdown, schemas, Python/Node script tests and CI policy tests; compiler jobs are skipped |
-| Known application/shared Rust packages | Full native Linux Clippy/tests and browser build; engine/geometry/units also select WASI |
-| Native app, storage, clipboard, library, transport or engine persistence entry points | The above and targeted Windows tests plus the real-window smoke |
-| Cargo manifests/lockfile, toolchain, workflows, scripts, vendored code, unknown paths or unavailable Git comparison | All jobs, including the complete Windows suite |
-| Main code push, merge group, nightly or manual workflow | All jobs, including complete Windows tests and the opt-in performance harness |
+| Draft PR | No CI jobs |
+| Ready PR, documentation only | Markdown, schemas and Python/Node repository checks |
+| Ready code PR without `approved-for-ci` | Repository checks, formatting and quick native compile |
+| Code PR with `approved-for-ci` | Full Linux and Windows Clippy/tests, performance harness, browser packaging, WASI, dependencies and Windows desktop smoke |
+| Main code push, merge group, nightly or manual workflow | Full qualification |
+| Unrelated label change on an approved PR | Repository checks and reuse of an actual full pass for the identical PR head and merge commit; no new build |
 
-Selection reads NUL-delimited Git paths with renames disabled so both old and
-new paths are checked. Invalid/missing revisions select all validation. Unknown
-packages, schemas, fixtures and configuration are deliberately conservative.
-The policy tests also scan current Windows-conditional Rust sources so adding a
-new platform-specific area requires selecting it. These tests run in the cheap
-repository job, before any selected target needs to complete.
+The quick compile reports its own result. The existing `checks` result represents
+merge readiness and remains unsuccessful for an unapproved code PR, with an
+explanation to add `approved-for-ci` after review. A quick green compile is not a
+full test pass. Documentation-only changes need no approval. Missing Git history,
+unknown files, fixtures and configuration require full qualification once approved;
+they receive a workspace compile in the earlier feedback stage.
 
-## Windows coverage
+PCBcraft currently has no configured merge queue or branch-protection rules.
+Unlike SolidCraft's affected-package approval stage followed by its full merge
+queue, approval here runs every platform before merge. The workflow gate does not
+create GitHub branch protection: requiring `checks` in a branch rule is a separate
+repository setting. Until then, contributors must wait for full `checks` before
+merging code; GitHub does not prevent an owner from merging around it.
 
-Ordinary relevant PRs run the complete storage, MCP, control, agent, units,
-geometry, CLI and chrome package tests. They also run engine persistence,
-clipboard and library families, plus app native-file, recent-project, clipboard,
-library/part editor, save/close, detached-view, native-keyboard, live MCP and
-Assistant process-launch cases. This retains the path alias, hidden lock-file,
-verbatim path, checkout line-ending and evidence regressions introduced by
-[#392](https://github.com/tangency-labs/pcbcraft/pull/392).
+Selection reads NUL-delimited Git paths with renames disabled, checking both sides
+of a rename. The aggregate rejects failed, cancelled, missing or unexpectedly
+skipped jobs and malformed stage outputs. Unrelated labels cannot turn skipped
+jobs into a qualifying pass. Their read-only waiter accepts only an existing
+successful run with every full job successful, the identical head SHA and the
+identical checked-out merge SHA recorded in the run title. It waits for an existing
+run for at most an hour, never starts another build, and fails closed on API errors,
+revoked approval, stale revisions or missing results. An approval-label event or
+a new push supersedes prior PR work; other labels cannot cancel a real build.
 
-General editor/model cases and feature-enabled performance-harness tests remain
-in the full Linux PR suite and the full Windows main/nightly/manual runs. Full
-Windows runs also retain both Windows Clippy passes. No Rust test is deleted or
-newly ignored. Windows checkouts still use `core.autocrlf=true`; the existing Git
-attributes continue to protect recorded evidence bytes. Python and diagnostic
-page tests also execute on Windows whenever its job is selected.
+## Windows and build settings
 
-The build job stages the existing `native_window_lifecycle` integration-test
-executable from Cargo's JSON artifact output. A separate `windows-latest` job
-downloads it and runs its one normally opt-in test against real native windows
-and the DX12/FXC backend. The smoke checks frame delivery, child/root lifetimes
-and cancellation/close behavior, with an external 180-second deadline. A zero-test
-run or nonzero exit fails. Only the owned process is terminated on timeout.
-This adds an OS-window boundary to the previous headless suite; it is not an
-endurance, physical input-latency or full product-startup qualification.
+Full qualification retains the entire Windows workspace suite, both Clippy
+passes and the opt-in performance harness. No Rust test is deleted or newly
+ignored. Windows checkouts keep `core.autocrlf=true` and existing Git attributes
+protect evidence bytes. Python and diagnostic-page regressions run on Windows too.
 
-## Build profile and caches
+The build job stages the existing `native_window_lifecycle` test from Cargo's JSON
+artifact output. A separate `windows-latest` job runs that normally opt-in test
+against native windows with DX12/FXC and a 180-second deadline. Zero tests and
+nonzero exits fail. Only the owned process is killed on timeout. This tests frame
+delivery, child/root lifetimes and close cancellation; it does not qualify
+endurance, physical input latency or full product startup.
 
-`--profile ci` inherits development behavior, keeps debug assertions and overflow
-checks, disables incremental compilation, uses optimization level 1 for workspace
-code and level 2 for dependencies, and emits only line-table debug data for the
-workspace. Dependencies omit debug data. There is no CI LTO; the shipping release
-profile remains separate. Developers can still use the ordinary profiles for a
-full debugger session or the release profile for performance measurements.
+`--profile ci` retains assertions and overflow checks, disables incremental builds,
+uses optimization level 1 and line-table debug data for workspace code, and level
+2 without debug data for dependencies. Shipping release and ordinary development
+profiles are unchanged. Linux, Windows, browser and WASI have separate cache keys;
+only main saves caches, while PRs restore them. New keys initially compile cold.
 
-Linux, Windows, browser and WASI use separate Rust cache keys with a CI-profile
-prefix and workspace artifacts included. Only runs on main save those caches;
-PRs restore without uploading their own build outputs. New PR pushes cancel
-superseded PR work. Main, scheduled and manual runs use separate concurrency
-groups, and running jobs are allowed to finish so they can populate the caches. Reruns use their own group
-and cannot cancel a newer PR run.
-
-Default runners remain `ubuntu-latest` and `windows-latest`. Repository variables
-`CI_RUNNER` and `CI_RUNNER_WINDOWS` can select provisioned build runners, including
-Blacksmith labels. Custom Windows build runners must produce x64 MSVC executables
-compatible with `windows-latest`. The desktop smoke always uses GitHub's Windows runner because
-it needs a presenting desktop session. `CI_BUILD_JOBS` defaults to four and
-`CI_BUILD_JOBS_WINDOWS` to two; these can be adjusted for provisioned resources.
-No provider credentials, runner subscriptions or branch-protection settings are
-changed by this workflow.
+Default runners remain `ubuntu-latest` and `windows-latest`. `CI_RUNNER` and
+`CI_RUNNER_WINDOWS` can select provisioned build runners; custom Windows builds
+must produce x64 MSVC executables compatible with `windows-latest`. Desktop smoke
+always uses GitHub's presenting Windows desktop. `CI_BUILD_JOBS` defaults to four,
+and `CI_BUILD_JOBS_WINDOWS` to two. Runner subscriptions and credentials are not
+changed here.
 
 ## Evidence and scope
 
-The completed [baseline run 44153702095](https://github.com/tangency-labs/pcbcraft/actions/runs/44153702095)
-used the previous workflow on `3fb2207`. Its Windows job took 35.4 minutes: 27.1
-minutes in the workspace test step and 3.5 minutes saving the cache. App test
-execution was 723.43 seconds and engine execution 571.53 seconds; compilation
-was part of the broader test step. Linux's combined check job took 20.2 minutes.
-These are observations of one hosted run, not controlled cold/warm comparisons
-or a predicted saving for the new workflow.
+The previous [baseline run](https://github.com/tangency-labs/pcbcraft/actions/runs/44153702095)
+on `3fb2207` took 35.4 minutes on Windows, including 27.1 minutes in workspace tests
+and 3.5 minutes saving the cache. Its Linux job took 20.2 minutes. These are single
+hosted observations, not a controlled comparison or a promised improvement.
 
-This implementation is separate from the investigation and container/baseline
-work in [#399](https://github.com/tangency-labs/pcbcraft/issues/399). It changes
-profile settings, selection and scheduling; the first run of the new cache keys
-is expected to compile without a populated main cache. Hosted durations and
-Windows desktop execution must be assessed from the new workflow's actual run.
-Local Linux tests cannot certify the Windows runner. Workflow syntax is checked
-with actionlint, while policy tests exercise missing history, renames, unknown
-paths, cancelled/skipped work, native-smoke timeout and zero-test refusals.
+This PR reduces how often expensive validation runs; a faster full cold build has
+not been established. It is separate from the investigation/container work in
+[#399](https://github.com/tangency-labs/pcbcraft/issues/399). Policy tests exercise
+stages, label transitions, missing history, renames, unknown fixtures, strict
+completion and qualification reuse. Local Linux tests cannot certify Windows
+execution; that boundary requires an actual full hosted run.
