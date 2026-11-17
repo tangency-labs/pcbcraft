@@ -23,8 +23,41 @@ fn differences(old: Value, new: Value) -> Vec<String> {
     compare("schematic.synthetic", &contract_of(&command(old)), &contract_of(&command(new))).iter().map(ToString::to_string).collect()
 }
 
-/// The committed snapshot matches what discovery describes: a breaking change fails here until
-/// `COMMAND_API_VERSION` is raised, and any other change until the snapshot is refreshed.
+/// Guarded schema differences are breaking against a retained snapshot, including after a head
+/// rewrite. Check exact diagnostics, both sections and the raised-version route through the real
+/// comparator; this helper does not validate instances against JSON Schema.
+fn assert_unevaluated_comparison(old: &Value, new: &Value) -> Vec<Change> {
+    let old_command = command(old.clone());
+    let new_command = command(new.clone());
+    let changes = compare("schematic.synthetic", &contract_of(&old_command), &contract_of(&new_command));
+    assert!(!changes.is_empty(), "{old} -> {new}: no diagnostic");
+    assert!(changes.iter().all(|change| change.breaking), "{changes:?}");
+    assert!(changes.iter().any(|change| change.what.ends_with("evaluation context is unknown)")), "{changes:?}");
+    assert!(compare("schematic.synthetic", &contract_of(&old_command), &contract_of(&old_command)).is_empty());
+    let expected: Vec<String> = changes.iter().map(ToString::to_string).collect();
+    let mut expected_problems = expected.clone();
+    expected_problems.push("raise COMMAND_API_VERSION above 1 if this break is intended, or keep the old contract".to_owned());
+    for section in SNAPSHOT_SECTIONS {
+        let mut base = json!({"command_api_version": 1, "commands": {}, "window_commands": {}});
+        base[*section] = json!({"schematic.synthetic": contract_of(&old_command)});
+        assert_eq!(check_snapshot(&base, section, std::slice::from_ref(&old_command), 1), Ok(()));
+        let Err(SnapshotMismatch::Breaking(problems)) = check_snapshot(&base, section, std::slice::from_ref(&new_command), 1) else {
+            panic!("the unchanged snapshot did not refuse the annotation-context change")
+        };
+        assert_eq!(problems, expected_problems);
+        let mut head = base.clone();
+        head[*section] = json!({"schematic.synthetic": contract_of(&new_command)});
+        assert_eq!(check_snapshot(&head, section, std::slice::from_ref(&new_command), 1), Ok(()));
+        assert_eq!(compare_snapshots(&base, &head).unwrap_err(), expected_problems);
+        head["command_api_version"] = json!(2);
+        assert_eq!(compare_snapshots(&base, &head).unwrap(), expected);
+    }
+    changes
+}
+
+/// Against an unchanged committed snapshot, a detected breaking difference requires a higher
+/// `COMMAND_API_VERSION`; other detected differences request a refreshed snapshot. A same-commit
+/// rewrite needs the separate comparison against a retained prior snapshot.
 #[test]
 fn every_command_matches_the_committed_snapshot() {
     let snapshot: Value = serde_json::from_str(SNAPSHOT).unwrap();
@@ -332,13 +365,12 @@ fn breaking_changes_are_labelled_breaking() {
     assert_eq!(changes, [Change { breaking: true, what: "`window.synthetic` scope: changed from \"window\" to \"pane\"".to_owned() }]);
 }
 
-/// Every row of the rule table in `compare`'s documentation (and docs/mcp.md), tried in every
-/// place a schema can sit: as a parameter, inside `items`, inside a schema-valued
-/// `additionalProperties` and as an `anyOf` alternative it keeps its label; under `oneOf`, `not`,
-/// `if`, `then`, `else`, `allOf` and anywhere in a schema containing a reference it is breaking.
-/// Referenced targets include definitions, properties, array items and alternatives.
+/// Every row of the rule table in `compare`'s documentation (and docs/mcp.md), tried at the
+/// parameter root and the nested positions listed below. Local labels hold in positive positions;
+/// `oneOf`, negation, conditionals and `allOf` make changes breaking, as does the conservative
+/// whole-parameter guard for references or unevaluated keywords.
 #[test]
-fn every_rule_holds_wherever_the_schema_sits() {
+fn every_rule_holds_in_the_listed_schema_positions() {
     let open = |properties: Value| json!({"type": "object", "properties": properties});
     let closed = |properties: Value| json!({"type": "object", "properties": properties, "additionalProperties": false});
     let mut rows: Vec<_> = vec![
@@ -514,6 +546,10 @@ fn every_rule_holds_wherever_the_schema_sits() {
         ),
         ("as an anyOf alternative", |s| json!({"type": "object", "properties": {"p": {"anyOf": [s]}}, "additionalProperties": false}), false),
         ("as a oneOf alternative", |s| json!({"type": "object", "properties": {"p": {"oneOf": [s]}}, "additionalProperties": false}), true),
+        ("with unevaluated properties", |s| json!({"anyOf": [s], "unevaluatedProperties": false}), true),
+        ("with unevaluated items", |s| json!({"anyOf": [s], "unevaluatedItems": false}), true),
+        ("with nested unevaluated properties", |s| json!({"properties": {"p": {"anyOf": [s], "unevaluatedProperties": false}}}), true),
+        ("with nested unevaluated items", |s| json!({"items": {"anyOf": [s], "unevaluatedItems": false}}), true),
         ("under not", |s| json!({"type": "object", "properties": {"p": {"not": s}}, "additionalProperties": false}), true),
         ("under if", |s| json!({"type": "object", "properties": {"p": {"if": s, "then": {}}}, "additionalProperties": false}), true),
         ("under then", |s| json!({"type": "object", "properties": {"p": {"if": {}, "then": s}}, "additionalProperties": false}), true),
@@ -558,6 +594,75 @@ fn every_rule_holds_wherever_the_schema_sits() {
             assert!(changes.iter().any(|change| change.breaking == expected), "{row} {place}: {changes:?}");
             assert!(changes.iter().all(|change| change.breaking == expected), "{row} {place}: {changes:?}");
         }
+    }
+}
+
+/// A locally looser alternative can lose evaluated-property or evaluated-item annotations. The
+/// unchanged unevaluated restriction makes these changes breaking, also in nested schemas and
+/// against a retained base after either head snapshot section is rewritten.
+#[test]
+fn unevaluated_contexts_make_annotation_changes_breaking() {
+    for (old, new) in [
+        (
+            json!({"type": "object", "anyOf": [{"properties": {"p": true}}], "unevaluatedProperties": false}),
+            json!({"type": "object", "anyOf": [true], "unevaluatedProperties": false}),
+        ),
+        (
+            json!({"type": "array", "anyOf": [{"prefixItems": [true]}], "unevaluatedItems": false}),
+            json!({"type": "array", "anyOf": [true], "unevaluatedItems": false}),
+        ),
+    ] {
+        for container in [None, Some("items"), Some("additionalProperties"), Some("properties")] {
+            let wrap = |schema: &Value| match container {
+                None => schema.clone(),
+                Some("properties") => json!({"properties": {"p": schema}}),
+                Some(key) => json!({key: schema}),
+            };
+            let changes = assert_unevaluated_comparison(&wrap(&old), &wrap(&new));
+            assert_eq!(changes.len(), 1, "{container:?}: {changes:?}");
+            assert!(changes[0].what.contains(".anyOf[0]: changed from"), "{changes:?}");
+        }
+    }
+}
+
+/// The conservative unevaluated guard inspects either endpoint, keeps unequal empty-map changes
+/// visible and includes nested/data occurrences rather than promising annotation-aware precision.
+#[test]
+fn unevaluated_contexts_keep_empty_maps_and_local_relaxations_breaking() {
+    for keyword in ["unevaluatedProperties", "unevaluatedItems"] {
+        for (old, new) in [
+            (json!({keyword: false, "required": ["p"]}), json!({"required": []})),
+            (json!({"required": ["p"]}), json!({keyword: false, "required": []})),
+        ] {
+            let changes = assert_unevaluated_comparison(&old, &new);
+            assert_eq!(changes.len(), 2, "{keyword}: {changes:?}");
+            assert!(changes.iter().any(|change| change.what.contains("params.required: no longer requires `p`")), "{changes:?}");
+        }
+        for empty_map in ["properties", "$defs", "definitions"] {
+            for container in [None, Some("items"), Some("additionalProperties")] {
+                let wrap = |schema: Value| match container {
+                    None => schema,
+                    Some(key) => json!({key: schema}),
+                };
+                let with = wrap(json!({keyword: false, empty_map: {}}));
+                let without = wrap(json!({keyword: false}));
+                for (old, new) in [(&with, &without), (&without, &with)] {
+                    let changes = assert_unevaluated_comparison(old, new);
+                    assert_eq!(changes.len(), 1, "{keyword} {empty_map} {container:?}: {changes:?}");
+                    assert_eq!(
+                        changes[0].what,
+                        format!(
+                            "`schematic.synthetic` params: changed from {old} to {new} (schema contains unevaluatedProperties or unevaluatedItems; evaluation context is unknown)"
+                        )
+                    );
+                }
+            }
+        }
+        let old = json!({"type": "string", "examples": [{keyword: false}]});
+        let new = json!({"type": ["string", "null"], "examples": [{keyword: false}]});
+        let changes = assert_unevaluated_comparison(&old, &new);
+        assert_eq!(changes.len(), 1, "{keyword}: {changes:?}");
+        assert!(changes[0].what.contains("params.type:"), "{changes:?}");
     }
 }
 

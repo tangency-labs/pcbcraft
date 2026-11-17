@@ -1775,9 +1775,9 @@ mod live {
             assert!(!pcbcraft_engine::catalog().iter().any(|command| pcbcraft_mcp::is_window_command(command.id)));
         }
 
-        /// Window and UI input commands are snapshotted beside engine commands, so a breaking
-        /// change to one fails here until the command API version is raised, and any other
-        /// change until the snapshot is refreshed.
+        /// Window and UI input commands are compared with the committed snapshot. Against an
+        /// unchanged snapshot, detected breaking differences require a higher API version and
+        /// other detected differences request a refresh; a rewrite needs prior-snapshot comparison.
         #[test]
         fn window_commands_match_the_committed_snapshot() {
             use pcbcraft_engine::command_api::{COMMAND_API_VERSION, SnapshotMismatch, check_snapshot};

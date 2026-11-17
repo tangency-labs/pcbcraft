@@ -9,8 +9,10 @@
 //! native file-format number, and none is saved in projects.
 //!
 //! `docs/schemas/command-contracts.json` snapshots every command's contract. [`check_snapshot`]
-//! compares the described commands with it and labels each difference compatible or breaking
-//! ([`compare`]); a breaking one fails until `COMMAND_API_VERSION` is raised.
+//! compares the described commands with it and labels detected differences compatible or breaking
+//! ([`compare`]). Against an unchanged snapshot, a detected breaking difference requires a higher
+//! `COMMAND_API_VERSION`. A same-commit snapshot rewrite needs comparison with a retained prior
+//! snapshot through [`compare_snapshots`]; neither check detects behavior absent from the schemas.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -139,14 +141,18 @@ const WHOLE: &[&str] = &["not", "allOf", "$ref", "if", "then", "else", "patternP
 /// Restrictions: dropping one accepts more; adding or changing one may refuse a valid call.
 const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 
-/// Every difference between the `old` and `new` contract of the command `id`, labelled.
+/// Detected differences between the `old` and `new` contract of the command `id`, labelled.
 ///
 /// A difference is compatible when every call valid under `old` stays valid with the same meaning
 /// as far as the schema can tell; otherwise it is breaking. If either parameter schema contains
 /// `$ref`, `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively breaking:
 /// an unchanged reference can target any location, including one used under `not`. Unequal
 /// referenced schemas with no child diagnostic are reported as a whole (an empty map can be
-/// a reference target too). Without references the rules below apply by keyword, at every depth:
+/// a reference target too). The same conservative treatment applies if either schema contains
+/// `unevaluatedProperties` or `unevaluatedItems`: a locally looser alternative can stop evaluating
+/// a property or item, so an unchanged outer restriction can refuse a formerly valid call. These
+/// scans include data values too, which can only cause extra breaking labels. Without references
+/// or unevaluated keywords the rules below apply by keyword, at every depth:
 /// - `properties`: an added parameter is compatible only when the old object refused unknown
 ///   names (`additionalProperties: false` and no `patternProperties`), since otherwise a call
 ///   could already pass that name with any value; whether it is required is `required`'s
@@ -194,18 +200,21 @@ pub fn compare(id: &str, old: &Value, new: &Value) -> Vec<Change> {
             let new = after.unwrap_or(&Value::Bool(true));
             let first = changes.len();
             schema(&mut Walk { id, out: &mut changes }, key, old, new);
-            if has_reference(old) || has_reference(new) {
+            let context = if has_reference(old) || has_reference(new) {
+                Some("schema contains a reference; target context is unknown")
+            } else if has_unevaluated(old) || has_unevaluated(new) {
+                Some("schema contains unevaluatedProperties or unevaluatedItems; evaluation context is unknown")
+            } else {
+                None
+            };
+            if let Some(context) = context {
                 if changes.len() == first {
-                    Walk { id, out: &mut changes }.push(
-                        true,
-                        key,
-                        format!("changed from {old} to {new} (schema contains a reference; target context is unknown)"),
-                    );
+                    Walk { id, out: &mut changes }.push(true, key, format!("changed from {old} to {new} ({context})"));
                 }
                 for change in &mut changes[first..] {
                     if !change.breaking {
                         change.breaking = true;
-                        change.what.push_str(" (schema contains a reference; target context is unknown)");
+                        change.what.push_str(&format!(" ({context})"));
                     }
                 }
             }
@@ -244,7 +253,8 @@ fn accepts_all(value: Option<&Value>) -> bool {
 
 /// Compare two schemas at `path`. Booleans and non-objects are compared as a whole: loosening to
 /// accept everything is compatible unless the old schema carries a `default` (dropping it may
-/// change what an omitted value means); anything else that differs is breaking.
+/// change what an omitted value means); anything else that differs is breaking. [`compare`]
+/// promotes these local labels when references or unevaluated keywords make context unknown.
 fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
     if old == new {
         return;
@@ -359,6 +369,18 @@ fn has_reference(value: &Value) -> bool {
             object.keys().any(|key| matches!(key.as_str(), "$ref" | "$dynamicRef" | "$recursiveRef")) || object.values().any(has_reference)
         }
         Value::Array(items) => items.iter().any(has_reference),
+        _ => false,
+    }
+}
+
+/// Whether unevaluated properties or items can depend on annotations from another schema.
+/// The recursive scan also includes data values, conservatively rejecting extra changes.
+fn has_unevaluated(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.keys().any(|key| matches!(key.as_str(), "unevaluatedProperties" | "unevaluatedItems")) || object.values().any(has_unevaluated)
+        }
+        Value::Array(items) => items.iter().any(has_unevaluated),
         _ => false,
     }
 }
@@ -525,9 +547,10 @@ pub fn check_snapshot(snapshot: &Value, section: &str, described: &[Value], api_
 /// The sections of a contract snapshot that list commands.
 pub const SNAPSHOT_SECTIONS: &[&str] = &["commands", "window_commands"];
 
-/// Compare two committed contract snapshots, `base` (for example the target branch's) and `head`
-/// (the change's), so that a breaking change committed together with a rewritten snapshot is
-/// still seen. Returns every difference, compatible and breaking, labelled as [`compare`] does.
+/// Compare two committed contract snapshots against a retained `base`, so rewriting `head` does
+/// not erase differences that [`compare`] detects against that base. On success, returns the
+/// detected compatible and breaking differences; on failure, returns comparison problems. Only
+/// recorded contracts are compared, not behavior absent from their schemas.
 ///
 /// # Errors
 ///

@@ -215,13 +215,18 @@ command in `commands` (project commands) and `window_commands` (window and
 `title`, `summary` and `description` of the command and its schemas, with
 object keys sorted (values of `const`, `default`, `enum` and `examples` are
 kept whole). The engine and app tests compare the described commands with it
-and label every difference. If either parameter schema contains `$ref`,
+and label detected differences. If either parameter schema contains `$ref`,
 `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively
 breaking: an unchanged reference may reach any target, including a property
 or array item used under `not` elsewhere. The classifier does not resolve
-reference targets or their polarity. If unequal referenced schemas produce no
-child diagnostic (for example, removing an empty map that is a reference
-target), it reports the whole schema as breaking. Without references, the rules are:
+reference targets or their polarity. The same conservative treatment applies
+if either schema contains `unevaluatedProperties` or `unevaluatedItems`, even
+nested: a locally looser alternative can stop evaluating a property or item,
+so an unchanged outer restriction can refuse a formerly valid call. Both
+scans also include data values, which can cause extra breaking labels. If
+unequal schemas in these guarded contexts produce no child diagnostic (for
+example, removing an empty map), the whole schema is reported as breaking.
+Without references or unevaluated keywords, the rules are:
 
 - compatible, when every call the old schema accepted is still accepted: a
   command added, an optional parameter added to an object that refuses
@@ -247,9 +252,11 @@ target), it reports the whole schema as breaking. Without references, the rules 
   `dependentSchemas`, `dependencies`), and any change under a keyword without
   a rule.
 
-The rules apply at every depth of a schema. A breaking difference fails the
-tests until `COMMAND_API_VERSION` is raised; then, as for any compatible
-difference, the failing test prints the section to copy into the snapshot.
+The rules apply at every depth of a schema. Against an unchanged snapshot,
+a detected breaking difference fails the tests until `COMMAND_API_VERSION`
+is raised. After the raise, or for other detected differences, the failing
+test prints the section to copy into the snapshot. Rewriting a snapshot in
+the same commit instead needs comparison with a retained prior snapshot.
 The snapshot drops a removed command; an id that comes back later is an
 addition.
 
@@ -258,15 +265,17 @@ result or meaning, and a stricter check the schema does not express need the
 same explicit decision with no failing test to prompt it; and they cannot tell
 whether a new default keeps the old behaviour. They also compare the code with
 the snapshot in the same commit, so a breaking change committed together with
-a rewritten snapshot passes them. For that case, CI on a pull request also
-compares the merge base's `command-contracts.json` with the pull request's,
-with the same classifier (the `command_contracts_against_base` example of
-`pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
-command_contracts_against_base -- BASE.json HEAD.json`): it fails when a
-command is removed or changed in a breaking way in either section and
-`command_api_version` was not raised, or when the version falls. It sees only
-what the snapshot records, so a changed meaning still needs review, and it
-cannot tell whether a raise was the right decision; a review must still read
+a rewritten snapshot passes them. When the merge base has a snapshot, CI on
+a pull request also compares that `command-contracts.json` with the pull
+request's, with the same classifier (the `command_contracts_against_base`
+example of `pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
+command_contracts_against_base -- BASE.json HEAD.json`): it fails when the
+classifier detects a breaking difference in either section without a raised
+`command_api_version`, or when the version falls. If the merge base has no
+snapshot, the workspace tests check the first snapshot against discovery
+instead. The cross-revision check sees only recorded contracts, so a changed
+meaning still needs review, and it cannot tell whether a raise was the right
+decision; a review must still read
 every change to `command-contracts.json`.
 
 ## Headless MCP

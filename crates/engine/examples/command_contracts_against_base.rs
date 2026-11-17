@@ -1,9 +1,9 @@
 //! Compare two command contract snapshots: `command_contracts_against_base BASE.json HEAD.json`.
 //!
-//! CI runs it with the target branch's `docs/schemas/command-contracts.json` as BASE and the
-//! change's as HEAD, so a breaking change committed together with a rewritten snapshot fails
-//! unless the change also raises the command API version. It prints every difference and exits
-//! with status 1 on a problem, 2 on unreadable input.
+//! If the pull request's merge base contains `docs/schemas/command-contracts.json`, CI compares
+//! it with the change's snapshot. A detected breaking difference requires a higher command API
+//! version. Success prints reported changes; failure prints comparison problems. Exit status
+//! is 1 for a comparison failure, 2 for unreadable input or incorrect arguments.
 
 use std::process::ExitCode;
 
