@@ -55,6 +55,14 @@ its folder again. A saved project retains its pinned definitions and opens
 without reopening the library. There is no separate session-upload group or
 Upload bundle entry point.
 
+**Export** (in the ribbon's Share group) writes the library selected in the tree to one
+`pcbcraft-library-bundle/1` file containing its original native documents, including
+`library.json` with the license. Desktop saves to a new file and never replaces an
+existing one; the browser downloads the file. Export doesn't change the library or any
+project and doesn't collect records from other libraries: the completion notice names
+other libraries the bundle depends on and any dependency that doesn't resolve. Project
+pins aren't exportable libraries.
+
 **Remove** forgets the registration/cache and leaves its files intact. **Delete library**
 is desktop-only for writable registered folders. Its confirmation names the
 folder, counts native item revisions and explains that projects keep their
@@ -251,7 +259,7 @@ and `placement: "here"`, `"beside"` or `"window"`. `inspect_editor` reports
 Type, query and selected exact key. `app.library_browse` changes those view-only
 choices; `type` is 0 All, 1 Symbol, 2 Footprint, 3 Generic part, 4 Orderable part.
 `app.library_source` uses the same source actions as the ribbon: `add`, `refresh`,
-`relocate`, `remove`, `delete`, and desktop `new` (a metadata form and folder picker). Add/relocate open host pickers, and Delete retains
+`relocate`, `remove`, `delete`, `export`, and desktop `new` (a metadata form and folder picker). Add/relocate/export open host pickers, and Delete retains
 the ordinary confirmation. Source folder I/O never runs on the editor thread.
 
 `app.library_catalog_edit` addresses a Parts Library `view` and opens its selected
