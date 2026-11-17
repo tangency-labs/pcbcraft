@@ -48,12 +48,15 @@ Board inspection includes `net_assignment` when authored, `assignment_mode`,
 pad contact; an assignment alone never makes it true. A conflicting island has
 no single resolved display net, while DRC retains its complete conflicting intent.
 
-**pcbcraft-board/22** stores optional `net_assignment` objects on vias, containing
+**pcbcraft-board/24** stores optional `net_assignment` objects on vias, containing
 `project`, `scope` and `net`. The address is omitted in Automatic mode; explicit
-null and nil identities are rejected. This version is selected only while an
-assignment exists, and older headers reject the vocabulary. No derived island
-membership or duplicate netlist is saved. Automatic-only legacy projects retain
-their previous native encoding, and unchanged native Save/Open preserves bytes.
+null and nil identities are rejected. This version requires at least one
+assignment and accepts optional assembly profile adoptions and extended stack
+fields. Earlier headers, including assembly-profile board/22 and stack board/23,
+reject via intent. No derived island membership or duplicate netlist is saved.
+Clearing the last assignment restores the format required by remaining authored
+data. Automatic-only legacy projects retain their previous native encoding,
+and unchanged native Save/Open preserves bytes.
 
 **pcbcraft-clipboard/4** carries explicit targets. Copy, duplication and relocation
 within the same board preserve those addresses. Foreign destinations or foreign

@@ -393,6 +393,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// Project/24 and project/39 require a nonempty part-group catalog. Expanded memberships use
 /// board-owned instances/5, and compact memberships use instances/7 with a bounded UUID dictionary.
 /// Project/36 requires pinned assembly profiles and allows either group membership encoding.
+/// Board format 24 requires explicit via intent and accepts optional extended stack fields
+/// and assembly profile adoptions. Earlier headers refuse via intent.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
@@ -909,7 +911,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     profile_catalog.validate(board.assembly_profiles.as_deref().unwrap_or_default())?;
     let originated = board.format == ORIGIN_BOARD_FORMAT;
-    if (originated && board.placement_origin.is_none()) || (!assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some()) {
+    if (originated && board.placement_origin.is_none())
+        || (!assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
+    {
         return Err("board.json: a placement origin requires format 21, 22, 23 or 24, and format 21 requires a placement origin.".into());
     }
     if let Some(origin) = &board.placement_origin {
@@ -1122,9 +1126,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (ASSIGNED_VIA_BOARD_FORMAT | STACK_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => {
-            Some(decode_setup(&value, false)?)
-        }
+        (
+            ASSIGNED_VIA_BOARD_FORMAT | STACK_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT,
+            Some(value),
+        ) => Some(decode_setup(&value, false)?),
         (ASSIGNED_VIA_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
@@ -1163,7 +1168,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
     if (stacked && !stack_fields) || (!assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23 or 24, which require at least one of them.".into());
+        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23 or 24; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -2120,7 +2125,8 @@ impl DocumentsEncoder {
 
 /// Keep legacy bytes until authored content requires a newer format. Select the highest
 /// applicable format: copper roles, base copper, copper thickness qualifiers or finished board
-/// thickness require 23; assembly profile adoptions at least 22; a placement origin at least 21;
+/// thickness require 23; explicit via intent requires 24 and accepts those stack fields and
+/// assembly profile adoptions. Profile adoptions alone require 22; a placement origin at least 21;
 /// zone outlines at least 20; validated board rules at least 19; and authored copper locks
 /// at least 18. Each format accepts earlier fields. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
@@ -2153,7 +2159,8 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         let format = if board.vias.iter().any(|via| via.net_assignment.is_some()) {
             ASSIGNED_VIA_BOARD_FORMAT
         } else if setup.requires_stack_format() {
-            STACK_BOARD_FORMAT        } else if !board.assembly_profiles.is_empty() {
+            STACK_BOARD_FORMAT
+        } else if !board.assembly_profiles.is_empty() {
             PROFILE_BOARD_FORMAT
         } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
