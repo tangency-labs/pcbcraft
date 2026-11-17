@@ -70,7 +70,9 @@ pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacit
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant. The
 [schematic keyboard shortcuts](keyboard-shortcuts.md) page inventories the
-schematic bindings with their focus and selection conditions.
+schematic bindings with their focus and selection conditions; the
+[board keyboard shortcuts](board-keyboard-shortcuts.md) page does the same for
+the PCB editor, whose keys deliberately reuse several letters differently.
 Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
 same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
 bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).
