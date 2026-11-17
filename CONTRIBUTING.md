@@ -170,10 +170,17 @@ concrete failure warrants it:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-cargo check --locked -p pcbcraft-web --target wasm32-unknown-unknown
+cargo clippy --locked --profile ci --workspace --all-targets -- -D warnings
+cargo test --locked --profile ci --workspace
+cargo check --locked --profile ci -p pcbcraft-web --target wasm32-unknown-unknown
 ```
+
+The `ci` profile keeps debug assertions and overflow checks, uses line-table debug
+information for workspace code and optimizes dependencies. It leaves ordinary
+development/debugger builds unchanged. [Continuous integration](docs/continuous-integration.md)
+describes target selection, Windows coverage, cache ownership and optional runner
+labels. Full main, merge-group, nightly and manual runs retain the Windows suite;
+ordinary PRs select the native integration cases when relevant files change.
 
 The test suite includes loopback transport tests, so a sandbox that forbids local
 sockets cannot run the complete suite. Report that limitation rather than
