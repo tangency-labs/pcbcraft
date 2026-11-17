@@ -82,6 +82,7 @@ pub struct GeometryError {
 }
 
 impl GeometryError {
+    /// An error with its code and a message that names the reason.
     pub(crate) fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self { code, message: message.into() }
     }

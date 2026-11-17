@@ -60,7 +60,8 @@ could later move into an engine module if that proves simpler.
 - **Panic guard.** Every kernel operation the crate calls (make, measure, read,
   write) runs under a guard that turns a panic into
   the error `kernel_internal`, adapted from SolidCraft's kernel boundary. The
-  reader refuses only the solid whose conversion panicked and keeps the others.
+  reader refuses only the solid whose conversion panicked and keeps the others
+  (no test reaches this: no valid input makes that conversion panic).
   `kernel_crash_test()` lets a diagnostics command prove the guard works.
   Dropping a body frees its kernel data outside the guard.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
@@ -114,12 +115,12 @@ At SolidCraft revision `73bdb6c`:
 | Body names with an apostrophe, a backslash, non-ASCII characters and leading or trailing spaces | read back unchanged |
 | An empty body name; part names `board.STEP`, `board.stp.STEP`, `board.step.stp`, `.step`, blank | the body reads back with its part's name; the part name loses its trailing `.step` suffixes and then its trailing `.stp` suffixes (any case), so `board.step.stp` becomes `board.step`; a part name left empty or blank is written as `Part` |
 | 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
-| Writing the same bodies twice | identical bytes |
+| Writing the same bodies twice | identical bytes, with an empty time stamp in the header |
 | The crate on `wasm32-wasip1` (no kernel) | making, reading and the crash test give `kernel_unavailable`; refused arguments keep `invalid_params` and `model_unreadable` |
 | Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
 | A kernel failure while making a body's STEP record (injected: no valid body fails there) | a caught kernel panic stays `kernel_internal`; a record the kernel refuses is `operation_failed` |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
-| A solid whose surfaces use an unsupported entity | that solid refused with `model_unsupported_entity` and its entity number |
+| Two solids, one with a surface of an unsupported entity | that solid refused with `model_unsupported_entity`, its own entity number and the surface's name; the other read |
 | Non-positive sizes, coordinates out of range, names with control characters, nothing to write | `invalid_params` |
 
 The automated checks are the unit tests in `crates/geometry/src/tests.rs`.
