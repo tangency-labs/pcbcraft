@@ -39,7 +39,9 @@ impl Catalog {
                 if reference.library != native.library {
                     external.insert(reference.library.clone());
                 }
-                if let Err(error) = self.exact(&reference, kind) {
+                // A category is only usable when its field definitions don't conflict, too.
+                let found = if kind == Kind::Category { self.category(&reference).map(drop) } else { self.exact(&reference, kind).map(drop) };
+                if let Err(error) = found {
                     unavailable.push(format!("{}: {error}", item.file));
                 }
             }
@@ -130,6 +132,22 @@ mod tests {
         install(&mut catalog, "demo", &documents("footprints/resistor-0603.json"));
         let report = catalog.export_bundle("demo").unwrap().report;
         assert!(report.contains("Unavailable dependencies: parts/resistor.json: Unavailable Footprint"), "{report}");
+    }
+
+    /// A category whose field meaning conflicts with another library's can't be used, so it is
+    /// reported even though its record is present.
+    #[test]
+    fn export_reports_a_category_with_conflicting_fields() {
+        let mut catalog = Catalog::default();
+        let docs = documents("");
+        install(&mut catalog, "demo", &docs);
+        let mut category: serde_json::Value = serde_json::from_str(&docs["categories/resistor.json"]).unwrap();
+        category["id"] = "incompatible-field".into();
+        category["fields"]["pcbcraft:resistance"]["value_type"] = json!({"type": "quantity", "quantity": "voltage", "unit": "V"});
+        let other = Documents::from([("library.json".into(), docs["library.json"].clone()), ("categories/other.json".into(), category.to_string())]);
+        install(&mut catalog, "other", &other);
+        let report = catalog.export_bundle("demo").unwrap().report;
+        assert!(report.contains("parts/resistor.json: Conflicting type definitions for category field pcbcraft:resistance"), "{report}");
     }
 
     /// Files that load as individual problems can still escape past the transport limit.
