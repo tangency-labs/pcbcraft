@@ -31,6 +31,10 @@ fn report_enum_strings_and_wrong_shapes_on_every_path() {
         let mut base = reported(&s);
         // Keep group representation independent of the voltage/group consistency check.
         base["materials"][0]["cti"][0].as_object_mut().unwrap().remove("cti_v").unwrap();
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":base}));
+        let base = setup(&s);
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), original);
         for &variant in variants {
             let mut candidate = base.clone();
             *candidate["materials"][0].pointer_mut(path).unwrap() = json!(variant);
