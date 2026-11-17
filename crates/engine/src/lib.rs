@@ -2195,7 +2195,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::fill::INSPECT_FILL,
         title: "Inspect Zone Fill",
-        summary: "Inspect pending, ready or unavailable fill for the current board source without starting calculation or editing.",
+        summary: "Inspect pending, ready, unfilled or unavailable fill for the current board source without starting calculation or editing.",
         params: &[BOARD],
     },
     Command {

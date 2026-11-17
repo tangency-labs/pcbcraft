@@ -415,3 +415,27 @@ fn explicit_pour_respects_board_edge_clearance_after_removal() {
     assert_eq!(material.contains([-4_400_001, 0]).unwrap(), Some(false));
     assert_eq!(material.contains([-4_399_997, 0]).unwrap(), Some(true));
 }
+
+/// Current project-owned group records survive pouring/removal and the same native-document
+/// worker transport. Metadata-only groups do not become another electrical connectivity graph.
+#[test]
+fn current_part_group_records_survive_pour_remove_and_worker_transport() {
+    let mut s = fixture(Connection::Solid, 0);
+    s.apply(crate::part_groups::CREATE, &json!({"name":"Power section","expected_revision":s.revision()})).unwrap();
+    let group = s.project().unwrap().part_groups().groups[0].id;
+    let part = s.project().unwrap().symbols()[0].component_id();
+    s.apply(crate::part_groups::SET_GROUPS, &json!({"part_instance":part,"groups":[group],"expected_revision":s.revision()})).unwrap();
+    let native = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    s.execute(REFILL_ZONES, &json!({})).unwrap();
+    s.execute(UNFILL_ZONES, &json!({})).unwrap();
+    let mut job = s.prepare_zone_fill(view(&s).target, true).unwrap();
+    let response = super::worker::execute(&job.worker_request().unwrap());
+    assert!(job.accept_worker_response(&response).unwrap().is_some());
+    assert_eq!(s.project().unwrap().part_groups().groups[0].id, group);
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), native);
+    assert_eq!(s.revision(), revision);
+    let reopened = crate::persistence::decode_documents(&native).unwrap();
+    assert_eq!(reopened.part_groups(), s.project().unwrap().part_groups());
+    assert_eq!(crate::persistence::encode_documents(reopened).unwrap(), native);
+}

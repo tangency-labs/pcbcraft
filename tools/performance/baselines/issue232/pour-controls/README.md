@@ -30,3 +30,15 @@ steady warm navigation, with no active worker handoff; it does not qualify that
 fix, refill throughput, allocation, presentation or a causal speedup. Initial
 parallel verification builds stalled; own overlapping jobs were reduced with the
 user's approval. No broader timing rerun was performed to improve the result.
+
+
+The branch was then rebased onto main at 3841189 after PR #395 became
+conflicting. Capability documentation retains both the new pour controls and
+main's layer-role/base-copper descriptions. Both native decoders and the new
+project constructor retain main's part-group data alongside the derived cache.
+A shared-command regression verifies part-group records/memberships survive
+pour/remove, native-document worker transport and unchanged Save/Open bytes.
+After that rebase, the full workspace suite passed 2,172 tests (12 ignored),
+with workspace all-target Clippy, native/browser builds and the same actual
+browser remove/repour pixel oracle passing. No new timing replay was added;
+the earlier timing sample retains its stated source and measurement limits.
