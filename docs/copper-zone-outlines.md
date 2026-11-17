@@ -17,6 +17,8 @@ three vertices, or pressing Enter. Backspace removes its last draft vertex, and
 Escape cancels unfinished geometry before leaving the tool. The chooser and
 preview do not edit the project. Completing a valid outline creates one undo step,
 including promotion of a previously derived net to a persistent identity.
+An unrelated project edit expires the chosen net even before the first point;
+accepted repeated zone creations retain the same choice until another edit occurs.
 
 Click an edge to select a zone. Drag a vertex to reshape it, drag an edge to
 translate it, or press M and click a destination. Delete removes the selected

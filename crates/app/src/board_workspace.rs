@@ -528,6 +528,7 @@ impl PcbApp {
     /// returns selection and transform intent; validation and dispatch follow after its borrow ends.
     /// All board panes use the shared grid display preference without changing their cameras.
     /// Rejected drawing creation restores its captured gesture so the user can correct it.
+    /// An accepted zone creation renews its armed net choice for the next outline only.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
         let enabled = ui.is_enabled()
             && (crate::IN_BROWSER || ui.input(|input| input.focused))
@@ -627,6 +628,10 @@ impl PcbApp {
                 self.run(edit.id, &edit.params);
                 if self.message.is_some() {
                     edit.restore_rejected(&mut self.views.active.board.zones);
+                } else if edit.id == pcbcraft_engine::board::zones::ADD_ZONE {
+                    // Only this tool's accepted creation renews its chosen net; unrelated edits
+                    // leave the captured authority stale and cancel before another point starts.
+                    self.views.active.board.zones.zone_source = self.views.active.input(&self.session);
                 }
             }
             if let Some(mut edit) = pick.drawing_edit

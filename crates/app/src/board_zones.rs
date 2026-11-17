@@ -72,6 +72,7 @@ impl PcbApp {
                 state.zones.zone = true;
                 state.zones.zone_target = Some(choice.target.clone());
                 state.zones.start(if edit.rectangle { Tool::Rectangle } else { Tool::Lines }, state.active_layer.clone());
+                state.zones.zone_source = Some(edit.source);
             }
             return;
         }
@@ -81,6 +82,7 @@ impl PcbApp {
 
 /// Edit the selected authored zone through the same command as MCP, retaining full settings.
 /// Missing/retired net identities remain visible and are never silently substituted.
+/// Popup choices commit when their values change, independently of the trigger's response flags.
 pub(super) fn properties(
     ui: &mut egui::Ui,
     view: BoardView<'_>,
@@ -101,7 +103,8 @@ pub(super) fn properties(
     let mut net_refs = vec![("current".to_owned(), format!("{current} ({status})"))];
     net_refs.extend(choices.iter().enumerate().filter(|(_, c)| c.id != Some(zone.net)).map(|(i, c)| (i.to_string(), c.label.clone())));
     let refs: Vec<_> = net_refs.iter().map(|(id, label)| (id.as_str(), label.clone())).collect();
-    let net_changed = properties::choice(ui, "Net", egui::Id::unique(("zone_net_edit", zone.id)), &mut net, &refs).changed();
+    properties::choice(ui, "Net", egui::Id::unique(("zone_net_edit", zone.id)), &mut net, &refs);
+    let net_changed = net != "current";
     if status != "active" {
         ui.label(shell::error(match status {
             "ambiguous" => "Ambiguous net identity.",
@@ -118,7 +121,8 @@ pub(super) fn properties(
         .map(|l| (l.id.to_string(), l.name))
         .collect();
     let refs: Vec<_> = layers.iter().map(|(id, label)| (id.as_str(), label.clone())).collect();
-    changed |= properties::choice(ui, "Layer", egui::Id::unique(("zone_layer", zone.id)), &mut layer, &refs).changed();
+    properties::choice(ui, "Layer", egui::Id::unique(("zone_layer", zone.id)), &mut layer, &refs);
+    changed |= layer != zone.layer.to_string();
     let mut options = zone.options.clone();
     let mut priority = i64::from(options.priority);
     ui.label("Priority");
@@ -148,20 +152,20 @@ pub(super) fn properties(
             changed = true;
         }
     }
-    let mut connection = match options.connection {
+    let original_connection = match options.connection {
         Connection::Thermal => "thermal",
         Connection::Solid => "solid",
         Connection::None => "none",
-    }
-    .to_owned();
-    changed |= properties::choice(
+    };
+    let mut connection = original_connection.to_owned();
+    properties::choice(
         ui,
         "Connection",
         egui::Id::unique(("zone_connection", zone.id)),
         &mut connection,
         &[("thermal", "Thermal".into()), ("solid", "Solid".into()), ("none", "None".into())],
-    )
-    .changed();
+    );
+    changed |= connection != original_connection;
     options.connection = match connection.as_str() {
         "solid" => Connection::Solid,
         "none" => Connection::None,

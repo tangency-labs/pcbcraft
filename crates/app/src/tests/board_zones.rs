@@ -140,6 +140,116 @@ fn zone_properties_edit_the_shared_options() {
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().zones()[0].options.priority, 7);
 }
+
+/// Net, layer and connection choices each commit once, while Escape preserves exact bytes.
+#[test]
+fn zone_properties_choices_commit_and_restore_exact_history() {
+    for (field, option) in [("Connection", "Solid"), ("Layer", "Bottom"), ("Net", "Net 2")] {
+        let mut h = fixture();
+        if field == "Net" {
+            let mut symbols = Vec::new();
+            for x in [0, 25_400_000] {
+                run(&mut h, PLACE_RESISTOR, json!({"x_nm":x,"y_nm":50_800_000}));
+                symbols.push(h.state().session.project().unwrap().symbols().last().unwrap().id());
+            }
+            run(&mut h, CONNECT_PINS, json!({"from":{"symbol":symbols[0],"terminal":"1"},"to":{"symbol":symbols[1],"terminal":"1"}}));
+            h.run();
+        }
+        draw(&mut h, true);
+        let edge = at(&h, 5_080_000, 0);
+        click_canvas_at(&mut h, edge);
+        h.state_mut().views.active.board.properties_collapsed = false;
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let original = h.state().session.project().unwrap().boards().next().unwrap().zones()[0].clone();
+        let nets = h.state().session.project().unwrap().inspect_net_registry().unwrap();
+        let chosen_net = nets["nets"][1]["anchor"].clone();
+        let option = if field == "Net" { nets["nets"][1]["name"].as_str().unwrap() } else { option };
+        h.get_by_role_and_label(Role::ComboBox, field).scroll_to_me();
+        h.run();
+        h.get_by_role_and_label(Role::ComboBox, field).click();
+        h.run();
+        h.key_press(Key::Escape);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        h.get_by_role_and_label(Role::ComboBox, field).click();
+        h.run();
+        click(&mut h, option);
+        assert_eq!(h.state().session.revision(), revision + 1, "{field}");
+        let project = h.state().session.project().unwrap();
+        let zone = project.boards().next().unwrap().zones()[0].clone();
+        let mut expected = original;
+        match field {
+            "Connection" => expected.options.connection = pcbcraft_engine::board::zones::Connection::Solid,
+            "Layer" => expected.layer = project.boards().next().unwrap().layers().into_iter().find(|l| l.name == "Bottom").unwrap().id,
+            _ => {
+                let rows = project.inspect_net_registry().unwrap();
+                let row = rows["nets"].as_array().unwrap().iter().find(|r| r["anchor"] == chosen_net).unwrap();
+                assert_eq!(row["id"], json!(zone.net));
+                assert_ne!(zone.net, expected.net);
+                expected.net = zone.net;
+            }
+        }
+        assert_eq!(zone, expected, "{field}");
+        let after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), after);
+    }
+}
+
+/// An armed chooser's captured net must expire even before the first drawing point exists.
+#[test]
+fn armed_zone_net_choice_expires_before_the_first_point() {
+    let mut h = fixture();
+    click(&mut h, "Draw zone outlines");
+    h.get_by_role_and_label(Role::Button, "Draw").click();
+    h.run();
+    assert!(h.state().views.active.board.zones.tool.is_some());
+    run(&mut h, "project.rename", json!({"name":"Changed after choosing the net"}));
+    let changed = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.run();
+    assert!(h.state().views.active.board.zones.tool.is_none());
+    for (x, y) in [(0, 0), (10_160_000, 0), (10_160_000, 10_160_000)] {
+        let point = at(&h, x, y);
+        click_canvas_at(&mut h, point);
+    }
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), changed);
+}
+
+/// Accepted repeated creations renew only their own net choice; an external edit expires it.
+#[test]
+fn repeated_zone_creation_keeps_its_net_until_an_external_edit() {
+    let mut h = fixture();
+    click(&mut h, "Draw zone outlines");
+    click(&mut h, "Rectangle");
+    h.get_by_role_and_label(Role::Button, "Draw").click();
+    h.run();
+    for offset in [0, 20_320_000] {
+        let revision = h.state().session.revision();
+        for (x, y) in [(offset, 0), (offset + 10_160_000, 10_160_000)] {
+            let point = at(&h, x, y);
+            click_canvas_at(&mut h, point);
+        }
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(h.state().views.active.board.zones.tool.is_some());
+    }
+    let project = h.state().session.project().unwrap();
+    let zones = project.boards().next().unwrap().zones();
+    assert_eq!(zones.len(), 2);
+    assert_eq!(zones[0].net, zones[1].net);
+    run(&mut h, "project.rename", json!({"name":"Changed between repeated outlines"}));
+    let changed = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.run();
+    assert!(h.state().views.active.board.zones.tool.is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), changed);
+}
 /// Vertex reshapes use the common path editor, while stale commands and cancelled drafts author nothing.
 #[test]
 fn zone_reshape_cancel_and_stale_view_are_safe() {

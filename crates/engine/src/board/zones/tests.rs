@@ -14,6 +14,20 @@ fn fixture() -> Session {
     edit(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true})).unwrap();
     s
 }
+/// Encode a supported pre-numbering snapshot through the native codec, as the registry tests
+/// do, so promotion is still covered independently from current eager net numbering.
+fn legacy_fixture() -> Session {
+    let mut s = fixture();
+    let mut project = s.snapshot().unwrap().as_ref().clone();
+    project.net_registry = Arc::default();
+    project.named_graph = Arc::default();
+    for sheet in Arc::make_mut(&mut project.sheets) {
+        sheet.connectivity = Arc::default();
+    }
+    let documents = encode_documents(Arc::new(project)).unwrap();
+    s.open_snapshot(decode_documents(&documents).unwrap());
+    s
+}
 /// Commands share the same revision precondition as GUI and MCP.
 fn edit(s: &mut Session, id: &str, mut params: Value) -> Result<u64, CommandError> {
     params["expected_revision"] = json!(s.revision());
@@ -37,7 +51,7 @@ fn add_params(s: &Session) -> Value {
 /// Identity promotion and creation are one undo step, without conductive copper or fill.
 #[test]
 fn creation_promotion_codec_and_history_are_atomic() {
-    let mut s = fixture();
+    let mut s = legacy_fixture();
     let before = s.snapshot().unwrap();
     let bytes = encode_documents(before.clone()).unwrap();
     let revision = s.revision();
@@ -69,6 +83,83 @@ fn creation_promotion_codec_and_history_are_atomic() {
     let doc: Value = serde_json::from_slice(&remaining[board_path.as_str()]).unwrap();
     assert_ne!(doc["format"], "pcbcraft-board/20");
     assert!(doc.get("zones").is_none());
+}
+
+/// Current numbered nets keep the same identity and shared display name when zones adopt them.
+#[test]
+fn numbered_net_identity_and_name_are_reused() {
+    let mut s = fixture();
+    let before = s.snapshot().unwrap();
+    let rows = before.inspect_net_registry().unwrap();
+    let id: Uuid = serde_json::from_value(rows["nets"][0]["id"].clone()).unwrap();
+    let documents = encode_documents(before.clone()).unwrap();
+    let params = add_params(&s);
+    edit(&mut s, ADD_ZONE, params).unwrap();
+    let after = s.snapshot().unwrap();
+    assert_eq!(after.board.zones[0].net, id);
+    assert_eq!(after.net_registry, before.net_registry);
+    assert_eq!(after.inspect_net_registry().unwrap()["nets"][0]["name"], rows["nets"][0]["name"]);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), documents);
+}
+
+/// Origins and zones coexist in format 21 in either creation order; removing either preserves
+/// the other, with exact codec/history round trips and refusal of incompatible older headers.
+#[test]
+fn zones_preserve_placement_origins_in_both_creation_orders() {
+    for zone_first in [false, true] {
+        let mut s = fixture();
+        let board_id = s.project().unwrap().board_target().unwrap().board;
+        let set_origin = json!({"board":board_id,"origin":{"kind":"point","x_nm":3_000_000,"y_nm":-4_000_000}});
+        if !zone_first {
+            edit(&mut s, super::super::origin::SET_PLACEMENT_ORIGIN, set_origin.clone()).unwrap();
+        }
+        let params = add_params(&s);
+        edit(&mut s, ADD_ZONE, params).unwrap();
+        if zone_first {
+            edit(&mut s, super::super::origin::SET_PLACEMENT_ORIGIN, set_origin).unwrap();
+        }
+        let both = s.snapshot().unwrap();
+        let zone = both.board.zones[0].clone();
+        let origin = both.board.placement_origin.clone();
+        let docs = encode_documents(both.clone()).unwrap();
+        let path = both.board_document_path().unwrap();
+        let board: Value = serde_json::from_slice(&docs[path.as_str()]).unwrap();
+        assert_eq!(board["format"], "pcbcraft-board/21");
+        assert_eq!(board["zones"].as_array().unwrap().len(), 1);
+        assert!(board["placement_origin"].is_object());
+        assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+        for zones in [Value::Null, json!([])] {
+            let mut bad = docs.clone();
+            let mut value = board.clone();
+            value["zones"] = zones;
+            bad.insert(path.clone(), serde_json::to_vec(&value).unwrap());
+            assert!(decode_documents(&bad).is_err());
+        }
+        let mut bad = docs.clone();
+        let mut value = board;
+        value["format"] = json!("pcbcraft-board/20");
+        bad.insert(path.clone(), serde_json::to_vec(&value).unwrap());
+        assert!(decode_documents(&bad).is_err());
+
+        edit(&mut s, super::super::origin::SET_PLACEMENT_ORIGIN, json!({"board":board_id,"origin":null})).unwrap();
+        let zones_only = s.snapshot().unwrap();
+        assert_eq!(zones_only.board.zones, vec![zone.clone()]);
+        let encoded = encode_documents(zones_only).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&encoded[path.as_str()]).unwrap()["format"], "pcbcraft-board/20");
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
+        edit(&mut s, DELETE_ZONES, json!({"zones":[zone.id]})).unwrap();
+        let origin_only = s.snapshot().unwrap();
+        assert_eq!(origin_only.board.placement_origin, origin);
+        let encoded = encode_documents(origin_only).unwrap();
+        let value: Value = serde_json::from_slice(&encoded[path.as_str()]).unwrap();
+        assert_eq!(value["format"], "pcbcraft-board/21");
+        assert!(value.get("zones").is_none());
+        assert_eq!(encode_documents(decode_documents(&encoded).unwrap()).unwrap(), encoded);
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
+    }
 }
 /// Malformed/foreign net, layer, geometry and settings never publish even a promoted registry.
 #[test]

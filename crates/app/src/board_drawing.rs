@@ -39,6 +39,8 @@ pub(super) struct State {
     pub(super) zone: bool,
     pub(super) zone_choices: Option<(pcbcraft_engine::board::view::BoardTarget, u64, Vec<crate::board_zones::NetChoice>)>,
     pub(super) zone_target: Option<pcbcraft_engine::nets::ClassTarget>,
+    /// A chosen net owns its revision before the first point, and between repeated creations.
+    pub(super) zone_source: Option<ViewInput>,
     pub(super) tool: Option<Tool>,
     pub(super) selected: Option<String>,
     selected_many: BTreeSet<uuid::Uuid>,
@@ -119,6 +121,7 @@ impl State {
     }
     /// Drop all drawing gestures when focus, workspace, layer or project authority changes.
     pub(super) fn cancel(&mut self) {
+        self.zone_source = None;
         self.tool = None;
         self.press = None;
         self.blocked_press = false;
@@ -137,9 +140,9 @@ impl State {
         self.select(None);
         had
     }
-    /// Return the original edit authority so synchronization can discard stale previews.
+    /// Return edit or armed-net authority so even a tool without points rejects stale input.
     pub(super) fn source(&self) -> Option<ViewInput> {
-        self.draft.as_ref().map(|draft| draft.source).or_else(|| self.edit.as_ref().map(|edit| edit.source))
+        self.draft.as_ref().map(|draft| draft.source).or_else(|| self.edit.as_ref().map(|edit| edit.source)).or(self.tool.and(self.zone_source))
     }
 }
 
