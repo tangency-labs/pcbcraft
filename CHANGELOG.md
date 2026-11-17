@@ -13,6 +13,22 @@ canvas. The choice is remembered with your settings and available
 through `app.set_preferences`; each view keeps its saved dock side and floating
 positions, and project data and history are unchanged.
 
+Part instances can be collected into named part groups shared by the schematic
+and the board. `part_groups.create`, `update`, `remove` and `inspect`
+manage the catalog, and `part_instances.set_groups` and
+`part_instances.inspect_groups` set and read a part instance's groups by its
+stable ID, so annotation does not change membership. A group that still has
+members cannot be removed. Projects with part groups save as
+`pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
+exist). Dense memberships use `pcbcraft-project/39` and board instances
+`pcbcraft-instances/7` through a compact UUID dictionary when expanded records
+exceed existing size limits; no supported membership is dropped. Earlier files
+keep the expanded representation while it fits, and compact files keep their
+encoding after reopening. Unchanged saves preserve canonical encoder bytes;
+accepted noncanonical input may normalize. Copy/Cut leave part groups in their
+owning project, so duplicated parts start ungrouped; projects without groups
+keep their format and canonical encoder bytes.
+
 Nets share readable names across schematic browsing, Rules and PCB inspection.
 Unnamed signals use net-owned numbers such as `Net-0001`, which survive component
 reference edits and deletion on a surviving net. Split/merge reconciliation and

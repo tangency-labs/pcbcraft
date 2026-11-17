@@ -15,9 +15,15 @@ Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
-Project/22 adds [project parameters](#parameter-records); projects with stored
-project values and no generated net numbers select it. Projects with generated
-net numbers use project/23, which can also store project parameters.
+Project/22 adds [project parameters](#parameter-records); project/23 adds generated
+net numbers and can also store project parameters.
+Project/24 adds the [part-group catalog](part-groups.md); its expanded
+memberships live in the instance home and use instances/5 when board-owned.
+Project/39 and instances/7 carry the same memberships through a compact UUID
+dictionary when expanded membership exceeds the existing document-size limits;
+older files keep their representation while it still fits. Byte-identical
+unchanged saves preserve canonical encoder output; accepted noncanonical input
+may normalize when saved.
 
 Project/23 adds persistent generated net numbers to the same instance registry,
 using instances/4 when board-owned. A stored record's positive `generated_number`
@@ -297,8 +303,8 @@ registry's retained identities.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22` or `/23` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, and version 23 adds net-owned generated numbers with optional project parameters |
-| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/4` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, and version 4 adds generated net numbers; schematic-only projects embed these records in `project.json` instead |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24` or `/39` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog |
+| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, or `/7` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/21` or `/23` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
@@ -481,8 +487,9 @@ keeps its earlier bytes.
 
 A sheet/9 document may carry a nonempty `parameters` object directly after
 `page`. A project/22 entry point requires a nonempty `parameters` object;
-project/23 accepts the same object optionally alongside generated net numbers.
-In either project format, the object appears directly before `sheets`:
+project/23 accepts the same object optionally alongside generated net numbers;
+project/24 and project/39 accept it optionally alongside the part-group catalog.
+In each of these project formats, the object appears directly before `sheets`:
 
 ```json
 "parameters": {
@@ -498,15 +505,48 @@ references. Editing ignores case, so a name that differs from another stored
 name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
-objects require sheet/9; project parameter objects require project/22 or
-project/23 and are rejected in other project versions. Project/22 is a superset
+objects require sheet/9; project parameter objects require project/22, project/23,
+project/24 or project/39 and are rejected in other project versions. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
 generated net numbers and permits those same optional fields, including project
-parameters. Both formats require adopted storage and occurrence metadata;
+parameters. Project/24 adds the part-group catalog and keeps every record
+of project/23 optional, generated net numbers included. Project/39 keeps those
+same rules with compact part-group memberships. All four formats require
+adopted storage and occurrence metadata;
 setting the first project value adopts them in the same undo step.
 Removing the last project value returns the entry point to the version its other
 content needs. The diagnostic single-file encoding refuses parameters.
+
+### Part-group records
+
+Both project/24 and project/39 require a nonempty `part_groups` catalog
+(`pcbcraft-part-groups/1`) directly after any `net_classes` record.
+Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
+their assignments, project parameters and no-connect intent are optional, each
+with its existing rules, and it requires adopted storage and occurrence metadata.
+Under project/24, explicit memberships are stored as `part_group_memberships`,
+after the sheet occurrences and any net registry in the instance home:
+`schematic_instances` without a board, or the board's `instances.json`, which
+selects `pcbcraft-instances/5` exactly when expanded memberships exist. Records are
+`{"part_instance":N,"group":UUID}`, sorted by part instance and group, unique and one per
+line. Empty lists, null, dangling records and these records under older headers
+are rejected. `N` is the part instance's number, as in `components` and
+`component-N`; see [part groups](part-groups.md).
+
+Project/39 and board-owned instances/7 replace that list with
+`compact_part_group_memberships`, containing a sorted UUID `groups` dictionary
+and sorted `part_instances` rows (`part_instance` plus sorted numeric `groups`
+references into that dictionary). UUIDs remain the identity authority. The
+reader refuses duplicate, unused, nil or foreign dictionary UUIDs, duplicate or
+unordered rows/references, out-of-range or noninteger indices, empty payloads,
+excess expansion and simultaneous expanded/compact fields. Encoding falls back
+once to compact storage on a byte-limit overflow; the limits do not increase,
+and Save adds no precondition. Legacy files that fit retain their expanded
+representation; compact files retain their encoding choice after reopening.
+Unchanged saves preserve canonical encoder bytes in either representation;
+accepted noncanonical input may normalize. Both homes support all 4,096 part
+instances in all 256 groups.
 
 ### Named net records
 

@@ -17,6 +17,7 @@ mod identity_tests;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
+mod named_catalog;
 pub mod net_classes;
 pub mod net_labels;
 pub mod netlist;
@@ -24,6 +25,7 @@ pub mod nets;
 pub mod no_connect;
 pub mod parameters;
 pub mod part_authoring;
+pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -2261,6 +2263,61 @@ const CATALOG: &[Command] = &[
             summary: "Optional scoped target; omit to list current identities and eligible derived anchors",
         }],
     },
+    Command {
+        id: part_groups::CREATE,
+        title: "Create Part Group",
+        summary: "Create a project-wide part group without assigning part instances or allocating a board.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name; identity is an independent UUID" },
+        ],
+    },
+    Command {
+        id: part_groups::UPDATE,
+        title: "Update Part Group",
+        summary: "Rename a part group, preserving its UUID and membership and incrementing its revision only on change.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name" },
+        ],
+    },
+    Command {
+        id: part_groups::REMOVE,
+        title: "Remove Part Group",
+        summary: "Remove a part group that no part instance belongs to; a group with members is refused and its members are listed.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+        ],
+    },
+    Command {
+        id: part_groups::INSPECT,
+        title: "Inspect Part Groups",
+        summary: "Read the part-group catalog without reading membership or changing history.",
+        params: &[],
+    },
+    Command {
+        id: part_groups::SET_GROUPS,
+        title: "Set Part-Instance Groups",
+        summary: "Replace a part instance's complete group set in one undoable step. An empty set removes its memberships.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "part_instance", kind: ParamKind::Text, required: true, summary: "Stable part-instance ID from project inspection" },
+            Param { name: "groups", kind: ParamKind::ClassSet, required: true, summary: "Complete set of part-group UUIDs" },
+        ],
+    },
+    Command {
+        id: part_groups::INSPECT_GROUPS,
+        title: "Inspect Part-Instance Groups",
+        summary: "Read one part instance's groups, or every grouped part instance, without changing history.",
+        params: &[Param {
+            name: "part_instance",
+            kind: ParamKind::Text,
+            required: false,
+            summary: "Optional part-instance ID; omit to list every part instance that belongs to a group",
+        }],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -2338,6 +2395,12 @@ pub struct Project {
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
     parameters: Arc<parameters::Parameters>,
+    /// Authored part groups, independent of membership.
+    part_groups: Arc<part_groups::Catalog>,
+    /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
+    part_group_memberships: Arc<part_groups::Memberships>,
+    /// Retain the compact storage choice after opening, independent of membership identity.
+    prefer_compact_part_groups: bool,
 }
 
 impl Project {
@@ -2731,6 +2794,12 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | part_groups::CREATE
+            | part_groups::UPDATE
+            | part_groups::REMOVE
+            | part_groups::INSPECT
+            | part_groups::SET_GROUPS
+            | part_groups::INSPECT_GROUPS
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2842,6 +2911,7 @@ impl Session {
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
+            if !p.part_groups.groups.is_empty() { inspected["part_groups"] = json!(p.part_groups()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -2933,6 +3003,10 @@ impl Session {
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
+        }
+        if matches!(id, part_groups::INSPECT | part_groups::INSPECT_GROUPS) {
+            self.validate_project_command(id, params)?;
+            return self.part_group_query(id, params);
         }
         if matches!(id, parameters::LIST | parameters::RESOLVE) {
             self.validate_project_command(id, params)?;
@@ -3043,6 +3117,12 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | part_groups::CREATE
+                | part_groups::UPDATE
+                | part_groups::REMOVE
+                | part_groups::INSPECT
+                | part_groups::SET_GROUPS
+                | part_groups::INSPECT_GROUPS
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -3120,6 +3200,9 @@ impl Session {
                 net_registry: Arc::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
+                part_groups: Arc::default(),
+                part_group_memberships: Arc::default(),
+                prefer_compact_part_groups: false,
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3141,6 +3224,11 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            part_groups::CREATE | part_groups::UPDATE | part_groups::REMOVE => self.edit_part_group(id, params)?,
+            part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,
+            part_groups::INSPECT | part_groups::INSPECT_GROUPS => {
+                self.part_group_query(id, params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
@@ -3683,8 +3771,13 @@ impl Session {
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
+    /// Memberships of part instances the candidate no longer holds are dropped in the same step;
+    /// edits that keep the part-instance map itself skip that scan.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
+        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+            project.prune_part_group_memberships();
+        }
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }
