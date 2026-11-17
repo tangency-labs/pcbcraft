@@ -231,9 +231,9 @@ fn mapped_tree(factors: &[usize], extra: bool, pad: (usize, usize)) -> Vec<u8> {
     tree.into_bytes()
 }
 
-/// The mapped-item expansion is bounded before it runs: a few hundred bytes that would place the
-/// block 2^20 times are refused, 100,000 placements read, and one more is refused. Both refusals
-/// are the pre-count's (its message), not the walk's own instance limit.
+/// The mapped-item expansion is bounded before it runs: a small mapped-item tree that would
+/// place the block 2^20 times is refused, 100,000 placements read, and one more is refused. Both
+/// refusals are the pre-count's (its message), not the walk's own instance limit.
 #[test]
 fn a_mapped_item_expansion_past_100000_placements_is_model_unreadable() {
     let huge = mapped_tree(&[2; 20], false, (0, 0));

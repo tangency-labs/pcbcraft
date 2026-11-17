@@ -230,7 +230,7 @@ class StepFile:
         )
 
     def product(self, name):
-        """A product with one definition: (definition, its shape representation, its origin)."""
+        """A product with one definition: (definition, product-definition shape)."""
         w = self.w
         product = w.add(f"PRODUCT('{name}','{name}','',(#{self.product_context}))")
         formation = w.add(f"PRODUCT_DEFINITION_FORMATION('','',#{product})")
@@ -307,7 +307,7 @@ def union(*boxes):
 
 
 def fixtures():
-    """(file name, STEP text, bodies, placements, (least, greatest corner) in the file's unit, unit)."""
+    """(file name, StepFile, bodies, placements, (least, greatest corner) in the file's unit, unit)."""
     out = []
 
     f = StepFile("ap214", "mm")

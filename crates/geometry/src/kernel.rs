@@ -253,9 +253,8 @@ impl<'a> Expansion<'a> {
     }
 
     /// The cost of expanding every root, after the representations reached from every
-    /// definition are found; the first error any of them meets. It stops counting once the work
-    /// is past [`MAX_EXPANSION_WORK`], so a file of many large closures costs this count no more
-    /// than the limit.
+    /// definition are found; the first error any of them meets. The preliminary closure scan
+    /// stops after its accumulated work exceeds [`MAX_EXPANSION_WORK`].
     fn total(&mut self) -> std::result::Result<Cost, String> {
         let scan = self.structure.links.len() as u64;
         let mut cost = Cost::default();

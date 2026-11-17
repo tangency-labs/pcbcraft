@@ -37,7 +37,7 @@ use pcbcraft_units::{MAX_LENGTH_NM, NM_PER_MM};
 /// reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
-    /// An argument was refused before the kernel saw it (`invalid_params`).
+    /// An argument is invalid or is refused by the kernel (`invalid_params`).
     InvalidParams,
     /// The model bytes are not a readable STEP exchange structure, or a solid in it is malformed
     /// (`model_unreadable`).
@@ -141,9 +141,9 @@ impl BoundingBox {
 /// translation`.
 ///
 /// The axes are the images of the x, y and z unit vectors, as unitless ratios; the translation is
-/// in nanometres. Placements read from a file are rotations, possibly mirrored, with at most a
-/// uniform scale; a non-uniform scale or a shear is accepted by [`Body::transformed`] and turns
-/// the body's surfaces into B-splines.
+/// in nanometres. Placements read from a file may include rotations, reflections and non-uniform
+/// scaling. A non-uniform scale or a shear accepted by [`Body::transformed`] turns the body's
+/// surfaces into B-splines.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     /// The images of the x, y and z unit vectors.

@@ -113,7 +113,7 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 
 | Code | Meaning |
 | --- | --- |
-| `invalid_params` | An argument was refused before the kernel saw it, including a name with an ASCII control character, which a STEP string cannot carry |
+| `invalid_params` | An argument is invalid or is refused by the kernel, including a name with an ASCII control character, which a STEP string cannot carry |
 | `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 levels, or an expansion past 100,000 placed bodies or 1,000,000 steps), or a placement that is not finite or moves a body more than 1 km from the origin |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input |
@@ -150,7 +150,7 @@ At SolidCraft revision `73bdb6c`:
 | Inch and metre units | converted to nanometres within 1 µm |
 | A part used twice, turned a quarter the second time | one body, two placements |
 | Two placed surface models sharing one closed shell, each beside its own open shell | three bodies, four placements: the shell placed by each model, nothing left at the origin |
-| A few hundred bytes of mapped items that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
+| A small mapped-item tree that would place a block 2^20 times; exactly 100,000 placements; 100,001 | `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | An expansion of exactly 1,000,000 steps, and of one more | read; `model_unreadable` |
 | 2^16 mapped placements, with no other relationship and with 10,000 unrelated relationships; 64 placements and 7,870 relationships at exactly 1,000,000 steps, and one more | read; `model_unreadable` before anything is expanded; read; `model_unreadable` |
 | A surface model of 20,000 empty closed shells beside the block, both placed 32,768 times through mapped items | read in under 30 s: one body, 32,768 placements, the model refused |
@@ -189,8 +189,8 @@ tolerance, 1 µm, is stored in the same file.
 ### Board-sized read
 
 `crates/geometry/tests/step_board.rs`, adapted from SolidCraft's board fixture,
-builds a board whose part instances are each their own product with a package and
-its own pins, the worst case for an import, and reads it back. By default it
+builds and reads a board whose part instances are each their own product with a
+package and its own pins: a body-heavy import case with no shared parts. By default it
 builds 2 part instances of 16 pins so a debug test run takes a few seconds. The
 figures above are for the full size:
 
@@ -199,11 +199,10 @@ PCBCRAFT_STEP_BOARD_PART_INSTANCES=500 PCBCRAFT_STEP_BOARD_PINS=16 \
     cargo test -p pcbcraft-geometry --test step_board
 ```
 
-In a debug build nearly all of the read time is the kernel building bodies from
-their records (about 50 ms a body); parsing the file and walking its assembly
-take well under a second at that size, and the time grows in proportion to the
-number of bodies. A release build is much faster; its figures are not recorded
-yet.
+For this measured debug-board workload, nearly all read time was the kernel
+building bodies from their records (about 50 ms a body); parsing the file and
+walking its assembly took well under a second. Release-build read times have
+not been measured.
 
 The kernel crates are Apache-2.0 only, unlike the rest of SolidCraft (MIT OR
 Apache-2.0). Apache-2.0 is on the `deny.toml` allow list, so no exception is

@@ -1,7 +1,7 @@
 //! A board-like STEP assembly, read without error, with its read time and peak memory printed.
 //!
-//! Every part instance is its own product holding a package body and its own pins, nothing shared:
-//! the worst case for an import. Adapted from SolidCraft's `crates/kernel/examples/
+//! Every part instance is its own product holding a package body and its own pins: a body-heavy
+//! import case with no shared parts. Adapted from SolidCraft's `crates/kernel/examples/
 //! step_board_fixture.rs` at revision `73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR
 //! Apache-2.0, copyright (c) 2026 SolidCraft contributors); the packages here are plain blocks
 //! with sharp edges.
