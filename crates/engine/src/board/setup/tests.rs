@@ -681,7 +681,7 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
     refused_because(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23"), STACK_REFUSAL);
 }
 
-/// Zone outlines survive stack fields with or without an origin; clearing the stack fields
+/// Zone outlines and board rules survive stack fields with or without an origin; clearing the stack fields
 /// restores the zone/origin format and byte-identical Undo/Redo snapshots.
 #[test]
 fn board_format_23_carries_zone_outlines() {
@@ -712,8 +712,9 @@ fn board_format_23_carries_zone_outlines() {
                 "target":{"kind":"derived","anchor":anchor}
             }),
         );
+        let board = s.project().unwrap().board_target().unwrap().board;
+        apply(&mut s, crate::board::rules::SET_RULES, json!({"board":board,"rules":crate::board::rules::Values::default()}));
         if with_origin {
-            let board = s.project().unwrap().board_target().unwrap().board;
             apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"board":board,"origin":{"kind":"board_zero"}}));
         }
         let earlier_format = if with_origin { "pcbcraft-board/21" } else { "pcbcraft-board/20" };
@@ -737,7 +738,7 @@ fn board_format_23_carries_zone_outlines() {
     }
 }
 
-/// Without a declared minimum, checks use the nominal finished thickness and say so.
+/// Without a declared minimum, the accessor returns the nominal finished thickness and its basis.
 #[test]
 fn board_thickness_for_checks_says_which_value_it_uses() {
     let mut s = session(2);
@@ -912,6 +913,161 @@ fn reducing_copper_count_keeps_authored_roles() {
     let grown = stack.with_copper_count(6).unwrap();
     assert_eq!(grown.stackup().finished_thickness_nm, Some(1_600_000));
     assert_eq!(grown.copper_stack().filter(|copper| copper.role == Some(CopperRole::Plane)).count(), 1);
+}
+
+/// Author arbitrary copper facts and board declarations through the shared setup command.
+fn author_two_layer_thickness(s: &mut Session) {
+    let mut candidate = setup(s);
+    for (index, role, basis, thickness, tolerance, weight, foil) in
+        [(0, "signal", "nominal", 48_001, 2_001, 1_001, 35_001), (2, "plane", "minimum", 42_001, 1_001, 2_001, 70_001)]
+    {
+        let copper = &mut candidate["stackup"]["strata"][index];
+        copper["role"] = json!(role);
+        copper["thickness_nm"] = json!(thickness);
+        copper["thickness_tolerance_nm"] = json!(tolerance);
+        copper["thickness_basis"] = json!(basis);
+        copper["base_copper"] = json!({"weight_milli_oz":weight,"thickness_nm":foil});
+    }
+    candidate["stackup"]["finished_thickness_nm"] = json!(2_000_001);
+    candidate["stackup"]["finished_thickness_tolerance_nm"] = json!(100_001);
+    candidate["stackup"]["declared_minimum_thickness_nm"] = json!(1_900_001);
+    apply(s, SET_BOARD_SETUP, json!({"setup":candidate}));
+}
+
+/// Every starter clears replaced copper qualifiers/base, preserves roles, all board declarations
+/// and physical IDs, and adopts through the shared command with exact Undo/Redo.
+#[test]
+fn starting_stackups_replace_authored_qualifiers_but_keep_roles_and_board_declarations() {
+    for preset in StackupPreset::ALL {
+        let mut s = session(2);
+        author_two_layer_thickness(&mut s);
+        let original = saved_board(&s, "pcbcraft-board/23");
+        let before = s.project().unwrap().board_setup().unwrap().clone();
+        let candidate = before.with_starting_stackup(preset).unwrap();
+        assert_eq!(saved_board(&s, "pcbcraft-board/23"), original);
+        assert_eq!(candidate.layers(), before.layers());
+        assert_eq!(candidate.stackup().id, before.stackup().id);
+        assert_eq!(candidate.stackup().finished_thickness_nm, before.stackup().finished_thickness_nm);
+        assert_eq!(candidate.stackup().finished_thickness_tolerance_nm, before.stackup().finished_thickness_tolerance_nm);
+        assert_eq!(candidate.stackup().declared_minimum_thickness_nm, before.stackup().declared_minimum_thickness_nm);
+        for (old, replaced) in before.stackup().strata.iter().zip(&candidate.stackup().strata) {
+            match (old, replaced) {
+                (Stratum::Copper { layer: old_id, .. }, Stratum::Copper { layer: new_id, .. }) => assert_eq!(old_id, new_id),
+                (Stratum::Dielectric { id: old_id, .. }, Stratum::Dielectric { id: new_id, .. }) => assert_eq!(old_id, new_id),
+                _ => panic!("starter changed stratum topology"),
+            }
+        }
+        let expected_thickness = if preset == StackupPreset::Fr4TwoOz { 70_000 } else { 35_000 };
+        for (old, replaced) in before.copper_stack().zip(candidate.copper_stack()) {
+            assert_eq!(replaced.layer, old.layer);
+            assert_eq!(replaced.role, old.role);
+            assert_eq!(replaced.base_copper, None);
+            assert_eq!(replaced.finished, Some(CopperThickness { thickness_nm: expected_thickness, tolerance_nm: None, basis: None }));
+        }
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+        assert_eq!(s.project().unwrap().board_setup().unwrap(), &candidate);
+        let replaced = saved_board(&s, "pcbcraft-board/23");
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(saved_board(&s, "pcbcraft-board/23"), original);
+        s.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(saved_board(&s, "pcbcraft-board/23"), replaced);
+    }
+}
+
+/// Base copper alone protects an inner stratum during resizing; explicitly clearing it permits
+/// command adoption while candidate construction and refusal leave source/history/bytes intact.
+#[test]
+fn reducing_copper_count_requires_clearing_base_copper_only() {
+    let mut s = session(4);
+    let mut candidate = setup(&s);
+    candidate["stackup"]["strata"][2]["base_copper"] = json!({"weight_milli_oz":1_001});
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    let original = saved_board(&s, "pcbcraft-board/23");
+    let snapshot = s.snapshot().unwrap();
+    let inspected = s.inspect();
+    let stack = s.project().unwrap().board_setup().unwrap();
+    let inner = stack.copper_stack().nth(1).unwrap();
+    assert_eq!(inner.role, None);
+    assert_eq!(inner.finished, None);
+    assert_eq!(inner.base_copper, Some(BaseCopper { weight_milli_oz: Some(1_001), thickness_nm: None }));
+    let error = stack.with_copper_count(2).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message.contains("before reducing the layer count")), "{error}");
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+    assert_eq!(s.inspect(), inspected);
+    assert_eq!(saved_board(&s, "pcbcraft-board/23"), original);
+    candidate["stackup"]["strata"][2].as_object_mut().unwrap().remove("base_copper");
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    let cleared = saved_board(&s, "pcbcraft-board/2");
+    let reduced = s.project().unwrap().board_setup().unwrap().with_copper_count(2).unwrap();
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":reduced}));
+    assert_eq!(s.project().unwrap().board_setup().unwrap().copper_stack().count(), 2);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved_board(&s, "pcbcraft-board/2"), cleared);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved_board(&s, "pcbcraft-board/23"), original);
+}
+
+/// Profile adoption replaces conflicting copper facts and all board declarations, rebases physical
+/// IDs to the target, round-trips the profile/board, and restores exact bytes through Undo/Redo.
+#[test]
+fn profile_replaces_authored_copper_and_board_declarations() {
+    let mut source = session(2);
+    author_two_layer_thickness(&mut source);
+    let source_setup = source.project().unwrap().board_setup().unwrap().clone();
+    let profile =
+        profile::SetupProfile::new("Copper declaration".into(), source_setup.clone(), crate::board::silkscreen::Settings::default()).unwrap();
+    let profile_bytes = profile.encode().unwrap();
+    let profile = profile::SetupProfile::decode(&profile_bytes).unwrap();
+    assert_eq!(profile.encode().unwrap(), profile_bytes);
+    let mut target = session(2);
+    let mut conflicting = setup(&target);
+    for index in [0, 2] {
+        let copper = &mut conflicting["stackup"]["strata"][index];
+        copper["role"] = json!("mixed");
+        copper["thickness_nm"] = json!(60_001);
+        copper["thickness_tolerance_nm"] = json!(3_001);
+        copper["thickness_basis"] = json!("minimum");
+        copper["base_copper"] = json!({"weight_milli_oz":3_001,"thickness_nm":80_001});
+    }
+    conflicting["stackup"]["finished_thickness_nm"] = json!(3_000_001);
+    conflicting["stackup"]["finished_thickness_tolerance_nm"] = json!(200_001);
+    conflicting["stackup"]["declared_minimum_thickness_nm"] = json!(2_800_001);
+    apply(&mut target, SET_BOARD_SETUP, json!({"setup":conflicting}));
+    let original = saved_board(&target, "pcbcraft-board/23");
+    let target_setup = target.project().unwrap().board_setup().unwrap().clone();
+    let candidate = target_setup.with_profile(&profile).unwrap();
+    assert_eq!(saved_board(&target, "pcbcraft-board/23"), original);
+    assert_ne!(source_setup.stackup().id, target_setup.stackup().id);
+    assert_eq!(candidate.stackup().id, target_setup.stackup().id);
+    assert_eq!(candidate.layers(), target_setup.layers());
+    for ((source_stratum, target_stratum), incoming) in
+        source_setup.stackup().strata.iter().zip(&target_setup.stackup().strata).zip(&candidate.stackup().strata)
+    {
+        match (source_stratum, target_stratum, incoming) {
+            (Stratum::Copper { layer: source_id, .. }, Stratum::Copper { layer: target_id, .. }, Stratum::Copper { layer: incoming_id, .. }) => {
+                assert_ne!(source_id, target_id);
+                assert_eq!(incoming_id, target_id);
+                let mut expected = source_setup.copper(*source_id).unwrap();
+                expected.layer = *target_id;
+                assert_eq!(candidate.copper(*target_id), Some(expected));
+            }
+            (Stratum::Dielectric { id: source_id, .. }, Stratum::Dielectric { id: target_id, .. }, Stratum::Dielectric { id: incoming_id, .. }) => {
+                assert_ne!(source_id, target_id);
+                assert_eq!(incoming_id, target_id);
+            }
+            _ => panic!("profile changed stratum topology"),
+        }
+    }
+    assert_eq!(candidate.stackup().finished_thickness_nm, Some(2_000_001));
+    assert_eq!(candidate.stackup().finished_thickness_tolerance_nm, Some(100_001));
+    assert_eq!(candidate.stackup().declared_minimum_thickness_nm, Some(1_900_001));
+    apply(&mut target, SET_BOARD_SETUP, json!({"setup":candidate,"silkscreen":profile.silkscreen}));
+    assert_eq!(target.project().unwrap().board_setup().unwrap(), &candidate);
+    let adopted = saved_board(&target, "pcbcraft-board/23");
+    target.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(saved_board(&target, "pcbcraft-board/23"), original);
+    target.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(saved_board(&target, "pcbcraft-board/23"), adopted);
 }
 
 /// Board rules and the stack fields share format 23; removing the stack fields returns to format 19.

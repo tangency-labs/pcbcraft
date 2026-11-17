@@ -1854,12 +1854,11 @@ impl DocumentsEncoder {
     }
 }
 
-/// Keep legacy bytes until newer authored data requires a newer format. Locked copper
-/// uses format 18 while an authored lock exists, unless board defaults require format 19.
-/// Format 19 requires validated rules and accepts earlier physical fields. Format 21 requires a
-/// placement origin and accepts every earlier field, including rules. Format 23 is chosen
-/// whenever the setup uses copper roles, base copper, copper thickness qualifiers or finished
-/// board thickness, and accepts every earlier field, including an origin. Independent
+/// Keep legacy bytes until authored content requires a newer format. Select the highest
+/// applicable format: copper roles, base copper, copper thickness qualifiers or finished board
+/// thickness require 23; a placement origin at least 21; zone outlines at least 20;
+/// validated board rules at least 19; and authored copper locks at least 18. Lower formats apply
+/// only without higher-version content. Each accepts earlier fields. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,
