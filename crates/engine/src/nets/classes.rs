@@ -151,6 +151,13 @@ impl Project {
         Ok(BoundResolution { address, bindings: record.class_bindings.clone(), resolution: self.resolve_net_classes(&classes, self.board_target())? })
     }
 
+    /// Resolve a current chooser target without promoting it. Unregistered derived nets carry
+    /// board defaults; inactive saved targets return the ordinary reconciliation error.
+    pub fn resolve_net_target(&self, target: &ClassTarget) -> Result<Option<BoundResolution>, CommandError> {
+        let (id, _) = self.class_target(target)?;
+        id.map(|net| self.resolve_net_assignment(NetAddress { project: self.id, scope: self.net_scope(), net })).transpose()
+    }
+
     /// Inspect assignments/conflicts without editing documents or promoting derived networks.
     pub fn inspect_net_classes(&self, target: &ClassTarget) -> Result<Value, CommandError> {
         let (id, _) = self.class_target(target)?;

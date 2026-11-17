@@ -301,3 +301,7 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 Each format step follows the existing ladder: a superset of the previous format,
 empty collections refused, older readers rejecting the new format, and
 byte-identical round trips.
+
+Standalone vias can retain an explicit net through placement and Properties; see
+[via net assignments](via-net-assignments.md) for automatic inheritance, physical
+connectivity and unresolved-target behavior.

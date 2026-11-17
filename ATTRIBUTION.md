@@ -1732,3 +1732,16 @@ interfaces: whole-nanometre integer hulls with even diagonal supports so corners
 and the DRC outline predicates, head-island and membership rules from the snapshot
 query, a probe budget with incomplete, canceled and stale outcomes, and previous-plan
 continuity. No Sparksmith world model, shove, dependency or file format was imported.
+
+## Explicit via net assignments
+
+The optional scoped via target, snapshot-local membership projection and shared
+assignment command for #369 are original MIT OR Apache-2.0 PCBcraft work.
+Placement and Properties compose the existing Craft search field, table and modal
+form through chrome, with bounded result pages and keyboard row reveal. The
+chrome table adapter exposes the toolkit's existing reveal behavior. PCBcraft
+owns typed net identities, filtering and pagination, which have no domain-specific
+toolkit component. Both forms share typed chooser data with zones.
+No custom-drawn control, external EDA source,
+artwork, library data or dependency was added. Physical island construction,
+accepted-board review, the net registry and native codecs retain their ownership.

@@ -77,6 +77,7 @@ const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
+const ASSIGNED_VIA_BOARD_FORMAT: &str = "pcbcraft-board/24";
 const ZONE_BOARD_FORMAT: &str = "pcbcraft-board/20";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
@@ -392,6 +393,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// Project/24 and project/39 require a nonempty part-group catalog. Expanded memberships use
 /// board-owned instances/5, and compact memberships use instances/7 with a bounded UUID dictionary.
 /// Project/36 requires pinned assembly profiles and allows either group membership encoding.
+/// Board format 24 requires explicit via intent and accepts optional extended stack fields
+/// and assembly profile adoptions. Earlier headers refuse via intent.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
@@ -894,31 +897,37 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
+    if assigned_vias != board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some())) {
+        return Err("board.json: explicit via assignments require format 24, which requires an assignment.".into());
+    }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
-    if (profiled && board.assembly_profiles.is_none()) || (!profiled && !stacked && board.assembly_profiles.is_some()) {
-        return Err("board.json: assembly profile adoptions require format 22 or 23. Format 22 requires at least one profile.".into());
+    if (profiled && board.assembly_profiles.is_none()) || (!assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some()) {
+        return Err("board.json: assembly profile adoptions require format 22, 23 or 24. Format 22 requires at least one profile.".into());
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
         return Err("board.json: an empty assembly_profiles array is not allowed".into());
     }
     profile_catalog.validate(board.assembly_profiles.as_deref().unwrap_or_default())?;
     let originated = board.format == ORIGIN_BOARD_FORMAT;
-    if (originated && board.placement_origin.is_none()) || (!originated && !profiled && !stacked && board.placement_origin.is_some()) {
-        return Err("board.json: a placement origin requires format 21, 22 or 23, and format 21 requires a placement origin.".into());
+    if (originated && board.placement_origin.is_none())
+        || (!assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
+    {
+        return Err("board.json: a placement origin requires format 21, 22, 23 or 24, and format 21 requires a placement origin.".into());
     }
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
     }
     let zoned = board.format == ZONE_BOARD_FORMAT;
     if (zoned && board.zones.is_none())
-        || (!zoned && !originated && !profiled && !stacked && board.zones.is_some())
+        || (!assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err("board.json: zones require format 20, 21, 22 or 23 and a nonempty array; format 20 requires zones.".into());
+        return Err("board.json: zones require format 20, 21, 22, 23 or 24 and a nonempty array; format 20 requires zones.".into());
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
-    if (ruled && board.rules.is_none()) || (!ruled && !stacked && !profiled && !originated && !zoned && board.rules.is_some()) {
+    if (ruled && board.rules.is_none()) || (!assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && board.rules.is_some()) {
         return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
     if let Some(rules) = &board.rules {
@@ -927,10 +936,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks {
+    if !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || stacked || profiled || originated || zoned;
+    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -960,6 +969,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | MULTIPAD_BOARD_FORMAT
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
+            | ASSIGNED_VIA_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
             | PROFILE_BOARD_FORMAT
             | STACK_BOARD_FORMAT
@@ -979,6 +989,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | MULTIPAD_BOARD_FORMAT
                     | LOCKED_COPPER_BOARD_FORMAT
                     | RULES_BOARD_FORMAT
+                    | ASSIGNED_VIA_BOARD_FORMAT
                     | ORIGIN_BOARD_FORMAT
                     | PROFILE_BOARD_FORMAT
                     | STACK_BOARD_FORMAT
@@ -1067,6 +1078,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | MULTIPAD_BOARD_FORMAT
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
+            | ASSIGNED_VIA_BOARD_FORMAT
             | ORIGIN_BOARD_FORMAT
             | PROFILE_BOARD_FORMAT
             | STACK_BOARD_FORMAT
@@ -1091,6 +1103,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | MULTIPAD_BOARD_FORMAT
                 | LOCKED_COPPER_BOARD_FORMAT
                 | RULES_BOARD_FORMAT
+                | ASSIGNED_VIA_BOARD_FORMAT
                 | ORIGIN_BOARD_FORMAT
                 | PROFILE_BOARD_FORMAT
                 | STACK_BOARD_FORMAT
@@ -1113,10 +1126,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (STACK_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => {
-            Some(decode_setup(&value, false)?)
-        }
-        (PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
+        (
+            ASSIGNED_VIA_BOARD_FORMAT | STACK_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT,
+            Some(value),
+        ) => Some(decode_setup(&value, false)?),
+        (ASSIGNED_VIA_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, None) => None,
@@ -1153,8 +1167,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
-    if stacked != stack_fields {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, which requires at least one of them.".into());
+    if (stacked && !stack_fields) || (!assigned_vias && !stacked && stack_fields) {
+        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23 or 24; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -2111,7 +2125,8 @@ impl DocumentsEncoder {
 
 /// Keep legacy bytes until authored content requires a newer format. Select the highest
 /// applicable format: copper roles, base copper, copper thickness qualifiers or finished board
-/// thickness require 23; assembly profile adoptions at least 22; a placement origin at least 21;
+/// thickness require 23; explicit via intent requires 24 and accepts those stack fields and
+/// assembly profile adoptions. Profile adoptions alone require 22; a placement origin at least 21;
 /// zone outlines at least 20; validated board rules at least 19; and authored copper locks
 /// at least 18. Each format accepts earlier fields. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
@@ -2141,7 +2156,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         });
 
     if let Some(setup) = setup {
-        let format = if setup.requires_stack_format() {
+        let format = if board.vias.iter().any(|via| via.net_assignment.is_some()) {
+            ASSIGNED_VIA_BOARD_FORMAT
+        } else if setup.requires_stack_format() {
             STACK_BOARD_FORMAT
         } else if !board.assembly_profiles.is_empty() {
             PROFILE_BOARD_FORMAT
@@ -2218,7 +2235,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"\n    }\n  },\n");
     } else {
-        let format = if !board.assembly_profiles.is_empty() {
+        let format = if board.vias.iter().any(|via| via.net_assignment.is_some()) {
+            ASSIGNED_VIA_BOARD_FORMAT
+        } else if !board.assembly_profiles.is_empty() {
             PROFILE_BOARD_FORMAT
         } else if board.placement_origin.is_some() {
             ORIGIN_BOARD_FORMAT
