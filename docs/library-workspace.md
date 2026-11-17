@@ -19,8 +19,8 @@ type, colors, spacing and interaction states define the visual treatment.
 | Shared state | Per-pane browsing state and existing view placement/lifecycle. Live MCP can choose and inspect Library. Browsing and source changes preserve project bytes, revision, dirty state and undo history. |
 
 The mockups also illustrate later work. New library, New symbol, New footprint,
-New generic part, Edit, Edit copy and the part form belong to #308/#309. Export
-belongs to #310; Category/Package/Manufacturer/Value filtering and Compare to
+New generic part, Edit, Edit copy and the part form belong to #308/#309; Export to
+#310. Category/Package/Manufacturer/Value filtering and Compare to
 #311; update availability and adoption to #312; Links to #314. Git and remote
 source examples belong to #93/#94. Planned controls may remain visible with the shared disabled treatment, as requested by @travle1; they do not execute actions. Invented sample records do not enter the catalog. The Parts Catalog placement picker remains
 its existing workflow.
