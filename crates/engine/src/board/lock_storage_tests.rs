@@ -135,51 +135,59 @@ fn malformed_lock_flags_are_refused_before_project_construction() {
     assert!(decode_documents(&bad).unwrap_err().contains("duplicate field `locked`"));
 }
 
-/// Format 34 retains earlier optional origin, rules, zones, copper and copper locks with no data loss.
+/// Format 34 retains optional origin, rules, zones, copper and copper locks, with or without
+/// material reports, and unlocking restores the remaining records without data loss.
 #[test]
 fn footprint_lock_format_composes_with_preexisting_board_extensions() {
-    let mut session = track::tests::routed_fixture();
-    let layer = track::tests::copper_layers(&session)[0];
-    track::tests::route(&mut session, layer, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 10_000_000, y_nm: 30_000_000 }]).unwrap();
-    let board = session.project().unwrap().board_target().unwrap().board;
-    for (command, mut params) in [
-        (track::ADD_VIA, json!({"at":{"x_nm":0,"y_nm":40_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000})),
-        (rules::SET_RULES, json!({"rules":rules::Values::default()})),
-        (origin::SET_PLACEMENT_ORIGIN, json!({"origin":{"kind":"point","x_nm":2_000_000,"y_nm":3_000_000}})),
-    ] {
-        params["board"] = json!(board);
-        params["expected_revision"] = json!(session.revision());
-        session.apply(command, &params).unwrap();
-    }
-    let p = session.snapshot().unwrap();
-    let anchor = p.inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
-    session
-        .apply(
-            zones::ADD_ZONE,
-            &json!({"layer":layer,"target":{"kind":"derived","anchor":anchor},
+    for reports in [false, true] {
+        let mut session = track::tests::routed_fixture();
+        let layer = track::tests::copper_layers(&session)[0];
+        track::tests::route(&mut session, layer, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 10_000_000, y_nm: 30_000_000 }]).unwrap();
+        let board = session.project().unwrap().board_target().unwrap().board;
+        for (command, mut params) in [
+            (track::ADD_VIA, json!({"at":{"x_nm":0,"y_nm":40_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000})),
+            (rules::SET_RULES, json!({"rules":rules::Values::default()})),
+            (origin::SET_PLACEMENT_ORIGIN, json!({"origin":{"kind":"point","x_nm":2_000_000,"y_nm":3_000_000}})),
+        ] {
+            params["board"] = json!(board);
+            params["expected_revision"] = json!(session.revision());
+            session.apply(command, &params).unwrap();
+        }
+        let p = session.snapshot().unwrap();
+        let anchor = p.inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+        session
+            .apply(
+                zones::ADD_ZONE,
+                &json!({"layer":layer,"target":{"kind":"derived","anchor":anchor},
         "points":[{"x_nm":0,"y_nm":50_000_000},{"x_nm":10_000_000,"y_nm":50_000_000},{"x_nm":10_000_000,"y_nm":60_000_000}],
         "expected_revision":session.revision()}),
-        )
-        .unwrap();
-    let p = session.snapshot().unwrap();
-    session
-        .apply(
-            track::SET_COPPER_LOCKED,
-            &json!({"board":board,"tracks":[p.board.tracks[0].id],"vias":[p.board.vias[0].id],
+            )
+            .unwrap();
+        let p = session.snapshot().unwrap();
+        session
+            .apply(
+                track::SET_COPPER_LOCKED,
+                &json!({"board":board,"tracks":[p.board.tracks[0].id],"vias":[p.board.vias[0].id],
         "locked":true,"expected_revision":session.revision()}),
-        )
-        .unwrap();
-    let original = session.snapshot().unwrap();
-    let before = encode_documents(original.clone()).unwrap();
-    let saved = encode_documents(with_lock(&original, true)).unwrap();
-    let path = test_board_path(&saved);
-    let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
-    expected["format"] = json!("pcbcraft-board/34");
-    expected["footprints"][0]["locked"] = json!(true);
-    assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
-    let loaded = decode_documents(&saved).unwrap();
-    assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
-    assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
+            )
+            .unwrap();
+        if reports {
+            add_material_report(&mut session);
+        }
+        let original = session.snapshot().unwrap();
+        let before = encode_documents(original.clone()).unwrap();
+        let saved = encode_documents(with_lock(&original, true)).unwrap();
+        let path = test_board_path(&saved);
+        let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
+        expected["format"] = json!("pcbcraft-board/34");
+        expected["footprints"][0]["locked"] = json!(true);
+        assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
+        let loaded = decode_documents(&saved).unwrap();
+        assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
+        assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
+        let packed = encode_packed(loaded).unwrap();
+        assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+    }
 }
 
 /// Add an unused synthetic report through the production setup command, without changing
