@@ -172,3 +172,12 @@ broad replay. These short shared-host runs do not qualify statistical tails,
 native-window/browser rendered latency, allocation, large-class capacity or
 Wayland endurance. Headless dark/light GPU images verify the reused route halo;
 WASI correctness and browser compilation cover separate boundaries.
+
+## Zone-fill slice (#232)
+
+The [bounded #232 evidence](../tools/performance/baselines/issue232/README.md)
+retains the saved-project navigation pair, raw samples, source/artifact hashes
+and packaged-worker success/failure record. The navigation fixture lacks a closed
+outline and correctly has unavailable fill; it does not measure filled-material
+rendering or refill throughput. The final packaged demo exercises actual automatic
+fill, while native window/endurance and realistic-board capture costs remain open.
