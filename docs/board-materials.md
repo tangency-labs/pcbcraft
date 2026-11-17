@@ -205,12 +205,13 @@ Each thickness is a positive whole number of nanometers up to 100 mm, and a tole
 keeps the lower bound positive and the upper bound within 100 mm. The minimum may not
 exceed the nominal value. These are declarations: they cover plating, coatings and
 fabrication variation and are never computed from, or checked against, the laminate
-sum. Checks that need one board thickness take the declared
-minimum when given, otherwise the nominal value, and report which one they used.
+sum. `BoardSetup::board_thickness_for_checks` returns the declared minimum when
+present, otherwise the nominal value, together with its basis. Existing checks do
+not yet consume this declaration.
 
 Every field is optional and omitted means unknown; zero is never a placeholder.
-Engine code reads them through `BoardSetup::copper`, `copper_stack` and
-`board_thickness_for_checks`; MCP clients read them from the inspected setup and
+Engine accessors are `BoardSetup::copper`, `copper_stack` and
+`board_thickness_for_checks`; MCP clients read the fields from the inspected setup and
 change them with `pcb.set_board_setup`, as one undo step. A copper-count reduction
 refuses to drop a copper layer that carries any of them. The two-layer starting
 stackups replace copper thickness, so they clear its tolerance, basis and base copper
@@ -263,9 +264,11 @@ These setup snapshots carry no required electrical/fabrication constraints or pr
 paths and do not establish a live link to their source file. Every export creates a
 new snapshot identity. Broader fabrication/process profiles remain planned.
 
-Import stages a preview. Layer IDs are rebased to the target's physical stack and
-unambiguous technical roles while extra target layers survive, preserving drawing
-ownership. Existing immutable material pins cannot be replaced by contradictory data.
+Import stages a preview. Layer IDs are rebased to the target's surviving physical
+stack and unambiguous technical roles. Extra target technical layers survive,
+preserving their drawing ownership; copper-count changes use the ordinary
+authored-stratum/removal checks. Existing immutable material pins cannot be replaced
+by contradictory data.
 Apply publishes stackup/materials/silkscreen through the shared revision-checked command,
 with one Undo; Cancel leaves the project unchanged. Export captures the current draft
 without saving or dirtying the project. Desktop publication uses an atomic new file

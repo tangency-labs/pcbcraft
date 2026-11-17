@@ -737,7 +737,7 @@ fn board_format_23_carries_zone_outlines() {
     }
 }
 
-/// Without a declared minimum, checks use the nominal finished thickness and say so.
+/// Without a declared minimum, the accessor returns the nominal finished thickness and its basis.
 #[test]
 fn board_thickness_for_checks_says_which_value_it_uses() {
     let mut s = session(2);

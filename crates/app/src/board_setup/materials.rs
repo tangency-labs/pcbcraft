@@ -35,7 +35,8 @@ fn text(value: &str) -> Option<String> {
 }
 
 /// Read-only summaries of the thermal and insulation reports, each followed by its source.
-/// Unknown conditions are named as unspecified rather than shown as a default.
+/// Missing axes and CTI values are labelled unspecified; other absent conditions are omitted,
+/// never defaulted.
 fn thermal_and_insulation_lines(material: &Material) -> Vec<String> {
     let axis = |axis: Option<MeasurementAxis>| axis.map(|a| format!("{a:?}-axis")).unwrap_or_else(|| "axis unspecified".into());
     let celsius = |milli_c: i64| milli_c as f64 / 1000.;

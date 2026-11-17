@@ -88,10 +88,10 @@ impl SetupProfile {
     }
 }
 impl BoardSetup {
-    /// Rebase a portable profile onto this board's retained physical and unambiguous technical
-    /// layer IDs. Extra target layers survive, preserving graphic ownership. Existing material
-    /// pins cannot be rewritten; ambiguity/name collisions fail through ordinary setup validation.
-    /// Shrinking authored strata retains the same protection as a manual copper-count edit.
+    /// Rebase a portable profile onto this board's surviving physical and unambiguous technical
+    /// layer IDs. Extra target technical layers survive, preserving their graphic ownership.
+    /// Existing material pins cannot be rewritten; ambiguity/name collisions fail through ordinary
+    /// setup validation. Copper-count changes use the ordinary authored-stratum/removal checks.
     /// The profile's declared finished board thickness, tolerance and minimum replace the board's.
     pub fn with_profile(&self, profile: &SetupProfile) -> Result<Self, CommandError> {
         profile.validate().map_err(CommandError::InvalidParams)?;
