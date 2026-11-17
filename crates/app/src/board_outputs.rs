@@ -1,9 +1,9 @@
 //! Fabrication output export: the existing Gerber/drill archive and an integrity sidecar.
 //!
-//! Both are captured deterministically on the UI thread;
-//! only the save dialog and filesystem write run on a worker. One export runs at
-//! a time. Dropping the application never joins the worker, and a worker that stops reports a
-//! disconnect instead of leaving the slot busy forever.
+//! The UI thread captures deterministic ZIP bytes and member records. A native worker selects
+//! the destination, serializes the filename-bound sidecar and writes the files; browser builds
+//! request downloads instead. One export runs at a time. Dropping the application never joins
+//! the worker, and a worker that stops reports a disconnect instead of leaving the slot busy.
 use pcbcraft_engine::board::fabrication::Archive;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
