@@ -260,6 +260,14 @@ rule record. Older headers reject rules. Boards without rules retain their earli
 encoding; removing rules restores the format required by the remaining data.
 See [board-rules.md](board-rules.md) for validation, resolution and reset behavior.
 
+Board format `pcbcraft-board/22` adds optional scoped `net_assignment` objects to
+vias and accepts the earlier board fields. It is selected only while at least
+one explicit assignment exists. Omission means automatic inheritance, while
+null/nil addresses and assignment fields under older headers are refused.
+Historical unresolved targets remain readable. See [via net assignments](via-net-assignments.md)
+for the registry, accepted-board and clipboard policy; no derived copper membership
+is stored.
+
 Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin with a
 stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
 in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier

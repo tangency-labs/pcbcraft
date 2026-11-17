@@ -45,9 +45,11 @@ pub use super::rules::Values as Rules;
 pub enum Kind {
     /// Applicable hard requirements contradict, so the affected checking result is incomplete.
     NetClassConflict,
+    /// Saved via intent no longer resolves to one active net on this board.
+    ViaNetUnresolved,
     /// Assigned policy could not be captured, so checking cannot establish a complete result.
     UnsupportedNetClasses,
-    /// One physical copper island joins pads from distinct intended nets, independently of
+    /// One physical copper island joins copper with distinct intended nets, independently of
     /// the clearance rule, including when the required clearance is zero.
     Short,
     Clearance,
@@ -62,12 +64,12 @@ pub enum Kind {
     CourtyardOverlap,
 }
 
-/// Intended membership participating in a short. `net` is an index in this snapshot's accepted
-/// baseline, or its project-wide logical graph when no baseline exists, never a persisted ID.
+/// Intended membership participating in a short. `net` is snapshot-local accepted or logical
+/// membership, extended by explicit via-only intent, never a persisted ID.
 /// Names are display text only; component-terminal keys identify the involved logical objects.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ShortNet {
-    /// Index in the checked snapshot's accepted baseline or logical graph, never a saved net ID.
+    /// Index in this checked snapshot's membership projection, never a saved net ID.
     pub net: usize,
     /// Display label for this membership; equal labels do not imply equal nets.
     pub name: String,
@@ -334,26 +336,52 @@ impl BoardView<'_> {
     fn check_shorts(self, lands: &[Land], members: &[Vec<usize>], items: &[Item], found: &mut Findings) {
         let project = self.project();
         let baseline = project.board.baseline.as_ref();
-        let accepted = baseline.map(|baseline| baseline.terminal_net_index());
         let graph = baseline.is_none().then(|| project.electrical_connectivity());
+        let intent = project.board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership(project, lands, self.tracks().len(), self.vias(), &intent);
+        for via in self.vias() {
+            if let Some(address) = via.net_assignment.filter(|a| project.via_net_state(*a) != "active") {
+                found.push(Violation {
+                    kind: Kind::ViaNetUnresolved,
+                    message: format!("Via net assignment is {}; review or clear its target.", project.via_net_state(address)),
+                    at: via.at,
+                    items: vec![via.id.to_string()],
+                    nets: Vec::new(),
+                });
+            }
+        }
         let memberships: Vec<_> = lands
             .iter()
             .map(|land| {
                 let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
                 let (component, terminal) = project.board.component_pin_for(pad)?;
-                let net = if let Some(accepted) = &accepted {
-                    *accepted.get(&(component, terminal))?
-                } else {
-                    graph.as_ref()?.net_index_for(project.component_terminal(component, terminal)?)?
-                };
-                Some((net, TerminalKey { component, terminal: terminal.to_owned() }))
+                Some(TerminalKey { component, terminal: terminal.to_owned() })
             })
             .collect();
         for island in members {
+            let assigned = island
+                .iter()
+                .filter_map(|n| n.checked_sub(lands.len() + self.tracks().len()))
+                .filter_map(|i| self.vias().get(i))
+                .find(|v| v.net_assignment.is_some_and(|a| project.via_net_state(a) == "active"));
+            if let Some(via) = assigned
+                && !island.iter().any(|n| *n < lands.len())
+            {
+                found.push(Violation {
+                    kind: Kind::Unconnected,
+                    message: "Assigned via island has no physical pad connection.".into(),
+                    at: via.at,
+                    items: island.iter().map(|n| items[*n].name.clone()).collect(),
+                    nets: Vec::new(),
+                });
+            }
             let mut nets = BTreeMap::<usize, Vec<TerminalKey>>::new();
             for &node in island {
-                if let Some(Some((net, terminal))) = memberships.get(node) {
-                    nets.entry(*net).or_default().push(terminal.clone());
+                if let Some(net) = intrinsic[node] {
+                    let terminals = nets.entry(net).or_default();
+                    if let Some(Some(terminal)) = memberships.get(node) {
+                        terminals.push(terminal.clone());
+                    }
                 }
             }
             if nets.len() < 2 {
@@ -364,12 +392,17 @@ impl BoardView<'_> {
                 .map(|(net, mut terminals)| {
                     terminals.sort();
                     terminals.dedup();
-                    let name = baseline.and_then(|baseline| baseline.net_name(net)).or_else(|| graph.as_ref().map(|graph| graph.net_name(net)));
+                    let name = intent
+                        .names
+                        .get(&net)
+                        .cloned()
+                        .or_else(|| baseline.and_then(|baseline| baseline.net_name(net)))
+                        .or_else(|| graph.as_ref().map(|graph| graph.net_name(net)));
                     ShortNet { net, name: name.unwrap_or_default(), terminals }
                 })
                 .collect();
             let names: Vec<_> = nets.iter().map(|net| format!("{} (net {})", net.name, net.net + 1)).collect();
-            let at = island.iter().find_map(|&node| memberships.get(node)?.as_ref().map(|_| items[node].at));
+            let at = island.first().map(|node| items[*node].at);
             let mut names_of_items: Vec<_> = island.iter().map(|&node| items[node].name.clone()).collect();
             names_of_items.sort();
             if let Some(at) = at {

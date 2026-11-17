@@ -88,6 +88,9 @@ impl PcbApp {
         let names_pending = net_presentation.names_pending;
         let unit = self.preferences.units;
         let revision = self.session.revision();
+        if target.vias().iter().any(|v| state.tracks.selected.contains(&v.id)) {
+            state.tracks.refresh_net_choices(target, revision);
+        }
         // The ratsnest for this revision, through the same per-input cache the canvas reads.
         let unrouted = state.ratsnest(target, input).map(|ratsnest| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
@@ -160,7 +163,15 @@ impl PcbApp {
                         if !nets.is_empty() {
                             property(ui, "Nets", &nets.into_iter().map(String::as_str).collect::<Vec<_>>().join(", "));
                         }
-                        copper_edit = copper_properties(ui, target, &state.tracks.selected, unit, view_id, revision);
+                        copper_edit = copper_properties(
+                            ui,
+                            target,
+                            &state.tracks.selected,
+                            unit,
+                            view_id,
+                            revision,
+                            state.tracks.via_choices.as_ref().map(|(_, _, choices)| choices.as_slice()).unwrap_or_default(),
+                        );
                     }
                     [] => {
                         property(ui, "Board", target.name());

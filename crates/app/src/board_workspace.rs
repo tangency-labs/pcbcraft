@@ -337,6 +337,38 @@ impl PcbApp {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         self.active_layer_field(ui, compact);
         self.board_size_controls(ui, enabled, compact);
+        if self.views.active.board.tracks.via_tool {
+            let revision = self.session.revision();
+            if let Some(project) = self.session.project() {
+                let view_id = self.views.active.id();
+                let state = &mut self.views.active.board.tracks;
+                if let Some(board) = project.board_target() {
+                    if let Some(view) = project.board_view(board) {
+                        state.refresh_net_choices(view, revision);
+                    }
+                    let choices = &state.via_choices.as_ref().map(|(_, _, c)| c.as_slice()).unwrap_or_default();
+                    let current = state.via_target.as_ref().map_or_else(
+                        || "Automatic".to_owned(),
+                        |target| choices.iter().find(|c| &c.target == target).map_or_else(|| "Selected net".into(), |c| c.label.clone()),
+                    );
+                    let mut action = None;
+                    workspace::ribbon_field(ui, "Via net", compact, |ui| {
+                        let (response, choice) = crate::board_net_choice::picker(
+                            ui,
+                            "Via placement net",
+                            egui::Id::unique(("via_net", view_id, revision)),
+                            choices,
+                            &current,
+                        );
+                        action = choice;
+                        response
+                    });
+                    if let Some(choice) = action {
+                        state.via_target = choice;
+                    }
+                }
+            }
+        }
     }
 
     /// Analysis keeps physical checks board-gated while shared class authoring needs only a project.

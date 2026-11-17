@@ -515,3 +515,8 @@ preferences; explicit changed copper must satisfy applicable hard dimensions.
 Queries and DRC retain per-object class IDs, revisions and assignment origins.
 See the [consumer contract](net-class-consumers.md) for parameters, provenance,
 stale authority and operation-specific conflict behavior.
+
+Standalone via net intent uses `pcb.add_via` with optional `target`, or
+`pcb.set_via_net` with `vias` and either `target` or `automatic: true`. Both share
+revision-checked GUI transactions. See [via net assignments](via-net-assignments.md)
+for target qualification, inspection and unresolved-state behavior.

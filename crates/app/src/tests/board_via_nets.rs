@@ -1,0 +1,143 @@
+//! Via assignment acceptance uses ordinary placement/Properties controls and canvas input.
+use super::board_tracks::{at, routable, vias};
+use super::*;
+use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
+
+/// Add a named singleton through the shared command so chooser rows use a stable readable name.
+fn ground(h: &mut Harness<'_, PcbApp>) {
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run(pcbcraft_engine::net_labels::ADD, &json!({"name":"GND","style":"global","x_nm":-50_000_000,"y_nm":0,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+}
+/// Choose net intent using the same shared Craft dropdown used by native and browser hosts.
+fn choose(h: &mut Harness<'_, PcbApp>, field: &str, option: &str) {
+    click(h, field);
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, option).click();
+    h.run();
+}
+/// Wait only for the already submitted bounded native preparation, without sending further input.
+fn settle(h: &mut Harness<'_, PcbApp>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().views.active.board.tracks.busy() && vias(h).is_empty() {
+        assert!(std::time::Instant::now() < deadline, "via preparation did not settle");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    h.run();
+}
+/// Place a via with real canvas input and end repeat placement so ordinary selection is available.
+fn place(h: &mut Harness<'_, PcbApp>) {
+    let p = at(h, Point { x_nm: 5_080_000, y_nm: 5_080_000 });
+    click_canvas_at(h, p);
+    settle(h);
+    assert_eq!(vias(h).len(), 1, "{:?}", h.state().message);
+    h.key_press(Key::Escape);
+    h.run();
+}
+
+/// Choosing a placement net authors nothing until the click; Properties clears/sets one undo step.
+#[test]
+fn via_assignment_controls_place_clear_and_restore_history() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        ground(&mut h);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.state_mut().start_via();
+        h.run();
+        choose(&mut h, "Via placement net", "GND");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        place(&mut h);
+        let via = vias(&h)[0].clone();
+        assert!(via.net_assignment.is_some());
+        let project = h.state().session.project().unwrap();
+        let view = project.boards().next().unwrap();
+        assert_eq!(view.copper_nets()[&via.id], "GND");
+        assert_eq!(view.inspect_vias()[0]["connected_to_pad"], false);
+        h.state_mut().views.active.board.tracks.selected.insert(via.id);
+        h.state_mut().views.active.board.properties_collapsed = false;
+        h.run();
+        let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        choose(&mut h, "Via net", "Automatic");
+        assert!(vias(&h)[0].net_assignment.is_none());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+        choose(&mut h, "Via net", "GND");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved, "same identity is a no-op");
+    }
+}
+
+/// Dismissing the chooser or placement leaves native bytes/history untouched; new projects reset intent.
+#[test]
+fn via_assignment_cancel_and_project_replacement_preserve_authority() {
+    let mut h = routable();
+    ground(&mut h);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().start_via();
+    h.run();
+    click(&mut h, "Via placement net");
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    if !h.state().views.active.board.tracks.via_tool {
+        h.state_mut().start_via();
+        h.run();
+    }
+    choose(&mut h, "Via placement net", "GND");
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.state_mut().run("project.new", &json!({"create_board":true}));
+    h.run();
+    assert!(!h.state().views.active.board.tracks.via_tool);
+    assert!(h.state().views.active.board.tracks.via_target.is_none());
+}
+
+/// The fourth ribbon field participates in the existing compact wrapping layout in both themes.
+#[test]
+fn via_net_picker_fits_compact_and_wide_ribbons() {
+    for (size, theme) in [(egui::vec2(1600., 1000.), ThemeChoice::Dark), (egui::vec2(700., 700.), ThemeChoice::Light)] {
+        let mut h = routable();
+        ground(&mut h);
+        h.set_size(size);
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        h.state_mut().start_via();
+        h.run();
+        assert!(fully_visible(&h, "Via placement net"));
+        choose(&mut h, "Via placement net", "GND");
+        assert!(h.state().views.active.board.tracks.via_target.is_some());
+        assert!(fully_visible(&h, "Via placement net"));
+    }
+}
+
+/// A split peer keeps its own placement policy while both panes inspect the committed via identity.
+#[test]
+fn split_via_placement_choices_stay_view_local() {
+    let mut h = routable();
+    ground(&mut h);
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let views = h.state().views.hosts[&crate::editor_layout::HostId::ROOT].layout.visible_views();
+    assert_eq!(views.len(), 2);
+    let ctx = h.ctx.clone();
+    h.state_mut().activate_editor(&ctx, views[0]);
+    h.run();
+    h.state_mut().start_via();
+    h.run();
+    choose(&mut h, "Via placement net", "GND");
+    assert!(h.state().views.view(views[0]).unwrap().board.tracks.via_target.is_some());
+    assert!(h.state().views.view(views[1]).unwrap().board.tracks.via_target.is_none());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().activate_editor(&ctx, views[1]);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.state_mut().start_via();
+    h.run();
+    assert!(h.state().views.active.board.tracks.via_target.is_none());
+}

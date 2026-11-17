@@ -79,6 +79,7 @@ pub(super) fn copper_properties(
     unit: units::Unit,
     view: crate::editor_view::ViewId,
     revision: u64,
+    net_choices: &[crate::board_net_choice::NetChoice],
 ) -> Option<(&'static str, serde_json::Value)> {
     use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MAX_WIDTH_NM, MIN_VIA_DRILL_NM, MIN_WIDTH_NM};
     let tracks: Vec<_> = target.tracks().iter().filter(|track| selected.contains(&track.id)).collect();
@@ -135,6 +136,37 @@ pub(super) fn copper_properties(
                 pcbcraft_engine::SET_TRACK_WIDTH,
                 serde_json::json!({"tracks":tracks.iter().map(|t| t.id).collect::<Vec<_>>(),"width_nm":width}),
             ));
+        }
+        ui.end_row();
+    }
+    if let Some(first) = vias.first() {
+        let choices = net_choices;
+        let current = if vias.iter().any(|v| v.net_assignment != first.net_assignment) {
+            "Mixed".to_owned()
+        } else if let Some(address) = first.net_assignment {
+            let state = target.via_net_state(address);
+            choices.iter().find(|c| c.id == Some(address.net)).map_or_else(
+                || format!("{} ({state})", address.net),
+                |c| if state == "active" { c.label.clone() } else { format!("{} ({state})", c.label) },
+            )
+        } else {
+            "Automatic".to_owned()
+        };
+        ui.label("Net");
+        if let Some(choice) = ui
+            .add_enabled_ui(!any_locked, |ui| {
+                crate::board_net_choice::picker(ui, "Via net", egui::Id::unique(("via_net_edit", salt, revision)), choices, &current)
+            })
+            .inner
+            .1
+        {
+            let mut params = serde_json::json!({"vias":vias.iter().map(|v| v.id).collect::<Vec<_>>()});
+            if let Some(target) = choice {
+                params["target"] = serde_json::json!(target);
+            } else {
+                params["automatic"] = serde_json::json!(true);
+            }
+            edit = Some((pcbcraft_engine::SET_VIA_NET, params));
         }
         ui.end_row();
     }

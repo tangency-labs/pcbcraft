@@ -62,6 +62,7 @@ pub(super) enum Action {
 fn label(kind: Kind) -> &'static str {
     match kind {
         Kind::NetClassConflict => "Conflicting net-class rules",
+        Kind::ViaNetUnresolved => "Unresolved via net",
         Kind::UnsupportedNetClasses => "Unsupported net-class rules",
         Kind::Short => "Short",
         Kind::Clearance => "Clearance",

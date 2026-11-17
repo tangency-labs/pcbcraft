@@ -24,7 +24,9 @@ conflicts. Terminal-to-pad correspondence and the accepted physical connectivity
 baseline determine which copper carries that intent. Pending schematic changes
 can combine current class intent on an accepted physical net; classification does
 not silently accept a pending board update. Unknown copper acquires no invented
-net identity or class.
+net identity or class. [Explicit via assignments](via-net-assignments.md) supply
+the same scoped authority without requiring a netted pad; their physical islands
+remain separate until geometry connects them.
 
 Omitted track/via sizes use the starting contact's effective preferences, falling
 back to board preferences in free space. The GUI adopts those defaults at pickup

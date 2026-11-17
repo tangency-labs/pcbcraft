@@ -995,7 +995,7 @@ impl PcbApp {
             workspace::RibbonLayout {
                 workspaces: workspace::Workspaces { entries: &entries, ..WORKSPACES },
                 quick: &quick,
-                pinned_fields: if board { 3 } else { 0 },
+                pinned_fields: if board { if self.views.active.board.tracks.via_tool { 4 } else { 3 } } else { 0 },
                 controls_label: "Layer & sizes",
             },
             |ui, section| match section {
@@ -2815,3 +2815,5 @@ impl eframe::App for PcbApp {
 
 #[cfg(test)]
 mod tests;
+
+mod board_net_choice;

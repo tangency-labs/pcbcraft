@@ -40,6 +40,7 @@ pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
+pub use board::via_nets::SET_VIA_NET;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -1982,6 +1983,12 @@ const CATALOG: &[Command] = &[
         params: &[
             BOARD,
             EXPECTED_REVISION,
+            Param {
+                name: "target",
+                required: false,
+                summary: "Explicit scoped net target; omission follows contacted copper",
+                kind: ParamKind::ClassTarget,
+            },
             Param { name: "at", required: true, summary: "Via center in integer nanometers", kind: ParamKind::Point },
             Param { name: "via_diameter_nm", required: false, summary: "Via pad diameter in integer nanometers", kind: ParamKind::ViaDiameter },
             Param {
@@ -2024,6 +2031,18 @@ const CATALOG: &[Command] = &[
             EXPECTED_REVISION,
             Param { name: "tracks", required: true, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
             Param { name: "width_nm", required: true, summary: "Track width in integer nanometers", kind: ParamKind::TrackWidth },
+        ],
+    },
+    Command {
+        id: SET_VIA_NET,
+        title: "Assign Via Net",
+        summary: "Set explicit via net intent, or clear it with automatic:true. Conflicting contact is refused atomically.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "vias", required: true, summary: "Unique existing via UUIDs", kind: ParamKind::TrackIds },
+            Param { name: "target", required: false, summary: "Active scoped net or current derived anchor", kind: ParamKind::ClassTarget },
+            Param { name: "automatic", required: false, summary: "True clears explicit assignment; exclusive with target", kind: ParamKind::Closed },
         ],
     },
     Command {
@@ -3001,6 +3020,7 @@ impl Session {
             | MOVE_TRACKS
             | RESHAPE_TRACKS
             | SET_TRACK_WIDTH
+            | SET_VIA_NET
             | SET_VIA_SIZE
             | DELETE_TRACKS
             | SET_COPPER_LOCKED
@@ -3062,7 +3082,7 @@ impl Session {
             let mut inspected = json!({
                 "name": p.name,
                 "assembly_profiles":p.assembly_profiles(),
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -3290,6 +3310,7 @@ impl Session {
                 | MOVE_TRACKS
                 | RESHAPE_TRACKS
                 | SET_TRACK_WIDTH
+                | SET_VIA_NET
                 | SET_VIA_SIZE
                 | DELETE_TRACKS
                 | SET_COPPER_LOCKED
@@ -3568,7 +3589,9 @@ impl Session {
                 self.export_fabrication(params)?;
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
-            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
+            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_NET | SET_VIA_SIZE | DELETE_TRACKS => {
+                self.edit_tracks(id, params)?
+            }
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
