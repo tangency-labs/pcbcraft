@@ -148,6 +148,21 @@ impl Drawing {
 }
 
 impl Drawings {
+    /// Materialize the view's legacy outline only when an authored drawing edit needs it.
+    pub(super) fn capture(view: BoardView<'_>) -> Self {
+        view.project().board.drawings.clone().unwrap_or_else(|| {
+            let items = view.drawings();
+            let layers = view
+                .layers()
+                .into_iter()
+                .filter(|layer| {
+                    items.iter().any(|item| item.layer == layer.id)
+                        && !view.setup().is_some_and(|setup| setup.layers().iter().any(|existing| existing.id == layer.id))
+                })
+                .collect();
+            Self { layers, items }
+        })
+    }
     /// Validate the complete layer/graphic candidate before adoption, including every reference.
     /// Technical additions cannot shadow a configured layer, introduce copper, or exceed bounds.
     pub(crate) fn validate(&mut self, project: &Project) -> Result<(), String> {
@@ -209,18 +224,7 @@ impl Session {
         let project = self.open_project()?;
         let target = project.resolve_board(None)?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        let mut data = project.board.drawings.clone().unwrap_or_else(|| {
-            let items = view.drawings();
-            let layers = view
-                .layers()
-                .into_iter()
-                .filter(|layer| {
-                    items.iter().any(|item| item.layer == layer.id)
-                        && !view.setup().is_some_and(|setup| setup.layers().iter().any(|existing| existing.id == layer.id))
-                })
-                .collect();
-            Drawings { layers, items }
-        });
+        let mut data = Drawings::capture(view);
         let before = data.clone();
         if command == ADD_DRAWING {
             let layer: Uuid = serde_json::from_value(params["layer"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
