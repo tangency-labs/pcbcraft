@@ -1687,3 +1687,9 @@ The boundary-hatch follow-up uses @travle1's supplied KiCad screenshot only as
 a black-box appearance reference. Its bounded diagonal scan conversion and
 shared modifier/marquee selection integration are independently authored
 PCBcraft code; no external implementation or artwork was incorporated.
+
+
+The mixed-board M follow-up composes PCBcraft's existing physical pad-contact
+policy, immutable previews and revision-checked transactions. Its selection-wide
+translation is original PCBcraft code, introduced after @travle1 reproduced the
+missing group pickup while testing #231. It adds no dependency or artwork.

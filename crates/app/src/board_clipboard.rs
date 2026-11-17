@@ -85,7 +85,8 @@ pub(super) fn busy(state: &BoardState) -> bool {
 }
 /// Tools, including the view-only ruler, supersede a clipboard preview before canvas input runs.
 fn authored_tool(state: &BoardState) -> bool {
-    state.move_requested
+    state.movement.active()
+        || state.move_requested
         || state.rotate_requested != 0
         || state.flip_requested
         || state.draft.is_some()

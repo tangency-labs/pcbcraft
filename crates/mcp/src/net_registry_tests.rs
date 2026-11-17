@@ -413,7 +413,13 @@ fn zone_commands_share_live_and_headless_authority() {
     }
     assert_eq!(editor.session.project().unwrap().boards().next().unwrap().zones()[0].options.priority, 9);
     for (id, is_live) in [(json!(live_id), true), (headless_id, false)] {
-        let delete = json!({"command":zones::DELETE_ZONES,"inspect":false,"params":{"zones":[id],"expected_revision":revision+1}});
+        let movement = json!({"command":pcbcraft_engine::board::movement::MOVE_ITEMS,"inspect":false,"params":{"items":{"zones":[id]},"dx_nm":1000,"dy_nm":2000,"expected_revision":revision+1}});
+        if is_live {
+            call_editor(&mut editor, &json!({"method":"engine.execute","params":movement})).unwrap();
+        } else {
+            headless.call("engine.execute", movement).unwrap();
+        }
+        let delete = json!({"command":zones::DELETE_ZONES,"inspect":false,"params":{"zones":[id],"expected_revision":revision+2}});
         if is_live {
             call_editor(&mut editor, &json!({"method":"engine.execute","params":delete})).unwrap();
         } else {

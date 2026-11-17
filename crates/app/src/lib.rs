@@ -17,6 +17,7 @@ mod board_clipboard;
 mod board_drawing;
 mod board_drc;
 mod board_measure;
+mod board_move;
 mod board_outputs;
 mod board_panels;
 mod board_presets;
@@ -1944,7 +1945,8 @@ impl PcbApp {
             let route_keys = Modifiers { ctrl: self.views.active.board.tracks.tool && ctx.input(|i| i.modifiers.ctrl), ..Modifiers::NONE };
             if ctx.input_mut(|i| i.consume_key(route_keys, Key::Escape))
                 && (!board_clipboard::busy(&self.views.active.board)
-                    || (!self.views.active.board.measure.escape()
+                    || (!self.views.active.board.movement.escape()
+                        && !self.views.active.board.measure.escape()
                         && !self.views.active.board.tracks.escape()
                         && !self.views.active.board.zones.escape()
                         && !self.views.active.board.drawing.escape()
@@ -2673,7 +2675,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("PCB Layout", "Select connected copper", "U".to_owned()));
     list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
     list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
-    list.push(("PCB Layout", "Move selected tracks and vias", "M or left drag".to_owned()));
+    list.push(("PCB Layout", "Move selected PCB group", "M".to_owned()));
     list.push(("PCB Layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB Layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB Layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));

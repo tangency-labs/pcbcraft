@@ -535,3 +535,175 @@ fn zones_join_mixed_selection_without_losing_footprints() {
     h.run();
     assert_eq!(h.state().views.active.board.zones.selection().len(), 2);
 }
+
+/// Multiple footprints and a full mixed selection move rigidly from an empty-space M pickup.
+#[test]
+fn board_group_m_moves_all_selected_categories() {
+    for mixed in [false, true] {
+        let mut h = two_zones();
+        for (symbol, x) in [("symbol-2", 0), ("symbol-3", 25_400_000)] {
+            run(
+                &mut h,
+                pcbcraft_engine::PLACE_FOOTPRINT,
+                json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":x,"y_nm":0}),
+            );
+        }
+        h.run();
+        if mixed {
+            let board = h.state().session.project().unwrap().boards().next().unwrap();
+            let layer = board.zones()[0].layer;
+            let outline = board.layers().into_iter().find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline).unwrap().id;
+            run(
+                &mut h,
+                pcbcraft_engine::ADD_DRAWING,
+                json!({"layer":outline,"closed":false,"points":[{"x_nm":0,"y_nm":15_240_000},{"x_nm":10_160_000,"y_nm":15_240_000}]}),
+            );
+            run(
+                &mut h,
+                pcbcraft_engine::ADD_TRACKS,
+                json!({"layer":layer,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":20_320_000},{"x_nm":10_160_000,"y_nm":20_320_000}]}),
+            );
+            run(&mut h, pcbcraft_engine::ADD_VIA, json!({"at":{"x_nm":10_160_000,"y_nm":20_320_000}}));
+            h.run();
+            h.state_mut().select_all_board();
+        } else {
+            let ids = h.state().session.project().unwrap().boards().next().unwrap().footprint_ids().collect();
+            h.state_mut().views.active.board.selection = ids;
+        }
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let bytes = encode_documents(before.clone()).unwrap();
+        let revision = h.state().session.revision();
+        let start = at(&h, -5_080_000, -5_080_000);
+        let end = at(&h, 0, -2_540_000);
+        h.hover_at(start);
+        h.run();
+        h.key_press(Key::M);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        h.hover_at(end);
+        h.run();
+        click_canvas_at(&mut h, end);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision + 1);
+        let after = h.state().session.snapshot().unwrap();
+        let old = before.boards().next().unwrap();
+        let new = after.boards().next().unwrap();
+        for (a, b) in old.footprints().zip(new.footprints()) {
+            assert_eq!(b.position, Point { x_nm: a.position.x_nm + 5_080_000, y_nm: a.position.y_nm + 2_540_000 }, "mixed={mixed}");
+        }
+        for (a, b) in old.zones().iter().zip(new.zones()) {
+            for (a, b) in a.points.iter().zip(&b.points) {
+                assert_eq!(*b, if mixed { Point { x_nm: a.x_nm + 5_080_000, y_nm: a.y_nm + 2_540_000 } } else { *a });
+            }
+        }
+        if mixed {
+            for (a, b) in old.drawings().iter().zip(new.drawings()) {
+                for (a, b) in a.points.iter().zip(b.points) {
+                    assert_eq!(b, Point { x_nm: a.x_nm + 5_080_000, y_nm: a.y_nm + 2_540_000 });
+                }
+            }
+            for (a, b) in old.tracks().iter().zip(new.tracks()) {
+                assert_eq!(b.start, Point { x_nm: a.start.x_nm + 5_080_000, y_nm: a.start.y_nm + 2_540_000 });
+                assert_eq!(b.end, Point { x_nm: a.end.x_nm + 5_080_000, y_nm: a.end.y_nm + 2_540_000 });
+            }
+            for (a, b) in old.vias().iter().zip(new.vias()) {
+                assert_eq!(b.at, Point { x_nm: a.at.x_nm + 5_080_000, y_nm: a.at.y_nm + 2_540_000 });
+            }
+        }
+        assert_eq!(new.footprints().count(), old.footprints().count());
+        let after_bytes = encode_documents(after.clone()).unwrap();
+        assert_eq!(encode_documents(pcbcraft_engine::persistence::decode_documents(&after_bytes).unwrap()).unwrap(), after_bytes);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    }
+}
+
+/// Cancellation and authority changes discard the whole pickup; a fresh M at the same revision
+/// captures its new pointer anchor rather than reusing the cancelled gesture's cached origin.
+#[test]
+fn board_group_move_cancellation_and_stale_authority_are_atomic() {
+    for reason in ["escape", "secondary", "focus", "revision", "filter", "hidden"] {
+        let mut h = two_zones();
+        h.state_mut().select_all_board();
+        h.run();
+        let items = crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap());
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let start = at(&h, -5_080_000, -5_080_000);
+        let end = at(&h, 0, -2_540_000);
+        h.hover_at(start);
+        h.run();
+        h.key_press(Key::M);
+        h.run();
+        assert!(h.state().views.active.board.movement.active(), "{reason}");
+        h.hover_at(end);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        match reason {
+            "escape" => h.key_press(Key::Escape),
+            "secondary" => {
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+                    h.run();
+                }
+            }
+            "focus" => h.event(egui::Event::WindowFocused(false)),
+            "revision" => run(&mut h, "project.rename", json!({"name":"Unrelated edit during group pickup"})),
+            "filter" => {
+                let id = h.state().views.active.id();
+                h.state_mut().set_selection_filters(id, &json!({"zones":false})).unwrap();
+            }
+            "hidden" => {
+                let layer = h.state().views.active.board.active_layer.clone().unwrap();
+                h.state_mut().views.active.board.hidden_layers.insert(layer);
+            }
+            _ => panic!("Unknown test cancellation reason {reason}"),
+        }
+        h.run();
+        let cancelled = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.event(egui::Event::WindowFocused(true));
+        h.run();
+        assert!(!h.state().views.active.board.movement.active(), "{reason}");
+        click_canvas_at(&mut h, end);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), cancelled);
+        if reason == "escape" {
+            h.state_mut().select_board_items(items);
+            h.run();
+            h.hover_at(end);
+            h.run();
+            h.key_press(Key::M);
+            h.run();
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+            let next = at(&h, 5_080_000, 0);
+            h.hover_at(next);
+            h.run();
+            click_canvas_at(&mut h, next);
+            let points = &h.state().session.project().unwrap().boards().next().unwrap().zones()[0].points;
+            let old = pcbcraft_engine::persistence::decode_documents(&before).unwrap();
+            assert_eq!(points[0].x_nm, old.boards().next().unwrap().zones()[0].points[0].x_nm + 5_080_000);
+        }
+    }
+}
+
+/// The shared ribbon exposes group pickup too; its off-canvas invocation uses a selected anchor.
+#[test]
+fn board_group_ribbon_move_places_the_whole_zone_selection() {
+    let mut h = two_zones();
+    h.state_mut().select_all_board();
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let first = before.boards().next().unwrap().zones()[0].points[0];
+    assert!(!h.get_by_label("Move selected PCB items or text").accesskit_node().is_disabled());
+    click(&mut h, "Move selected PCB items or text");
+    assert!(h.state().views.active.board.movement.active());
+    let destination = at(&h, first.x_nm + 5_080_000, first.y_nm + 2_540_000);
+    click_canvas_at(&mut h, destination);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let after = h.state().session.project().unwrap().boards().next().unwrap();
+    for (old, new) in before.boards().next().unwrap().zones().iter().zip(after.zones()) {
+        assert_eq!(new.points[0], Point { x_nm: old.points[0].x_nm + 5_080_000, y_nm: old.points[0].y_nm + 2_540_000 });
+    }
+}

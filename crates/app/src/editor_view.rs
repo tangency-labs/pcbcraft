@@ -200,6 +200,7 @@ pub(super) struct SchematicState {
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
     pub(super) clipboard: crate::board_clipboard::State,
+    pub(super) movement: crate::board_move::State,
     pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
@@ -243,7 +244,7 @@ impl BoardState {
     }
     /// Whether a footprint or its reference currently owns a placement gesture.
     pub(super) fn editing_footprint(&self) -> bool {
-        self.draft.is_some() || self.reference_drag.is_some()
+        self.draft.is_some() || self.reference_drag.is_some() || self.movement.active()
     }
 
     /// Reuse connectivity for the same board and view/revision authority. Missing authority
@@ -697,6 +698,7 @@ impl EditorView {
         self.board.drc.cancel();
         self.schematic.clipboard = crate::clipboard::State::default();
         self.board.clipboard = crate::board_clipboard::State::default();
+        self.board.movement.cancel();
         self.board.drawing.cancel();
         self.board.zones.cancel();
         self.board.tracks.cancel();

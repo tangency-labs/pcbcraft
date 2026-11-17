@@ -149,6 +149,7 @@ impl PcbApp {
         }
         workspace::ribbon_separator(ui);
 
+        let group_moving = self.views.active.board.movement.active();
         let selected = enabled && self.views.active.board.selection.len() == 1;
         let reference = enabled && self.views.active.board.reference.selected.is_some();
         // Move also starts a copper move when tracks or vias are selected and no footprint is.
@@ -157,9 +158,9 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Move,
                 label: "Move",
-                description: "Move selected footprint, text or copper",
+                description: "Move selected PCB items or text",
                 shortcut: "M",
-                enabled: (selected || reference || copper) && !editing,
+                enabled: enabled && (selected_items || reference || copper) && !editing,
                 active: editing,
                 menu_check: None,
             },
@@ -168,7 +169,7 @@ impl PcbApp {
                 label: "Rotate",
                 description: "Rotate selected footprint or text counterclockwise",
                 shortcut: "R",
-                enabled: selected || reference || editing,
+                enabled: !group_moving && (selected || reference || editing),
                 active: false,
                 menu_check: None,
             },
@@ -177,7 +178,7 @@ impl PcbApp {
                 label: "Flip",
                 description: "Flip footprint to the other side",
                 shortcut: "F",
-                enabled: selected || self.views.active.board.draft.is_some(),
+                enabled: !group_moving && (selected || self.views.active.board.draft.is_some()),
                 active: false,
                 menu_check: None,
             },
@@ -546,6 +547,12 @@ impl PcbApp {
         }
         let highlighted = self.views.board_highlight_for(id, &self.session);
         let label = if self.views.is_split() { format!("PCB canvas {}", id.0 + 1) } else { "PCB canvas".to_owned() };
+        if self.board_move_ready(ui.ctx(), id, enabled)
+            && let Some(widget) = self.views.view(id).map(|v| v.widget_id())
+        {
+            ui.push_id(widget, |ui| shell::canvas(ui, |ui| self.board_move_canvas(ui, id, &label)));
+            return;
+        }
         if self.board_clipboard_ready(ui.ctx(), id, enabled)
             && let Some(widget) = self.views.view(id).map(|v| v.widget_id())
         {

@@ -31,6 +31,11 @@ selection. A left-to-right box contains whole outlines; a right-to-left box
 crosses their edges. Zones can join a mixed board selection, and Delete removes
 the complete selection in one undo step. Hatch marks are short diagonal strokes
 along the boundary, leaving the interior clear.
+With multiple board objects selected, M picks up the complete group, including
+zones, graphics, footprints, tracks and vias. Click places it in one undo step;
+Escape or right-click cancels without changing the selection or document. Explicitly
+selected tracks translate once; unselected track ends on moved pads follow the
+existing footprint movement policy.
 
 With a zone selected, **Properties** edits its net, copper layer, priority,
 clearance override, thermal gap, spoke width, connection style and minimum island

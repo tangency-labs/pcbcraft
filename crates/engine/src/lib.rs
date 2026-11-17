@@ -944,6 +944,18 @@ const CATALOG: &[Command] = &[
         params: &[BOARD, EXPECTED_REVISION, Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" }],
     },
     Command {
+        id: board::movement::MOVE_ITEMS,
+        title: "Move PCB items",
+        summary: "Translate an explicit mixed board selection and attached pad ends in one atomic edit.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" },
+            Param { name: "dx_nm", required: true, kind: ParamKind::Displacement, summary: "Horizontal displacement in nanometers" },
+            Param { name: "dy_nm", required: true, kind: ParamKind::Displacement, summary: "Vertical displacement in nanometers" },
+        ],
+    },
+    Command {
         id: board::clipboard::DELETE,
         title: "Delete PCB items",
         summary: "Remove a mixed physical selection in one undo step without deleting logical components.",
@@ -2782,6 +2794,7 @@ impl Session {
             | board::clipboard::COPY
             | board::clipboard::CUT
             | board::clipboard::PASTE
+            | board::movement::MOVE_ITEMS
             | board::clipboard::DELETE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
@@ -3211,6 +3224,7 @@ impl Session {
                 self.copy_board(params, false)?;
             }
             board::clipboard::CUT => self.delete_board_items(params, true)?,
+            board::movement::MOVE_ITEMS => self.move_board_items(params)?,
             board::clipboard::DELETE => self.delete_board_items(params, false)?,
             board::clipboard::PASTE => self.paste_board(params)?,
             clipboard::COPY => {
