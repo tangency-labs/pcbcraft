@@ -142,6 +142,14 @@ fn numbers_are_exact_at_the_shared_decimal_edges() {
         let failure = parse(&format!(r#"property("n") = {number}"#)).unwrap_err();
         assert_eq!(failure.kind, ParseErrorKind::InvalidNumber, "{number}: {failure}");
         assert_eq!(failure.offset, 16);
+        let reason = match number {
+            ".5" | "--1" => "Expected digits before the decimal point.",
+            "1." => "Expected digits after the decimal point.",
+            "1e+" => "Expected exponent digits.",
+            "1mm" | "1.2.3" => "Invalid decimal number; unit suffixes are not supported.",
+            _ => "Number exceeds shared decimal precision or exponent limits.",
+        };
+        assert_eq!(failure.message, reason, "{number}");
     }
     assert_eq!(number_value("0e48"), Ok("0".into()));
     assert_eq!(number_value(&format!("{}1", "0".repeat(127))), Ok("1".into()));
@@ -172,7 +180,9 @@ fn resource_limits_bound_wide_and_deep_queries() {
     }
     let mixed = format!("{}true{}", "(!".repeat(MAX_QUERY_DEPTH / 2), ")".repeat(MAX_QUERY_DEPTH / 2));
     parse(&mixed).unwrap();
-    assert_eq!(parse(&format!("!{mixed}")).unwrap_err().kind, ParseErrorKind::LimitExceeded);
+    let failure = parse(&format!("!{mixed}")).unwrap_err();
+    assert_eq!(failure.kind, ParseErrorKind::LimitExceeded);
+    assert_eq!(failure.message, "Query exceeds 32 nested parentheses or negations.");
 }
 
 /// Spans slice the original Unicode input; grouping changes only the outer node's extent.
@@ -188,6 +198,7 @@ fn unicode_spans_and_json_strings_are_byte_addressed() {
         let failure = parse(&format!("net={text}")).unwrap_err();
         assert_eq!(failure.kind, ParseErrorKind::InvalidString);
         assert_eq!(failure.offset, 4);
+        assert_eq!(failure.message, "Invalid quoted text or escape.");
     }
     assert_eq!(canonical(&parse(r#"net="\ud83d\ude00""#).unwrap().expression), "NetEqual\"😀\"");
     let failure = parse("net=\"Ω\"💡").unwrap_err();
@@ -210,6 +221,7 @@ fn selector_and_operator_rules_are_checked_row_by_row() {
         for value in ["null", "1", "true", "", "{}", "[]"] {
             let failure = parse(&format!("{field} = {value}")).unwrap_err();
             assert_eq!(failure.kind, ParseErrorKind::UnexpectedToken);
+            assert!(failure.message.contains(if value.starts_with(['{', '[']) { "Unexpected character" } else { "double-quoted text" }));
         }
     }
     for operator in ["=", "!=", "<", "<=", ">", ">="] {
