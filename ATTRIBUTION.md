@@ -521,6 +521,16 @@ asset or new dependency is introduced.
 
 ## Dependencies
 
+The staged PR approval policy, CI profile and separation of Windows build/native-window smoke jobs follow
+SolidCraft's `Cargo.toml` and `.github/workflows/ci.yml` at revision
+`0f5a5e22d22492416af6009f59cd39facce2de75` (MIT OR Apache-2.0, SolidCraft
+contributors). PCBcraft follows the quick/approved-native/full-event staging,
+including deferred platform checks, with its own Cargo-metadata consumer selection.
+Its selection policy, Windows suite definitions, artifact
+staging, timeout/result checks and policy regressions are independently authored
+for this repository. The workflow retains existing pinned actions and adds the
+same pinned GitHub artifact upload/download actions used by that reference.
+
 `Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so that notices file must include it.
 
 The workspace picker on the ribbon's workspace tile (`crates/chrome/src/workspace.rs`,
