@@ -33,21 +33,10 @@ impl Session {
         let original = self.open_project()?;
         let (graph, anchor) = target(original, params)?;
         let index = graph.network(&anchor).ok_or_else(|| CommandError::InvalidParams("Unknown net anchor.".into()))?;
-        if original.net_registry.records.iter().any(|r| matches!(r.state, State::Active {}) && graph.network(&r.primary) == Some(index)) {
+        let (project, _) = promoted(original, &graph, &anchor, index)?;
+        if project.net_registry == original.net_registry {
             return Ok(());
         }
-        let mut project =
-            if original.layout.is_none() { original.with_board_folders(".").map_err(CommandError::InvalidParams)? } else { original.clone() };
-        if !project.has_sheet_occurrences() {
-            project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
-        }
-        let mut registry = (*project.net_registry).clone();
-        let mut ids = registry.records.iter().map(|r| r.id).collect();
-        let record = graph.networks[index].record(allocate(&mut ids)?, Some(&anchor)).map_err(CommandError::InvalidParams)?;
-        registry.records.push(record);
-        registry.records.sort_by_key(|r| r.id);
-        project.net_registry = Arc::new(registry);
-        project.net_registry.validate(&project).map_err(CommandError::InvalidParams)?;
         self.change(project)
     }
 
@@ -97,4 +86,58 @@ impl Session {
         project.net_registry.validate(&project).map_err(CommandError::InvalidParams)?;
         self.change(project)
     }
+}
+
+impl Project {
+    /// Resolve a scoped saved identity or promote a meaningful derived net without publication.
+    /// The caller commits the returned candidate with its other authored intent in one step.
+    pub(crate) fn with_promoted_net(&self, target: &super::ClassTarget) -> Result<(Self, Uuid), CommandError> {
+        if let super::ClassTarget::Persistent { project, scope, net } = target {
+            if *project != self.id || *scope != self.net_scope() || self.net_registry.record(*net).is_none() {
+                return Err(CommandError::InvalidParams("Unknown or foreign zone net.".into()));
+            }
+            return Ok((self.clone(), *net));
+        }
+        let anchor = match target {
+            super::ClassTarget::Derived { anchor } => anchor,
+            _ => return Err(CommandError::InvalidParams("Expected a derived net anchor.".into())),
+        };
+        if anchor.project != self.id || anchor.scope != self.net_scope() {
+            return Err(CommandError::InvalidParams("Foreign derived net owner.".into()));
+        }
+        let graph = Graph::build(self).map_err(CommandError::InvalidParams)?;
+        let index = graph
+            .network(anchor)
+            .filter(|i| graph.networks[*i].meaningful())
+            .ok_or_else(|| CommandError::InvalidParams("Choose a meaningful current net.".into()))?;
+        promoted(self, &graph, anchor, index)
+    }
+}
+/// Prepare the same identity allocation for explicit promotion and zone creation; no history is touched.
+fn promoted(original: &Project, graph: &Graph, anchor: &super::Anchor, index: usize) -> Result<(Project, Uuid), CommandError> {
+    if let Some(record) =
+        original.net_registry.records.iter().find(|r| matches!(r.state, State::Active {}) && graph.network(&r.primary) == Some(index))
+    {
+        return Ok((original.clone(), record.id));
+    }
+    let mut project =
+        if original.layout.is_none() { original.with_board_folders(".").map_err(CommandError::InvalidParams)? } else { original.clone() };
+    if !project.has_sheet_occurrences() {
+        project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
+    }
+    let mut registry = (*project.net_registry).clone();
+    let mut ids = registry.records.iter().map(|r| r.id).collect();
+    let record = graph.networks[index].record(allocate(&mut ids)?, Some(anchor)).map_err(CommandError::InvalidParams)?;
+    registry.records.push(record);
+    registry.records.sort_by_key(|r| r.id);
+    project.net_registry = Arc::new(registry);
+    project.net_registry.validate(&project).map_err(CommandError::InvalidParams)?;
+    let id = project
+        .net_registry
+        .records
+        .iter()
+        .find(|r| matches!(r.state, State::Active {}) && graph.network(&r.primary) == Some(index))
+        .ok_or_else(|| CommandError::InvalidParams("Promoted identity missing.".into()))?
+        .id;
+    Ok((project, id))
 }

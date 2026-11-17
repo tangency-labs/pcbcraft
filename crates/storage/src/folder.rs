@@ -16,13 +16,12 @@ const TRANSACTION: &str = ".pcbcraft-save";
 const JOURNAL_LIMIT: usize = 4 * 1024 * 1024;
 /// Names that Windows reads as a device, not a file, when they come before the first dot of a
 /// file or folder name in a usual (not `\\?\`) path, so `C:\…\con.r2.json` means the console
-/// (#156). Document paths use only
-/// lowercase ASCII letters, digits and hyphens, so these are the only device names a path can
-/// hold. Checked with `GetFullPathNameW` on Windows 10: `com0`, `lpt0` and `com10` are ordinary
-/// names there.
-const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+/// (#156). Conversion destination names also allow Unicode, so include the superscript digits
+/// 1–3 Windows recognizes in COM/LPT device names. Document IDs are restricted to ASCII.
+/// Checked with `GetFullPathNameW` on Windows 10: `com0`, `lpt0` and `com10` are ordinary names.
+const WINDOWS_DEVICE_NAMES: [&str; 28] = [
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5",
-    "lpt6", "lpt7", "lpt8", "lpt9",
+    "lpt6", "lpt7", "lpt8", "lpt9", "com¹", "com²", "com³", "lpt¹", "lpt²", "lpt³",
 ];
 
 #[derive(Deserialize, Serialize)]
@@ -332,11 +331,13 @@ fn refuse_windows_device_names(documents: &Documents) -> Result<(), String> {
 
 /// Return the first part of a `/`-separated document path, such as `con` in
 /// `library/symbols/workshop/con.r2.json`, whose text before its first dot is one of
-/// [`WINDOWS_DEVICE_NAMES`], ignoring ASCII case. `None` means every part is an ordinary name.
-fn windows_device_name(relative: &str) -> Option<&str> {
+/// [`WINDOWS_DEVICE_NAMES`], ignoring ASCII case and trailing ASCII spaces in that stem.
+/// Return the stem without those spaces; `None` means no part matches a device name.
+pub(crate) fn windows_device_name(relative: &str) -> Option<&str> {
     relative
         .split('/')
         .map(|part| part.split_once('.').map_or(part, |(stem, _)| stem))
+        .map(|stem| stem.trim_end_matches(' '))
         .find(|stem| WINDOWS_DEVICE_NAMES.iter().any(|device| stem.eq_ignore_ascii_case(device)))
 }
 
@@ -698,6 +699,40 @@ mod tests {
             "library/footprints/workshop/lpt0.r1.json",
         ] {
             assert_eq!(windows_device_name(path), None, "{path}");
+        }
+    }
+
+    /// Windows reserves the Latin-1 superscript digits 1–3 in COM/LPT names, including
+    /// mixed-case names with extensions. Similar prefixes and other digits stay ordinary.
+    #[test]
+    fn superscript_device_names_are_reserved() {
+        for device in ["COM¹", "com²", "CoM³", "LPT¹", "lpt²", "LpT³"] {
+            for path in [device.to_owned(), format!("{device}.pc"), format!("library/{device}/item.r1.json"), format!("{device}.tar.gz")] {
+                assert_eq!(windows_device_name(&path), Some(device), "{path}");
+            }
+        }
+        for name in ["COM¹-extra.pc", "LPT²backup", "COM¹0.pc", "COM⁰.pc", "COM⁴.pc", "LPT⁴.pc", "¹COM.pc"] {
+            assert_eq!(windows_device_name(name), None, "{name}");
+        }
+    }
+
+    /// Trailing ASCII spaces must not hide a device name, including before the first dot.
+    /// Internal spaces, ordinary prefixes and other Unicode whitespace do not select a device.
+    #[test]
+    fn trailing_spaces_do_not_hide_device_names() {
+        for (path, device) in [
+            ("NUL ", "NUL"),
+            ("aux   ", "aux"),
+            ("COM¹ ", "COM¹"),
+            ("lPt³  .pc", "lPt³"),
+            ("NUL .tar.gz", "NUL"),
+            ("library/COM²  /item.r1.json", "COM²"),
+            ("library/workshop/CoN .r2.json", "CoN"),
+        ] {
+            assert_eq!(windows_device_name(path), Some(device), "{path:?}");
+        }
+        for name in ["NUL-backup ", "COM¹0 ", "NU L ", "ordinary NUL ", "NUL\u{a0}", "COM¹\u{2003}.pc"] {
+            assert_eq!(windows_device_name(name), None, "{name:?}");
         }
     }
 

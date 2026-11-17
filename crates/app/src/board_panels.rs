@@ -3,7 +3,7 @@ use crate::{PcbApp, editor_view::BoardState};
 use egui::{Id, Rect, Ui};
 use pcbcraft_chrome::{board, units, workspace};
 use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Stratum};
-mod properties;
+pub(super) mod properties;
 use properties::{copper_properties, footprint_transform};
 
 impl PcbApp {
@@ -115,6 +115,19 @@ impl PcbApp {
                         state.reference.show(ui, &footprint, input, unit, enabled, pcbcraft_chrome::properties::form_body_height(area));
                     return;
                 }
+                if state.zones.selected.is_some() {
+                    copper_edit = egui::ScrollArea::vertical()
+                        .id_salt(("zone_properties", view_id))
+                        .max_height(pcbcraft_chrome::properties::form_body_height(area))
+                        .show(ui, |ui| {
+                            ui.add_enabled_ui(settings_enabled && !state.editing_footprint(), |ui| {
+                                crate::board_zones::properties(ui, target, &mut state.zones, unit, revision)
+                            })
+                            .inner
+                        })
+                        .inner;
+                    return;
+                }
                 let selected: Vec<_> = target.footprints_for_ids(&state.selection).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
@@ -197,7 +210,10 @@ impl PcbApp {
             self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
             self.repaint_editors(ui.ctx());
         }
-        if let Some((command, mut params)) = copper_edit {
+        if let Some((command, mut params)) = copper_edit
+            && (command != pcbcraft_engine::board::zones::SET_ZONE
+                || (settings_enabled && input.is_some_and(|source| self.views.active.accepts(source, &self.session))))
+        {
             params["board"] = serde_json::json!(target.target.board);
             params["expected_revision"] = serde_json::json!(self.session.revision());
             if pcbcraft_engine::board::track::preparation::is_copper_edit(command) {

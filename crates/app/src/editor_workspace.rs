@@ -489,6 +489,8 @@ impl EditorViews {
         self.active.board.reference = Default::default();
         if !selection.is_empty() {
             self.active.board.drawing.cancel();
+            self.active.board.zones.cancel();
+            self.active.board.zones.select(None);
             self.active.board.drawing.select(None);
             self.active.board.tracks.cancel();
             self.active.board.tracks.selected.clear();
@@ -504,6 +506,8 @@ impl EditorViews {
         }
         self.active.board.selection.clear();
         self.active.board.drawing.cancel();
+        self.active.board.zones.cancel();
+        self.active.board.zones.select(None);
         self.active.board.drawing.select(None);
         self.active.board.tracks.cancel();
         self.active.board.tracks.selected.clear();

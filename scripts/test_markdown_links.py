@@ -16,7 +16,9 @@ class MarkdownLinkChecks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # The checker resolves its repository root; build fixture paths from the same spelling.
+        # Temp directories can use Windows short names or symlink aliases on Unix.
+        self.root = Path(self.temp.name).resolve()
         (self.root / "docs" / "sub").mkdir(parents=True)
         (self.root / "README.md").write_text("# Home\n", encoding="utf-8")
         (self.root / "docs" / "a.md").write_text("ok", encoding="utf-8")
