@@ -1,9 +1,9 @@
 use super::*;
 use std::fs;
 
-/// Build an immutable export capture without a filesystem or live editor dependency.
-fn capture(text: &str) -> Archive {
-    Archive::new(&[pcbcraft_engine::board::fabrication::Output { name: "board.gbr".into(), contents: text.into() }]).unwrap()
+/// Build an immutable export capture, returning any archive error to the test.
+fn capture(text: &str) -> Result<Archive, String> {
+    Archive::new(&[pcbcraft_engine::board::fabrication::Output { name: "board.gbr".into(), contents: text.into() }])
 }
 
 /// Both artifacts are published from the capture, with the exact save-dialog filename in JSON.
@@ -14,7 +14,7 @@ fn publish_package_binds_the_selected_filename_and_replaces_both_files() {
     let path = dir.path().join("chosen.zip");
     let sidecar = dir.path().join("chosen.zip.manifest.json");
     for text in ["first\n", "replacement\n"] {
-        let archive = capture(text);
+        let archive = capture(text).unwrap();
         publish_package(&path, &archive).unwrap();
         assert_eq!(fs::read(&path).unwrap(), archive.bytes());
         assert_eq!(fs::read(&sidecar).unwrap(), archive.manifest_json("chosen.zip").unwrap());
@@ -29,13 +29,13 @@ fn sidecar_failure_reports_partial_publication_and_stale_digest_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.zip");
     let sidecar = dir.path().join("board.zip.manifest.json");
-    let old = capture("old\n");
+    let old = capture("old\n").unwrap();
     publish_package(&path, &old).unwrap();
     let old_manifest = fs::read(&sidecar).unwrap();
     // A non-file companion destination reliably fails on every native test platform.
     fs::remove_file(&sidecar).unwrap();
     fs::create_dir(&sidecar).unwrap();
-    let replacement = capture("replacement\n");
+    let replacement = capture("replacement\n").unwrap();
     let error = publish_package(&path, &replacement).unwrap_err();
     assert!(error.contains("ZIP published") && error.contains("manifest failed") && error.contains("not a regular file"), "{error}");
     assert_eq!(fs::read(&path).unwrap(), replacement.bytes());
@@ -57,7 +57,7 @@ fn archive_failure_keeps_the_existing_sidecar() {
     let sidecar = dir.path().join("board.zip.manifest.json");
     fs::create_dir(&path).unwrap();
     fs::write(&sidecar, b"old manifest").unwrap();
-    let error = publish_package(&path, &capture("new")).unwrap_err();
+    let error = publish_package(&path, &capture("new").unwrap()).unwrap_err();
     assert!(error.contains("Sidecar not updated") && error.contains("not a regular file"), "{error}");
     assert_eq!(fs::read(&sidecar).unwrap(), b"old manifest");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
@@ -71,7 +71,7 @@ fn non_utf8_archive_name_is_refused_before_publication() {
     use std::os::unix::ffi::OsStringExt;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(std::ffi::OsString::from_vec(vec![b'x', 0xff]));
-    let error = publish_package(&path, &capture("new")).unwrap_err();
+    let error = publish_package(&path, &capture("new").unwrap()).unwrap_err();
     assert!(error.contains("filename must be valid UTF-8"), "{error}");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
 }
@@ -83,10 +83,10 @@ fn completion_releases_the_export_slot_on_every_outcome() {
     let ctx = egui::Context::default();
     let mut exports = Exports::default();
     for result in [Ok(Outcome::Saved), Ok(Outcome::DownloadsRequested), Ok(Outcome::Cancelled), Err("save failed".into())] {
-        exports.start(&ctx, "board.zip".into(), capture("archive")).unwrap();
+        exports.start(&ctx, "board.zip".into(), capture("archive").unwrap()).unwrap();
         assert!(exports.busy());
         assert!(exports.poll().is_none());
-        assert_eq!(exports.start(&ctx, "overlap.zip".into(), capture("")).unwrap_err(), "Finish the current fabrication export first.");
+        assert_eq!(exports.start(&ctx, "overlap.zip".into(), capture("").unwrap()).unwrap_err(), "Finish the current fabrication export first.");
         let saved = matches!(&result, Ok(Outcome::Saved));
         let cancelled = matches!(&result, Ok(Outcome::Cancelled));
         let requested = matches!(&result, Ok(Outcome::DownloadsRequested));
@@ -101,7 +101,7 @@ fn completion_releases_the_export_slot_on_every_outcome() {
         assert!(!exports.busy());
         assert!(exports.poll().is_none());
     }
-    exports.start(&ctx, "board.zip".into(), capture("")).unwrap();
+    exports.start(&ctx, "board.zip".into(), capture("").unwrap()).unwrap();
     drop(exports.completion.take());
     assert!(exports.poll().unwrap().unwrap_err().contains("stopped before reporting"));
     assert!(!exports.busy());
