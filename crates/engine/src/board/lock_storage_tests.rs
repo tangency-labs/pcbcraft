@@ -261,10 +261,12 @@ fn clipboard_refuses_active_footprint_locks_without_changing_unlocked_fragments(
     assert_eq!(BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
     let locked = with_lock(&original, true);
     let error = BoardFragment::capture(&locked, &selection, false).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"));
     let mut envelope: Value = serde_json::from_str(&text).unwrap();
     envelope["footprints"][0]["locked"] = json!(true);
     let error = BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"));
     assert_eq!(BoardFragment::capture(&original, &selection, false).unwrap().to_text().unwrap(), text);
 }

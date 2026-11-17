@@ -107,11 +107,13 @@ explicit local tool sizes remain a per-view choice. Changing rules invalidates
 previous checks and unfinished route authority without resizing existing copper.
 
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
-Authored defaults have a stable rule UUID and use board format 19 or later
-(20 with zone outlines, 21 with a placement origin, 23 when the board setup uses the
-copper or board thickness fields); removing the record restores built-in resolution
-and the format required by the remaining
-board data. A board without rules retains its current bytes. Request-local DRC
+Authored defaults have a stable rule UUID and require at least board format 19.
+Zone outlines require at least 20, a placement origin 21, assembly profile adoptions
+22, and the board setup's copper or board thickness fields 23. The highest format
+required by the remaining data takes precedence, including explicit via assignments
+(24) and footprint locks (25); see the [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
+Removing the record restores built-in resolution and the format required by the
+remaining board data. A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
 
 [Class definitions and dimensional resolution](net-classes.md),
