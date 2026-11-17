@@ -89,13 +89,14 @@ Bounds apply before or during parsing:
 | --- | --- | --- |
 | Complete UTF-8 input, including whitespace | 16,384 bytes | 0 |
 | Non-EOF lexical tokens | 4,096 | Start of token 4,097 |
-| Combined open parentheses and unary negations | 32 | First excessive opening token |
+| Combined expression-grouping parentheses and unary negations | 32 | First excessive opening token |
 | Numeric input and precision | Shared quantity bounds above | First byte of number |
 
 Scanning, string decoding and numeric normalization process bounded input. The
 lexer keeps only its current token. The tree is bounded by the token count;
 flat chains avoid input-length recursion during parsing, cloning and dropping.
-Nested boolean groups/negations use the depth bound. No cache, journal, project
+Nested boolean groups/negations use the depth bound; the nonrecursive parentheses
+around a property identifier do not add a nesting level. No cache, journal, project
 snapshot or undo copy is retained by the parser.
 
 ## Extension and compatibility boundary

@@ -10,7 +10,7 @@ use pcbcraft_units::quantity::Quantity;
 pub const MAX_QUERY_BYTES: usize = 16_384;
 /// Maximum number of non-end tokens consumed by a parse.
 pub const MAX_QUERY_TOKENS: usize = 4_096;
-/// Maximum combined nesting of parentheses and unary negations.
+/// Maximum combined nesting of expression-grouping parentheses and unary negations.
 pub const MAX_QUERY_DEPTH: usize = 32;
 
 /// A complete parsed expression, independent of any project, board or revision.

@@ -178,6 +178,8 @@ fn resource_limits_bound_wide_and_deep_queries() {
         assert_eq!(failure.message, "Query exceeds 32 nested parentheses or negations.");
         assert_eq!(failure.offset, MAX_QUERY_DEPTH);
     }
+    let property_at_depth = format!("{}property(\"n\")=1{}", "(".repeat(MAX_QUERY_DEPTH), ")".repeat(MAX_QUERY_DEPTH));
+    parse(&property_at_depth).unwrap();
     let mixed = format!("{}true{}", "(!".repeat(MAX_QUERY_DEPTH / 2), ")".repeat(MAX_QUERY_DEPTH / 2));
     parse(&mixed).unwrap();
     let failure = parse(&format!("!{mixed}")).unwrap_err();
