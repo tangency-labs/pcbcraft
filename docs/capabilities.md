@@ -159,8 +159,9 @@ unused folders, removal and confirmed system-trash deletion of whole libraries, 
 generic/orderable identities on Unix desktop with dependency and open-document
 guards. Browser folder/bundle
 reads remember names that need reopening after reload. See
-[native library sources](native-library-sources.md) for platform limits. Disabled
-planned controls do not yet provide export, comparison or connections.
+[native library sources](native-library-sources.md) for platform limits. Share ›
+Export writes the selected library to one bundle file. Disabled planned controls
+do not yet provide comparison or connections.
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
