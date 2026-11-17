@@ -81,9 +81,10 @@ const ASSIGNED_VIA_BOARD_FORMAT: &str = "pcbcraft-board/24";
 const ZONE_BOARD_FORMAT: &str = "pcbcraft-board/20";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
-const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/25";
+const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
+const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -387,8 +388,9 @@ pub fn is_document_path(path: &str) -> bool {
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 21
 /// requires a validated placement origin and may carry rules and every earlier field.
-/// Board format 25 requires an authored footprint lock and accepts all earlier fields,
-/// including optional via intent, stack fields, assembly profiles, origin, zones and rules.
+/// Board format 34 requires an authored footprint lock and accepts all earlier fields,
+/// including optional material reports, via intent, stack fields, assembly profiles, origin,
+/// zones and rules. Reserved board formats 26–33 are not supported.
 /// Missing footprint locks default to false. Board format 22 requires a nonempty assembly
 /// profile adoption list. Board format 23 requires an authored stack field and allows
 /// adoptions alongside the earlier board fields.
@@ -399,6 +401,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// Project/36 requires pinned assembly profiles and allows either group membership encoding.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
+/// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
+/// assembly profiles and extended stack fields optionally. Earlier headers refuse the reports.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
@@ -903,19 +907,20 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // earlier field. Empty arrays are never written, so they are refused.
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT;
     if footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
-        return Err("board.json: footprint locks require board format 25, which requires an authored footprint lock.".into());
+        return Err("board.json: footprint locks require board format 34, which requires an authored footprint lock.".into());
     }
+    let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
-    let via_intent = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
-    if (assigned_vias && !via_intent) || (!assigned_vias && !footprint_locks && via_intent) {
-        return Err("board.json: explicit via assignments require format 24 or 25; format 24 requires an assignment.".into());
+    let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
+    if (assigned_vias && !has_assigned_vias) || (!footprint_locks && !reported && !assigned_vias && has_assigned_vias) {
+        return Err("board.json: explicit via assignments require format 24, 25 or 34; format 24 requires an assignment.".into());
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
     if (profiled && board.assembly_profiles.is_none())
-        || (!footprint_locks && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
+        || (!footprint_locks && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
-        return Err("board.json: assembly profile adoptions require format 22, 23, 24 or 25. Format 22 requires at least one profile.".into());
+        return Err("board.json: assembly profile adoptions require format 22, 23, 24, 25 or 34. Format 22 requires at least one profile.".into());
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
         return Err("board.json: an empty assembly_profiles array is not allowed".into());
@@ -923,23 +928,23 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     profile_catalog.validate(board.assembly_profiles.as_deref().unwrap_or_default())?;
     let originated = board.format == ORIGIN_BOARD_FORMAT;
     if (originated && board.placement_origin.is_none())
-        || (!footprint_locks && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
+        || (!footprint_locks && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
-        return Err("board.json: a placement origin requires format 21, 22, 23, 24 or 25, and format 21 requires a placement origin.".into());
+        return Err("board.json: a placement origin requires format 21, 22, 23, 24, 25 or 34, and format 21 requires a placement origin.".into());
     }
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
     }
     let zoned = board.format == ZONE_BOARD_FORMAT;
     if (zoned && board.zones.is_none())
-        || (!footprint_locks && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
+        || (!footprint_locks && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err("board.json: zones require format 20, 21, 22, 23, 24 or 25 and a nonempty array; format 20 requires zones.".into());
+        return Err("board.json: zones require format 20, 21, 22, 23, 24, 25 or 34 and a nonempty array; format 20 requires zones.".into());
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
     if (ruled && board.rules.is_none())
-        || (!footprint_locks && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && board.rules.is_some())
+        || (!footprint_locks && !reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && board.rules.is_some())
     {
         return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
@@ -949,10 +954,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !footprint_locks && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks {
+    if !footprint_locks && !reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias || footprint_locks;
+    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias || reported || footprint_locks;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -986,6 +991,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ORIGIN_BOARD_FORMAT
             | PROFILE_BOARD_FORMAT
             | STACK_BOARD_FORMAT
+            | REPORT_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
     );
@@ -1007,6 +1013,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | ORIGIN_BOARD_FORMAT
                     | PROFILE_BOARD_FORMAT
                     | STACK_BOARD_FORMAT
+                    | REPORT_BOARD_FORMAT
                     | ZONE_BOARD_FORMAT
                     | LOCKED_FOOTPRINT_BOARD_FORMAT
             ))
@@ -1097,6 +1104,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ORIGIN_BOARD_FORMAT
             | PROFILE_BOARD_FORMAT
             | STACK_BOARD_FORMAT
+            | REPORT_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
@@ -1123,6 +1131,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | ORIGIN_BOARD_FORMAT
                 | PROFILE_BOARD_FORMAT
                 | STACK_BOARD_FORMAT
+                | REPORT_BOARD_FORMAT
                 | ZONE_BOARD_FORMAT
                 | LOCKED_FOOTPRINT_BOARD_FORMAT
         ) && board.assignments.is_some())
@@ -1145,6 +1154,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let setup = match (board.format.as_str(), board.setup) {
         (
             LOCKED_FOOTPRINT_BOARD_FORMAT
+            | REPORT_BOARD_FORMAT
             | ASSIGNED_VIA_BOARD_FORMAT
             | STACK_BOARD_FORMAT
             | PROFILE_BOARD_FORMAT
@@ -1197,9 +1207,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
+    let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
+    if (reported && !material_reports) || (!footprint_locks && !reported && material_reports) {
+        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25 or 34; format 25 requires at least one of them.".into());
+    }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
-    if (stacked && !stack_fields) || (!footprint_locks && !assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24 or 25; format 23 requires at least one of them.".into());
+    if (stacked && !stack_fields) || (!footprint_locks && !reported && !assigned_vias && !stacked && stack_fields) {
+        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25 or 34; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -2155,7 +2169,8 @@ impl DocumentsEncoder {
 }
 
 /// Keep legacy bytes until authored content requires a newer format. Active footprint locks
-/// require 25 and accept every earlier field. Explicit via intent requires at least 24;
+/// require 34 and accept every earlier field optionally, including material reports. Without
+/// footprint locks, material reports require 25; explicit via intent at least 24;
 /// copper roles, base copper, copper thickness qualifiers or finished board thickness at least 23;
 /// assembly profile adoptions at least 22; a placement origin at least 21;
 /// zone outlines at least 20; validated board rules at least 19; and authored copper locks
@@ -2189,6 +2204,8 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     if let Some(setup) = setup {
         let format = if board.footprints().iter().any(|footprint| footprint.locked) {
             LOCKED_FOOTPRINT_BOARD_FORMAT
+        } else if setup.requires_report_format() {
+            REPORT_BOARD_FORMAT
         } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
             ASSIGNED_VIA_BOARD_FORMAT
         } else if setup.requires_stack_format() {

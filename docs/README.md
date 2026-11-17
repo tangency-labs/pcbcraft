@@ -63,6 +63,9 @@ supported versions and deferred work before extending a format or consumer.
 
 ## Architecture and plans
 
+[Continuous integration](continuous-integration.md) describes quick PR feedback,
+approval and affected native checks, deferred platform coverage and build caches.
+
 These documents explain design decisions and staged work. Several combine
 delivered foundations with proposed extensions; they do not establish feature
 availability by themselves.

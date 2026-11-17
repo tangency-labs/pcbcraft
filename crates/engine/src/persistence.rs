@@ -767,7 +767,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         return Err("mirrored symbol placements require split sheet format 6".into());
     }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.locked)) {
-        return Err("footprint locks require split board format 25".into());
+        return Err("footprint locks require split board format 34".into());
     }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());

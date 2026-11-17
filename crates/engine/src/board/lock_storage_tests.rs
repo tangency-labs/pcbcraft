@@ -43,7 +43,7 @@ fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
         let locked = with_lock(&original, true);
         let saved = encode_documents(locked.clone()).unwrap();
         let board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(board["format"], "pcbcraft-board/25");
+        assert_eq!(board["format"], "pcbcraft-board/34");
         assert_eq!(board["footprints"][0]["locked"], true);
         assert_eq!(saved.len(), documents.len());
         for (name, bytes) in &documents {
@@ -77,15 +77,15 @@ fn footprint_locks_require_their_own_nonempty_format() {
     let path = test_board_path(&original);
     let saved = encode_documents(with_lock(&project, true)).unwrap();
     let text = String::from_utf8(saved[&path].clone()).unwrap();
-    for version in 1..=24 {
+    for version in 1..=25 {
         let mut bad = saved.clone();
-        bad.insert(path.clone(), text.replace("pcbcraft-board/25", &format!("pcbcraft-board/{version}")).into_bytes());
+        bad.insert(path.clone(), text.replace("pcbcraft-board/34", &format!("pcbcraft-board/{version}")).into_bytes());
         let error = decode_documents(&bad).unwrap_err();
-        assert!(error.contains("footprint locks require board format 25"), "{version}: {error}");
+        assert!(error.contains("footprint locks require board format 34"), "{version}: {error}");
     }
     let mut bad = original.clone();
     let mut board: Value = serde_json::from_slice(&bad[&path]).unwrap();
-    board["format"] = json!("pcbcraft-board/25");
+    board["format"] = json!("pcbcraft-board/34");
     bad.insert(path.clone(), serde_json::to_vec(&board).unwrap());
     assert!(decode_documents(&bad).unwrap_err().contains("requires an authored footprint lock"));
     let mut incomplete = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
@@ -95,11 +95,19 @@ fn footprint_locks_require_their_own_nonempty_format() {
         (22, "Format 22 requires at least one profile"),
         (23, "unsupported board format or incompatible setup"),
         (24, "format 24 requires an assignment"),
+        (25, "unsupported board format or incompatible setup"),
     ] {
         marker["format"] = json!(format!("pcbcraft-board/{version}"));
         incomplete.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
         let error = decode_documents(&incomplete).unwrap_err();
         assert!(error.contains(reason), "{version}: {error}");
+    }
+    // Reservations are not implemented formats, even when no lock or other extension is present.
+    for version in 26..=33 {
+        marker["format"] = json!(format!("pcbcraft-board/{version}"));
+        incomplete.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
+        let error = decode_documents(&incomplete).unwrap_err();
+        assert!(error.contains("unsupported board format"), "{version}: {error}");
     }
     // Explicit false is readable under an existing header, but canonical saves omit it.
     board = serde_json::from_slice(&original[&path]).unwrap();
@@ -127,7 +135,7 @@ fn malformed_lock_flags_are_refused_before_project_construction() {
     assert!(decode_documents(&bad).unwrap_err().contains("duplicate field `locked`"));
 }
 
-/// Format 25 retains earlier optional origin, rules, zones, copper and copper locks with no data loss.
+/// Format 34 retains earlier optional origin, rules, zones, copper and copper locks with no data loss.
 #[test]
 fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     let mut session = track::tests::routed_fixture();
@@ -166,7 +174,7 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     let saved = encode_documents(with_lock(&original, true)).unwrap();
     let path = test_board_path(&saved);
     let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
-    expected["format"] = json!("pcbcraft-board/25");
+    expected["format"] = json!("pcbcraft-board/34");
     expected["footprints"][0]["locked"] = json!(true);
     assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
     let loaded = decode_documents(&saved).unwrap();
@@ -174,77 +182,108 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
 }
 
-/// Every combination of published profile, stack and via-intent fields remains optional in
-/// format 25, survives reopen, and returns to its exact earlier bytes after unlocking.
+/// Add an unused synthetic report through the production setup command, without changing
+/// geometry, pins or stack fields. This report does not assert a material design limit.
+fn add_material_report(session: &mut Session) {
+    let mut setup = serde_json::to_value(session.project().unwrap().board_setup().unwrap()).unwrap();
+    let material = json!({"id":Uuid::from_u128(9041),"revision":1,"name":"Lock storage report","family":"Synthetic",
+        "thermal_conductivity":[{"conductivity_mw_per_m_k":1000,"axis":"z","basis":"typical",
+            "source":{"document":"Synthetic lock-storage regression","locator":"fixture"}}]});
+    if setup.get("materials").is_none() {
+        setup["materials"] = json!([]);
+    }
+    setup["materials"].as_array_mut().unwrap().push(material);
+    session.apply(crate::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":session.revision()})).unwrap();
+}
+
+/// Every combination of published report, profile, stack and via-intent fields remains optional
+/// in format 34. Report-only stays 25, lock-only and both use 34, and unlocking restores exact
+/// folder/archive bytes at the format required by the remaining authored content.
 #[test]
 fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     use assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
-    for profiles in [false, true] {
-        for stack in [false, true] {
-            for via_intent in [false, true] {
-                let mut session = track::tests::routed_fixture();
-                let board = session.project().unwrap().board_target().unwrap().board;
-                if profiles {
-                    session
-                        .apply(
-                            SET_ASSEMBLY_PROFILE,
-                            &json!({"content":{"name":"Lock compatibility","revision":1,"provenance":{"kind":"authored"}},
+    for reports in [false, true] {
+        for profiles in [false, true] {
+            for stack in [false, true] {
+                for via_intent in [false, true] {
+                    let mut session = track::tests::routed_fixture();
+                    let board = session.project().unwrap().board_target().unwrap().board;
+                    if profiles {
+                        session
+                            .apply(
+                                SET_ASSEMBLY_PROFILE,
+                                &json!({"content":{"name":"Lock compatibility","revision":1,"provenance":{"kind":"authored"}},
                                 "expected_revision":session.revision()}),
-                        )
-                        .unwrap();
-                    let profile = session.project().unwrap().assembly_profiles().heads[0].profile;
-                    let mut adoption = json!({"board":board,"profile":profile,"revision":1,"expected_revision":session.revision()});
-                    adoption["acceptance"] = session.execute(PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap()["acceptance"].clone();
-                    session.apply(ADOPT_ASSEMBLY_PROFILE, &adoption).unwrap();
-                }
-                if stack {
-                    let mut setup = serde_json::to_value(session.project().unwrap().board_setup().unwrap()).unwrap();
-                    setup["stackup"]["finished_thickness_nm"] = json!(1_600_000);
-                    session.apply(crate::SET_BOARD_SETUP, &json!({"board":board,"setup":setup,"expected_revision":session.revision()})).unwrap();
-                }
-                if via_intent {
-                    let anchor = session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
-                    session
-                        .apply(
-                            track::ADD_VIA,
-                            &json!({"board":board,"at":{"x_nm":-30_000_000,"y_nm":-30_000_000},
-                                "target":{"kind":"derived","anchor":anchor},"expected_revision":session.revision()}),
-                        )
-                        .unwrap();
-                }
-                let original = session.snapshot().unwrap();
-                let before = encode_documents(original.clone()).unwrap();
-                let saved = encode_documents(with_lock(&original, true)).unwrap();
-                let path = test_board_path(&saved);
-                let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
-                if via_intent || stack || profiles {
-                    assert_eq!(
-                        expected["format"],
-                        format!(
-                            "pcbcraft-board/{}",
-                            if via_intent {
-                                24
-                            } else if stack {
-                                23
-                            } else {
-                                22
-                            }
-                        )
-                    );
-                }
-                expected["format"] = json!("pcbcraft-board/25");
-                expected["footprints"][0]["locked"] = json!(true);
-                assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
-                for (name, bytes) in &before {
-                    if name != &path {
-                        assert_eq!(&saved[name], bytes, "unrelated document {name}");
+                            )
+                            .unwrap();
+                        let profile = session.project().unwrap().assembly_profiles().heads[0].profile;
+                        let mut adoption = json!({"board":board,"profile":profile,"revision":1,"expected_revision":session.revision()});
+                        adoption["acceptance"] = session.execute(PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap()["acceptance"].clone();
+                        session.apply(ADOPT_ASSEMBLY_PROFILE, &adoption).unwrap();
                     }
+                    if stack {
+                        let mut setup = serde_json::to_value(session.project().unwrap().board_setup().unwrap()).unwrap();
+                        setup["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+                        session.apply(crate::SET_BOARD_SETUP, &json!({"board":board,"setup":setup,"expected_revision":session.revision()})).unwrap();
+                    }
+                    if via_intent {
+                        let anchor = session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+                        session
+                            .apply(
+                                track::ADD_VIA,
+                                &json!({"board":board,"at":{"x_nm":-30_000_000,"y_nm":-30_000_000},
+                                "target":{"kind":"derived","anchor":anchor},"expected_revision":session.revision()}),
+                            )
+                            .unwrap();
+                    }
+                    if reports {
+                        add_material_report(&mut session);
+                    }
+                    let original = session.snapshot().unwrap();
+                    let before = encode_documents(original.clone()).unwrap();
+                    assert_eq!(encode_documents(decode_documents(&before).unwrap()).unwrap(), before, "unlocked no-op");
+                    let original_archive = encode_packed(original.clone()).unwrap();
+                    let saved = encode_documents(with_lock(&original, true)).unwrap();
+                    let path = test_board_path(&saved);
+                    let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
+                    if reports || via_intent || stack || profiles {
+                        assert_eq!(
+                            expected["format"],
+                            format!(
+                                "pcbcraft-board/{}",
+                                if reports {
+                                    25
+                                } else if via_intent {
+                                    24
+                                } else if stack {
+                                    23
+                                } else {
+                                    22
+                                }
+                            )
+                        );
+                    }
+                    let mut explicit_false = before.clone();
+                    let mut false_board = expected.clone();
+                    false_board["footprints"][0]["locked"] = json!(false);
+                    explicit_false.insert(path.clone(), serde_json::to_vec(&false_board).unwrap());
+                    assert_eq!(encode_documents(decode_documents(&explicit_false).unwrap()).unwrap(), before, "explicit false canonicalizes");
+                    expected["format"] = json!("pcbcraft-board/34");
+                    expected["footprints"][0]["locked"] = json!(true);
+                    assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
+                    for (name, bytes) in &before {
+                        if name != &path {
+                            assert_eq!(&saved[name], bytes, "unrelated document {name}");
+                        }
+                    }
+                    let loaded = decode_documents(&saved).unwrap();
+                    assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
+                    let packed = encode_packed(loaded.clone()).unwrap();
+                    assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+                    let unlocked = with_lock(&loaded, false);
+                    assert_eq!(encode_documents(unlocked.clone()).unwrap(), before);
+                    assert_eq!(encode_packed(unlocked).unwrap(), original_archive);
                 }
-                let loaded = decode_documents(&saved).unwrap();
-                assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
-                let packed = encode_packed(loaded.clone()).unwrap();
-                assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
-                assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
             }
         }
     }
@@ -283,5 +322,5 @@ fn diagnostic_codec_refuses_footprint_locks() {
     footprint["locked"] = json!(true);
     document["board"] = json!({"footprints":[footprint]});
     let error = crate::persistence::decode(&serde_json::to_vec(&document).unwrap()).unwrap_err();
-    assert!(error.contains("footprint locks require split board format 25"), "{error}");
+    assert!(error.contains("footprint locks require split board format 34"), "{error}");
 }

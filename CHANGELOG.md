@@ -68,16 +68,24 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
-- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; adoptions require at least board format 22, stack fields 23, explicit via assignments 24 and footprint locks 25, with the highest requirement taking precedence. Generic rows and other profiles are unchanged. No placement file is written yet.
-- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin require at least board format 21; profile adoptions require 22, stack fields 23, explicit via assignments 24 and footprint locks 25, with the highest requirement taking precedence. Clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
-- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin or stack fields select their later format.
+- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; adoptions require at least board format 22, stack fields 23, explicit via assignments 24, material reports 25 and footprint locks 34, with the highest requirement taking precedence. Generic rows and other profiles are unchanged. No placement file is written yet.
+- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin require at least board format 21; profile adoptions require 22, stack fields 23, explicit via assignments 24, material reports 25 and footprint locks 34, with the highest requirement taking precedence. Clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
+- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin, profile adoptions, stack fields, via intent, material reports or footprint locks select their later format.
 
 Board setup stores an optional role and base copper for each copper layer, a
 tolerance and basis for its finished thickness, and the declared finished board
 thickness, through `pcb.set_board_setup`. Boards with these fields require at least
 board format 23; setup profiles use version 2. Older builds refuse these formats.
-Explicit via assignments require board format 24 and footprint locks 25; the highest
+Explicit via assignments require board format 24, material reports 25 and footprint
+locks 34; the highest
 requirement takes precedence, while other boards keep their encoding.
+
+Materials take sourced thermal conductivity, thermal expansion, dielectric
+strength and CTI reports, each with its unit in the field name, its test
+conditions and a required source; a CTI given with a material group must lie in
+that group's IEC 60664-1 band. Boards that use them require at least board format 25 and
+setup profiles use version 3, which older builds refuse; other boards keep their
+encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.
@@ -108,9 +116,18 @@ Tracks and vias can be locked together in Properties or through
 `pcb.set_copper_locked`. Locked copper stays selectable and refuses geometry,
 size and deletion changes, including indirect changes from footprint transforms
 and segment dragging. Mixed edits fail atomically. Clipboard copies retain locks;
-Cut refuses protected copper. Locks persist with board format 18 and board-kind
-clipboard format 3, which older builds refuse. Unlocked files keep their earlier
+Cut refuses protected copper. Locks persist with board format 18 or a later
+supported format, and board-kind clipboard format 3 (4 with explicit via intent),
+which older builds refuse. Unlocked files keep their earlier
 encodings; undo/redo preserves both geometry and lock intent.
+
+Placed-footprint lock metadata survives native folder/archive reopen and is
+visible in inspection and typed board views. Active footprint locks require board
+format 34, with material reports and earlier board fields optional. Report-only
+boards retain format 25; unlocking the last footprint restores the format required
+by remaining content. False is omitted and unlocked board encoding is unchanged.
+This is storage only: no footprint lock command, GUI toggle or edit protection yet.
+Clipboard and diagnostic single-file codecs explicitly refuse active footprint locks.
 
 DRC measures copper and board-edge clearance against the same rounded pad
 contours as connectivity, avoiding false findings at empty bounding corners.

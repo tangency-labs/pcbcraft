@@ -164,7 +164,7 @@ fn native_assignment_version_and_null_guards_preserve_legacy_bytes() {
     run(&mut s, SET_VIA_NET, json!({"vias":[id],"target":target})).unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let key = saved.iter().find(|(_, b)| String::from_utf8_lossy(b).contains("pcbcraft-board/24")).unwrap().0.clone();
-    for format in ["pcbcraft-board/13", "pcbcraft-board/19", "pcbcraft-board/21", "pcbcraft-board/22", "pcbcraft-board/23"] {
+    for format in ["pcbcraft-board/13", "pcbcraft-board/19", "pcbcraft-board/21", "pcbcraft-board/22", "pcbcraft-board/23", "pcbcraft-board/25"] {
         let mut bad = saved.clone();
         bad.insert(key.clone(), String::from_utf8(saved[&key].clone()).unwrap().replace("pcbcraft-board/24", format).into_bytes());
         assert!(decode_documents(&bad).is_err());

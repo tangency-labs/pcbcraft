@@ -111,7 +111,8 @@ Authored defaults have a stable rule UUID and require at least board format 19.
 Zone outlines require at least 20, a placement origin 21, assembly profile adoptions
 22, and the board setup's copper or board thickness fields 23. The highest format
 required by the remaining data takes precedence, including explicit via assignments
-(24) and footprint locks (25); see the [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
+(24), thermal or insulation material reports (25) and footprint locks (34); see the
+[native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
 Removing the record restores built-in resolution and the format required by the
 remaining board data. A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
@@ -264,9 +265,10 @@ Copy and paste of board objects is in progress separately in #197 through #202.
 ## Footprint lock metadata (storage only)
 
 Placed footprints now retain an optional `locked` flag in native board format
-25. Inspection and typed board views report a boolean, defaulting to false for
+34. Inspection and typed board views report a boolean, defaulting to false for
 older files. Folder/archive saves omit false and preserve true; unlocking the
-last footprint restores the format needed by the remaining data. This slice
+last footprint restores format 25 if material reports remain, otherwise the format
+needed by the remaining data. Reports are optional under format 34. This slice
 does **not** expose a lock/unlock command or GUI action, nor does the flag yet
 protect footprint movement, rotation, flipping, alignment or deletion. It is not
 a fixed-obstacle promise. Those shared-command and enforcement workflows remain

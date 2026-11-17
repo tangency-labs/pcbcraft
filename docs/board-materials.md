@@ -114,6 +114,40 @@ values. The model does not select reports, interpolate frequencies, combine
 different plies into an effective Dk or calculate impedance. Those operations
 need an explicit model and applicability checks.
 
+### Thermal and insulation reports
+
+Four further optional report lists sit beside `tg` and `dielectric`. Each report needs a
+basis (`typical`, `minimum`, `maximum` or `measured`) and a source, and may name its method
+(up to 80 characters). The unit is part of the value's field name; a report with a bare
+value, a separate unit or no source is refused. Up to 16 reports of each kind are retained
+separately and in canonical order, and are never averaged or substituted for one another.
+A missing report or condition means unknown, never zero.
+
+| List | Value field and unit | Conditions |
+| --- | --- | --- |
+| `thermal_conductivity` | `conductivity_mw_per_m_k`, mW/(m·K), 1–10,000,000 | optional `axis`, `temperature_milli_c` |
+| `cte` | `cte_ppb_per_k`, ppb/K (10⁻⁹ per kelvin), −1,000,000–10,000,000 | optional `axis`, `region` (`below_tg` or `above_tg`), and the temperature range `from_milli_c`/`to_milli_c`, which come together and rise |
+| `dielectric_strength` | `breakdown_v`, V, 1–10,000,000 | required `specimen_thickness_nm`, 1–100,000,000; optional `axis` |
+| `cti` | `cti_v`, V, 1–1000, and/or `material_group` (`I`, `II`, `IIIa`, `IIIb`) | at least one of the two |
+
+The numeric fields in these four lists require parsed JSON integer-kind tokens:
+`1` is accepted within the field's range, while `1.0`, `1e0`, `-0`, strings and
+fractional numbers are refused. This token-kind restriction is stricter than the
+mathematical-integer meaning of JSON Schema's `integer`. The existing Tg and Dk/Df
+field readers are unchanged.
+
+For example, 1.0 W/(m·K) through the thickness is `conductivity_mw_per_m_k: 1000` with
+`axis: z`, 50 ppm/K is `cte_ppb_per_k: 50000`, and 40 kV across a 1.0 mm specimen is
+`breakdown_v: 40000` with `specimen_thickness_nm: 1000000`. Breakdown voltage is kept with
+its specimen thickness instead of being reduced to a field strength, because the two do
+not scale linearly.
+
+The CTI material groups follow IEC 60664-1 clause 4.8.1.3: group I from 600 V, II from
+400 V up to below 600 V, IIIa from 175 V up to below 400 V and IIIb from 100 V up to
+below 175 V. A report that gives both a CTI value and a group must agree with these
+bands; a group alone records a datasheet that states only the group. These are material
+reports, not creepage or clearance requirements, which belong to the rules model.
+
 ## Construction and dimensions
 
 Each dielectric gap retains its existing stable UUID and optional descriptive
@@ -199,10 +233,13 @@ fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
 thickness require at least `pcbcraft-board/23` when one of them is present.
-Explicit via assignments require board/24 and footprint locks board/25; both
-formats retain the stack fields.
+Explicit via assignments require board/24. Thermal conductivity, thermal expansion,
+dielectric strength and CTI reports require board/25, which accepts every earlier
+field optionally. Footprint locks require board/34, which also accepts those reports
+optionally. The highest applicable format takes precedence; older headers refuse
+these extensions. Without them a board keeps its earlier format and bytes.
 
-Version 3 does not introduce a reusable material library, thermal expansion,
+Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance
 solver. Extending those capabilities will use typed records and explicit format
 versions rather than an unchecked property bag.
@@ -221,8 +258,9 @@ clearance checks and preparation actions. PCBcraft currently clips against coppe
 bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
 
 Profiles imports/exports a named `.pcsetup.json` file with format
-`pcbcraft-setup-profile/1`, or `/2` when the setup uses the copper and board
-thickness fields above, an independent UUID and positive revision, a complete
+`pcbcraft-setup-profile/1`, `/2` when the setup uses the copper and board
+thickness fields above, or `/3` when a material carries a thermal conductivity,
+thermal expansion, dielectric strength or CTI report, an independent UUID and positive revision, a complete
 validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
 material definitions, reports and references are embedded. The bounded, strict decoder
 rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.
