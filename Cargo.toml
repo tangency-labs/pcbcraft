@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["apps/*", "crates/*"]
-exclude = ["vendor/eframe"]
+exclude = ["vendor/eframe", "vendor/solidcore-ops"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,7 @@ solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev
 # SolidCraft's B-rep kernel and STEP crates, at the same revision as the UI crates above.
 # Only pcbcraft-geometry depends on them (docs/geometry-kernel.md).
 solidcore-ops = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcore-record = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 solidcore-step = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence", "clipboard"] }
 egui = "=0.37.0"
@@ -57,3 +58,7 @@ eframe = { path = "vendor/eframe" }
 # Shared viewport callbacks require SolidCraft's published renderer fixes.
 egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+
+# Narrow backport of upstream STEP composition fixes; see vendor/solidcore-ops/PATCH.md.
+[patch."https://github.com/tangency-labs/solidcraft.git"]
+solidcore-ops = { path = "vendor/solidcore-ops" }
