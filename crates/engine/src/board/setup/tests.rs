@@ -4,6 +4,7 @@ use super::*;
 use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, persistence};
 use std::sync::Arc;
 
+mod enums;
 mod integers;
 
 /// The reader's reason for refusing the stack fields under an older header.
@@ -613,7 +614,7 @@ fn with_header(documents: &persistence::Documents, from: &str, to: &str) -> pers
 /// are one undoable setup edit that saves losslessly in its own board format. Unset values stay
 /// unknown and boards without these fields keep their earlier format and bytes.
 ///
-/// 47.9 µm is IPC-2221A clause 10.1.1, Table 10-1: the minimum external conductor thickness after
+/// 47.9 µm is IPC-2221A clause 10.1.1, Table 10-2: the minimum external conductor thickness after
 /// processing for 1 oz foil, Class 1 and 2. Top records it as nominal and Bottom as minimum, so both
 /// bases are covered. The 35 µm foil for 1 oz follows IPC-2251 clause 4.1.1.3; the other values are
 /// arbitrary.

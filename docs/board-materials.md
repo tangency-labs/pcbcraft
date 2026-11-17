@@ -190,7 +190,8 @@ used and does not assign nets. Optional `base_copper` describes the foil as orde
 `weight_milli_oz`, the nominal weight in thousandths of an ounce per square foot
 (1000 is 1 oz, accepted from 1 to 100 000), and/or the foil `thickness_nm`. At least
 one is required. Neither is derived from the other, and neither changes the finished
-thickness.
+thickness. The `role` and `thickness_basis` fields accept only their listed strings,
+not singleton objects naming a variant.
 
 Base copper weight and foil thickness, copper tolerance, and the three board-thickness
 fields require parsed integer-kind numbers: decimal/exponent spellings (including `-0`)
