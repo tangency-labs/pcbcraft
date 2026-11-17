@@ -4,6 +4,8 @@ use super::{MAX_LENGTH_NM, MAX_MATERIALS, MAX_PLIES_PER_GAP, MAX_TEMPERATURE_MIL
 use super::{insulation, thermal};
 use serde_json::{Value, json};
 
+const INTEGER_TOKENS: &str = "Readers require parsed integer-kind JSON numbers; decimal/exponent spellings (including -0) are refused even when JSON Schema considers their values integral.";
+
 /// Require bounded text; whitespace and control characters are checked during adoption.
 fn text(max: usize) -> Value {
     json!({"type":"string","minLength":1,"maxLength":max})
@@ -72,7 +74,7 @@ fn basis() -> Value {
 
 /// Temperatures share the Tg report range.
 fn temperature() -> Value {
-    json!({"type":"integer","minimum":MIN_TEMPERATURE_MILLI_C,"maximum":MAX_TEMPERATURE_MILLI_C})
+    json!({"type":"integer","minimum":MIN_TEMPERATURE_MILLI_C,"maximum":MAX_TEMPERATURE_MILLI_C,"description":INTEGER_TOKENS})
 }
 
 /// Conductivity in mW/(m·K); an absent axis is not an isotropy claim.
@@ -80,7 +82,7 @@ fn thermal_conductivity() -> Value {
     json!({"type":"array","maxItems":thermal::MAX_REPORTS,"items":{
         "type":"object","additionalProperties":false,"required":["conductivity_mw_per_m_k","basis","source"],
         "properties":{
-            "conductivity_mw_per_m_k":{"type":"integer","minimum":1,"maximum":thermal::MAX_CONDUCTIVITY_MW_PER_M_K},
+            "conductivity_mw_per_m_k":{"type":"integer","minimum":1,"maximum":thermal::MAX_CONDUCTIVITY_MW_PER_M_K,"description":INTEGER_TOKENS},
             "axis":{"enum":["x","y","z"]},"temperature_milli_c":temperature(),"method":text(80),
             "basis":basis(),"source":source()
         }
@@ -93,7 +95,7 @@ fn cte() -> Value {
         "type":"object","additionalProperties":false,"required":["cte_ppb_per_k","basis","source"],
         "dependentRequired":{"from_milli_c":["to_milli_c"],"to_milli_c":["from_milli_c"]},
         "properties":{
-            "cte_ppb_per_k":{"type":"integer","minimum":thermal::MIN_CTE_PPB_PER_K,"maximum":thermal::MAX_CTE_PPB_PER_K},
+            "cte_ppb_per_k":{"type":"integer","minimum":thermal::MIN_CTE_PPB_PER_K,"maximum":thermal::MAX_CTE_PPB_PER_K,"description":INTEGER_TOKENS},
             "axis":{"enum":["x","y","z"]},"region":{"enum":["below_tg","above_tg"]},
             "from_milli_c":temperature(),"to_milli_c":temperature(),"method":text(80),
             "basis":basis(),"source":source()
@@ -106,8 +108,8 @@ fn dielectric_strength() -> Value {
     json!({"type":"array","maxItems":insulation::MAX_REPORTS,"items":{
         "type":"object","additionalProperties":false,"required":["breakdown_v","specimen_thickness_nm","basis","source"],
         "properties":{
-            "breakdown_v":{"type":"integer","minimum":1,"maximum":insulation::MAX_BREAKDOWN_V},
-            "specimen_thickness_nm":{"type":"integer","minimum":1,"maximum":MAX_LENGTH_NM},
+            "breakdown_v":{"type":"integer","minimum":1,"maximum":insulation::MAX_BREAKDOWN_V,"description":INTEGER_TOKENS},
+            "specimen_thickness_nm":{"type":"integer","minimum":1,"maximum":MAX_LENGTH_NM,"description":INTEGER_TOKENS},
             "axis":{"enum":["x","y","z"]},"method":text(80),"basis":basis(),"source":source()
         }
     }})
@@ -119,7 +121,7 @@ fn cti() -> Value {
         "type":"object","additionalProperties":false,"required":["basis","source"],
         "anyOf":[{"required":["cti_v"]},{"required":["material_group"]}],
         "properties":{
-            "cti_v":{"type":"integer","minimum":1,"maximum":insulation::MAX_CTI_V},
+            "cti_v":{"type":"integer","minimum":1,"maximum":insulation::MAX_CTI_V,"description":INTEGER_TOKENS},
             "material_group":{"enum":["I","II","IIIa","IIIb"]},"method":text(80),"basis":basis(),"source":source()
         }
     }})
