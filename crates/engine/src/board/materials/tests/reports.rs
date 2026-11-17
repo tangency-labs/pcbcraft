@@ -529,6 +529,52 @@ fn board_format_24_carries_stack_fields_origin_and_rules() {
     assert_eq!(saved(&s, "pcbcraft-board/19"), ruled);
 }
 
+/// Stack fields and reports preserve zone outlines, with or without a placement origin;
+/// removing them restores the exact zone-format bytes through undo.
+#[test]
+fn board_formats_23_and_24_carry_zone_outlines() {
+    for origin in [false, true] {
+        let mut s = crate::board::track::tests::routed_fixture();
+        let board = s.project().unwrap().board_target().unwrap().board;
+        if origin {
+            apply(
+                &mut s,
+                crate::board::origin::SET_PLACEMENT_ORIGIN,
+                json!({"board":board,"origin":{"kind":"point","x_nm":1_000_000,"y_nm":2_000_000}}),
+            );
+        }
+        let layer = crate::board::track::tests::copper_layers(&s)[0];
+        let nets = s.project().unwrap().inspect_net_registry().unwrap();
+        apply(
+            &mut s,
+            crate::board::zones::ADD_ZONE,
+            json!({
+                "layer":layer,"target":{"kind":"derived","anchor":nets["nets"][0]["anchor"]},
+                "points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},
+                    {"x_nm":10_000_000,"y_nm":10_000_000},{"x_nm":0,"y_nm":10_000_000}]
+            }),
+        );
+        let zone_format = if origin { "pcbcraft-board/21" } else { "pcbcraft-board/20" };
+        let zoned = saved(&s, zone_format);
+        let zones = board_json(&zoned)["zones"].clone();
+        assert_eq!(zones.as_array().unwrap().len(), 1);
+        let mut c = setup(&s);
+        c["stackup"]["strata"][0]["role"] = json!("signal");
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":c.clone()}));
+        let stacked = saved(&s, "pcbcraft-board/23");
+        assert_eq!(board_json(&stacked)["zones"], zones);
+        c["materials"] = json!([{"id":Uuid::from_u128(303),"revision":1,"name":"Synthetic insulation","cti":reports()["cti"]}]);
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
+        let documents = saved(&s, "pcbcraft-board/24");
+        assert_eq!(board_json(&documents)["zones"], zones);
+        refused(&with_header(&documents, "pcbcraft-board/24", zone_format), "require board format 24");
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(saved(&s, "pcbcraft-board/23"), stacked);
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(saved(&s, zone_format), zoned);
+    }
+}
+
 /// Locked copper also travels in format 24 without any format 23 stack field, and dropping the
 /// reports returns to format 18 byte for byte.
 #[test]

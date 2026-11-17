@@ -51,6 +51,7 @@ If Trunk reports `invalid value '1' for '--no-color'`, the shell has supplied
 | `crates/engine` | Project model, validation, commands, immutable snapshots and undo/redo; no UI |
 | `crates/app` | Desktop/browser composition, canvas tools, preferences and project-file lifecycle |
 | `crates/chrome` | Shared colors, sizes, icons, menus, cards and other presentation primitives |
+| `crates/geometry` | Solid bodies and STEP exchange behind a kernel-neutral API; the only crate that links the solid kernel |
 | `crates/units` | Shared physical quantity/unit definitions, exact decimal parsing/display, and geometry length conversion/edit formatting |
 | `crates/mcp` | Tool discovery and dispatch over the engine; a restricted live adapter and a separate headless session |
 | `crates/craft-control` | Bounded framing and authenticated local transport |
@@ -142,7 +143,8 @@ angle-bracket destinations and HTML href/src attributes. Fenced/inline code,
 external URLs, repository-root-relative URLs and fragment-only links are ignored.
 Query strings and fragments are stripped for file-existence checks; heading anchor
 names and external link availability are not validated. Missing local targets are
-reported with the source file and line number.
+reported with the source file's repository-relative path, using forward slashes on
+every platform, and its line number.
 
 Apply the [bounded verification rule](AGENTS.md#keep-verification-bounded):
 choose checks that answer a specific question about the change, and stop when

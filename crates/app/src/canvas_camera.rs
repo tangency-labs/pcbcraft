@@ -361,6 +361,7 @@ impl Camera {
                 .footprints()
                 .flat_map(board_extent)
                 .chain(project.drawings().into_iter().flat_map(|drawing| drawing.points))
+                .chain(project.zones().iter().flat_map(|zone| zone.points.iter().copied()))
                 .chain(copper)
                 .fold(Rect::NOTHING, |bounds, point| {
                     bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
