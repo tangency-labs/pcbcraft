@@ -196,6 +196,128 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
 
+/// Format 23 carries the stack fields together with a placement origin: a board with an origin,
+/// a copper role and a finished thickness saves as format 23, reopens with every value and
+/// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
+/// fields (header 20 requires zones, covered separately by the setup tests). Removing the origin
+/// keeps format 23; removing the stack fields instead falls back to format 21.
+#[test]
+fn stack_format_carries_the_placement_origin() {
+    let mut s = board();
+    let plain = s.inspect()["project"]["board"]["setup"].clone();
+    let mut candidate = plain.clone();
+    candidate["stackup"]["strata"][0]["role"] = json!("signal");
+    candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":candidate,"expected_revision":s.revision()})).unwrap();
+    set(&mut s, json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM})).unwrap();
+
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&documents);
+    let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
+    let reopened = decode_documents(&documents).unwrap();
+    assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
+    assert_eq!(reopened.board_setup().unwrap().stackup().finished_thickness_nm, Some(1_600_000));
+    let target = reopened.board_target().unwrap();
+    assert_eq!(reopened.board_view(target).unwrap().authored_placement_origin(), view(&s).authored_placement_origin());
+    assert_eq!(encode_documents(reopened).unwrap(), documents);
+
+    let text = String::from_utf8(documents[&path].clone()).unwrap();
+    let mut altered = documents.clone();
+    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    match decode_documents(&altered) {
+        Ok(_) => panic!("format 21 opened the stack fields"),
+        Err(error) => assert!(error.contains("require board format 23"), "{error}"),
+    }
+
+    let format = |s: &Session| {
+        let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+        serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()["format"].clone()
+    };
+    set(&mut s, Value::Null).unwrap();
+    assert_eq!(format(&s), "pcbcraft-board/23");
+    set(&mut s, json!({"kind":"board_zero"})).unwrap();
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(format(&s), "pcbcraft-board/21");
+}
+
+/// The last in-range coordinates are accepted on both sides and one step beyond is refused.
+#[test]
+fn point_origins_accept_the_whole_coordinate_range_and_nothing_beyond() {
+    let max = crate::schematic::MAX_CENTER_NM;
+    let mut s = board();
+    for (x, y) in [(max, max), (-max, -max), (max, -max)] {
+        set(&mut s, json!({"kind":"point","x_nm":x,"y_nm":y})).unwrap();
+        assert_eq!(view(&s).placement_origin().unwrap().at, Point { x_nm: x, y_nm: y });
+    }
+    let before = s.snapshot().unwrap();
+    for (x, y) in [(-max - 1, 0), (0, -max - 1), (max + 1, 0), (0, max + 1)] {
+        assert!(set(&mut s, json!({"kind":"point","x_nm":x,"y_nm":y})).is_err(), "{x} {y}");
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+}
+
+/// A saved origin is read as strictly as a request: a nil identity, an out-of-range point and a
+/// field its kind does not use are each refused, and the unaltered file still opens.
+#[test]
+fn saved_origins_refuse_nil_ids_out_of_range_points_and_extra_fields() {
+    let max = crate::schematic::MAX_CENTER_NM;
+    let mut s = board();
+    set(&mut s, json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM})).unwrap();
+    let id = s.project().unwrap().board.placement_origin.as_ref().unwrap().id;
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&documents);
+    let text = String::from_utf8(documents[&path].clone()).unwrap();
+    let anchor = format!(r#"{{"kind":"point","x_nm":{},"y_nm":{}}}"#, 2 * MM, 3 * MM);
+    assert!(text.contains(&anchor) && text.contains(&id.to_string()));
+    assert!(decode_documents(&documents).is_ok());
+    for (from, to) in [
+        (id.to_string(), Uuid::nil().to_string()),
+        (anchor.clone(), format!(r#"{{"kind":"point","x_nm":{},"y_nm":0}}"#, max + 1)),
+        (anchor.clone(), r#"{"kind":"board_zero","x_nm":0}"#.to_owned()),
+        (anchor.clone(), r#"{"kind":"outline_lower_left","y_nm":0}"#.to_owned()),
+    ] {
+        let mut altered = documents.clone();
+        altered.insert(path.clone(), text.replacen(&from, &to, 1).into_bytes());
+        assert!(decode_documents(&altered).is_err(), "{to}");
+    }
+}
+
+/// Excellon coordinates are rounded to 0.001 mm from integer nanometres with halves going up,
+/// so a hole at a half micrometre writes the same rounding on both sides of zero and after any
+/// whole-millimetre shift, and a hole just left of zero writes 0.000 rather than -0.000.
+#[test]
+fn drill_coordinates_round_the_same_way_wherever_the_origin_is() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let (via_x, via_y) = (7 * MM + 2_500, 20 * MM);
+    route_with_vias(
+        &mut s,
+        front,
+        &[Point { x_nm: 5 * MM, y_nm: via_y }, Point { x_nm: via_x, y_nm: via_y }, Point { x_nm: 9 * MM, y_nm: via_y }],
+        &[(1, back)],
+    )
+    .unwrap();
+    let drill = |s: &Session| view(s).fabrication_outputs().unwrap().into_iter().find(|f| f.name.ends_with("-PTH.drl")).unwrap();
+    for (offset, written) in
+        [(-2_500, "0.003"), (2_500, "-0.002"), (400, "0.000"), (-400, "0.000"), (-10 * MM - 2_500, "10.003"), (10 * MM + 2_500, "-10.002")]
+    {
+        set(&mut s, json!({"kind":"point","x_nm":via_x + offset,"y_nm":via_y})).unwrap();
+        let near = drill(&s);
+        assert!(near.contents.contains(&format!("\nX{written}Y0.000\n")), "{offset}: {}", near.contents);
+        assert!(!near.contents.contains("-0.000"));
+        set(&mut s, json!({"kind":"point","x_nm":via_x + offset - 10 * MM,"y_nm":via_y + 10 * MM})).unwrap();
+        let shifted = drill(&s);
+        let (before, after) = (coordinates(&near), coordinates(&shifted));
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert_eq!((b.0, b.1), (a.0 + 10_000, a.1 + 10_000), "{offset}");
+        }
+    }
+}
+
 /// Move a footprint through the shared transform command.
 fn place(session: &mut Session, footprint: &str, at: Point, rotation: u16, side: &str) {
     let params = json!({"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":rotation,"side":side,"expected_revision":session.revision()});
@@ -300,80 +422,4 @@ fn bottom_side_names_round_trip() {
     let refused = serde_json::from_value::<BottomSide>(json!("viewed_from_below")).unwrap_err().to_string();
     assert!(refused.contains("unknown variant `viewed_from_below`"), "{refused}");
     assert!(refused.contains("`viewed_from_top`") && refused.contains("`viewed_from_bottom`"), "{refused}");
-}
-
-/// The last in-range coordinates are accepted on both sides and one step beyond is refused.
-#[test]
-fn point_origins_accept_the_whole_coordinate_range_and_nothing_beyond() {
-    let max = crate::schematic::MAX_CENTER_NM;
-    let mut s = board();
-    for (x, y) in [(max, max), (-max, -max), (max, -max)] {
-        set(&mut s, json!({"kind":"point","x_nm":x,"y_nm":y})).unwrap();
-        assert_eq!(view(&s).placement_origin().unwrap().at, Point { x_nm: x, y_nm: y });
-    }
-    let before = s.snapshot().unwrap();
-    for (x, y) in [(-max - 1, 0), (0, -max - 1), (max + 1, 0), (0, max + 1)] {
-        assert!(set(&mut s, json!({"kind":"point","x_nm":x,"y_nm":y})).is_err(), "{x} {y}");
-        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
-    }
-}
-
-/// A saved origin is read as strictly as a request: a nil identity, an out-of-range point and a
-/// field its kind does not use are each refused, and the unaltered file still opens.
-#[test]
-fn saved_origins_refuse_nil_ids_out_of_range_points_and_extra_fields() {
-    let max = crate::schematic::MAX_CENTER_NM;
-    let mut s = board();
-    set(&mut s, json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM})).unwrap();
-    let id = s.project().unwrap().board.placement_origin.as_ref().unwrap().id;
-    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
-    let path = test_board_path(&documents);
-    let text = String::from_utf8(documents[&path].clone()).unwrap();
-    let anchor = format!(r#"{{"kind":"point","x_nm":{},"y_nm":{}}}"#, 2 * MM, 3 * MM);
-    assert!(text.contains(&anchor) && text.contains(&id.to_string()));
-    assert!(decode_documents(&documents).is_ok());
-    for (from, to) in [
-        (id.to_string(), Uuid::nil().to_string()),
-        (anchor.clone(), format!(r#"{{"kind":"point","x_nm":{},"y_nm":0}}"#, max + 1)),
-        (anchor.clone(), r#"{"kind":"board_zero","x_nm":0}"#.to_owned()),
-        (anchor.clone(), r#"{"kind":"outline_lower_left","y_nm":0}"#.to_owned()),
-    ] {
-        let mut altered = documents.clone();
-        altered.insert(path.clone(), text.replacen(&from, &to, 1).into_bytes());
-        assert!(decode_documents(&altered).is_err(), "{to}");
-    }
-}
-
-/// Excellon coordinates are rounded to 0.001 mm from integer nanometres with halves going up,
-/// so a hole at a half micrometre writes the same rounding on both sides of zero and after any
-/// whole-millimetre shift, and a hole just left of zero writes 0.000 rather than -0.000.
-#[test]
-fn drill_coordinates_round_the_same_way_wherever_the_origin_is() {
-    let mut s = routed_fixture();
-    outline(&mut s);
-    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
-    let (via_x, via_y) = (7 * MM + 2_500, 20 * MM);
-    route_with_vias(
-        &mut s,
-        front,
-        &[Point { x_nm: 5 * MM, y_nm: via_y }, Point { x_nm: via_x, y_nm: via_y }, Point { x_nm: 9 * MM, y_nm: via_y }],
-        &[(1, back)],
-    )
-    .unwrap();
-    let drill = |s: &Session| view(s).fabrication_outputs().unwrap().into_iter().find(|f| f.name.ends_with("-PTH.drl")).unwrap();
-    for (offset, written) in
-        [(-2_500, "0.003"), (2_500, "-0.002"), (400, "0.000"), (-400, "0.000"), (-10 * MM - 2_500, "10.003"), (10 * MM + 2_500, "-10.002")]
-    {
-        set(&mut s, json!({"kind":"point","x_nm":via_x + offset,"y_nm":via_y})).unwrap();
-        let near = drill(&s);
-        assert!(near.contents.contains(&format!("\nX{written}Y0.000\n")), "{offset}: {}", near.contents);
-        assert!(!near.contents.contains("-0.000"));
-        set(&mut s, json!({"kind":"point","x_nm":via_x + offset - 10 * MM,"y_nm":via_y + 10 * MM})).unwrap();
-        let shifted = drill(&s);
-        let (before, after) = (coordinates(&near), coordinates(&shifted));
-        assert_eq!(before.len(), after.len());
-        for (a, b) in before.iter().zip(&after) {
-            assert_eq!((b.0, b.1), (a.0 + 10_000, a.1 + 10_000), "{offset}");
-        }
-    }
 }

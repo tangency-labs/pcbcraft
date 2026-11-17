@@ -11,12 +11,14 @@ pub mod authoring;
 pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
+pub mod edits;
 pub mod hierarchy;
 #[cfg(test)]
 mod identity_tests;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
+mod named_catalog;
 pub mod net_classes;
 pub mod net_labels;
 pub mod netlist;
@@ -24,6 +26,7 @@ pub mod nets;
 pub mod no_connect;
 pub mod parameters;
 pub mod part_authoring;
+pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
@@ -2331,6 +2334,61 @@ const CATALOG: &[Command] = &[
             summary: "Optional scoped target; omit to list current identities and eligible derived anchors",
         }],
     },
+    Command {
+        id: part_groups::CREATE,
+        title: "Create Part Group",
+        summary: "Create a project-wide part group without assigning part instances or allocating a board.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name; identity is an independent UUID" },
+        ],
+    },
+    Command {
+        id: part_groups::UPDATE,
+        title: "Update Part Group",
+        summary: "Rename a part group, preserving its UUID and membership and incrementing its revision only on change.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name" },
+        ],
+    },
+    Command {
+        id: part_groups::REMOVE,
+        title: "Remove Part Group",
+        summary: "Remove a part group that no part instance belongs to; a group with members is refused and its members are listed.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+        ],
+    },
+    Command {
+        id: part_groups::INSPECT,
+        title: "Inspect Part Groups",
+        summary: "Read the part-group catalog without reading membership or changing history.",
+        params: &[],
+    },
+    Command {
+        id: part_groups::SET_GROUPS,
+        title: "Set Part-Instance Groups",
+        summary: "Replace a part instance's complete group set in one undoable step. An empty set removes its memberships.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "part_instance", kind: ParamKind::Text, required: true, summary: "Stable part-instance ID from project inspection" },
+            Param { name: "groups", kind: ParamKind::ClassSet, required: true, summary: "Complete set of part-group UUIDs" },
+        ],
+    },
+    Command {
+        id: part_groups::INSPECT_GROUPS,
+        title: "Inspect Part-Instance Groups",
+        summary: "Read one part instance's groups, or every grouped part instance, without changing history.",
+        params: &[Param {
+            name: "part_instance",
+            kind: ParamKind::Text,
+            required: false,
+            summary: "Optional part-instance ID; omit to list every part instance that belongs to a group",
+        }],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -2410,6 +2468,12 @@ pub struct Project {
     parameters: Arc<parameters::Parameters>,
     /// Immutable profile payloads are shared across project snapshots and history.
     assembly_profiles: Arc<board::assembly_profile::Catalog>,
+    /// Authored part groups, independent of membership.
+    part_groups: Arc<part_groups::Catalog>,
+    /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
+    part_group_memberships: Arc<part_groups::Memberships>,
+    /// Retain the compact storage choice after opening, independent of membership identity.
+    prefer_compact_part_groups: bool,
 }
 
 impl Project {
@@ -2626,6 +2690,8 @@ pub struct Session {
     update_plan: Option<board::update::CachedPlan>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
+    /// Told about each new history root and committed edit; never part of the project.
+    observer: Option<Arc<dyn edits::EditObserver>>,
 }
 
 impl Default for Session {
@@ -2642,6 +2708,7 @@ impl Default for Session {
             history_root_revision: 0,
             update_plan: None,
             defer_net_reconciliation: false,
+            observer: None,
         }
     }
 }
@@ -2654,6 +2721,19 @@ impl Session {
     /// Share the exact current snapshot with a background save without copying model data.
     pub fn snapshot(&self) -> Option<Arc<Project>> {
         self.project.clone()
+    }
+
+    /// Report later history roots and committed edits to `observer`, replacing any earlier one,
+    /// or stop reporting with `None`. Edits come from [`Self::apply`] and
+    /// [`Self::commit_copper_edit`]; roots from opens and from adopted save metadata, so every
+    /// change to the current project reaches the observer. An open project is reported at once as the first root, so
+    /// the observer always knows the state the next edit builds on. Neither the project nor its
+    /// history changes.
+    pub fn observe_edits(&mut self, observer: Option<Arc<dyn edits::EditObserver>>) {
+        if let (Some(observer), Some(project)) = (&observer, &self.project) {
+            observer.opened(project.clone());
+        }
+        self.observer = observer;
     }
 
     /// Adopt a validated project as a new history root. Advance past its highest stored ID
@@ -2671,6 +2751,7 @@ impl Session {
         self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
+        self.report_opened();
     }
 
     pub fn revision(&self) -> u64 {
@@ -2683,6 +2764,7 @@ impl Session {
     /// identity/absence and retains a later root/folder choice made since the save began.
     /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
+    /// When it changes anything, the edit observer is told the current project as a new root.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
@@ -2733,6 +2815,8 @@ impl Session {
         }
         if changed {
             self.update_plan = None;
+            // The adopted metadata is saved data, so it is a new base rather than an edit.
+            self.report_opened();
         }
         changed
     }
@@ -2803,6 +2887,12 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | part_groups::CREATE
+            | part_groups::UPDATE
+            | part_groups::REMOVE
+            | part_groups::INSPECT
+            | part_groups::SET_GROUPS
+            | part_groups::INSPECT_GROUPS
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2919,6 +3009,7 @@ impl Session {
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
+            if !p.part_groups.groups.is_empty() { inspected["part_groups"] = json!(p.part_groups()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -3015,6 +3106,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
         }
+        if matches!(id, part_groups::INSPECT | part_groups::INSPECT_GROUPS) {
+            self.validate_project_command(id, params)?;
+            return self.part_group_query(id, params);
+        }
         if matches!(id, parameters::LIST | parameters::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.parameter_query(id, params);
@@ -3039,7 +3134,38 @@ impl Session {
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
+    /// A command that advances the revision is reported to the edit observer once it has
+    /// been adopted; failures, no-ops and queries are not reported.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        let before = self.revision;
+        let revision = self.apply_command(id, params)?;
+        if revision != before {
+            self.report_committed(id, params);
+        }
+        Ok(revision)
+    }
+
+    /// Tell the edit observer that `command` with `params` produced the current project.
+    pub(crate) fn report_committed(&self, command: &str, params: &Value) {
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.committed(edits::CommittedEdit {
+                command: command.to_owned(),
+                params: params.clone(),
+                revision: self.revision,
+                project: project.clone(),
+            });
+        }
+    }
+
+    /// Tell the edit observer that the current project is a new base for later edits.
+    fn report_opened(&self) {
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.opened(project.clone());
+        }
+    }
+
+    /// Route a command to its query, library, sheet or project handler. See [`Self::apply`].
+    fn apply_command(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         // A read-only query that needs no project: accepted like `execute`, changing nothing.
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3126,6 +3252,12 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | part_groups::CREATE
+                | part_groups::UPDATE
+                | part_groups::REMOVE
+                | part_groups::INSPECT
+                | part_groups::SET_GROUPS
+                | part_groups::INSPECT_GROUPS
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -3206,6 +3338,9 @@ impl Session {
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
                 assembly_profiles: Arc::default(),
+                part_groups: Arc::default(),
+                part_group_memberships: Arc::default(),
+                prefer_compact_part_groups: false,
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3227,6 +3362,11 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            part_groups::CREATE | part_groups::UPDATE | part_groups::REMOVE => self.edit_part_group(id, params)?,
+            part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,
+            part_groups::INSPECT | part_groups::INSPECT_GROUPS => {
+                self.part_group_query(id, params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
@@ -3772,8 +3912,13 @@ impl Session {
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
     /// Net allocation and reconciliation validate before any session/history state is changed.
+    /// Memberships of part instances the candidate no longer holds are dropped in the same step;
+    /// edits that keep the part-instance map itself skip that scan.
     fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
+        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+            project.prune_part_group_memberships();
+        }
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
         }

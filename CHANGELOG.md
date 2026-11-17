@@ -13,6 +13,22 @@ canvas. The choice is remembered with your settings and available
 through `app.set_preferences`; each view keeps its saved dock side and floating
 positions, and project data and history are unchanged.
 
+Part instances can be collected into named part groups shared by the schematic
+and the board. `part_groups.create`, `update`, `remove` and `inspect`
+manage the catalog, and `part_instances.set_groups` and
+`part_instances.inspect_groups` set and read a part instance's groups by its
+stable ID, so annotation does not change membership. A group that still has
+members cannot be removed. Projects with part groups save as
+`pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
+exist). Dense memberships use `pcbcraft-project/39` and board instances
+`pcbcraft-instances/7` through a compact UUID dictionary when expanded records
+exceed existing size limits; no supported membership is dropped. Earlier files
+keep the expanded representation while it fits, and compact files keep their
+encoding after reopening. Unchanged saves preserve canonical encoder bytes;
+accepted noncanonical input may normalize. Copy/Cut leave part groups in their
+owning project, so duplicated parts start ungrouped; projects without groups
+keep their format and canonical encoder bytes.
+
 Nets share readable names across schematic browsing, Rules and PCB inspection.
 Unnamed signals use net-owned numbers such as `Net-0001`, which survive component
 reference edits and deletion on a surviving net. Split/merge reconciliation and
@@ -39,9 +55,15 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
-- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Project format 36 pins the revisions; board format 22 records adoptions. Generic rows and other profiles are unchanged. No placement file is written yet.
-- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin use board format 21, or 22 when they also adopt an assembly output profile; boards without one keep their previous encoding. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
-- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
+- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Project format 36 pins the revisions; board format 22 records adoptions unless stack fields require 23. Generic rows and other profiles are unchanged. No placement file is written yet.
+- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin use board format 21, or 22 with profile adoptions, unless stack fields require 23; clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
+- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin or stack fields select their later format.
+
+Board setup stores an optional role and base copper for each copper layer, a
+tolerance and basis for its finished thickness, and the declared finished board
+thickness, through `pcb.set_board_setup`. Boards that use them save as board
+format 23 and setup profiles as version 2, which older builds refuse; other
+boards keep their encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.

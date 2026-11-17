@@ -408,14 +408,14 @@ mod live {
         WindowCommand {
             id: "app.library_source",
             title: "Manage Library Source",
-            summary: "Run Library workspace source management. Add/relocate use native pickers; Delete requires the same folder/count confirmation as the GUI. No project edits.",
+            summary: "Run Library workspace source management. Add/relocate/export use native pickers; Delete requires the same folder/count confirmation as the GUI. No project edits.",
             params: &[
                 VIEW,
                 Param {
                     name: "action",
                     summary: "Source operation",
                     required: true,
-                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete"]),
+                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete", "export"]),
                 },
                 Param { name: "source", summary: "Registration ID, defaults to selected source", required: false, kind: Kind::Name },
             ],

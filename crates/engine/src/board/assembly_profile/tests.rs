@@ -604,6 +604,109 @@ fn profile_without_origin_round_trips() {
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
 }
 
+/// A qualified stack, placement origin, and adopted profile keep their values through Save/Open.
+/// Clearing or undoing the adoption restores the same stack-bearing board bytes.
+#[test]
+fn stack_format_carries_an_assembly_profile_adoption() {
+    let (mut s, [footprint, _, _]) = placed();
+    let target = s.project().unwrap().board_target().unwrap();
+    let mut setup = s.inspect()["project"]["board"]["setup"].clone();
+    setup["stackup"]["strata"][0]["role"] = json!("signal");
+    setup["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    s.apply(crate::SET_BOARD_SETUP, &json!({"board":target.board,"setup":setup,"expected_revision":s.revision()})).unwrap();
+    let id = Uuid::from_u128(84);
+    let profile = content(json!({"name":"Stacked","corrections":[{"library":LIBRARY,"definition":"resistor-0402","rotation":90}]}), 1);
+    pin(&mut s, Some(id), profile).unwrap();
+    let pinned = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&pinned);
+    let board: Value = serde_json::from_slice(&pinned[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/23");
+    assert!(board.get("assembly_profiles").is_none());
+
+    adopt(&mut s, id, Some(1)).unwrap();
+    let adopted = encode_documents(s.snapshot().unwrap()).unwrap();
+    let mut saved: Value = serde_json::from_slice(&adopted[&path]).unwrap();
+    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["setup"], board["setup"]);
+    assert_eq!(saved["placement_origin"], board["placement_origin"]);
+    assert_eq!(saved["assembly_profiles"], json!([{"profile":id,"revision":1}]));
+    let reopened = decode_documents(&adopted).unwrap();
+    let reopened_board = reopened.board_view(target).unwrap();
+    assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
+    assert_eq!(reopened_board.authored_placement_origin(), view(&s).authored_placement_origin());
+    assert_eq!(reopened_board.placement_row(&footprint, Some(id)).unwrap(), Placed { at: Point { x_nm: 30 * MM, y_nm: -15 * MM }, rotation: 120 });
+    assert_eq!(encode_documents(reopened).unwrap(), adopted);
+    let mut downgraded = adopted.clone();
+    saved["format"] = json!("pcbcraft-board/22");
+    downgraded.insert(path, serde_json::to_vec(&saved).unwrap());
+    refused_because(decode_documents(&downgraded), "require board format 23");
+
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), pinned);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), adopted);
+    adopt(&mut s, id, None).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), pinned);
+}
+
+/// Profile pinning preserves both formats for a board's part-group memberships and their Undo history.
+#[test]
+fn assembly_profiles_preserve_expanded_and_compact_group_memberships() {
+    use crate::part_groups::{CREATE, SET_GROUPS};
+    use crate::persistence::{decode_packed, encode_packed};
+
+    let (mut s, _) = fixture();
+    s.apply(CREATE, &json!({"name":"Sample group","expected_revision":s.revision()})).unwrap();
+    let project = s.project().unwrap();
+    let group = project.part_groups().groups[0].id;
+    let member = project.part_instance_addresses().next().unwrap();
+    s.apply(SET_GROUPS, &json!({"part_instance":member,"groups":[group],"expected_revision":s.revision()})).unwrap();
+    let grouped = s.snapshot().unwrap();
+    let instance_path = grouped.instances_document_path().unwrap();
+    let id = Uuid::from_u128(85);
+    for (compact, project_format, instances_format) in
+        [(false, "pcbcraft-project/24", "pcbcraft-instances/5"), (true, "pcbcraft-project/39", "pcbcraft-instances/7")]
+    {
+        let grouped = Arc::new(Project { prefer_compact_part_groups: compact, ..Project::clone(&grouped) });
+        let original = encode_documents(grouped.clone()).unwrap();
+        let entry: Value = serde_json::from_slice(&original["project.json"]).unwrap();
+        let instances: Value = serde_json::from_slice(&original[&instance_path]).unwrap();
+        assert_eq!(entry["format"], project_format);
+        assert_eq!(instances["format"], instances_format);
+        s.open_snapshot(decode_documents(&original).unwrap());
+
+        pin(&mut s, Some(id), content(json!({"name":"Grouped project"}), 1)).unwrap();
+        let pinned = s.snapshot().unwrap();
+        let docs = encode_documents(pinned.clone()).unwrap();
+        let entry: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/36");
+        assert_eq!(docs[&instance_path], original[&instance_path]);
+        let reopened = decode_documents(&docs).unwrap();
+        assert_eq!(reopened.part_groups(), grouped.part_groups());
+        assert_eq!(reopened.part_group_memberships(), grouped.part_group_memberships());
+        assert_eq!(reopened.assembly_profiles(), pinned.assembly_profiles());
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        assert_eq!(decode_packed(&encode_packed(pinned).unwrap()).unwrap().documents, docs);
+
+        let mut invalid = docs.clone();
+        let mut wrong_header = instances.clone();
+        wrong_header["format"] = json!("pcbcraft-instances/1");
+        invalid.insert(instance_path.clone(), serde_json::to_vec(&wrong_header).unwrap());
+        refused_because(decode_documents(&invalid), if compact { "instances format 7" } else { "unsupported instances format" });
+        if compact {
+            let mut mixed = instances;
+            mixed["part_group_memberships"] = json!(grouped.part_group_memberships().iter().collect::<Vec<_>>());
+            invalid.insert(instance_path.clone(), serde_json::to_vec(&mixed).unwrap());
+            refused_because(decode_documents(&invalid), "exactly one membership encoding");
+        }
+
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), original);
+        s.apply("edit.redo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
+    }
+}
+
 /// Preview exposes corrected rows before acceptance; stale or altered reviews cannot change state.
 #[test]
 fn adoption_reviews_values_and_checks_revision_atomically() {
