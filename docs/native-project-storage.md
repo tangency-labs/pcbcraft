@@ -21,7 +21,9 @@ Project/24 adds the [part-group catalog](part-groups.md); its expanded
 memberships live in the instance home and use instances/5 when board-owned.
 Project/39 and instances/7 carry the same memberships through a compact UUID
 dictionary when expanded membership exceeds the existing document-size limits;
-valid older files keep their bytes while that representation still fits.
+older files keep their representation while it still fits. Byte-identical
+unchanged saves preserve canonical encoder output; accepted noncanonical input
+may normalize when saved.
 
 Project/23 adds persistent generated net numbers to the same instance registry,
 using instances/4 when board-owned. A stored record's positive `generated_number`
@@ -530,9 +532,11 @@ reader refuses duplicate, unused, nil or foreign dictionary UUIDs, duplicate or
 unordered rows/references, out-of-range or noninteger indices, empty payloads,
 excess expansion and simultaneous expanded/compact fields. Encoding falls back
 once to compact storage on a byte-limit overflow; the limits do not increase,
-and Save adds no precondition. Legacy files that fit retain their bytes;
-compact files retain their encoding choice after reopening. Both homes support
-all 4,096 part instances in all 256 groups.
+and Save adds no precondition. Legacy files that fit retain their expanded
+representation; compact files retain their encoding choice after reopening.
+Unchanged saves preserve canonical encoder bytes in either representation;
+accepted noncanonical input may normalize. Both homes support all 4,096 part
+instances in all 256 groups.
 
 ### Named net records
 

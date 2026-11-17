@@ -105,8 +105,9 @@ encoding refuses part groups.
 
 Inspection does not migrate a project. The first group edit adopts current
 folder and occurrence metadata in the same undo step. Projects without part
-groups keep their existing format and bytes, and removing the last group
-returns the entry point to the version its other content needs.
+groups keep their existing format and canonical encoder bytes; accepted
+noncanonical input may normalize when saved. Removing the last group returns
+the entry point to the version its other content needs.
 
 ### Dense membership
 
@@ -130,10 +131,12 @@ At the supported maximum the compact membership payload is below 4 MiB.
 Both storage homes validate the dictionary, row ordering, uniqueness, integer
 reference range, bounded expansion and existing part/group identities. Compact
 and expanded fields cannot coexist. Older envelopes refuse the compact field,
-and project/39 requires compact memberships. Valid legacy files, including
-4,096 and 4,097 memberships, retain their bytes while their expanded encoding
-fits the limits. Opening a compact file retains its encoding preference, so its
-next unchanged save is also byte-identical.
+and project/39 requires compact memberships. Legacy files, including 4,096 and
+4,097 memberships, retain the expanded representation while it fits the limits.
+Opening a compact file retains its encoding preference. For canonical encoder
+output, an unchanged save after reopening is byte-identical in either
+representation. Accepted noncanonical input, such as reversed catalog entries,
+may normalize when saved.
 
 ### Clipboard boundary
 

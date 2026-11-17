@@ -157,7 +157,7 @@ fn legacy_memberships_keep_their_bytes_above_four_thousand_records() {
 }
 
 /// Dense accepted membership, including the full 4096-by-256 space, saves through both native
-/// homes under the existing byte limits. The compact representation is idempotent after reopen.
+/// homes under the existing byte limits. Canonical compact output is byte-identical after reopen.
 #[test]
 fn maximum_memberships_save_and_reload_in_both_storage_homes() {
     for board in [false, true] {
@@ -234,7 +234,7 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
     }
 }
 
-/// Projects without part groups keep their format and bytes; a catalog without members
+/// Projects without part groups keep their format and canonical encoder bytes; a catalog without members
 /// writes project/24 but leaves the board instance header unchanged.
 #[test]
 fn untouched_projects_keep_their_bytes_and_headers() {
