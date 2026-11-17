@@ -127,7 +127,7 @@ fn publish(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("Choose a destination directory.")?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     temp.write_all(bytes).and_then(|_| temp.as_file().sync_all()).map_err(|e| e.to_string())?;
-    temp.persist_noclobber(path).map_err(|e| format!("Could not publish library copy; choose a new filename: {}", e.error))?;
+    temp.persist_noclobber(path).map_err(|e| format!("That file already exists or could not be created; choose a new filename: {}", e.error))?;
     // The visible file is complete even if directory sync is unavailable; don't claim a durable
     // save when that final confirmation fails. A retry must use a new name.
     #[cfg(unix)]
