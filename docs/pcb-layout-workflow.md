@@ -108,9 +108,10 @@ previous checks and unfinished route authority without resizing existing copper.
 
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
 Authored defaults have a stable rule UUID and use board format 19 or later
-(20 with zone outlines, 21 with a placement origin, 23 when the board setup uses the
-copper or board thickness fields); removing the record restores built-in resolution
-and the format required by the remaining
+(20 with zone outlines, 21 with a placement origin, 22 with assembly profile
+adoptions, 23 with copper or board thickness fields, 24 with explicit via intent,
+25 with thermal or insulation material reports); removing the record restores built-in resolution and the format required
+by the remaining
 board data. A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
 

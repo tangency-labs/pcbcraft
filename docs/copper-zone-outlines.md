@@ -75,9 +75,11 @@ clearance. Explicit stored null is not an alternate encoding.
 
 [Board/20](native-project-storage.md#zone-outline-records) is a superset of board/19
 with an optional board-rules object and a required nonempty `zones` array. A board
-that also has a placement origin uses board/21; one with copper roles, base copper,
-copper thickness qualifiers or finished board thickness uses board/23. These
-formats preserve the zone outlines alongside the origin and setup records. Each
+that also has a placement origin needs at least board/21; copper roles, base
+copper, copper thickness qualifiers or finished board thickness need at least
+board/23. Thermal conductivity, thermal expansion, dielectric strength or CTI
+reports select board/25. The encoder chooses the highest applicable format,
+preserving the zone outlines alongside the origin, setup and material records. Each
 zone is one JSON line in UUID order and contains only authored intent. A board
 without zones keeps the format its other content requires; no fill or preview is
 saved. Existing folder/archive codecs, recovery and Undo/Redo use those records.
