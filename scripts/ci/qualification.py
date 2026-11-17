@@ -1,12 +1,11 @@
-"""Carry completed full checks across unrelated labels without launching another build."""
+"""Carry approved native PR checks across unrelated labels without launching another build."""
 import json
 import os
 import re
 import time
 from urllib.request import Request, urlopen
 
-FULL_JOBS = {"changes", "documentation-links", "library-schemas", "native-tests",
-             "windows-tests", "windows-smoke", "web", "geometry-webassembly", "licenses", "checks"}
+PR_JOBS = {"changes", "documentation-links", "library-schemas", "native-tests", "checks"}
 
 
 def api(path: str):
@@ -27,11 +26,11 @@ def require_current_approval() -> None:
     if pr.get("head", {}).get("sha") != os.environ["CI_HEAD_SHA"] or pr.get("draft"):
         raise RuntimeError("PR head or draft state changed; use the current run")
     if not any(label.get("name") == "approved-for-ci" for label in pr.get("labels", [])):
-        raise RuntimeError("CI approval was removed; full qualification is required")
+        raise RuntimeError("CI approval was removed; use the current feedback run")
 
 
 def passing_run(runs: list[dict], head: str, merge: str, current: int, jobs) -> tuple[bool, bool]:
-    """Accept only a completed full run for this exact PR head and checked-out merge commit."""
+    """Accept only approved native checks for this exact head and checked-out merge commit."""
     pending = False
     for run in runs:
         if (run.get("id") == current or run.get("head_sha") != head
@@ -42,7 +41,7 @@ def passing_run(runs: list[dict], head: str, merge: str, current: int, jobs) -> 
             pending = True
         elif run.get("conclusion") == "success":
             results = {job["name"]: job.get("conclusion") for job in jobs(run["id"])}
-            if all(results.get(name) == "success" for name in FULL_JOBS):
+            if all(results.get(name) == "success" for name in PR_JOBS):
                 return True, pending
     return False, pending
 
@@ -59,10 +58,10 @@ def wait_for_pass(timeout: float = 3600) -> None:
         passed, pending = passing_run(runs, head, merge, current,
                                      lambda run: api(f"/repos/{repo}/actions/runs/{run}/jobs?filter=latest&per_page=100")["jobs"])
         if passed:
-            print("The exact PR head and merge commit already passed every full check.")
+            print("The exact PR head and merge commit already passed approved native checks.")
             return
         if not pending or time.monotonic() >= deadline:
-            raise RuntimeError("No full passing run for this merge commit; reapply approved-for-ci to run qualification")
+            raise RuntimeError("No approved native pass for this merge commit; reapply approved-for-ci to run checks")
         time.sleep(20)
 
 

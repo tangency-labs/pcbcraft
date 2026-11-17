@@ -19,7 +19,7 @@ def full() -> dict[str, bool]:
 
 
 def select(event: str, paths: list[str] | None) -> dict[str, bool]:
-    """Only recognized documentation avoids qualification; code and uncertainty require all.
+    """Only recognized documentation avoids builds; stage selection defers PR platform checks.
 
     Staging is applied separately so a feedback run never claims full validation.
     """
@@ -34,16 +34,16 @@ def select(event: str, paths: list[str] | None) -> dict[str, bool]:
             continue
         if path.startswith(".github/ISSUE_TEMPLATE/") or path in {".github/pull_request_template.md", ".github/CODEOWNERS", ".github/FUNDING.yml"}:
             continue
-        # Without a merge queue, approval qualifies every platform for any non-documentation
-        # change. Sources, fixtures, manifests and unknown paths all reach this fallback.
+        # Sources, fixtures, manifests and unknown paths are build inputs. The PR stage
+        # decides between quick compilation and native checks; other events run all platforms.
         return full()
     return result
 
 
 def plan(event: str, payload: dict, paths: list[str] | None) -> dict[str, str]:
-    """Stage PR feedback separately from qualification; approval runs all without a merge queue.
+    """PRs get quick feedback or approved native tests; other build events cover all platforms.
 
-    Drafts do no compilation. Unrelated label events carry only an actual full pass for the
+    Drafts do no compilation. Unrelated label events carry only an approved native pass for the
     same head, instead of repeating builds or accepting skipped qualification jobs.
     """
     selected = select(event, paths)
@@ -59,9 +59,14 @@ def plan(event: str, payload: dict, paths: list[str] | None) -> dict[str, str]:
             if action in {"labeled", "unlabeled"} and payload.get("label", {}).get("name") != APPROVAL and approved:
                 mode, selected = "carry", dict.fromkeys(OUTPUTS, False)
             elif approved:
-                mode, selected = "full", full()
+                mode, selected = "approved", dict.fromkeys(OUTPUTS, False)
+                selected["native"] = True
             else:
                 mode, selected, quick = "quick", dict.fromkeys(OUTPUTS, False), True
+            if mode in {"quick", "approved"}:
+                selected["licenses"] = paths is None or any(
+                    path in {"Cargo.toml", "Cargo.lock", "deny.toml"} or path.endswith("/Cargo.toml")
+                    for path in paths)
     return {**{key: str(value).lower() for key, value in selected.items()},
             "quick": str(quick).lower(), "mode": mode}
 

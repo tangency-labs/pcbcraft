@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci import check, policy as select, qualification, windows, window_smoke
+from ci import check, native, policy as select, qualification, windows, window_smoke
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -126,10 +126,10 @@ class CompletionTests(unittest.TestCase):
             del needs["changes"]["outputs"][key]
             self.assertTrue(check.failures(needs), key)
 
-    def test_quick_feedback_does_not_claim_merge_readiness(self):
+    def test_quick_feedback_passes_without_requiring_full_qualification(self):
         selected = select.plan("pull_request", {}, ["Cargo.toml"])
         self.assertTrue(selected["quick"] == "true" and selected["mode"] == "quick")
-        self.assertIn("approved-for-ci", " ".join(check.failures(self.needs(selected))))
+        self.assertEqual(check.failures(self.needs(selected)), [])
 
     def test_qualification_cannot_skip_a_platform_or_lose_its_stage(self):
         needs = self.needs(select.full())
@@ -141,7 +141,7 @@ class CompletionTests(unittest.TestCase):
 
 
 class StageTests(unittest.TestCase):
-    """Review approval gates test execution; unknown paths cannot bypass full qualification."""
+    """Review approval gates test execution; unknown paths cannot bypass native approval."""
 
     def test_drafts_never_compile_even_with_approval(self):
         selected = select.plan("pull_request", {"pull_request": {"draft": True, "labels": [{"name": select.APPROVAL}]}}, None)
@@ -153,14 +153,22 @@ class StageTests(unittest.TestCase):
             selected = select.plan("pull_request", {}, paths)
             self.assertEqual(selected["mode"], "quick")
             self.assertEqual(selected["quick"], "true")
-            self.assertFalse(any(selected[key] == "true" for key in select.OUTPUTS))
+            self.assertFalse(any(selected[key] == "true" for key in select.OUTPUTS if key != "licenses"))
 
-    def test_approval_and_later_pushes_require_every_platform(self):
+    def test_dependency_inputs_keep_license_checks_before_merge(self):
+        for path in ("Cargo.lock", "Cargo.toml", "crates/app/Cargo.toml", "deny.toml"):
+            for labels in ([], [{"name": select.APPROVAL}]):
+                selected = select.plan("pull_request", {"pull_request": {"labels": labels}}, [path])
+                self.assertEqual(selected["licenses"], "true")
+        self.assertEqual(select.plan("pull_request", {}, ["crates/app/src/lib.rs"])["licenses"], "false")
+
+    def test_approval_and_later_pushes_run_native_without_other_platforms(self):
         for action in ("labeled", "synchronize", "ready_for_review"):
             payload = {"action": action, "label": {"name": select.APPROVAL}, "pull_request": {"labels": [{"name": select.APPROVAL}]}}
             selected = select.plan("pull_request", payload, ["crates/engine/src/board.rs"])
-            self.assertEqual(selected["mode"], "full")
-            self.assertTrue(all(selected[key] == "true" for key in select.OUTPUTS))
+            self.assertEqual(selected["mode"], "approved")
+            self.assertEqual(selected["native"], "true")
+            self.assertTrue(all(selected[key] == "false" for key in select.OUTPUTS if key != "native"))
             self.assertEqual(selected["quick"], "false")
 
     def test_unrelated_labels_carry_proof_and_approval_removal_returns_to_quick(self):
@@ -177,7 +185,7 @@ class StageTests(unittest.TestCase):
 
 
 class QualificationTests(unittest.TestCase):
-    """A green quick run or another revision is never evidence of full qualification."""
+    """A green quick run or another revision is never evidence of native approval."""
 
     def candidate(self, **updates):
         return {"id": 10, "head_sha": "a" * 40, "display_title": "CI: " + "b" * 40,
@@ -185,7 +193,7 @@ class QualificationTests(unittest.TestCase):
 
     def proof(self, runs, jobs=None):
         if jobs is None:
-            jobs = [{"name": name, "conclusion": "success"} for name in qualification.FULL_JOBS]
+            jobs = [{"name": name, "conclusion": "success"} for name in qualification.PR_JOBS]
         return qualification.passing_run(runs, "a" * 40, "b" * 40, 99, lambda _: jobs)
 
     def test_only_the_exact_head_and_merge_commit_can_carry(self):
@@ -194,9 +202,9 @@ class QualificationTests(unittest.TestCase):
             self.assertEqual(self.proof([self.candidate(**updates)]), (False, False))
 
     def test_failed_missing_and_skipped_tests_cannot_carry(self):
-        for name in qualification.FULL_JOBS:
+        for name in qualification.PR_JOBS:
             for status in ("skipped", "failure", "cancelled", None):
-                jobs = [{"name": job, "conclusion": status if job == name else "success"} for job in qualification.FULL_JOBS]
+                jobs = [{"name": job, "conclusion": status if job == name else "success"} for job in qualification.PR_JOBS]
                 self.assertFalse(self.proof([self.candidate()], jobs)[0])
         self.assertEqual(self.proof([self.candidate()], []), (False, False))
 
@@ -225,6 +233,67 @@ class QualificationTests(unittest.TestCase):
             qualification.wait_for_pass()
         self.assertEqual(approval.call_count, 2)
         sleep.assert_called_once_with(20)
+
+
+class NativeSelectionTests(unittest.TestCase):
+    """Reverse dependency coverage includes consumers; unknown build inputs never select nothing."""
+
+    @staticmethod
+    def metadata():
+        graph = {"units": [], "geometry": ["units"], "engine": ["geometry"],
+                 "app": ["engine"], "web": ["app"], "cli": ["engine"], "unrelated": []}
+        return {"workspace_root": "/workspace", "workspace_members": list(graph),
+                "packages": [{"id": name, "name": name, "manifest_path": f"/workspace/crates/{name}/Cargo.toml",
+                              "dependencies": [{"name": dep, "rename": "an_alias", "kind": "build", "target": "cfg(windows)"} for dep in deps]}
+                             for name, deps in graph.items()]}
+
+    def test_transitive_consumers_and_renamed_target_build_dependencies(self):
+        self.assertEqual(native.affected(self.metadata(), ["crates/units/src/lib.rs"]), ["app", "cli", "engine", "geometry", "units", "web"])
+        self.assertEqual(native.affected(self.metadata(), ["crates/app/src/lib.rs"]), ["app", "web"])
+        self.assertEqual(native.affected(self.metadata(), ["crates/app/src/lib.rs", "crates/cli/src/main.rs"]), ["app", "cli", "web"])
+
+    def test_unknown_deleted_fixture_and_configuration_inputs_select_all(self):
+        for paths in (None, ["Cargo.lock"], ["crates/app/Cargo.toml"], ["crates/app/build.rs"],
+                      ["crates/geometry/tests/fixtures/new.step"], ["crates/removed/src/lib.rs"],
+                      ["/outside/source.rs"], ["crates/app/../../outside.rs"]):
+            self.assertIsNone(native.affected(self.metadata(), paths), paths)
+
+    def test_documentation_mixed_with_code_does_not_broaden_selection(self):
+        self.assertEqual(native.affected(self.metadata(), ["README.md", "crates/app/src/lib.rs"]), ["app", "web"])
+
+    def test_pr_commands_omit_doctests_and_opt_in_harness(self):
+        commands = native.commands(["app", "web"], False)
+        self.assertEqual(len(commands), 2)
+        self.assertIn("--tests", commands[1])
+        self.assertNotIn("--workspace", commands[0])
+        self.assertIn("web", commands[1])
+        self.assertFalse(any("performance-harness" in command for command in commands))
+
+    def test_full_events_retain_workspace_doctests_and_harness(self):
+        commands = native.commands(None, True)
+        self.assertEqual(len(commands), 4)
+        self.assertIn("--workspace", commands[1])
+        self.assertNotIn("--tests", commands[1])
+        self.assertIn("performance::", commands[3])
+        with self.assertRaises(ValueError):
+            native.commands([], False)
+
+    def test_native_main_routes_approved_packages_and_propagates_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            event = Path(temp) / "event.json"
+            event.write_text("{}", encoding="utf-8")
+            env = {"CI_MODE": "approved", "GITHUB_EVENT_PATH": str(event)}
+            with patch.dict(os.environ, env), patch("ci.native.subprocess.check_output", return_value=json.dumps(self.metadata())), patch("ci.native.changed_paths", return_value=["crates/app/src/lib.rs"]), patch("ci.native.subprocess.run") as run, patch("builtins.print"):
+                native.main()
+            self.assertEqual([call.args[0] for call in run.call_args_list], native.commands(["app", "web"], False))
+            with patch.dict(os.environ, {"CI_MODE": "full"}), patch("ci.native.subprocess.check_output", return_value=json.dumps(self.metadata())), patch("ci.native.subprocess.run", side_effect=subprocess.CalledProcessError(1, ["cargo"])) as run, patch("builtins.print"), self.assertRaises(subprocess.CalledProcessError):
+                native.main()
+            self.assertEqual(run.call_count, 1)
+
+    def test_invalid_native_stage_fails_before_running_cargo(self):
+        with patch.dict(os.environ, {"CI_MODE": "quick"}), patch("ci.native.subprocess.check_output") as metadata, self.assertRaises(ValueError):
+            native.main()
+        metadata.assert_not_called()
 
     def test_api_failure_never_becomes_a_passing_result(self):
         env = {"GITHUB_REPOSITORY": "owner/repo", "CI_HEAD_SHA": "a" * 40, "GITHUB_SHA": "b" * 40, "GITHUB_RUN_ID": "99"}

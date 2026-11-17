@@ -20,11 +20,13 @@ def failures(needs: dict) -> list[str]:
     if outputs.get("windows_full") == "true" and outputs.get("windows") != "true":
         errors.append("full Windows validation was selected without its job")
     mode = outputs.get("mode")
-    if mode not in {"docs", "quick", "full", "carry"}:
+    if mode not in {"docs", "quick", "approved", "full", "carry"}:
         errors.append("missing/invalid CI stage")
     full_keys = set(JOBS.values()) - {"quick"} | {"windows_full"}
-    if mode == "quick":
-        errors.append("Code changes need full qualification: add approved-for-ci after review.")
+    if mode == "quick" and (outputs.get("quick") != "true" or any(outputs.get(key) != "false" for key in full_keys - {"licenses"})):
+        errors.append("quick feedback requires compilation and defers heavy checks")
+    if mode == "approved" and (outputs.get("native") != "true" or any(outputs.get(key) != "false" for key in (full_keys - {"native", "licenses"}) | {"quick"})):
+        errors.append("approved PRs require native checks and defer other platforms")
     if mode == "full" and (any(outputs.get(key) != "true" for key in full_keys) or outputs.get("quick") != "false"):
         errors.append("qualification requires every platform check")
     if mode in {"docs", "carry"} and any(outputs.get(key) != "false" for key in full_keys | {"quick"}):
@@ -40,7 +42,7 @@ def failures(needs: dict) -> list[str]:
 if __name__ == "__main__":
     needs = json.loads(os.environ["CI_NEEDS"])
     errors = failures(needs)
-    if not errors and needs["changes"]["outputs"]["mode"] == "full" and os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+    if not errors and needs["changes"]["outputs"]["mode"] == "approved" and os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
         from qualification import require_current_approval
         require_current_approval()
     if not errors and needs["changes"]["outputs"]["mode"] == "carry":

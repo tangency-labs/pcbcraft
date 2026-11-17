@@ -1,5 +1,5 @@
 # Drafts skip builds; ordinary PR pushes run repository checks and a quick compile.
-# approved-for-ci runs full qualification before merge (this repository has no merge queue).
+# approved-for-ci runs affected native checks; broad platforms run on main, merge groups and nightly.
 name: CI
 run-name: "CI: ${{ github.sha }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'approved-for-ci' && ' (labels)' || '' }}"
 
@@ -131,8 +131,10 @@ jobs:
           cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: cargo fmt --all --check
-      - run: cargo clippy --locked --profile ci --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --profile ci --workspace
+      - name: Check affected native packages (full workspace outside PRs)
+        run: python -B scripts/ci/native.py
+        env:
+          CI_MODE: ${{ needs.changes.outputs.mode }}
       - name: Compare command contracts with the base branch
         if: github.event_name == 'pull_request'
         env:
@@ -146,10 +148,6 @@ jobs:
           fi
       - name: Test command-contract workflow baseline
         run: python -B -m unittest discover -s scripts -p 'test_command_contract_workflow.py'
-      - name: Check opt-in performance harness
-        run: |
-          cargo clippy --locked --profile ci -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
-          cargo test --locked --profile ci -p pcbcraft-app --features performance-harness performance::
 
   windows-tests:
     needs: changes
@@ -288,7 +286,7 @@ jobs:
       - run: cargo deny --locked check licenses sources bans
 
   checks:
-    # Preserve the required check name, including when docs intentionally skip every compiler job.
+    # Report the selected stage honestly: passing quick feedback is green, not full qualification.
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, web, geometry-webassembly, licenses]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
