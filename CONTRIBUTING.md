@@ -143,7 +143,8 @@ angle-bracket destinations and HTML href/src attributes. Fenced/inline code,
 external URLs, repository-root-relative URLs and fragment-only links are ignored.
 Query strings and fragments are stripped for file-existence checks; heading anchor
 names and external link availability are not validated. Missing local targets are
-reported with the source file and line number.
+reported with the source file's repository-relative path, using forward slashes on
+every platform, and its line number.
 
 Apply the [bounded verification rule](AGENTS.md#keep-verification-bounded):
 choose checks that answer a specific question about the change, and stop when
