@@ -78,7 +78,7 @@ with an optional board-rules object and a required nonempty `zones` array. A boa
 that also has a placement origin needs at least board/21; copper roles, base
 copper, copper thickness qualifiers or finished board thickness need at least
 board/23. Thermal conductivity, thermal expansion, dielectric strength or CTI
-reports select board/24. The encoder chooses the highest applicable format,
+reports select board/25. The encoder chooses the highest applicable format,
 preserving the zone outlines alongside the origin, setup and material records. Each
 zone is one JSON line in UUID order and contains only authored intent. A board
 without zones keeps the format its other content requires; no fill or preview is

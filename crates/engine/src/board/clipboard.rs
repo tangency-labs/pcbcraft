@@ -417,10 +417,14 @@ impl BoardFragment {
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft board fragment."))?;
+        let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
-        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3")
-            || (envelope.format == "pcbcraft-clipboard/3") != locked
-            || (!locked && (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()))
+        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3" | "pcbcraft-clipboard/4")
+            || (envelope.format == "pcbcraft-clipboard/4") != assigned
+            || (!assigned && (envelope.format == "pcbcraft-clipboard/3") != locked)
+            || (!assigned
+                && !locked
+                && (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()))
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -570,7 +574,9 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked) {
+            format: if self.vias.iter().any(|via| via.net_assignment.is_some()) {
+                "pcbcraft-clipboard/4"
+            } else if self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked) {
                 "pcbcraft-clipboard/3"
             } else if self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()) {
                 "pcbcraft-clipboard/2"
@@ -805,6 +811,16 @@ impl BoardFragment {
             Arc::make_mut(&mut next.board).tracks.push(copy);
         }
         for source in &self.vias {
+            if let Some(address) = source.net_assignment
+                && (self.source_project != next.id
+                    || self.source_board != target.board
+                    || address.project != next.id
+                    || address.scope != next.net_scope())
+            {
+                return Err(invalid(
+                    "Explicit via assignments require a resolved same-board destination; clear or remap the assignment before copying across projects.",
+                ));
+            }
             let mut copy = source.clone();
             copy.id = crate::fresh_id()?;
             copy.at = crate::clipboard::transformed(source.at, self.anchor, at, options.items.quarter_turns)?;

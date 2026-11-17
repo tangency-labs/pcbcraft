@@ -19,6 +19,7 @@ mod board_properties;
 mod board_ratsnest;
 mod board_tracks;
 mod board_update;
+mod board_via_nets;
 mod board_views;
 mod board_zones;
 #[cfg(not(target_arch = "wasm32"))]

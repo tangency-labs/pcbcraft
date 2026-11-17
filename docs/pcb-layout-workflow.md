@@ -108,9 +108,9 @@ previous checks and unfinished route authority without resizing existing copper.
 
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
 Authored defaults have a stable rule UUID and use board format 19 or later
-(20 with zone outlines, 21 with a placement origin, 23 when the board setup uses
-copper or board thickness fields, 24 when a material carries thermal or insulation
-reports); removing the record restores built-in resolution and the format required
+(20 with zone outlines, 21 with a placement origin, 22 with assembly profile
+adoptions, 23 with copper or board thickness fields, 24 with explicit via intent,
+25 with thermal or insulation material reports); removing the record restores built-in resolution and the format required
 by the remaining
 board data. A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
@@ -302,3 +302,7 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 Each format step follows the existing ladder: a superset of the previous format,
 empty collections refused, older readers rejecting the new format, and
 byte-identical round trips.
+
+Standalone vias can retain an explicit net through placement and Properties; see
+[via net assignments](via-net-assignments.md) for automatic inheritance, physical
+connectivity and unresolved-target behavior.

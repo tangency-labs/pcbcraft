@@ -34,20 +34,22 @@ fn text(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-/// Read-only summaries of the thermal and insulation reports, each followed by its source.
+/// Read-only summaries include each reported method when present, followed by its source.
 /// Missing axes and CTI values are labelled unspecified; other absent conditions are omitted,
 /// never defaulted.
 fn thermal_and_insulation_lines(material: &Material) -> Vec<String> {
     let axis = |axis: Option<MeasurementAxis>| axis.map(|a| format!("{a:?}-axis")).unwrap_or_else(|| "axis unspecified".into());
     let celsius = |milli_c: i64| milli_c as f64 / 1000.;
+    let method = |value: &Option<String>| value.as_ref().map(|m| format!(" · {m}")).unwrap_or_default();
     let mut lines = Vec::new();
     for report in &material.thermal_conductivity {
         let temperature = report.temperature_milli_c.map(|t| format!(" · at {} °C", celsius(t))).unwrap_or_default();
         lines.push(format!(
-            "Thermal conductivity {} W/(m·K) · {}{temperature} · {:?}",
+            "Thermal conductivity {} W/(m·K) · {}{temperature} · {:?}{}",
             report.conductivity_mw_per_m_k as f64 / 1000.,
             axis(report.axis),
-            report.basis
+            report.basis,
+            method(&report.method)
         ));
         lines.push(report.source.document.clone());
     }
@@ -61,23 +63,30 @@ fn thermal_and_insulation_lines(material: &Material) -> Vec<String> {
             (Some(from), Some(to)) => format!(" · {} to {} °C", celsius(from), celsius(to)),
             _ => String::new(),
         };
-        lines.push(format!("CTE {} ppm/K · {}{region}{range} · {:?}", report.cte_ppb_per_k as f64 / 1000., axis(report.axis), report.basis));
+        lines.push(format!(
+            "CTE {} ppm/K · {}{region}{range} · {:?}{}",
+            report.cte_ppb_per_k as f64 / 1000.,
+            axis(report.axis),
+            report.basis,
+            method(&report.method)
+        ));
         lines.push(report.source.document.clone());
     }
     for report in &material.dielectric_strength {
         lines.push(format!(
-            "Dielectric strength {} kV at {} mm · {} · {:?}",
+            "Dielectric strength {} kV at {} mm · {} · {:?}{}",
             report.breakdown_v as f64 / 1000.,
             report.specimen_thickness_nm as f64 / 1_000_000.,
             axis(report.axis),
-            report.basis
+            report.basis,
+            method(&report.method)
         ));
         lines.push(report.source.document.clone());
     }
     for report in &material.cti {
         let value = report.cti_v.map(|v| format!("{v} V")).unwrap_or_else(|| "value unspecified".into());
         let group = report.material_group.map(|g| format!(" · group {}", g.name())).unwrap_or_default();
-        lines.push(format!("CTI {value}{group} · {:?}", report.basis));
+        lines.push(format!("CTI {value}{group} · {:?}{}", report.basis, method(&report.method)));
         lines.push(report.source.document.clone());
     }
     lines
@@ -417,6 +426,34 @@ mod tests {
             assert!(decimal(invalid, 6).is_err(), "{invalid}");
         }
         assert_eq!(decimal("-40.125", 3).unwrap(), Some(-40125));
+    }
+
+    /// Equal measurements remain distinguishable when their reported methods differ; absent
+    /// methods add no separator or implied method to any of the four report kinds.
+    #[test]
+    fn thermal_and_insulation_summaries_distinguish_methods() {
+        let source = json!({"document":"Synthetic report"});
+        for (kind, report) in [
+            ("thermal_conductivity", json!({"conductivity_mw_per_m_k":1000,"basis":"typical","source":source})),
+            ("cte", json!({"cte_ppb_per_k":50000,"basis":"typical","source":source})),
+            ("dielectric_strength", json!({"breakdown_v":40000,"specimen_thickness_nm":1000000,"basis":"minimum","source":source})),
+            ("cti", json!({"material_group":"IIIa","basis":"minimum","source":source})),
+        ] {
+            let mut value = serde_json::to_value(Material::new("Reported laminate".into()).unwrap()).unwrap();
+            let mut first = report.clone();
+            let mut second = report.clone();
+            first["method"] = json!("Synthetic method A");
+            second["method"] = json!("Synthetic method B");
+            value[kind] = json!([report, first, second]);
+            let material: Material = serde_json::from_value(value).unwrap();
+            let lines = thermal_and_insulation_lines(&material);
+            assert_eq!(lines.len(), 6, "{kind}");
+            assert_eq!(lines[2], format!("{} · Synthetic method A", lines[0]), "{kind}");
+            assert_eq!(lines[4], format!("{} · Synthetic method B", lines[0]), "{kind}");
+            for source_line in [1, 3, 5] {
+                assert_eq!(lines[source_line], "Synthetic report", "{kind}");
+            }
+        }
     }
 
     /// Thermal and insulation reports are listed with their units, conditions and sources, and a

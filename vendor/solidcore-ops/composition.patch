@@ -1,0 +1,19 @@
+--- upstream/src/step_assembly.rs
++++ patched/src/step_assembly.rs
+@@ -0,0 +1,2 @@
++// PCBcraft patch: local-first STEP composition backported from SolidCraft #17776
++// (7dc89ee26e4d5f20c3bb93137fc35fb430e34245); see ../PATCH.md.
+@@ -102,0 +105,2 @@
++    /// Visit a definition's bodies and children, applying each child's local frame before
++    /// the inherited world frame. Existing cycle, depth and visit refusals remain unchanged.
+@@ -137 +141 @@
+-            self.definition(occurrence.child, concat(&world, &local), depth + 1)?;
++            self.definition(occurrence.child, concat(&local, &world), depth + 1)?;
+@@ -142,0 +147,2 @@
++    /// Expand mapped bodies in origin-inverse, target, then inherited-world order, retaining
++    /// the existing representation deduplication, traversal order and depth checks.
+@@ -173,2 +179,2 @@
+-                    let local = concat(&target, &origin_inverse);
+-                    let placed = concat(&world, &local);
++                    let local = concat(&origin_inverse, &target);
++                    let placed = concat(&local, &world);

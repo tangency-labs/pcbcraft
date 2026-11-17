@@ -68,6 +68,10 @@ impl Authority {
     pub fn class_rules(&self) -> Option<&super::class_rules::Context> {
         self.class_rules.as_deref()
     }
+    /// The captured board, for engine consumers that need more of the same snapshot than copper.
+    pub(crate) fn view(&self) -> Option<BoardView<'_>> {
+        self.snapshot.board_view(self.target)
+    }
     /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
     /// Rule overrides are immutable inputs: a different override requires a new query.
     pub fn is_current(&self, session: &Session) -> bool {
@@ -255,10 +259,23 @@ impl ClearanceQuery {
             }
             None => &[],
         };
+        self.probe_membership(contour, layers, nets, intended_from)
+    }
+
+    /// Evaluate a route leg with the complete connected route's intended memberships. The
+    /// optional replaced source retains the public single-contour probe's exclusion behavior;
+    /// a new route passes none so every existing contact is checked.
+    pub(super) fn probe_membership(
+        &self,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        replaced: Option<usize>,
+    ) -> Result<Results, CommandError> {
         let candidates = self.candidates(contour, layers)?;
         let gaps: Vec<_> = candidates
             .into_iter()
-            .filter(|index| Some(*index) != intended_from)
+            .filter(|index| Some(*index) != replaced)
             .map(|index| (index, contour.gap(&self.geometry.items[index].contour)))
             .collect();
         let connected: Vec<_> = nets
@@ -328,26 +345,26 @@ impl BoardGeometry {
         merged: Vec<Vec<usize>>,
     ) -> Self {
         let project = view.project();
-        let baseline = project.board.baseline.as_ref();
-        let accepted = baseline.map(|b| b.terminal_net_index());
-        let graph = baseline.is_none().then(|| project.electrical_connectivity());
-        let pad_nets: Vec<Option<usize>> = lands
+        let intent = project.board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership(project, &lands, view.tracks().len(), view.vias(), &intent);
+        let names: Vec<Option<String>> = members
             .iter()
-            .map(|land| {
-                let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
-                let (component, terminal) = project.board.component_pin_for(pad)?;
-                if let Some(accepted) = &accepted {
-                    accepted.get(&(component, terminal)).copied()
-                } else {
-                    graph.as_ref()?.net_index_for(project.component_terminal(component, terminal)?)
+            .map(|nodes| {
+                let unresolved = nodes
+                    .iter()
+                    .filter_map(|n| n.checked_sub(lands.len() + view.tracks().len()).and_then(|i| view.vias().get(i)))
+                    .any(|v| v.net_assignment.is_some_and(|a| project.via_net_state(a) != "active"));
+                let nets: BTreeSet<_> = nodes.iter().filter_map(|n| intrinsic[*n]).collect();
+                if unresolved || nets.len() != 1 {
+                    return None;
                 }
+                intent.names.get(nets.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
             })
             .collect();
-        let names: Vec<Option<String>> = members.iter().map(|nodes| nodes.iter().find_map(|node| lands.get(*node)?.net.clone())).collect();
         let members = merged;
         let mut node_nets = vec![Vec::new(); lands.len() + view.tracks().len() + view.vias().len()];
         for nodes in &members {
-            let nets: Vec<_> = nodes.iter().filter_map(|node| pad_nets.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
+            let nets: Vec<_> = nodes.iter().filter_map(|node| intrinsic.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
             for &node in nodes {
                 node_nets[node] = nets.clone();
             }
@@ -361,7 +378,7 @@ impl BoardGeometry {
                 contour: land.contour(),
                 layers: land.layers.clone(),
                 island,
-                intended_nets: pad_nets[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
+                intended_nets: intrinsic[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
                 net: land.net.clone().or_else(|| names[island].clone()),
                 at,
             });

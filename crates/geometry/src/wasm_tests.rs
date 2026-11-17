@@ -33,3 +33,22 @@ fn arguments_are_still_refused_before_the_kernel() {
     refused(Body::cuboid("tab\there", [0; 3], [1; 3]).map(|_| ()), ErrorCode::InvalidParams, "the body name has a control character");
     refused(read_step(&[0xff, 0xfe]).map(|_| ()), ErrorCode::ModelUnreadable, "STEP text is not UTF-8");
 }
+
+/// Without a kernel, an empty read has no placed bodies and no box, a placement of a missing
+/// body is `invalid_params`, and boxes still unite.
+#[test]
+fn placements_need_no_kernel_until_a_body_is_moved() {
+    let empty = StepRead::default();
+    assert!(empty.placed_bodies().unwrap().is_empty());
+    assert_eq!(empty.bounding_box().unwrap(), None);
+
+    let mut missing = StepRead::default();
+    missing.placements.push(Placement { body: 0, transform: Transform::IDENTITY });
+    let error = missing.placed_bodies().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+    assert!(error.message().contains("placement of body 0 out of range"), "{error}");
+
+    let a = BoundingBox { min_nm: [0, 0, 0], max_nm: [1, 1, 1] };
+    let b = BoundingBox { min_nm: [-1, 2, 0], max_nm: [0, 3, 1] };
+    assert_eq!(a.union(&b), BoundingBox { min_nm: [-1, 0, 0], max_nm: [1, 3, 1] });
+}

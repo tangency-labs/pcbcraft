@@ -43,7 +43,7 @@ fn report_enum_strings_and_wrong_shapes_on_every_path() {
             assert_eq!(canonical["materials"][0].pointer(path).unwrap(), &json!(variant), "{path}");
             assert_eq!(canonical["materials"][0]["tg"], base["materials"][0]["tg"]);
             assert_eq!(canonical["materials"][0]["dielectric"], base["materials"][0]["dielectric"]);
-            let documents = saved(&s, "pcbcraft-board/24");
+            let documents = saved(&s, "pcbcraft-board/25");
             let board_path = persistence::test_board_path(&documents);
             let profile = SetupProfile::new("Synthetic report enums".into(), s.project().unwrap().board_setup().unwrap().clone(), Default::default())
                 .unwrap()

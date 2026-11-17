@@ -37,7 +37,7 @@ struct Edit {
 #[derive(Debug, Default)]
 pub(super) struct State {
     pub(super) zone: bool,
-    pub(super) zone_choices: Option<(pcbcraft_engine::board::view::BoardTarget, u64, Vec<crate::board_zones::NetChoice>)>,
+    pub(super) zone_choices: Option<(pcbcraft_engine::board::view::BoardTarget, u64, Vec<crate::board_net_choice::NetChoice>)>,
     pub(super) zone_target: Option<pcbcraft_engine::nets::ClassTarget>,
     /// A chosen net owns its revision before the first point, and between repeated creations.
     pub(super) zone_source: Option<ViewInput>,

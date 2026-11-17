@@ -1,5 +1,6 @@
 //! MCP tool definitions and dispatch. Every tool wraps an engine or window command, or an inspection.
 
+use pcbcraft_engine::command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision};
 use serde_json::{Value, json};
 
 use crate::backend::{Backend, is_window_command, needs_live_editor};
@@ -31,7 +32,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "list_commands",
             "List commands",
-            "Every available command, with its summary and parameters. `filter` keeps those whose id or summary contains it.",
+            "Every available command, with its summary and parameters. `filter` keeps those whose id or summary contains it. A second part gives the command API version, the catalog revision and the optional features this build offers.",
             json!({"filter": {"type": "string"}}),
             &[],
             Effect::ReadOnly,
@@ -102,6 +103,17 @@ fn text(value: &Value) -> Value {
     json!({"content": [{"type": "text", "text": value.to_string()}]})
 }
 
+/// The command list as clients have always read it, followed by the command API version, the
+/// revision of the whole unfiltered catalog `all` and the optional features this build offers,
+/// which are also the structured result.
+fn listing(commands: &Value, all: &[Value]) -> Value {
+    let about = json!({"command_api_version": COMMAND_API_VERSION, "catalog_revision": catalog_revision(all), "capabilities": CAPABILITIES});
+    json!({
+        "content": [{"type": "text", "text": commands.to_string()}, {"type": "text", "text": about.to_string()}],
+        "structuredContent": about,
+    })
+}
+
 /// A failed command is a tool result the agent can read, not a protocol error.
 fn failure(message: &str) -> Value {
     json!({"isError": true, "content": [{"type": "text", "text": message}]})
@@ -121,14 +133,20 @@ fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, String
 /// Run a tool whose arguments have been checked.
 pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
     let result = match name {
-        "list_commands" => backend.call("engine.commands", json!({})).map(|all| {
-            let filter = args["filter"].as_str().unwrap_or_default().to_lowercase();
-            let keeps = |c: &&Value| {
-                let field = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
-                field("id").contains(&filter) || field("summary").contains(&filter)
+        "list_commands" => {
+            return match backend.call("engine.commands", json!({})) {
+                Ok(all) => {
+                    let all = all.as_array().cloned().unwrap_or_default();
+                    let filter = args["filter"].as_str().unwrap_or_default().to_lowercase();
+                    let keeps = |c: &&Value| {
+                        let field = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
+                        field("id").contains(&filter) || field("summary").contains(&filter)
+                    };
+                    listing(&Value::Array(all.iter().filter(keeps).cloned().collect()), &all)
+                }
+                Err(message) => failure(&message),
             };
-            Value::Array(all.as_array().into_iter().flatten().filter(keeps).cloned().collect())
-        }),
+        }
         "describe_command" => describe_command(backend, args["command"].as_str().unwrap_or_default()),
         "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]})),
         "cross_probe" => backend.call("project.cross_probe", args.clone()),

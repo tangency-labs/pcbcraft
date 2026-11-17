@@ -1,0 +1,12 @@
+{
+  "base": "4c71221cfd60d9ee11dbfee7688540afdfe397f2",
+  "files": {
+    "crates/engine/src/board/route.rs": "55556080d1f38a65742b5052eea5bd0b2e17b3f18884102f184c86c0724f4018",
+    "crates/engine/src/board/route/walkaround.rs": "0974133962eefb9733c110c78e2101a0fa50b613fc3ff3c08e844d89f4c3437a",
+    "crates/engine/src/board/route/tests.rs": "d877eadfdd89319134c75b629a2eb6753cb2372775ed8df00180b7ba71087df2"
+  },
+  "fixtures": {
+    "channels-v1": "2bcba0154913f8e396b975f470040edc649342e4ed40bbe77af107c5ae2f0efa",
+    "dense-v1": "df1731d2e45075cf29c595d9e8c997bb284bbcc51e144ae99d49b0a25eec55da"
+  }
+}
