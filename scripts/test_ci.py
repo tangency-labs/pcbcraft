@@ -1,14 +1,16 @@
 """CI policy regressions: conservative selection, real Git comparisons and strict completion."""
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci import check, select, windows, window_smoke
+from ci import check, policy as select, windows, window_smoke
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -96,6 +98,18 @@ class GitComparisonTests(unittest.TestCase):
     def test_missing_and_invalid_revisions_request_full_validation(self):
         for before in ("0" * 40, "f" * 40, "--output=/tmp/untrusted"):
             self.assertIsNone(select.changed_paths("push", {"before": before, "after": self.base}, self.repo))
+
+    def test_workflow_entrypoint_runs_in_fresh_python_process(self):
+        """Exercise direct script imports and Git pipes, including standard-library module lookup."""
+        (self.repo / "README.md").write_text("documentation\n", encoding="utf-8")
+        self.commit()
+        payload = self.repo / "event.json"
+        payload.write_text(json.dumps({"before": self.base, "after": self.git("rev-parse", "HEAD").strip()}), encoding="utf-8")
+        output = self.repo / "outputs"
+        env = {**os.environ, "GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": str(payload), "GITHUB_OUTPUT": str(output)}
+        result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/ci/policy.py")], cwd=self.repo, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(output.read_text().splitlines()), {f"{key}=false" for key in select.OUTPUTS})
 
 
 class CompletionTests(unittest.TestCase):

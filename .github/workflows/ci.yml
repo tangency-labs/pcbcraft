@@ -46,7 +46,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: select
-        run: python -B scripts/ci/select.py
+        run: python -B scripts/ci/policy.py
 
   documentation-links:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
