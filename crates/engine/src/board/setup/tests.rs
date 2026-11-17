@@ -671,7 +671,8 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
     for older in ["pcbcraft-board/3", "pcbcraft-board/5"] {
         refused_because(&with_header(&documents, "pcbcraft-board/23", older), STACK_REFUSAL);
     }
-    refused_because(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20"), "unsupported board format");
+    // Format 20 also refuses this board before the stack check, because it requires zones.
+    refused_because(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20"), "format 20 requires zones");
     refused_because(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23"), STACK_REFUSAL);
 }
 
