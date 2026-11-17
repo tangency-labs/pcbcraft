@@ -196,6 +196,52 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
 
+/// Format 23 carries the stack fields together with a placement origin: a board with an origin,
+/// a copper role and a finished thickness saves as format 23, reopens with every value and
+/// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
+/// fields (header 20 requires zones, covered separately by the setup tests). Removing the origin
+/// keeps format 23; removing the stack fields instead falls back to format 21.
+#[test]
+fn stack_format_carries_the_placement_origin() {
+    let mut s = board();
+    let plain = s.inspect()["project"]["board"]["setup"].clone();
+    let mut candidate = plain.clone();
+    candidate["stackup"]["strata"][0]["role"] = json!("signal");
+    candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":candidate,"expected_revision":s.revision()})).unwrap();
+    set(&mut s, json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM})).unwrap();
+
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&documents);
+    let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
+    let reopened = decode_documents(&documents).unwrap();
+    assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
+    assert_eq!(reopened.board_setup().unwrap().stackup().finished_thickness_nm, Some(1_600_000));
+    let target = reopened.board_target().unwrap();
+    assert_eq!(reopened.board_view(target).unwrap().authored_placement_origin(), view(&s).authored_placement_origin());
+    assert_eq!(encode_documents(reopened).unwrap(), documents);
+
+    let text = String::from_utf8(documents[&path].clone()).unwrap();
+    let mut altered = documents.clone();
+    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    match decode_documents(&altered) {
+        Ok(_) => panic!("format 21 opened the stack fields"),
+        Err(error) => assert!(error.contains("require board format 23"), "{error}"),
+    }
+
+    let format = |s: &Session| {
+        let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+        serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()["format"].clone()
+    };
+    set(&mut s, Value::Null).unwrap();
+    assert_eq!(format(&s), "pcbcraft-board/23");
+    set(&mut s, json!({"kind":"board_zero"})).unwrap();
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(format(&s), "pcbcraft-board/21");
+}
+
 /// The last in-range coordinates are accepted on both sides and one step beyond is refused.
 #[test]
 fn point_origins_accept_the_whole_coordinate_range_and_nothing_beyond() {

@@ -66,7 +66,10 @@ existing session revision. They do not claim to implement background checking.
 
 An authored board-default record has `format: "pcbcraft-rules/1"`, an independent
 UUID `id`, and the typed `values` object. It lives in `board.json` under board
-format 19, which accepts the earlier physical fields including locks. Format 19
+format 19 or later: 20 with zone outlines, 21 with a placement origin, 23 when the
+setup uses copper roles, base copper, copper thickness qualifiers or finished board
+thickness.
+Each accepts the earlier physical fields including locks. Format 19
 requires a valid rule record, and older board headers reject it. Null, missing
 or contradictory stored records fail before adoption. Removing the record
 returns to the format required by the board's remaining data.

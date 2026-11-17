@@ -39,8 +39,14 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
-- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin use board format 21; boards without one keep their previous encoding. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
-- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
+- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin use board format 21 unless stack fields require 23; clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
+- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin or stack fields select their later format.
+
+Board setup stores an optional role and base copper for each copper layer, a
+tolerance and basis for its finished thickness, and the declared finished board
+thickness, through `pcb.set_board_setup`. Boards that use them save as board
+format 23 and setup profiles as version 2, which older builds refuse; other
+boards keep their encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.
