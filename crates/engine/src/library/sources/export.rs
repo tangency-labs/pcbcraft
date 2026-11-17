@@ -1,5 +1,5 @@
 //! Whole-library export reuses the original native documents of one loaded source.
-use super::{Catalog, Kind, MAX_SOURCE_BYTES, Reference};
+use super::{Catalog, Key, Kind, MAX_SOURCE_BYTES, Reference};
 use serde_json::json;
 use std::collections::BTreeSet;
 
@@ -21,6 +21,7 @@ impl Catalog {
         let native = self.sources.get(source).filter(|_| self.source_available(source)).ok_or("Choose an available library to export.")?;
         let mut external = BTreeSet::new();
         let mut unavailable = Vec::new();
+        let own: BTreeSet<&Key> = native.items.iter().map(|item| &item.key).collect();
         for item in &native.items {
             // Check each declared reference on its own, so one missing dependency can't hide the others.
             let mut references: Vec<(Reference, Kind)> = Vec::new();
@@ -36,8 +37,14 @@ impl Catalog {
                 references.push((record.part.clone(), Kind::Part));
             }
             for (reference, kind) in references {
+                let key = Key { library: reference.library.clone(), kind, id: reference.id.clone(), revision: reference.revision };
                 if reference.library != native.library {
                     external.insert(reference.library.clone());
+                } else if !own.contains(&key)
+                    && let Some(other) = self.index.get(&key).and_then(|(source, _)| self.sources.get(source))
+                {
+                    // Same library ID, but another loaded source supplies the record.
+                    external.insert(other.name.clone());
                 }
                 // A category is only usable when its field definitions don't conflict, too.
                 let found = if kind == Kind::Category { self.category(&reference).map(drop) } else { self.exact(&reference, kind).map(drop) };
@@ -148,6 +155,26 @@ mod tests {
         install(&mut catalog, "other", &other);
         let report = catalog.export_bundle("demo").unwrap().report;
         assert!(report.contains("parts/resistor.json: Conflicting type definitions for category field pcbcraft:resistance"), "{report}");
+    }
+
+    /// A record of the same library ID that another loaded source supplies isn't in the bundle,
+    /// so that source is named too.
+    #[test]
+    fn export_names_another_source_of_the_same_library() {
+        let mut catalog = Catalog::default();
+        install(&mut catalog, "demo", &documents("footprints/resistor-0603.json"));
+        let extra = Documents::from([
+            (
+                "library.json".into(),
+                r#"{"format":"pcbcraft-library/1","id":"parts-demo","name":"Extra footprints","license":"MIT OR Apache-2.0"}"#.into(),
+            ),
+            ("footprints/resistor-0603.json".into(), documents("")["footprints/resistor-0603.json"].clone()),
+        ]);
+        install(&mut catalog, "extra", &extra);
+        assert_eq!(
+            catalog.export_bundle("demo").unwrap().report,
+            "Exported Native Parts Demo (3 items). Not included, install separately: Extra footprints."
+        );
     }
 
     /// Files that load as individual problems can still escape past the transport limit.
