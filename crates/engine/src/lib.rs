@@ -11,6 +11,7 @@ pub mod authoring;
 pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
+pub mod command_api;
 pub mod edits;
 pub mod hierarchy;
 #[cfg(test)]

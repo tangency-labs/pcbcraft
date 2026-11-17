@@ -1775,6 +1775,25 @@ mod live {
             assert!(!pcbcraft_engine::catalog().iter().any(|command| pcbcraft_mcp::is_window_command(command.id)));
         }
 
+        /// Window and UI input commands are compared with the committed snapshot. Against an
+        /// unchanged snapshot, detected breaking differences require a higher API version and
+        /// other detected differences request a refresh; a rewrite needs prior-snapshot comparison.
+        #[test]
+        fn window_commands_match_the_committed_snapshot() {
+            use pcbcraft_engine::command_api::{COMMAND_API_VERSION, SnapshotMismatch, check_snapshot};
+            let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
+            let mut described = window_catalog();
+            described.extend(crate::ui_automation::catalog());
+            match check_snapshot(&snapshot, "window_commands", &described, COMMAND_API_VERSION) {
+                Ok(()) => {}
+                Err(SnapshotMismatch::Breaking(problems)) => panic!("{}", problems.join("\n")),
+                Err(SnapshotMismatch::Stale { changes, section, api_version }) => panic!(
+                    "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
+                    changes.join("\n")
+                ),
+            }
+        }
+
         /// GUI and live discovery preferences share typed validation; refusal changes no state.
         #[test]
         fn library_preferences_command_is_atomic_and_does_not_edit_the_project() {

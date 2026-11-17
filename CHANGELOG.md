@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+`list_commands` adds the command API version, a catalog revision and the
+optional protocol features the build offers, so an agent can tell when the
+commands it was written for may no longer work and when its cached discovery
+data is out of date. Existing replies keep their fields; see
+[command API version](docs/mcp.md#command-api-version).
+
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
 keeping the effective track width, net-class clearances and board-edge clearance.

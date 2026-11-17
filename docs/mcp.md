@@ -179,6 +179,105 @@ for named targets, window-local coordinates, completion tickets and cancellation
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
 
+## Command API version
+
+`list_commands` keeps returning the command array as its first text part. A
+second text part, also given as the result's `structuredContent`, reads
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api"]}`.
+These are three separate things:
+
+- `command_api_version` is one number for the whole public command contract,
+  `COMMAND_API_VERSION` in `crates/engine/src/command_api.rs`. It rises only
+  when a published change breaks existing callers, by an explicit decision, and
+  never falls. There is no version per command.
+- `catalog_revision` is the SHA-256 of every command this session describes,
+  sorted by id, with object keys sorted and titles, summaries and descriptions
+  included. It changes whenever a command is added or removed or a description
+  changes, so a client can drop cached discovery data; a new revision alone
+  does not mean existing callers are incompatible. It covers the whole catalog
+  whatever `filter` keeps. A live editor (project, window and `ui.` commands)
+  and a headless session (project commands) describe different catalogs, and
+  builds differ, so each reports its own revision; it is computed when asked,
+  not stored.
+- `capabilities` names the optional protocol features this build offers; a
+  feature added later is appended and none is removed. Command schemas from
+  `list_commands` and `describe_command` say which commands and parameters the
+  running build supports.
+
+None of them is the MCP `protocolVersion` negotiated by `initialize`,
+`serverInfo.version` (the build's version) or a native file-format version,
+and none is saved in projects.
+
+[`docs/schemas/command-contracts.json`](schemas/command-contracts.json) is a
+snapshot of every command's contract: `command_api_version`, then one line per
+command in `commands` (project commands) and `window_commands` (window and
+`ui.` commands), each the description without its `id` and without the
+`title`, `summary` and `description` of the command and its schemas, with
+object keys sorted (values of `const`, `default`, `enum` and `examples` are
+kept whole). The engine and app tests compare the described commands with it
+and label detected differences. If either parameter schema contains `$ref`,
+`$dynamicRef` or `$recursiveRef`, every difference in it is conservatively
+breaking: an unchanged reference may reach any target, including a property
+or array item used under `not` elsewhere. The classifier does not resolve
+reference targets or their polarity. The same conservative treatment applies
+if either schema contains `unevaluatedProperties` or `unevaluatedItems`, even
+nested: a locally looser alternative can stop evaluating a property or item,
+so an unchanged outer restriction can refuse a formerly valid call. Both
+scans also include data values, which can cause extra breaking labels. If
+unequal schemas in these guarded contexts produce no child diagnostic (for
+example, removing an empty map), the whole schema is reported as breaking.
+Without references or unevaluated keywords, the rules are:
+
+- compatible, when every call the old schema accepted is still accepted: a
+  command added, an optional parameter added to an object that refuses
+  unknown names (`additionalProperties: false` and no `patternProperties`,
+  as every command's top-level parameters are), a required parameter made
+  optional, enum values added, a type widened (`integer` to `number`
+  included), a bound loosened, a `pattern`, `format`, `const`, `multipleOf`
+  or `uniqueItems` dropped, `additionalProperties` or `items` loosened,
+  `anyOf` alternatives appended, a `$defs` or `definitions` entry added,
+  `examples` changed, or an equal-length `prefixItems` child loosened;
+- breaking otherwise: a command or parameter removed, a parameter newly
+  required, enum values removed, a type narrowed or added, a bound tightened or
+  added, a `pattern`, `format`, `const` or `multipleOf` added or changed, a
+  `default` added, changed or dropped (also by replacing a schema that
+  carries one with one that accepts anything), a `$defs` or `definitions`
+  entry removed or changed in any way (a definition may be used under `not`,
+  where loosening it refuses calls), a property added to an object that
+  accepted unknown names (a call may already pass that name with another
+  value), a changed `prefixItems` length or a tightened child, any `oneOf`
+  change (a value may then match two alternatives), any
+  change under a keyword compared as a whole (`not`, `allOf`, `$ref`, `if`,
+  `then`, `else`, `patternProperties`, `dependentRequired`,
+  `dependentSchemas`, `dependencies`), and any change under a keyword without
+  a rule.
+
+The rules apply at every depth of a schema. Against an unchanged snapshot,
+a detected breaking difference fails the tests until `COMMAND_API_VERSION`
+is raised. After the raise, or for other detected differences, the failing
+test prints the section to copy into the snapshot. Rewriting a snapshot in
+the same commit instead needs comparison with a retained prior snapshot.
+The snapshot drops a removed command; an id that comes back later is an
+addition.
+
+The tests see only the described parameter schemas. Changed units, a changed
+result or meaning, and a stricter check the schema does not express need the
+same explicit decision with no failing test to prompt it; and they cannot tell
+whether a new default keeps the old behaviour. They also compare the code with
+the snapshot in the same commit, so a breaking change committed together with
+a rewritten snapshot passes them. When the pull request’s target commit has a snapshot, CI on
+a pull request also compares that `command-contracts.json` with the pull
+request's checked-out merge result, with the same classifier (the `command_contracts_against_base`
+example of `pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
+command_contracts_against_base -- BASE.json HEAD.json`): it fails when the
+classifier detects a breaking difference in either section without a raised
+`command_api_version`, or when the version falls. If the target commit has no
+snapshot, the workspace tests check the first snapshot against discovery
+instead. The cross-revision check sees only recorded contracts, so a changed
+meaning still needs review, and it cannot tell whether a raise was the right
+decision; a review must still read
+every change to `command-contracts.json`.
+
 ## Headless MCP
 
 `nets.promote` and `nets.resolve_ambiguity` use the shared revision-checked
