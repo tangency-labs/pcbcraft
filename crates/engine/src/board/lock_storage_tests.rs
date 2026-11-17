@@ -68,7 +68,7 @@ fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
     }
 }
 
-/// Active footprint locks cannot be smuggled under any older/reserved header; an empty extension
+/// Active footprint locks cannot be smuggled under any older header; an empty extension
 /// is refused too. These are downgrade attacks on the current reader, not an old-binary test.
 #[test]
 fn footprint_locks_require_their_own_nonempty_format() {
@@ -88,13 +88,18 @@ fn footprint_locks_require_their_own_nonempty_format() {
     board["format"] = json!("pcbcraft-board/25");
     bad.insert(path.clone(), serde_json::to_vec(&board).unwrap());
     assert!(decode_documents(&bad).unwrap_err().contains("requires an authored footprint lock"));
-    let mut reserved = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
-    let reserved_path = test_board_path(&reserved);
-    let mut marker: Value = serde_json::from_slice(&reserved[&reserved_path]).unwrap();
-    for version in [22, 23, 24] {
+    let mut incomplete = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
+    let marker_path = test_board_path(&incomplete);
+    let mut marker: Value = serde_json::from_slice(&incomplete[&marker_path]).unwrap();
+    for (version, reason) in [
+        (22, "Format 22 requires at least one profile"),
+        (23, "unsupported board format or incompatible setup"),
+        (24, "format 24 requires an assignment"),
+    ] {
         marker["format"] = json!(format!("pcbcraft-board/{version}"));
-        reserved.insert(reserved_path.clone(), serde_json::to_vec(&marker).unwrap());
-        assert!(decode_documents(&reserved).unwrap_err().contains("unsupported board format"));
+        incomplete.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
+        let error = decode_documents(&incomplete).unwrap_err();
+        assert!(error.contains(reason), "{version}: {error}");
     }
     // Explicit false is readable under an existing header, but canonical saves omit it.
     board = serde_json::from_slice(&original[&path]).unwrap();
@@ -167,6 +172,82 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     let loaded = decode_documents(&saved).unwrap();
     assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
     assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
+}
+
+/// Every combination of published profile, stack and via-intent fields remains optional in
+/// format 25, survives reopen, and returns to its exact earlier bytes after unlocking.
+#[test]
+fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
+    use assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
+    for profiles in [false, true] {
+        for stack in [false, true] {
+            for via_intent in [false, true] {
+                let mut session = track::tests::routed_fixture();
+                let board = session.project().unwrap().board_target().unwrap().board;
+                if profiles {
+                    session
+                        .apply(
+                            SET_ASSEMBLY_PROFILE,
+                            &json!({"content":{"name":"Lock compatibility","revision":1,"provenance":{"kind":"authored"}},
+                                "expected_revision":session.revision()}),
+                        )
+                        .unwrap();
+                    let profile = session.project().unwrap().assembly_profiles().heads[0].profile;
+                    let mut adoption = json!({"board":board,"profile":profile,"revision":1,"expected_revision":session.revision()});
+                    adoption["acceptance"] = session.execute(PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap()["acceptance"].clone();
+                    session.apply(ADOPT_ASSEMBLY_PROFILE, &adoption).unwrap();
+                }
+                if stack {
+                    let mut setup = serde_json::to_value(session.project().unwrap().board_setup().unwrap()).unwrap();
+                    setup["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+                    session.apply(crate::SET_BOARD_SETUP, &json!({"board":board,"setup":setup,"expected_revision":session.revision()})).unwrap();
+                }
+                if via_intent {
+                    let anchor = session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+                    session
+                        .apply(
+                            track::ADD_VIA,
+                            &json!({"board":board,"at":{"x_nm":-30_000_000,"y_nm":-30_000_000},
+                                "target":{"kind":"derived","anchor":anchor},"expected_revision":session.revision()}),
+                        )
+                        .unwrap();
+                }
+                let original = session.snapshot().unwrap();
+                let before = encode_documents(original.clone()).unwrap();
+                let saved = encode_documents(with_lock(&original, true)).unwrap();
+                let path = test_board_path(&saved);
+                let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
+                if via_intent || stack || profiles {
+                    assert_eq!(
+                        expected["format"],
+                        format!(
+                            "pcbcraft-board/{}",
+                            if via_intent {
+                                24
+                            } else if stack {
+                                23
+                            } else {
+                                22
+                            }
+                        )
+                    );
+                }
+                expected["format"] = json!("pcbcraft-board/25");
+                expected["footprints"][0]["locked"] = json!(true);
+                assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
+                for (name, bytes) in &before {
+                    if name != &path {
+                        assert_eq!(&saved[name], bytes, "unrelated document {name}");
+                    }
+                }
+                let loaded = decode_documents(&saved).unwrap();
+                assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
+                let packed = encode_packed(loaded.clone()).unwrap();
+                assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+                assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
+            }
+        }
+    }
 }
 
 /// Clipboard has no footprint-lock extension yet: exporting/importing cannot silently lose intent.

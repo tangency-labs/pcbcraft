@@ -75,8 +75,10 @@ clearance. Explicit stored null is not an alternate encoding.
 
 [Board/20](native-project-storage.md#zone-outline-records) is a superset of board/19
 with an optional board-rules object and a required nonempty `zones` array. A board
-that also has a placement origin uses board/21, or board/25 when footprint
-locks are also present, preserving those records. Each
+that also has a placement origin uses board/21; assembly profile adoptions require
+at least board/22, extended stack fields board/23, explicit via assignments board/24,
+and footprint locks board/25. Each higher format preserves the zone outlines and
+the other earlier records. Each
 zone is one JSON line in UUID order and contains only authored intent. A board
 without zones keeps the format its other content requires; no fill or preview is
 saved. Existing folder/archive codecs, recovery and Undo/Redo use those records.

@@ -19,6 +19,7 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub mod layout;
+mod part_group_storage;
 pub use documents::{
     Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
     encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
@@ -495,11 +496,14 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, occurrence IDs and sheet paper require split documents or an archive;
-    /// refuse loss.
+    /// drawings, rotation, occurrence IDs, sheet paper, net classes and part groups require split
+    /// documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
+        }
+        if !project.part_groups.groups.is_empty() {
+            return Err("Part groups require split documents or a packed archive.".into());
         }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
@@ -531,6 +535,8 @@ impl Encoder {
             || !project.board.vias.is_empty()
             || project.board.rules.is_some()
             || project.board.placement_origin.is_some()
+            || !project.board.assembly_profiles.is_empty()
+            || !project.assembly_profiles.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
             || project
@@ -540,7 +546,7 @@ impl Encoder {
                 .any(|f| f.rotation != 0 || f.bottom || f.locked || f.reference_offset.is_some() || f.reference_text.is_some())
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, board rules, placement origins, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, footprint locks, reference offsets or print overrides; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, board rules, placement origins, assembly profiles, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, footprint locks, reference offsets or print overrides; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
@@ -1056,6 +1062,10 @@ fn validate_with_hierarchy(
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
+        assembly_profiles: Arc::default(),
+        part_groups: Arc::default(),
+        part_group_memberships: Arc::default(),
+        prefer_compact_part_groups: false,
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;

@@ -196,6 +196,52 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
 
+/// Format 23 carries the stack fields together with a placement origin: a board with an origin,
+/// a copper role and a finished thickness saves as format 23, reopens with every value and
+/// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
+/// fields (header 20 requires zones, covered separately by the setup tests). Removing the origin
+/// keeps format 23; removing the stack fields instead falls back to format 21.
+#[test]
+fn stack_format_carries_the_placement_origin() {
+    let mut s = board();
+    let plain = s.inspect()["project"]["board"]["setup"].clone();
+    let mut candidate = plain.clone();
+    candidate["stackup"]["strata"][0]["role"] = json!("signal");
+    candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":candidate,"expected_revision":s.revision()})).unwrap();
+    set(&mut s, json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM})).unwrap();
+
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&documents);
+    let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
+    let reopened = decode_documents(&documents).unwrap();
+    assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
+    assert_eq!(reopened.board_setup().unwrap().stackup().finished_thickness_nm, Some(1_600_000));
+    let target = reopened.board_target().unwrap();
+    assert_eq!(reopened.board_view(target).unwrap().authored_placement_origin(), view(&s).authored_placement_origin());
+    assert_eq!(encode_documents(reopened).unwrap(), documents);
+
+    let text = String::from_utf8(documents[&path].clone()).unwrap();
+    let mut altered = documents.clone();
+    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    match decode_documents(&altered) {
+        Ok(_) => panic!("format 21 opened the stack fields"),
+        Err(error) => assert!(error.contains("require board format 23"), "{error}"),
+    }
+
+    let format = |s: &Session| {
+        let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+        serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()["format"].clone()
+    };
+    set(&mut s, Value::Null).unwrap();
+    assert_eq!(format(&s), "pcbcraft-board/23");
+    set(&mut s, json!({"kind":"board_zero"})).unwrap();
+    s.apply(crate::SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(format(&s), "pcbcraft-board/21");
+}
+
 /// The last in-range coordinates are accepted on both sides and one step beyond is refused.
 #[test]
 fn point_origins_accept_the_whole_coordinate_range_and_nothing_beyond() {
@@ -270,4 +316,110 @@ fn drill_coordinates_round_the_same_way_wherever_the_origin_is() {
             assert_eq!((b.0, b.1), (a.0 + 10_000, a.1 + 10_000), "{offset}");
         }
     }
+}
+
+/// Move a footprint through the shared transform command.
+fn place(session: &mut Session, footprint: &str, at: Point, rotation: u16, side: &str) {
+    let params = json!({"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":rotation,"side":side,"expected_revision":session.revision()});
+    session.apply(crate::SET_FOOTPRINT_TRANSFORM, &params).unwrap();
+}
+
+/// Rows of one top and one bottom part at 30 degrees, measured from an origin at board
+/// (10 mm, 30 mm), under both bottom-side conventions.
+#[test]
+fn bottom_part_at_thirty_degrees_follows_each_convention() {
+    let mut s = routed_fixture();
+    let ids: Vec<_> = view(&s).footprints().map(|f| f.id).collect();
+    let (bottom, top) = (&ids[0], &ids[1]);
+    place(&mut s, bottom, Point { x_nm: 40 * MM, y_nm: 25 * MM }, 30, "back");
+    place(&mut s, top, Point { x_nm: 40 * MM, y_nm: 45 * MM }, 30, "front");
+    set(&mut s, json!({"kind":"point","x_nm":10 * MM,"y_nm":30 * MM})).unwrap();
+    let frame = view(&s).placement_origin().unwrap().frame();
+    let row = |id: &String, convention| {
+        let footprint = view(&s).footprints().find(|f| &f.id == id).unwrap();
+        frame.place(footprint.position, footprint.rotation, footprint.bottom, convention)
+    };
+    // Bottom part, seen from the top: X = 40 - 10 = 30 mm; Y up = 30 - 25 = 5 mm; rotation as
+    // placed, 30, still counterclockwise from the top (IPC-2581, 3.3.2).
+    assert_eq!(row(bottom, BottomSide::ViewedFromTop), Placed { at: Point { x_nm: 30 * MM, y_nm: 5 * MM }, rotation: 30 });
+    // Seen from below: X = -(40 - 10) = -30 mm; Y unchanged, 5 mm; rotation 360 - 30 = 330.
+    assert_eq!(row(bottom, BottomSide::ViewedFromBottom), Placed { at: Point { x_nm: -30 * MM, y_nm: 5 * MM }, rotation: 330 });
+    // Top part under either convention: X = 40 - 10 = 30 mm; Y up = 30 - 45 = -15 mm; rotation 30.
+    for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
+        assert_eq!(row(top, convention), Placed { at: Point { x_nm: 30 * MM, y_nm: -15 * MM }, rotation: 30 });
+    }
+    assert_eq!(BottomSide::default(), BottomSide::ViewedFromTop);
+    assert_eq!(serde_json::to_value(BottomSide::ViewedFromBottom).unwrap(), "viewed_from_bottom");
+}
+
+/// Each convention reproduces where the pads really are. Seen from the top, a bottom row is
+/// the mirrored footprint turned by its rotation; seen from below (X negated), it is the
+/// unmirrored footprint turned by its rotation. Checked on every quarter turn, which is exact.
+#[test]
+fn each_convention_reproduces_the_bottom_pads() {
+    let mut s = routed_fixture();
+    let id = view(&s).footprints().next().unwrap().id;
+    let at = Point { x_nm: 40 * MM, y_nm: 25 * MM };
+    let pads = |s: &Session| {
+        let footprint = view(s).footprints().find(|f| f.id == id).unwrap();
+        (footprint.position, footprint.rotation, footprint.pads.iter().map(|pad| pad.center).collect::<Vec<_>>())
+    };
+    place(&mut s, &id, at, 0, "front");
+    // Library offsets from the placement point, Y up.
+    let local: Vec<_> = pads(&s).2.iter().map(|pad| (pad.x_nm - at.x_nm, at.y_nm - pad.y_nm)).collect();
+    assert!(local.iter().any(|(x, y)| (*x, *y) != (0, 0)));
+    set(&mut s, json!({"kind":"point","x_nm":10 * MM,"y_nm":30 * MM})).unwrap();
+    let frame = view(&s).placement_origin().unwrap().frame();
+    let turn = |(x, y): (i64, i64), degrees: u16| match degrees {
+        0 => (x, y),
+        90 => (-y, x),
+        180 => (-x, -y),
+        _ => (y, -x),
+    };
+    for rotation in [0, 90, 180, 270] {
+        place(&mut s, &id, at, rotation, "back");
+        let (position, turned, board) = pads(&s);
+        assert_eq!(turned, rotation);
+        let top = frame.place(position, turned, true, BottomSide::ViewedFromTop);
+        let below = frame.place(position, turned, true, BottomSide::ViewedFromBottom);
+        for (&(x, y), pad) in local.iter().zip(&board) {
+            let seen = frame.to_output(*pad);
+            let (dx, dy) = turn((-x, y), top.rotation);
+            assert_eq!((seen.x_nm, seen.y_nm), (top.at.x_nm + dx, top.at.y_nm + dy), "from the top at {rotation}");
+            let (dx, dy) = turn((x, y), below.rotation);
+            assert_eq!((-seen.x_nm, seen.y_nm), (below.at.x_nm + dx, below.at.y_nm + dy), "from below at {rotation}");
+        }
+    }
+}
+
+/// Rotations are folded into one turn: 359 is 1 seen from below, and 360 or 750 write the
+/// same rows as 0 or 30.
+#[test]
+fn rotation_is_folded_into_one_turn() {
+    let at = Point { x_nm: 40 * MM, y_nm: 25 * MM };
+    let frame = Frame::BOARD_ZERO;
+    let placed = |rotation, convention| frame.place(at, rotation, true, convention).rotation;
+    assert_eq!(placed(359, BottomSide::ViewedFromTop), 359);
+    assert_eq!(placed(359, BottomSide::ViewedFromBottom), 1);
+    for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
+        for on_bottom in [false, true] {
+            assert_eq!(frame.place(at, 360, on_bottom, convention), frame.place(at, 0, on_bottom, convention));
+            assert_eq!(frame.place(at, 750, on_bottom, convention), frame.place(at, 30, on_bottom, convention));
+        }
+        assert_eq!(placed(0, convention), 0);
+    }
+}
+
+/// Both convention names read back, and an unknown name is refused because it is not one of the two.
+#[test]
+fn bottom_side_names_round_trip() {
+    for convention in [BottomSide::ViewedFromTop, BottomSide::ViewedFromBottom] {
+        let name = serde_json::to_value(convention).unwrap();
+        assert_eq!(serde_json::from_value::<BottomSide>(name).unwrap(), convention);
+    }
+    assert_eq!(serde_json::from_value::<BottomSide>(json!("viewed_from_top")).unwrap(), BottomSide::ViewedFromTop);
+    assert_eq!(serde_json::from_value::<BottomSide>(json!("viewed_from_bottom")).unwrap(), BottomSide::ViewedFromBottom);
+    let refused = serde_json::from_value::<BottomSide>(json!("viewed_from_below")).unwrap_err().to_string();
+    assert!(refused.contains("unknown variant `viewed_from_below`"), "{refused}");
+    assert!(refused.contains("`viewed_from_top`") && refused.contains("`viewed_from_bottom`"), "{refused}");
 }

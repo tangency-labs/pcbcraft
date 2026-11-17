@@ -1,14 +1,12 @@
 //! Zone-specific intent and forms compose the shared board path editor and engine commands.
+use crate::board_net_choice::{NetChoice, net_choices};
 use crate::{
     Dialog, PcbApp,
     board_drawing::Tool,
     editor_view::{ViewInput, Workspace},
 };
 use pcbcraft_chrome::{controls, properties, shell};
-use pcbcraft_engine::{
-    board::{view::BoardView, zones::Connection},
-    nets::ClassTarget,
-};
+use pcbcraft_engine::board::{view::BoardView, zones::Connection};
 use serde_json::{Value, json};
 
 /// A creation chooser retains its exact view/revision and typed net targets until armed or cancelled.
@@ -193,27 +191,6 @@ pub(super) fn properties(
     })
 }
 
-/// A revision-qualified derived/persistent target and display label; names never grant authority.
-#[derive(Clone, Debug)]
-pub(super) struct NetChoice {
-    label: String,
-    target: ClassTarget,
-    id: Option<uuid::Uuid>,
-}
-/// Build picker presentation once from an engine inspection; unnamed nets remain distinguishable.
-fn net_choices(rows: &Value) -> Vec<NetChoice> {
-    rows["nets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
-        .filter_map(|(index, row)| {
-            let anchor = serde_json::from_value(row["anchor"].clone()).ok()?;
-            let label = row["name"].as_str().filter(|name| !name.is_empty()).map_or_else(|| format!("Net {}", index + 1), str::to_owned);
-            Some(NetChoice { label, target: ClassTarget::Derived { anchor }, id: serde_json::from_value(row["id"].clone()).ok() })
-        })
-        .collect()
-}
 /// Scalars commit on focus loss; stale revisions and Escape discard text without a transaction.
 #[derive(Clone)]
 struct Scalar {

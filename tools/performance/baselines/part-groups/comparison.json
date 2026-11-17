@@ -1,0 +1,48 @@
+{
+  "schema": "pcbcraft-membership-history-comparison/1",
+  "scope": "One matched, bounded Linux engine process per revision; same command-generated fixture and runner source.",
+  "fixture_sha256": "0a37add31eb3b3e5976e77d1021d19eeb371c5e5c0c3fd70737479f3e4b4c1fa",
+  "engine_dependency_trees_equal": true,
+  "runs": {
+    "before": {
+      "observed_peak_rss_bytes": 478498816,
+      "observed_high_water_bytes": 478498816,
+      "rss_samples": 50,
+      "process_elapsed_ms": 546.3263359852135,
+      "edits": 1000,
+      "edit_p50_ms": 0.46468699999999996,
+      "edit_p95_ms": 0.603197,
+      "edit_max_ms": 0.7528600000000001,
+      "edit_total_ms": 458.289512,
+      "correctness": {
+        "all_edits_changed_revision": true,
+        "canonical_roundtrip": true,
+        "exact_redo": true,
+        "exact_undo": true
+      }
+    },
+    "after": {
+      "observed_peak_rss_bytes": 25522176,
+      "observed_high_water_bytes": 25677824,
+      "rss_samples": 8,
+      "process_elapsed_ms": 81.19880105368793,
+      "edits": 1000,
+      "edit_p50_ms": 0.023444,
+      "edit_p95_ms": 0.02605,
+      "edit_max_ms": 0.038984,
+      "edit_total_ms": 23.608686,
+      "correctness": {
+        "all_edits_changed_revision": true,
+        "canonical_roundtrip": true,
+        "exact_redo": true,
+        "exact_undo": true
+      }
+    }
+  },
+  "limits": [
+    "Workspace Cargo.lock hashes differ; the engine dependency/version trees are identical.",
+    "Observed RSS/VmHWM are 10 ms samples, not allocator totals or a guaranteed exact peak.",
+    "Edit samples are operations in one process, not independent statistical replays.",
+    "No maximum-capacity, native UI, Windows, browser or endurance qualification."
+  ]
+}

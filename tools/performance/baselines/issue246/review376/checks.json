@@ -1,0 +1,175 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit_code": 0,
+    "seconds": 1.6957881450653076
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 22.85249972343445
+  },
+  {
+    "name": "workspace-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace"
+    ],
+    "exit_code": 0,
+    "seconds": 386.1828203201294
+  },
+  {
+    "name": "web",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "seconds": 9.28380012512207
+  },
+  {
+    "name": "harness-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 11.737915277481079
+  },
+  {
+    "name": "harness-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "performance::"
+    ],
+    "exit_code": 0,
+    "seconds": 43.99651741981506
+  },
+  {
+    "name": "harness-web",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-app",
+      "--features",
+      "performance-harness",
+      "--example",
+      "board_perf_web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "seconds": 9.650232315063477
+  },
+  {
+    "name": "wasi-board",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-engine",
+      "--target",
+      "wasm32-wasip1",
+      "--lib",
+      "board::",
+      "--",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 103.73319029808044
+  },
+  {
+    "name": "deny",
+    "command": [
+      "cargo",
+      "deny",
+      "--locked",
+      "check",
+      "licenses",
+      "sources",
+      "bans"
+    ],
+    "exit_code": 0,
+    "seconds": 0.7644109725952148
+  },
+  {
+    "name": "markdown",
+    "command": [
+      "python",
+      "-B",
+      "scripts/check-markdown-links.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.11997842788696289
+  },
+  {
+    "name": "python",
+    "command": [
+      "python",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts",
+      "-p",
+      "test_*.py"
+    ],
+    "exit_code": 0,
+    "seconds": 2.199301242828369
+  },
+  {
+    "name": "node",
+    "command": [
+      "node",
+      "--no-warnings",
+      "--experimental-vm-modules",
+      "--test",
+      "scripts/test-performance-page.cjs",
+      "scripts/test-rendered-performance-page.cjs"
+    ],
+    "exit_code": 0,
+    "seconds": 0.08998346328735352
+  }
+]

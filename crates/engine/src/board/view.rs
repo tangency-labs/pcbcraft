@@ -272,7 +272,7 @@ impl<'a> BoardView<'a> {
     }
 
     /// Find a canonical placement without resolving geometry or accepted-net membership.
-    fn placement(self, id: &str) -> Option<&'a super::Footprint> {
+    pub(super) fn placement(self, id: &str) -> Option<&'a super::Footprint> {
         let ordinal = crate::schematic::wiring::parse_id(id, "footprint-")?;
         if id != format!("footprint-{ordinal}") {
             return None;

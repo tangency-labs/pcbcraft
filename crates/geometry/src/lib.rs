@@ -1,10 +1,10 @@
 //! Solid bodies and STEP (ISO 10303-21) exchange for PCBcraft's 3D features.
 //!
 //! This crate is the boundary to the B-rep kernel. It is implemented with SolidCraft's
-//! `solidcore` kernel and its `solidcore-ops` and `solidcore-step` crates, at the SolidCraft
-//! revision the workspace already pins, but no kernel type appears in its public API: callers see
-//! [`Body`], [`BoundingBox`] and [`GeometryError`] only, so the kernel can be replaced without
-//! touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
+//! `solidcore` kernel and its `solidcore-ops`, `solidcore-record` and `solidcore-step` crates, at the
+//! SolidCraft revision the workspace already pins, but no kernel type appears in its public API:
+//! callers use kernel-neutral types such as [`Body`], [`BoundingBox`], [`Transform`] and
+//! [`GeometryError`], so the kernel can be replaced without touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
 //! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
 //! guard: a panic inside it becomes an error with the code [`ErrorCode::KernelInternal`] instead
@@ -37,7 +37,7 @@ use pcbcraft_units::{MAX_LENGTH_NM, NM_PER_MM};
 /// reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
-    /// An argument was refused before the kernel saw it (`invalid_params`).
+    /// An argument is invalid or is refused by the kernel (`invalid_params`).
     InvalidParams,
     /// The model bytes are not a readable STEP exchange structure, or a solid in it is malformed
     /// (`model_unreadable`).
@@ -125,6 +125,69 @@ impl BoundingBox {
         let corners = self.min_nm.iter().zip(&other.min_nm).chain(self.max_nm.iter().zip(&other.max_nm));
         corners.map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0)
     }
+
+    /// The smallest box holding both `self` and `other`.
+    pub fn union(&self, other: &BoundingBox) -> BoundingBox {
+        let mut out = *self;
+        for ((lo, hi), (other_lo, other_hi)) in out.min_nm.iter_mut().zip(out.max_nm.iter_mut()).zip(other.min_nm.iter().zip(&other.max_nm)) {
+            *lo = (*lo).min(*other_lo);
+            *hi = (*hi).max(*other_hi);
+        }
+        out
+    }
+}
+
+/// An affine placement: a point `p` goes to `p.x·axes[0] + p.y·axes[1] + p.z·axes[2] +
+/// translation`.
+///
+/// The axes are the images of the x, y and z unit vectors, as unitless ratios; the translation is
+/// in nanometres. Placements read from a file may include rotations, reflections and non-uniform
+/// scaling. A non-uniform scale or a shear accepted by [`Body::transformed`] turns the body's
+/// surfaces into B-splines.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform {
+    /// The images of the x, y and z unit vectors.
+    pub axes: [[f64; 3]; 3],
+    /// Where the origin goes, in nanometres.
+    pub translation_nm: [i64; 3],
+}
+
+impl Transform {
+    /// The placement that leaves every point where it is.
+    pub const IDENTITY: Transform = Transform { axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [0; 3] };
+
+    /// A move by `offset_nm` without turning.
+    pub const fn translation(offset_nm: [i64; 3]) -> Transform {
+        Transform { axes: Transform::IDENTITY.axes, translation_nm: offset_nm }
+    }
+
+    /// The kernel's affine matrix in millimetres: rows 0 to 2 the axes, row 3 the translation,
+    /// the fourth column `(0, 0, 0, 1)`.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] for an axis that is not finite or a translation more than
+    /// [`MAX_LENGTH_NM`] from zero.
+    fn matrix_mm(&self) -> Result<[[f64; 4]; 4]> {
+        if self.axes.iter().flatten().any(|v| !v.is_finite()) {
+            return Err(GeometryError::new(ErrorCode::InvalidParams, "a transform axis is not finite"));
+        }
+        let t = point_mm(self.translation_nm)?;
+        let [x, y, z] = self.axes;
+        Ok([[x[0], x[1], x[2], 0.0], [y[0], y[1], y[2], 0.0], [z[0], z[1], z[2], 0.0], [t[0], t[1], t[2], 1.0]])
+    }
+
+    /// The placement of a kernel matrix in millimetres, laid out as [`Transform::matrix_mm`]
+    /// gives it, or `None` when an entry is not finite or the translation lies more than
+    /// [`MAX_LENGTH_NM`] from zero.
+    fn from_matrix_mm(m: &[[f64; 4]; 4]) -> Option<Transform> {
+        let [x, y, z, t] = m;
+        let axes = [[x[0], x[1], x[2]], [y[0], y[1], y[2]], [z[0], z[1], z[2]]];
+        if axes.iter().flatten().any(|v| !v.is_finite()) {
+            return None;
+        }
+        Some(Transform { axes, translation_nm: point_nm([t[0], t[1], t[2]]).ok()? })
+    }
 }
 
 /// A named solid (or sheet) held by the kernel.
@@ -183,6 +246,20 @@ impl Body {
         let (lo, hi) = kernel::bounds(&self.solid)?;
         Ok(BoundingBox { min_nm: point_nm(lo)?, max_nm: point_nm(hi)? })
     }
+
+    /// A copy of the body, with the same name, moved by `transform`. The body itself is
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] for an axis that is not finite, a translation more than
+    /// [`MAX_LENGTH_NM`] from zero, or axes the kernel does not accept as a regular map (a
+    /// flattening, or a scale too uneven to prove regular); otherwise the kernel's failure.
+    pub fn transformed(&self, transform: &Transform) -> Result<Body> {
+        let matrix = transform.matrix_mm()?;
+        let solid = kernel::transformed(&self.solid, &matrix)?;
+        Ok(Body { name: self.name.clone(), solid })
+    }
 }
 
 /// A STEP solid item the reader did not turn into a [`Body`]; the rest of the file is still read.
@@ -196,19 +273,77 @@ pub struct RefusedItem {
     pub message: String,
 }
 
-/// What [`read_step`] found: every body it read, in ascending entity-number order, and every
-/// solid item it refused. For a file written by [`write_step`] that is the order written.
+/// One use of a body in the file's world frame: an assembly that places a part twice gives two
+/// placements of the same body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    /// The body placed (index into [`StepRead::bodies`]).
+    pub body: usize,
+    /// Where it goes, from the body's own representation frame to the file's world frame.
+    pub transform: Transform,
+}
+
+/// What [`read_step`] found: every body it read, in ascending entity-number order, where the
+/// file places each, and every solid item it refused. For a file written by [`write_step`] the
+/// body order is the order written.
 #[derive(Debug, Default)]
 pub struct StepRead {
-    /// The bodies read, in ascending entity-number order.
+    /// The bodies read, in ascending entity-number order, each in its own representation's frame.
     pub bodies: Vec<Body>,
+    /// Every use of a body: those its product structure places, in the order the assembly tree
+    /// lists them, then each body no product places, once and where it is.
+    pub placements: Vec<Placement>,
     /// The solid items refused, with their reasons.
     pub refused: Vec<RefusedItem>,
 }
 
+impl StepRead {
+    /// One body for each placement, moved into the file's world frame, in placement order.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] when a placement names no body of this read; otherwise the
+    /// failures of [`Body::transformed`].
+    pub fn placed_bodies(&self) -> Result<Vec<Body>> {
+        self.placements.iter().map(|p| self.placed(p)).collect()
+    }
+
+    /// The box of every placed body in the file's world frame; `None` when nothing was read.
+    /// Each body is moved before it is measured, so a turned body gives the box of its turned
+    /// surfaces, not the turned box of the body.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] when a placement names no body of this read; otherwise the
+    /// failures of [`Body::transformed`] and [`Body::bounding_box`].
+    pub fn bounding_box(&self) -> Result<Option<BoundingBox>> {
+        let mut out: Option<BoundingBox> = None;
+        for placement in &self.placements {
+            let b = self.placed(placement)?.bounding_box()?;
+            out = Some(out.map_or(b, |o| o.union(&b)));
+        }
+        Ok(out)
+    }
+
+    /// The body `placement` names, moved by it.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidParams`] when the placement names no body of this read; otherwise the
+    /// failures of [`Body::transformed`].
+    fn placed(&self, placement: &Placement) -> Result<Body> {
+        let body = self
+            .bodies
+            .get(placement.body)
+            .ok_or_else(|| GeometryError::new(ErrorCode::InvalidParams, format!("placement of body {} out of range", placement.body)))?;
+        body.transformed(&placement.transform)
+    }
+}
+
 /// Reads the solids and surface models of a STEP file (AP203, AP214 or AP242) in the units its
-/// representation context states. Assembly placements are not applied yet: each body is in its
-/// own representation's frame.
+/// representation context states. Each body stays in its own representation's frame;
+/// [`StepRead::placements`] lists where the file's product structure (parts, assemblies and
+/// their placements, mapped items) puts it, and [`StepRead::placed_bodies`] applies them.
 ///
 /// A solid that cannot be read is listed in [`StepRead::refused`] and the others are still read.
 /// Reading has no side effects.
@@ -216,13 +351,26 @@ pub struct StepRead {
 /// # Errors
 ///
 /// [`ErrorCode::ModelUnreadable`] when the bytes are not UTF-8 text or not an ISO 10303-21
-/// exchange structure; [`ErrorCode::KernelUnavailable`] without a kernel;
+/// exchange structure, its product structure is malformed (a cycle, a broken reference, nesting
+/// deeper than 32 combined occurrence/mapping levels, an expansion past 100,000 placed bodies
+/// or its work budget of 1,000,000 + 1,000 × parsed entity count steps, counted before it runs), or a placement is not finite or
+/// moves a body more than [`MAX_LENGTH_NM`] from the origin;
+/// [`ErrorCode::KernelUnavailable`] without a kernel;
 /// [`ErrorCode::KernelInternal`] when the reader panics.
 pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
     let text = std::str::from_utf8(bytes).map_err(|e| GeometryError::new(ErrorCode::ModelUnreadable, format!("STEP text is not UTF-8: {e}")))?;
-    let (bodies, refused) = kernel::read(text)?;
-    let bodies = bodies.into_iter().map(|(name, solid)| Body { name, solid }).collect();
-    Ok(StepRead { bodies, refused })
+    let read = kernel::read(text)?;
+    let bodies = read.bodies.into_iter().map(|(name, solid)| Body { name, solid }).collect();
+    let placements = read
+        .placements
+        .iter()
+        .map(|(body, matrix)| {
+            let transform = Transform::from_matrix_mm(matrix)
+                .ok_or_else(|| GeometryError::new(ErrorCode::ModelUnreadable, format!("the file places body {body} outside the supported range")))?;
+            Ok(Placement { body: *body, transform })
+        })
+        .collect::<Result<_>>()?;
+    Ok(StepRead { bodies, placements, refused: read.refused })
 }
 
 /// Writes `bodies` as one part named `part_name` in an AP242 STEP file, exactly as the kernel

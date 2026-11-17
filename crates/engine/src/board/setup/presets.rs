@@ -28,6 +28,8 @@ impl BoardSetup {
     /// Stage a two-layer starting stackup with stable layer/profile IDs. Existing material pins
     /// remain intact; the chosen built-in material retains its catalog pin. Multilayer drafts are refused.
     /// Nominal foil uses 35/70 µm; the dielectric takes the residual of a chosen 1.6 mm total.
+    /// Copper tolerance, basis and base copper describe the replaced values, so they are cleared;
+    /// roles and the declared finished board thickness are kept.
     pub fn with_starting_stackup(&self, preset: StackupPreset) -> Result<Self, CommandError> {
         if self.stackup.strata.len() != 3 {
             return Err(CommandError::InvalidParams("starting stackup presets require two copper layers".into()));
@@ -38,7 +40,12 @@ impl BoardSetup {
         let mut strata = self.stackup.strata.clone();
         for stratum in &mut strata {
             match stratum {
-                Stratum::Copper { thickness_nm, .. } => *thickness_nm = Some(copper),
+                Stratum::Copper { thickness_nm, base_copper, thickness_tolerance_nm, thickness_basis, .. } => {
+                    *thickness_nm = Some(copper);
+                    *base_copper = None;
+                    *thickness_tolerance_nm = None;
+                    *thickness_basis = None;
+                }
                 Stratum::Dielectric { thickness_nm, material: label, construction, thickness_tolerance_nm, .. } => {
                     *thickness_nm = Some(1_600_000 - 2 * copper);
                     *thickness_tolerance_nm = None;
@@ -48,7 +55,7 @@ impl BoardSetup {
             }
         }
         let materials = retain_template(&self.materials, material)?;
-        Self::try_from(SetupRecords { materials, layers: self.layers.clone(), stackup: super::Stackup { id: self.stackup.id, strata } })
+        Self::try_from(SetupRecords { materials, layers: self.layers.clone(), stackup: self.stackup.with_strata(strata) })
             .map_err(CommandError::InvalidParams)
     }
 }

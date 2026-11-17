@@ -1,0 +1,14 @@
+{
+  "README.md": "8883f5be3e444a3062305fcef5daf1a93d208e04dd5568980c5e5da0e927a726",
+  "after-channels-v1.json.gz": "6751deb068dd1204ab1005a9ee763339325284d7889d800d0a9b8fe48ef4518f",
+  "after-dense-v1.json.gz": "dd32e916c1561cb4cfc960aecd834af47b18fd0d38872a331c62ddbe4cc0d4cf",
+  "after-environment.json": "4ad4286bff1cc4704e8fac344406fc602b4384b330c8ae2a7d65dc516aa4ca65",
+  "after-executable.sha256": "163ed48337b720d79dae08c4fb39963835d5405eadbc70dea0f19c16191594ea",
+  "before-channels-v1.json.gz": "4385a9e3180d6666a56b33b12673900e7190cc9b4ccff126dc8829ace9c2056b",
+  "before-dense-v1.json.gz": "eec4ddbe8eae43cc320d4c829cb3212da23ef320075fc7530a35a31abff67cff",
+  "before-environment.json": "d7e92ad512bf08b54e13568f0323007d929b13ff25b2c017b6160e892613bb9c",
+  "before-executable.sha256": "b818203e598471e713ebde1a7a6cd25a06a7c5377c15775bb2428f45146b2d68",
+  "before-tests.log.gz": "dd83f4e842f4a586395d0420a1c8de6949738780edd3bee43525e8ae33cb4b91",
+  "checks.json": "a6fddaf4d41f4b55a5fd4ae510efb94cd7f0bf38a4f6fc19a2f8cecc6598b3c4",
+  "source.json": "e6ec4bc43c7bfc59da760b22a3a4ffda55db39181e33ab0d6b8f9666c8e16db9"
+}

@@ -14,3 +14,5 @@ tools/performance/baselines/browser-*.json linguist-generated=true
 # this command overwrites tracked changes.
 tools/performance/baselines/extended/*.log -text
 tools/performance/baselines/extended/*.txt -text
+# Membership-history evidence includes hashes of its runner and metadata as well as raw samples.
+tools/performance/baselines/part-groups/** -text

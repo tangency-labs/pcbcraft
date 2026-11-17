@@ -1,10 +1,12 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
 mod deletion;
+mod export;
 pub mod inventory;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
 pub use deletion::ItemRemoval;
+pub use export::Export;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -331,6 +333,8 @@ pub struct NativeSource {
     license: String,
     items: Vec<Item>,
     problems: Vec<String>,
+    /// The original text, kept so the whole library can be exported unchanged.
+    documents: Documents,
 }
 impl NativeSource {
     /// Stable manifest identity, including for sources with no valid item documents.
@@ -359,7 +363,14 @@ impl NativeSource {
         if manifest.id.starts_with("project-") {
             return Err("library.json: project- library IDs are reserved for pinned project records".into());
         }
-        let mut source = Self { library: manifest.id, name: manifest.name, license: manifest.license, items: Vec::new(), problems: Vec::new() };
+        let mut source = Self {
+            library: manifest.id,
+            name: manifest.name,
+            license: manifest.license,
+            items: Vec::new(),
+            problems: Vec::new(),
+            documents: documents.clone(),
+        };
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
             match source.parse_item(path, text) {
                 Ok(item) => source.items.push(item),
@@ -670,6 +681,7 @@ impl Catalog {
                 license: String::new(),
                 items: Vec::new(),
                 problems: vec![error],
+                documents: Documents::new(),
             });
             // Embedded registrations are bounded by this repository's delivery adapter.
             let source_id = format!("bundled-{id}");

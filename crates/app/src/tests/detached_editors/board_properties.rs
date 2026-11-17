@@ -60,3 +60,54 @@ fn detached_length_drafts_stay_in_their_window_and_revision() {
     assert_eq!(h.get_by_label("Footprint X").value().as_deref(), Some("2.54 mm"));
     assert_eq!(child_value(&peer, "Footprint X").as_deref(), Some("2.54 mm"));
 }
+
+/// Via policy changes in a detached Properties card use the shared transaction and update the root.
+#[test]
+fn detached_via_net_properties_share_intent_without_leaking_placement_state() {
+    let (mut h, peer) = multi_window();
+    let run = |h: &mut Harness<'_, PcbApp>, command: &str, mut params: Value| {
+        params["expected_revision"] = json!(h.state().session.revision());
+        h.state_mut().run(command, &params);
+        assert_eq!(h.state().message, None);
+    };
+    run(&mut h, pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    run(&mut h, pcbcraft_engine::net_labels::ADD, json!({"name":"GND","style":"global","x_nm":-50_000_000,"y_nm":0}));
+    let rows = h.state().session.project().unwrap().inspect_net_registry().unwrap();
+    let row = rows["nets"].as_array().unwrap().iter().find(|r| r["name"] == "GND").unwrap();
+    run(&mut h, pcbcraft_engine::ADD_VIA, json!({"at":{"x_nm":0,"y_nm":5_000_000},"target":{"kind":"derived","anchor":row["anchor"]}}));
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let views = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    let ctx = h.ctx.clone();
+    h.state_mut().activate_editor(&ctx, views[1]);
+    detach(&mut h);
+    let id = h.state().session.project().unwrap().boards().next().unwrap().vias()[0].id;
+    for view in &views {
+        let view = h.state_mut().views.view_mut(*view).unwrap();
+        view.board.tracks.selected.insert(id);
+        view.board.properties_collapsed = false;
+    }
+    h.run();
+    focus(&mut h, &peer, true);
+    let at = child_rect(&peer, "Via net").center();
+    child_click_at(&mut h, &peer, at);
+    let automatic = child_rect(&peer, "Choose automatic net").center();
+    child_click_at(&mut h, &peer, automatic);
+    let confirm = child_rect(&peer, "Use net").center();
+    child_click_at(&mut h, &peer, confirm);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().views.view(views[1]).unwrap().board.tracks.committing() {
+        assert!(std::time::Instant::now() < deadline, "detached net edit did not publish: {:?}", h.state().message);
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    h.run();
+    let project = h.state().session.project().unwrap();
+    assert!(project.boards().next().unwrap().vias()[0].net_assignment.is_none());
+    assert_eq!(child_value(&peer, "Via net").as_deref(), Some("Automatic"));
+    focus(&mut h, &peer, false);
+    h.run();
+    assert_eq!(h.get_by_label("Via net").value().as_deref(), Some("Automatic"));
+}

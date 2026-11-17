@@ -1,0 +1,28 @@
+{
+  "schema": "pcbcraft-issue246-evidence/1",
+  "implementation": "343e04ae5d714454f47efed2d87f4382e24f44dd",
+  "base": "b19753b49d5259bd512f32d8e0f0c732ded28204",
+  "artifacts": {
+    "README.md": "720fed17079ab51779ad1ad4b18cf7442d77ce87a2aa6209f29cea6e1fd03316",
+    "checks-channels-v1-after.json.gz": "a55647cf7655f2fc0b95dc8df4cc548a723813b5f0d29d9723d77c9122d374f4",
+    "checks-channels-v1-before.json.gz": "71beee963066f8ec51be0cf6ee9de08736744b3f5195907b37b5172691995e5e",
+    "checks-dense-v1-after.json.gz": "1806deb076ff7d05039850f55d91221bd1faf88d12ad442f398c7fdef9921d37",
+    "checks-dense-v1-before.json.gz": "eb949adf5b0e86912c3cc37b05d021f6339e39f00729db0581fae63805c8ed5f",
+    "checks.json": "893f8daedb5e9851e3e5049ad1ad62e7750575fdc9442c33f0c7e84bb2dfe63d",
+    "comparison-run-channels-v1.md": "8c97c055166036d6b9d5dda74cf62fb1d690282f099c88b1977d5d614db6b8c0",
+    "comparison-run-dense-v1.md": "9e099edc5fd3e3c5bd80ce8cdc0e17698d06084a2db8bc461d10b564346a8d1c",
+    "environment-after.json": "40fa0bf6d47c0bfa971651c37767556aa3964d5670a1cbd974d070acc41b10d2",
+    "environment-before.json": "6d62d93ac8303ea922c349bc2119da33df4537ae5204b69f393be1bd5d3fc224",
+    "environment-retry.json": "a2e2c877dce84bcc03b17cfb5ab71ade885d03348be09648b57892bd60448b0a",
+    "failure-review.md": "3265f0f6b820ac279984af770abe136b611e03f76508c5ef137eca73f6e7667b",
+    "run-channels-v1-after.json.gz": "9d7f341858f4aec8643108667374767f33c18e556b0faec4c05d7fde60a1564c",
+    "run-channels-v1-before.json.gz": "333732757528739d2675855404e6b955b1bf8e517a410cc73b31bce0c218f4a6",
+    "run-dense-v1-after.json.gz": "326396cca0f95f92d063b2c235e207f16a1d5471dc91ad8c1760c1bf521bec64",
+    "run-dense-v1-before.json.gz": "57e2194342d1f27a015870a3843ebc5027054644423d6985369c3b40a1fd8f0b",
+    "walkaround-channels-v1-retry.json.gz": "ce79f06af35e62699688408858dc3b647ca7aced7278a9fe399c00f493a2792f",
+    "walkaround-channels-v1.json.gz": "7595542315b91f378acaa81410c204831ca392e3a496f95a2aa02585537baa14",
+    "walkaround-dense-v1-retry.json.gz": "7319d20b97423db5e0b5a4c313e3d8425cbc5466dc25940e05e5d56001e9b289",
+    "walkaround-dense-v1.json.gz": "9ed2df96cec13d096812c412ea020de2668147c5b6b170f0fc010202cb923726"
+  },
+  "retry": "dbe01680875a52c3aaf713c6cf7528d046f24782"
+}

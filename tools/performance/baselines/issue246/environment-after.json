@@ -1,0 +1,10 @@
+{
+  "hardware": "Apple M5 Max; 128 GB RAM; physical host",
+  "os": "macOS 27.2.1 (Darwin 27.2.0)",
+  "runtime": "native CPU replay",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-apple-darwin\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "profile": "release",
+  "power": "AC power; macOS default power mode; developer desktop with ordinary background load; CPU exclusivity and thermal state not controlled.",
+  "notes": "Issue246 walkaround solver: bounded before/after comparison on channels-v1 and dense-v1, 20 iterations, before/after runs alternated. Engine-only change; existing boundaries are compared for regressions and walkaround timings are a separate report. No latency-tail, allocation, presentation or endurance qualification.",
+  "revision": "343e04ae5d714454f47efed2d87f4382e24f44dd"
+}

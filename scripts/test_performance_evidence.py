@@ -29,6 +29,37 @@ def read_report(path):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_part_group_history_evidence_preserves_inputs_samples_and_summaries(self):
+        """Retain exact checkout bytes and tie reported savings to the saved raw observations."""
+        path = root / "baselines" / "part-groups"
+        manifest = dict(line.split("  ", 1)[::-1] for line in (path / "SHA256SUMS").read_text().splitlines())
+        self.assertEqual(set(manifest), {entry.name for entry in path.iterdir() if entry.name != "SHA256SUMS"})
+        for name, digest in manifest.items():
+            self.assertEqual(hashlib.sha256((path / name).read_bytes()).hexdigest(), digest, name)
+        metadata = json.loads((path / "source-metadata.json").read_text())
+        self.assertEqual(hashlib.sha256((path / "membership-memory.rs").read_bytes()).hexdigest(), metadata["runner_sha256"])
+        self.assertEqual(hashlib.sha256(gzip.decompress((path / "fixture.pc.gz").read_bytes())).hexdigest(), metadata["fixture_sha256"])
+        comparison = json.loads((path / "comparison.json").read_text())
+        for label in ("before", "after"):
+            with self.subTest(revision=label):
+                report = read_report(path / f"{label}-resources.json.gz")
+                timings = read_report(path / f"{label}-timings.json.gz")
+                self.assertEqual(report["artifact_sha256"], metadata["fixture_sha256"])
+                self.assertEqual(report["executable_sha256"], metadata[label]["executable_sha256"])
+                values = sorted(timings["edit_ms"])
+                self.assertEqual(len(values), timings["workload"]["edits"])
+                self.assertEqual(len(values), 1000)
+                self.assertTrue(all(value >= 0 for value in values))
+                self.assertTrue(all(timings["correctness"].values()))
+                summary = comparison["runs"][label]
+                self.assertEqual(summary["correctness"], timings["correctness"])
+                self.assertEqual(summary["edit_p50_ms"], values[(len(values) * 50 + 99) // 100 - 1])
+                self.assertEqual(summary["edit_p95_ms"], values[(len(values) * 95 + 99) // 100 - 1])
+                for field, source in (("observed_peak_rss_bytes", "VmRSS"), ("observed_high_water_bytes", "VmHWM")):
+                    peak = max(sample[source] for sample in report["uninstrumented"]["rss_samples"])
+                    self.assertEqual(report["uninstrumented"][field], peak)
+                    self.assertEqual(summary[field], peak)
+
     def test_manifest_and_source_archives_match_the_recorded_bytes(self):
         manifest = json.loads((evidence / "manifest.json").read_text())
         self.assertEqual(set(manifest["files"]), {p.name for p in evidence.iterdir() if p.name != "manifest.json"})

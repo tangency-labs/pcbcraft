@@ -45,9 +45,11 @@ pub use super::rules::Values as Rules;
 pub enum Kind {
     /// Applicable hard requirements contradict, so the affected checking result is incomplete.
     NetClassConflict,
+    /// Saved via intent no longer resolves to one active net on this board.
+    ViaNetUnresolved,
     /// Assigned policy could not be captured, so checking cannot establish a complete result.
     UnsupportedNetClasses,
-    /// One physical copper island joins pads from distinct intended nets, independently of
+    /// One physical copper island joins copper with distinct intended nets, independently of
     /// the clearance rule, including when the required clearance is zero.
     Short,
     Clearance,
@@ -62,12 +64,12 @@ pub enum Kind {
     CourtyardOverlap,
 }
 
-/// Intended membership participating in a short. `net` is an index in this snapshot's accepted
-/// baseline, or its project-wide logical graph when no baseline exists, never a persisted ID.
+/// Intended membership participating in a short. `net` is snapshot-local accepted or logical
+/// membership, extended by explicit via-only intent, never a persisted ID.
 /// Names are display text only; component-terminal keys identify the involved logical objects.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ShortNet {
-    /// Index in the checked snapshot's accepted baseline or logical graph, never a saved net ID.
+    /// Index in this checked snapshot's membership projection, never a saved net ID.
     pub net: usize,
     /// Display label for this membership; equal labels do not imply equal nets.
     pub name: String,
@@ -334,26 +336,52 @@ impl BoardView<'_> {
     fn check_shorts(self, lands: &[Land], members: &[Vec<usize>], items: &[Item], found: &mut Findings) {
         let project = self.project();
         let baseline = project.board.baseline.as_ref();
-        let accepted = baseline.map(|baseline| baseline.terminal_net_index());
         let graph = baseline.is_none().then(|| project.electrical_connectivity());
+        let intent = project.board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership(project, lands, self.tracks().len(), self.vias(), &intent);
+        for via in self.vias() {
+            if let Some(address) = via.net_assignment.filter(|a| project.via_net_state(*a) != "active") {
+                found.push(Violation {
+                    kind: Kind::ViaNetUnresolved,
+                    message: format!("Via net assignment is {}; review or clear its target.", project.via_net_state(address)),
+                    at: via.at,
+                    items: vec![via.id.to_string()],
+                    nets: Vec::new(),
+                });
+            }
+        }
         let memberships: Vec<_> = lands
             .iter()
             .map(|land| {
                 let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
                 let (component, terminal) = project.board.component_pin_for(pad)?;
-                let net = if let Some(accepted) = &accepted {
-                    *accepted.get(&(component, terminal))?
-                } else {
-                    graph.as_ref()?.net_index_for(project.component_terminal(component, terminal)?)?
-                };
-                Some((net, TerminalKey { component, terminal: terminal.to_owned() }))
+                Some(TerminalKey { component, terminal: terminal.to_owned() })
             })
             .collect();
         for island in members {
+            let assigned = island
+                .iter()
+                .filter_map(|n| n.checked_sub(lands.len() + self.tracks().len()))
+                .filter_map(|i| self.vias().get(i))
+                .find(|v| v.net_assignment.is_some_and(|a| project.via_net_state(a) == "active"));
+            if let Some(via) = assigned
+                && !island.iter().any(|n| *n < lands.len())
+            {
+                found.push(Violation {
+                    kind: Kind::Unconnected,
+                    message: "Assigned via island has no physical pad connection.".into(),
+                    at: via.at,
+                    items: island.iter().map(|n| items[*n].name.clone()).collect(),
+                    nets: Vec::new(),
+                });
+            }
             let mut nets = BTreeMap::<usize, Vec<TerminalKey>>::new();
             for &node in island {
-                if let Some(Some((net, terminal))) = memberships.get(node) {
-                    nets.entry(*net).or_default().push(terminal.clone());
+                if let Some(net) = intrinsic[node] {
+                    let terminals = nets.entry(net).or_default();
+                    if let Some(Some(terminal)) = memberships.get(node) {
+                        terminals.push(terminal.clone());
+                    }
                 }
             }
             if nets.len() < 2 {
@@ -364,12 +392,17 @@ impl BoardView<'_> {
                 .map(|(net, mut terminals)| {
                     terminals.sort();
                     terminals.dedup();
-                    let name = baseline.and_then(|baseline| baseline.net_name(net)).or_else(|| graph.as_ref().map(|graph| graph.net_name(net)));
+                    let name = intent
+                        .names
+                        .get(&net)
+                        .cloned()
+                        .or_else(|| baseline.and_then(|baseline| baseline.net_name(net)))
+                        .or_else(|| graph.as_ref().map(|graph| graph.net_name(net)));
                     ShortNet { net, name: name.unwrap_or_default(), terminals }
                 })
                 .collect();
             let names: Vec<_> = nets.iter().map(|net| format!("{} (net {})", net.name, net.net + 1)).collect();
-            let at = island.iter().find_map(|&node| memberships.get(node)?.as_ref().map(|_| items[node].at));
+            let at = island.first().map(|node| items[*node].at);
             let mut names_of_items: Vec<_> = island.iter().map(|&node| items[node].name.clone()).collect();
             names_of_items.sort();
             if let Some(at) = at {
@@ -388,15 +421,9 @@ impl BoardView<'_> {
     /// clearance from every outline segment. Penetration remains a finding at zero required
     /// clearance. Open outline paths still count as edges.
     fn check_outline(self, items: &[Item], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
-        let layers = self.layers();
-        let outline: Vec<_> = self
-            .drawings()
-            .into_iter()
-            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
-            .collect();
-        let polygons: Vec<_> = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
+        let Outline { drawn, polygons, edges } = self.outline_edges();
         if polygons.is_empty() {
-            if !items.is_empty() || !outline.is_empty() {
+            if !items.is_empty() || drawn {
                 found.push(Violation {
                     kind: Kind::NoOutline,
                     message: "The board has no closed Board Outline".into(),
@@ -407,18 +434,9 @@ impl BoardView<'_> {
             }
             return;
         }
-        let edges: Vec<(Point, Point)> = outline
-            .iter()
-            .flat_map(|drawing| {
-                let points = &drawing.points;
-                let count = if drawing.closed { points.len() } else { points.len().saturating_sub(1) };
-                (0..count).map(move |i| (points[i], points[(i + 1) % points.len()]))
-            })
-            .collect();
         for item in items {
             let rules = context.map_or(rules, |context| context.limits_for(&item.name, rules));
-            let anchors = &item.contour.core;
-            if !anchors.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon))) {
+            if !contains(&polygons, &item.contour) {
                 found.push(Violation {
                     kind: Kind::OutsideBoard,
                     message: "Copper lies outside the Board Outline".into(),
@@ -428,12 +446,7 @@ impl BoardView<'_> {
                 });
                 continue;
             }
-            let (distance, crosses) = edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
-                let distance = item.contour.gap(&Contour::capsule(*a, *b, 0.));
-                // A contained edge can have gap zero even though it enters a pad's copper.
-                let penetrates = distance < 0. || (distance == 0. && item.contour.penetrates_segment(*a, *b));
-                (best.min(distance), crosses || penetrates)
-            });
+            let (distance, crosses) = edge_gap(&edges, &item.contour);
             if crosses || distance < rules.edge_clearance_nm as f64 {
                 found.push(Violation {
                     kind: Kind::EdgeClearance,
@@ -483,6 +496,53 @@ impl BoardView<'_> {
                 }
             }
         }
+    }
+}
+
+/// The board's Board Outline drawings: closed polygons that must contain copper, and every
+/// edge, closed or open, that copper must keep its edge clearance from.
+pub(super) struct Outline {
+    /// Whether any outline drawing exists, even one that is not closed.
+    pub(super) drawn: bool,
+    pub(super) polygons: Vec<Vec<Point>>,
+    pub(super) edges: Vec<(Point, Point)>,
+}
+
+/// Whether every core anchor of the copper lies inside some closed outline polygon.
+pub(super) fn contains(polygons: &[Vec<Point>], contour: &Contour) -> bool {
+    contour.core.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon)))
+}
+
+/// The copper's smallest distance to any outline edge, and whether an edge enters its interior.
+/// A contained edge can have gap zero even though it enters a pad's copper.
+pub(super) fn edge_gap(edges: &[(Point, Point)], contour: &Contour) -> (f64, bool) {
+    edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
+        let distance = contour.gap(&Contour::capsule(*a, *b, 0.));
+        let penetrates = distance < 0. || (distance == 0. && contour.penetrates_segment(*a, *b));
+        (best.min(distance), crosses || penetrates)
+    })
+}
+
+impl BoardView<'_> {
+    /// Collect Board Outline drawings shared by DRC and route planning. Open paths contribute
+    /// edges only; closed drawings contribute a polygon and their closing edge.
+    pub(super) fn outline_edges(self) -> Outline {
+        let layers = self.layers();
+        let outline: Vec<_> = self
+            .drawings()
+            .into_iter()
+            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
+            .collect();
+        let polygons = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
+        let edges = outline
+            .iter()
+            .flat_map(|drawing| {
+                let points = &drawing.points;
+                let count = if drawing.closed { points.len() } else { points.len().saturating_sub(1) };
+                (0..count).map(move |i| (points[i], points[(i + 1) % points.len()]))
+            })
+            .collect();
+        Outline { drawn: !outline.is_empty(), polygons, edges }
     }
 }
 
