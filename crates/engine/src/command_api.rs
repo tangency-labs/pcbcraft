@@ -125,6 +125,7 @@ pub struct Change {
 }
 
 impl std::fmt::Display for Change {
+    /// Format the severity label and difference description, returning formatting errors.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", if self.breaking { "breaking" } else { "compatible" }, self.what)
     }
@@ -251,10 +252,11 @@ fn accepts_all(value: Option<&Value>) -> bool {
     }
 }
 
-/// Compare two schemas at `path`. Booleans and non-objects are compared as a whole: loosening to
-/// accept everything is compatible unless the old schema carries a `default` (dropping it may
-/// change what an omitted value means); anything else that differs is breaking. [`compare`]
-/// promotes these local labels when references or unevaluated keywords make context unknown.
+/// Compare two schemas at `path`. Booleans and non-objects are compared as a whole. A change
+/// from `false` is compatible, as is loosening to accept everything unless the old schema carries
+/// a `default` (dropping it may change what an omitted value means). Other differences are breaking.
+/// [`compare`] promotes these local labels when references or unevaluated keywords make context
+/// unknown.
 fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
     if old == new {
         return;
@@ -487,8 +489,9 @@ fn alternatives(walk: &mut Walk, path: &str, key: &str, before: Option<&Value>, 
 /// Why described commands do not match the committed snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SnapshotMismatch {
-    /// A breaking difference while `COMMAND_API_VERSION` stayed at the snapshot's, or an API
-    /// version below the snapshot's or not a whole number: the code must change, not the snapshot.
+    /// A breaking difference without a raised API version, a code API version below the snapshot's,
+    /// or a malformed stored snapshot version. Unannounced breaks require preserving the old
+    /// contract or raising the code's API version; malformed stored versions require snapshot repair.
     Breaking(Vec<String>),
     /// Nothing breaks unannounced, but the snapshot is out of date; `section` is what the section
     /// should read and `api_version` what `command_api_version` should read.
