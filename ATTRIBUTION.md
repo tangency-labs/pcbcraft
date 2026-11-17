@@ -1681,3 +1681,26 @@ Apache-2.0). Its `NOTICE` is retained unchanged in
 distributed builds, so the release notices file described under
 [Dependencies](#dependencies) must include it. No kernel source is copied into
 this repository.
+
+
+## Copper-zone outlines
+
+The #231 outline model, exact integer polygon checks, commands and hatching are
+original PCBcraft work under MIT OR Apache-2.0. Zone gestures compose the existing
+PCBcraft Board Outline editor; net promotion uses the existing sparse registry.
+The new-zone chooser and Properties compose pinned Craft dialog, choice, checkbox
+and text controls through chrome. No external EDA source, artwork, library asset
+or new dependency was incorporated. No toolkit gap required custom interface
+presentation; the hatch is original PCB geometry. Fill and zone output remain
+separate work.
+
+The boundary-hatch follow-up uses @travle1's supplied KiCad screenshot only as
+a black-box appearance reference. Its bounded diagonal scan conversion and
+shared modifier/marquee selection integration are independently authored
+PCBcraft code; no external implementation or artwork was incorporated.
+
+
+The mixed-board M follow-up composes PCBcraft's existing physical pad-contact
+policy, immutable previews and revision-checked transactions. Its selection-wide
+translation is original PCBcraft code, introduced after @travle1 reproduced the
+missing group pickup while testing #231. It adds no dependency or artwork.
