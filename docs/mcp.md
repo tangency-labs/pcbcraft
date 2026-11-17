@@ -404,7 +404,9 @@ metadata, never a behaviour selector. Names, source hints and vendor metadata
 have 1–64 characters without surrounding whitespace or controls; available
 profiles have unique names. `bottom_side` defaults to `viewed_from_top`, or is
 `viewed_from_bottom`. The schema version (`pcbcraft-assembly-profile/1`) is
-independent of content revisions.
+independent of content revisions. The command currently requires a project with a
+board; it is unavailable in schematic-only projects even though the catalog is
+project-owned.
 
 Optional `corrections` has one entry per `library` and footprint `definition`,
 with a `rotation` (0–359 whole degrees, counterclockwise from the component side)
@@ -427,7 +429,10 @@ affected placement rows before and after, plus an `acceptance` digest. It edits
 nothing. `pcb.adopt_assembly_profile` accepts the same parameters and that digest,
 recomputing the preview atomically. A stale revision or altered review is refused.
 Pinning is not adoption; only explicit adoption changes profile-adjusted rows.
-Each edit is one undo step and repeated unchanged adoptions are no-ops.
+Each edit is one undo step and repeated unchanged adoptions are no-ops. Pinning on
+a supported older project adopts the folder, occurrence and allocation metadata
+required by the catalog's saved format in that same undo step; existing project,
+board and object identities and registered storage roots are preserved.
 
 Inspection exposes project `assembly_profiles` (identity watermarks and pinned
 revisions) and board `assembly_profiles` (explicit revision adoptions), sorted by

@@ -264,6 +264,67 @@ fn profiles_leave_fabrication_and_legacy_markers_alone() {
     refused_because(view(&s).placement_row(&id, None), "Draw a Board Outline");
 }
 
+/// Preview shares one outline frame across multiple old/proposed rows and agrees with single-row output.
+#[test]
+fn outline_preview_reuses_the_frame_for_all_placements() {
+    let (mut s, ids) = fixture();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(SET_PLACEMENT_ORIGIN, &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"outline_lower_left"}})).unwrap();
+    let id = Uuid::from_u128(94);
+    pin(
+        &mut s,
+        Some(id),
+        content(
+            json!({"name":"Outline","corrections":[{"library":LIBRARY,"definition":"resistor-0402",
+        "rotation":180,"centroid":{"x_nm":MM,"y_nm":2*MM}}]}),
+            1,
+        ),
+    )
+    .unwrap();
+    let before = s.snapshot().unwrap();
+    invalid_because(
+        s.execute(PREVIEW_ASSEMBLY_PROFILE, &json!({"board":board,"profile":id,"revision":1,"expected_revision":s.revision()})),
+        "Draw a Board Outline",
+    );
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::board::drc::tests::outline(&mut s);
+    let generic: Vec<_> = ids.iter().map(|footprint| view(&s).placement_row(footprint, None).unwrap()).collect();
+    let before = s.snapshot().unwrap();
+    let review = s.execute(PREVIEW_ASSEMBLY_PROFILE, &json!({"board":board,"profile":id,"revision":1,"expected_revision":s.revision()})).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    assert_eq!(
+        review["affected_rows"],
+        json!([
+            {"footprint":ids[0],"before":{"at":{"x_nm":5*MM,"y_nm":33*MM},"rotation":0},"after":{"at":{"x_nm":6*MM,"y_nm":31*MM},"rotation":180}},
+            {"footprint":ids[1],"before":{"at":{"x_nm":13*MM,"y_nm":33*MM},"rotation":0},"after":{"at":{"x_nm":14*MM,"y_nm":31*MM},"rotation":180}}
+        ])
+    );
+    adopt(&mut s, id, Some(1)).unwrap();
+    for index in 0..2 {
+        assert_eq!(serde_json::to_value(view(&s).placement_row(&ids[index], Some(id)).unwrap()).unwrap(), review["affected_rows"][index]["after"]);
+    }
+    assert_eq!(view(&s).placement_row(&ids[2], Some(id)).unwrap(), generic[2]);
+    assert_eq!(ids.iter().map(|footprint| view(&s).placement_row(footprint, None).unwrap()).collect::<Vec<_>>(), generic);
+}
+
+/// An empty board needs no resolved frame to preview or adopt a profile; no rows are fabricated.
+#[test]
+fn empty_outline_preview_does_not_resolve_an_unused_origin() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(SET_PLACEMENT_ORIGIN, &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"outline_lower_left"}})).unwrap();
+    let id = Uuid::from_u128(95);
+    pin(&mut s, Some(id), content(json!({"name":"Empty"}), 1)).unwrap();
+    let before = s.snapshot().unwrap();
+    let review = s.execute(PREVIEW_ASSEMBLY_PROFILE, &json!({"board":board,"profile":id,"revision":1,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(review["affected_rows"], json!([]));
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    adopt(&mut s, id, Some(1)).unwrap();
+    assert_eq!(view(&s).assembly_profiles(), &[Adoption { profile: id, revision: 1 }]);
+    refused_because(view(&s).placement_row("footprint-999", Some(id)), "No footprint footprint-999");
+}
+
 /// Pinning and adoption are separate undoable transactions; repeats are no-ops and revisions are immutable.
 #[test]
 fn profiles_are_edited_in_one_undo_step() {
@@ -309,35 +370,40 @@ fn bad_requests_change_nothing() {
         json!({"name":"X","corrections":[entry]})
     };
     let edge = MAX_OFFSET_NM + 1;
-    for value in [
-        json!({}),
-        json!({"name":""}),
-        json!({"name":" padded"}),
-        json!({"name":"padded\u{feff}"}),
-        json!({"name":"tab\tinside"}),
-        json!({"name":"n".repeat(MAX_NAME_CHARS+1)}),
-        json!({"name":"X","bottom_side":"mirrored"}),
-        json!({"name":"X","bottom_side":null}),
-        json!({"name":"X","corrections":null}),
-        json!({"name":"X","extra":1}),
-        json!({"name":7}),
-        json!("X"),
-        package(json!({})),
-        package(json!({"rotation":0})),
-        package(json!({"rotation":360})),
-        package(json!({"rotation":-1})),
-        package(json!({"rotation":90.5})),
-        package(json!({"centroid":{"x_nm":0,"y_nm":0}})),
-        package(json!({"centroid":{"x_nm":edge,"y_nm":0}})),
-        package(json!({"centroid":{"x_nm":0,"y_nm":-edge}})),
-        package(json!({"centroid":{"x_nm":1}})),
-        package(json!({"rotation":90,"centroid":null})),
-        package(json!({"rotation":90,"revision":1})),
-        package(json!({"rotation":90,"library":"Basic"})),
-        package(json!({"rotation":90,"definition":""})),
-        json!({"name":"X","corrections":[{"library":LIBRARY,"definition":"a","rotation":1},{"library":LIBRARY,"definition":"a","rotation":2}]}),
+    for (value, reason) in [
+        (json!({}), "missing field `name`"),
+        (json!({"name":""}), "metadata needs"),
+        (json!({"name":" padded"}), "metadata needs"),
+        (json!({"name":"padded\u{feff}"}), "metadata needs"),
+        (json!({"name":"tab\tinside"}), "metadata needs"),
+        (json!({"name":"n".repeat(MAX_NAME_CHARS+1)}), "metadata needs"),
+        (json!({"name":"X","bottom_side":"mirrored"}), "unknown variant `mirrored`"),
+        (json!({"name":"X","bottom_side":null}), "invalid type: null"),
+        (json!({"name":"X","corrections":null}), "invalid type: null"),
+        (json!({"name":"X","extra":1}), "unknown field `extra`"),
+        (json!({"name":7}), "expected a string"),
+        (json!("X"), "expected struct ProfileContent"),
+        (package(json!({})), "changes nothing"),
+        (package(json!({"rotation":0})), "changes nothing"),
+        (package(json!({"rotation":360})), "0 through 359"),
+        (package(json!({"rotation":-1})), "expected u16"),
+        (package(json!({"rotation":90.5})), "expected u16"),
+        (package(json!({"centroid":{"x_nm":0,"y_nm":0}})), "centroid correction must be nonzero"),
+        (package(json!({"centroid":{"x_nm":edge,"y_nm":0}})), "within 100 mm"),
+        (package(json!({"centroid":{"x_nm":0,"y_nm":-edge}})), "within 100 mm"),
+        (package(json!({"centroid":{"x_nm":1}})), "missing field `y_nm`"),
+        (package(json!({"rotation":90,"centroid":null})), "invalid type: null"),
+        (package(json!({"rotation":90,"revision":1})), "unknown field `revision`"),
+        (package(json!({"rotation":90,"library":"Basic"})), "valid library and footprint definition id"),
+        (package(json!({"rotation":90,"definition":""})), "valid library and footprint definition id"),
+        (
+            json!({"name":"X","corrections":[{"library":LIBRARY,"definition":"a","rotation":1},{"library":LIBRARY,"definition":"a","rotation":2}]}),
+            "unique and in library and definition order",
+        ),
     ] {
-        invalid_because(pin(&mut s, None, content(value.clone(), 1)), "immutable profile content");
+        let profile = content(value.clone(), 1);
+        refused_because(parse(&profile), reason);
+        invalid_because(pin(&mut s, None, profile), "immutable profile content");
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()), "{value}");
     }
     let good = content(json!({"name":"Good"}), 1);
@@ -607,31 +673,132 @@ fn removal_and_cleanup_preserve_adoptions_and_undo_redo() {
     assert_eq!(first.assembly_profiles.revisions[0].content.revision, 1, "cleanup cannot mutate history");
 }
 
+/// Pinning alone migrates supported legacy metadata, preserves identities and undoes in one step.
+fn legacy_pin_round_trip(project: Arc<Project>) {
+    let mut s = Session::default();
+    s.open_snapshot(project);
+    let before = s.snapshot().unwrap();
+    let board = before.board_target().unwrap();
+    let sheets: Vec<_> = before.sheets.iter().map(|sheet| sheet.sheet_id).collect();
+    let id = Uuid::from_u128(93);
+    let profile = content(json!({"name":"Legacy"}), 1);
+    pin(&mut s, Some(id), profile.clone()).unwrap();
+    let pinned = s.snapshot().unwrap();
+    assert_eq!(pinned.id(), before.id());
+    assert_eq!(pinned.board_target(), Some(board));
+    assert_eq!(pinned.sheets.iter().map(|sheet| sheet.sheet_id).collect::<Vec<_>>(), sheets);
+    assert!(Arc::ptr_eq(&pinned.components, &before.components));
+    assert!(Arc::ptr_eq(&pinned.board, &before.board), "pinning does not adopt or edit a board");
+    assert!(pinned.board.assembly_profiles.is_empty());
+    assert!(pinned.has_sheet_occurrences());
+    assert!(pinned.numeric_id_high_water.is_some());
+    assert_eq!(pinned.layout_root(), Some(before.layout_root().unwrap_or(".")));
+    if before.board_folder().is_some() {
+        assert_eq!(pinned.board_folder(), before.board_folder());
+    }
+    let saved = encode_documents(pinned.clone()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&saved["project.json"]).unwrap()["format"], "pcbcraft-project/36");
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    let packed = crate::persistence::encode_packed(pinned.clone()).unwrap();
+    assert_eq!(encode_documents(crate::persistence::decode_packed(&packed).unwrap().project).unwrap(), saved);
+    let revision = s.revision();
+    assert_eq!(pin(&mut s, Some(id), profile).unwrap(), revision);
+    assert!(Arc::ptr_eq(&pinned, &s.snapshot().unwrap()));
+    s.apply("edit.undo", &Value::Null).unwrap();
+    let restored = s.snapshot().unwrap();
+    crate::assert_same_content(&before, &restored);
+    assert!(restored.assembly_profiles.heads.is_empty());
+    assert_eq!(restored.layout_root(), before.layout_root());
+    assert_eq!(restored.has_sheet_occurrences(), before.has_sheet_occurrences());
+    let restored_documents = encode_documents(restored).unwrap();
+    assert_eq!(encode_documents(decode_documents(&restored_documents).unwrap()).unwrap(), restored_documents);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Real legacy flat/split codecs, including explicit flat registration, can pin without board adoption.
+#[test]
+fn legacy_pin_only_round_trips_flat_split_and_packed_projects() {
+    use crate::persistence::{decode, decode_packed, encode};
+    for bytes in [
+        include_bytes!("../../../app/tests/fixtures/two-resistors-format-1.pc").as_slice(),
+        include_bytes!("../../../app/tests/fixtures/two-resistors-format-2.pc").as_slice(),
+        include_bytes!("../../../app/tests/fixtures/two-resistors.pc").as_slice(),
+    ] {
+        let project = decode(bytes).unwrap();
+        assert_eq!(project.layout_root(), None);
+        assert!(!project.has_sheet_occurrences());
+        legacy_pin_round_trip(project);
+    }
+    let old_split = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap().project;
+    assert_eq!(old_split.layout_root(), None);
+    legacy_pin_round_trip(old_split.clone());
+    let mut registered = Session::default();
+    registered.open_snapshot(old_split);
+    registered
+        .apply(
+            crate::PLACE_FOOTPRINT,
+            &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,
+        "x_nm":0,"y_nm":0,"expected_revision":registered.revision()}),
+        )
+        .unwrap();
+    let flat = encode(registered.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&flat).unwrap()["format"], "pcbcraft-project/7");
+    let flat = decode(&flat).unwrap();
+    assert_eq!(flat.boards().next().unwrap().name(), "Board");
+    assert_eq!(flat.layout_root(), None);
+    assert!(!flat.has_sheet_occurrences());
+    legacy_pin_round_trip(flat.clone());
+    let split = encode_documents(flat.clone()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&split["project.json"]).unwrap()["format"], "pcbcraft-project/9");
+    legacy_pin_round_trip(decode_documents(&split).unwrap());
+    let foldered = flat.with_board_folders("manufacturing").unwrap().with_board_folder("existing-board").unwrap();
+    legacy_pin_round_trip(Arc::new(foldered));
+}
+
+/// Catalog commands retain the existing no-board availability rule without migrating a refused edit.
+#[test]
+fn schematic_only_profile_pin_remains_unavailable() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":false})).unwrap();
+    let before = s.snapshot().unwrap();
+    assert_eq!(before.board_target(), None);
+    let result = pin(&mut s, None, content(json!({"name":"Unavailable"}), 1));
+    assert!(
+        matches!(&result, Err(CommandError::Unavailable(message)) if message.contains(SET_ASSEMBLY_PROFILE) && message.contains("can't run now")),
+        "{result:?}"
+    );
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    let saved = encode_documents(before).unwrap();
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+}
+
 /// Provenance and optional vendor metadata reject null, unknown fields and first oversized values.
 #[test]
 fn metadata_edges_change_nothing_and_imported_content_reopens() {
     let (mut s, _) = fixture();
     let before = s.snapshot().unwrap();
-    for (field, value) in [
-        ("vendor", Value::Null),
-        ("vendor", json!(7)),
-        ("vendor", json!("")),
-        ("vendor", json!(" padded")),
-        ("vendor", json!("x".repeat(MAX_NAME_CHARS + 1))),
-        ("provenance", Value::Null),
-        ("provenance", json!("authored")),
-        ("provenance", json!({})),
-        ("provenance", json!({"kind":"unknown"})),
-        ("provenance", json!({"kind":"authored","source":"extra"})),
-        ("provenance", json!({"kind":"imported"})),
-        ("provenance", json!({"kind":"imported","source":null})),
-        ("provenance", json!({"kind":"imported","source":""})),
-        ("provenance", json!({"kind":"imported","source":"padded "})),
-        ("provenance", json!({"kind":"imported","source":"x".repeat(MAX_NAME_CHARS+1)})),
-        ("provenance", json!({"kind":"imported","source":"valid","extra":true})),
+    for (field, value, reason) in [
+        ("vendor", Value::Null, "expected a string"),
+        ("vendor", json!(7), "expected a string"),
+        ("vendor", json!(""), "metadata needs"),
+        ("vendor", json!(" padded"), "metadata needs"),
+        ("vendor", json!("x".repeat(MAX_NAME_CHARS + 1)), "metadata needs"),
+        ("provenance", Value::Null, "invalid type: null"),
+        ("provenance", json!("authored"), "internally tagged enum Provenance"),
+        ("provenance", json!({}), "missing field `kind`"),
+        ("provenance", json!({"kind":"unknown"}), "unknown variant `unknown`"),
+        ("provenance", json!({"kind":"authored","source":"extra"}), "unknown field `source`"),
+        ("provenance", json!({"kind":"imported"}), "missing field `source`"),
+        ("provenance", json!({"kind":"imported","source":null}), "expected a string"),
+        ("provenance", json!({"kind":"imported","source":""}), "bounded source hint"),
+        ("provenance", json!({"kind":"imported","source":"padded "}), "bounded source hint"),
+        ("provenance", json!({"kind":"imported","source":"x".repeat(MAX_NAME_CHARS+1)}), "bounded source hint"),
+        ("provenance", json!({"kind":"imported","source":"valid","extra":true}), "unknown field `extra`"),
     ] {
         let mut invalid = content(json!({"name":"Metadata"}), 1);
         invalid[field] = value;
+        refused_because(parse(&invalid), reason);
         invalid_because(pin(&mut s, None, invalid), "immutable profile content");
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()), "{field}");
     }
@@ -746,11 +913,20 @@ fn command_numeric_spellings_match_the_schema_snapshot() {
         let saved = encode_documents(s.snapshot().unwrap()).unwrap();
         assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     }
-    for bad in ["0", "-0", "-1", "1.5", "4294967296", "9007199254740993", "18446744073709551615"] {
+    for (bad, reason) in [
+        ("0", "content revision must be positive"),
+        ("-0", "content revision must be positive"),
+        ("-1", "expected u32"),
+        ("1.5", "expected u32"),
+        ("4294967296", "expected u32"),
+        ("9007199254740993", "expected u32"),
+        ("18446744073709551615", "expected u32"),
+    ] {
         let (mut s, _) = fixture();
         let mut profile = content(json!({"name":"Bad"}), 1);
         profile["revision"] = serde_json::from_str(bad).unwrap();
         let before = s.snapshot().unwrap();
+        refused_because(parse(&profile), reason);
         invalid_because(pin(&mut s, None, profile), "immutable profile content");
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }

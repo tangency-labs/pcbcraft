@@ -3,7 +3,7 @@
 use super::{
     Footprint,
     definition::{self, MAX_OFFSET_NM},
-    origin::{BottomSide, Placed},
+    origin::{BottomSide, Frame, Placed},
     view::BoardView,
 };
 use crate::{CommandError, Project, Session, schematic::Point};
@@ -334,18 +334,18 @@ impl<'a> BoardView<'a> {
             }
             None => None,
         };
-        self.profile_row(footprint, record)
-    }
-    /// Apply generic transforms to supplied, already validated profile data, without selecting by vendor.
-    fn profile_row(self, footprint: &str, profile: Option<&AssemblyProfile>) -> Result<Placed, String> {
         let placement = self.placement(footprint).ok_or_else(|| format!("No footprint {footprint} on this board."))?;
-        let frame = self.placement_origin()?.frame();
+        Ok(Self::profile_row(placement, record, self.placement_origin()?.frame()))
+    }
+    /// Apply validated profile data to an existing placement with the caller's resolved output frame.
+    /// A preview shares this frame across old and proposed values and across all placements.
+    fn profile_row(placement: &Footprint, profile: Option<&AssemblyProfile>, frame: Frame) -> Placed {
         let convention = profile.map_or_else(BottomSide::default, |p| p.content.bottom_side);
         let row = frame.place(Point { x_nm: placement.x_nm, y_nm: placement.y_nm }, placement.rotation, placement.bottom, convention);
-        Ok(match profile.and_then(|p| p.correction_for(placement)) {
+        match profile.and_then(|p| p.correction_for(placement)) {
             Some(c) => c.apply(placement, row, frame, convention),
             None => row,
-        })
+        }
     }
 }
 
@@ -509,6 +509,14 @@ impl Session {
         }
         catalog.cleanup(&candidate.board.assembly_profiles);
         catalog.validate(&candidate.board.assembly_profiles).map_err(CommandError::InvalidParams)?;
+        // The catalog's project envelope requires folder and occurrence identities, even when
+        // no board adopts it. Adopt them in the candidate so pinning and migration undo together.
+        if candidate.layout.is_none() {
+            candidate = candidate.with_board_folders(".").map_err(CommandError::InvalidParams)?;
+        }
+        if !candidate.has_sheet_occurrences() {
+            candidate = candidate.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
+        }
         self.change(candidate)
     }
 
@@ -567,12 +575,15 @@ impl Session {
             }
         }
         let mut rows = Vec::new();
-        for footprint in project.board.footprints() {
-            let key = format!("footprint-{}", footprint.id);
-            let old = view.profile_row(&key, previous).map_err(CommandError::InvalidParams)?;
-            let new = view.profile_row(&key, proposed).map_err(CommandError::InvalidParams)?;
-            if old != new {
-                rows.push(json!({"footprint":key,"before":old,"after":new}));
+        let placements = project.board.footprints();
+        if !placements.is_empty() {
+            let frame = view.placement_origin().map_err(CommandError::InvalidParams)?.frame();
+            for footprint in placements {
+                let old = BoardView::profile_row(footprint, previous, frame);
+                let new = BoardView::profile_row(footprint, proposed, frame);
+                if old != new {
+                    rows.push(json!({"footprint":format!("footprint-{}", footprint.id),"before":old,"after":new}));
+                }
             }
         }
         let mut review = json!({"project":project.id(),"opening":self.history_root_revision(),"board":board.board,"expected_revision":self.revision(),"profile":id,

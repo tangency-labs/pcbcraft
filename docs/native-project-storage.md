@@ -297,6 +297,8 @@ identities keep their earlier encoding; retirement watermarks keep format 36
 necessary even after the last unused payload is released. See the
 [shared commands](mcp.md#assembly-output-profiles) for pin/preview/adopt behaviour.
 
+### Zone outline records
+
 Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
 all board/19 fields, with board rules optional. A zone board with a placement
 origin uses format 21, preserving both records; removing either feature retains
@@ -1043,8 +1045,14 @@ pcbcraft-cli convert /path/to/old-project.pc.zip /path/to/converted-project.pc
 A source folder or its `project.pc` entry point must contain a supported split
 project. Archives must use container version 2, or be manifest-less ZIPs of that
 previous split layout. A destination ending in `.pc` creates a container-v3 ZIP;
-other destinations create a new folder. Both forms validate all managed documents
-and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
+other destinations create a new folder. On Windows, a destination named like a
+device, such as `con.pc`, `aux` or `COM1.pc`, is refused before anything is written.
+This includes `COM¹`–`COM³` and `LPT¹`–`LPT³`, with or without extensions and
+ignoring ASCII case, as specified by [Windows naming conventions](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions).
+Trailing ASCII spaces in the text before the first dot do not bypass the check:
+`NUL ` and `COM¹  .pc` are also refused. The check does not rename the destination.
+Other platforms accept these as ordinary destination names. Both forms validate
+all managed documents and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
 bytes. The entry point becomes project/16 with a board-folder registration and
 single-use occurrence records; the entry-point path, physical board path and
 packed manifest change. Unrelated root files such

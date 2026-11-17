@@ -1352,6 +1352,9 @@ fn assembly_output_profiles_round_trip_through_execute() {
         json!({"revision":1,"provenance":{"kind":"authored"},"name":"Bad","corrections":[{"library":"basic-components","definition":"sot23","rotation":360}]}),
     );
     assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(refused["content"][0]["type"], "text");
+    let reason = refused["content"][0]["text"].as_str().unwrap();
+    assert!(reason.contains("`content`") && reason.contains("immutable profile content"), "{refused}");
     let inspected = body(&call(&mut server, "inspect_project", json!({})));
     assert_eq!(inspected["project"]["assembly_profiles"]["revisions"], profiles);
     assert_eq!(inspected["project"]["boards"][0]["assembly_profiles"], json!([{"profile":profiles[0]["id"],"revision":1}]));
