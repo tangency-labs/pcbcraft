@@ -251,9 +251,16 @@ result or meaning, and a stricter check the schema does not express need the
 same explicit decision with no failing test to prompt it; and they cannot tell
 whether a new default keeps the old behaviour. They also compare the code with
 the snapshot in the same commit, so a breaking change committed together with
-a rewritten snapshot passes them: a review must read every change to
-`command-contracts.json`. Comparing the snapshot on the merge base with the new
-one in CI, with the same classifier, would catch that case.
+a rewritten snapshot passes them. For that case, CI on a pull request also
+compares the target branch's `command-contracts.json` with the pull request's,
+with the same classifier (the `command_contracts_against_base` example of
+`pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
+command_contracts_against_base -- BASE.json HEAD.json`): it fails when a
+command is removed or changed in a breaking way in either section and
+`command_api_version` was not raised, or when the version falls. It sees only
+what the snapshot records, so a changed meaning still needs review, and it
+cannot tell whether a raise was the right decision; a review must still read
+every change to `command-contracts.json`.
 
 ## Headless MCP
 

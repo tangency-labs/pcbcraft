@@ -63,6 +63,16 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - name: Compare command contracts with the base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if git cat-file -e "$BASE_SHA:docs/schemas/command-contracts.json" 2>/dev/null; then
+            git show "$BASE_SHA:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
+            cargo run --locked -q -p pcbcraft-engine --example command_contracts_against_base -- "$RUNNER_TEMP/base-command-contracts.json" docs/schemas/command-contracts.json
+          fi
       - name: Check opt-in performance harness
         run: |
           cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings

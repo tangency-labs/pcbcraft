@@ -583,3 +583,47 @@ fn dependency_maps_keep_parameter_names() {
         }
     }
 }
+
+/// Two snapshots: a breaking difference fails unless the new one raises the API version, in
+/// either section; a removed command is breaking; compatible differences pass and are listed; a
+/// version that falls or is not a whole number fails.
+#[test]
+fn snapshots_compare_against_the_base() {
+    let snapshot =
+        |version: Value, commands: Value, window: Value| json!({"command_api_version": version, "commands": commands, "window_commands": window});
+    let narrow = json!({"params": {"type": "object", "properties": {"n": {"maximum": 3}}, "additionalProperties": false}});
+    let wide = json!({"params": {"type": "object", "properties": {"n": {"maximum": 4}}, "additionalProperties": false}});
+    let base = snapshot(json!(1), json!({"a.x": wide.clone()}), json!({"ui.y": wide.clone()}));
+
+    assert_eq!(compare_snapshots(&base, &base), Ok(vec![]));
+    let loosened = snapshot(json!(1), json!({"a.x": wide.clone(), "a.z": wide.clone()}), json!({"ui.y": wide.clone()}));
+    assert_eq!(compare_snapshots(&base, &loosened), Ok(vec!["compatible: `a.z`: added".to_owned()]));
+
+    let tightened = snapshot(json!(1), json!({"a.x": narrow.clone()}), json!({"ui.y": wide.clone()}));
+    let problems = compare_snapshots(&base, &tightened).unwrap_err();
+    assert_eq!(problems[0], "breaking: `a.x` params.properties.n.maximum: changed from 4 to 3");
+    let window_tightened = snapshot(json!(1), json!({"a.x": wide.clone()}), json!({"ui.y": narrow.clone()}));
+    assert_eq!(compare_snapshots(&base, &window_tightened).unwrap_err()[0], "breaking: `ui.y` params.properties.n.maximum: changed from 4 to 3");
+    let removed = snapshot(json!(1), json!({}), json!({"ui.y": wide.clone()}));
+    assert_eq!(compare_snapshots(&base, &removed).unwrap_err()[0], "breaking: `a.x`: removed");
+
+    let raised = snapshot(json!(2), json!({"a.x": narrow.clone()}), json!({"ui.y": wide.clone()}));
+    assert_eq!(compare_snapshots(&base, &raised), Ok(vec!["breaking: `a.x` params.properties.n.maximum: changed from 4 to 3".to_owned()]));
+    let fallen = snapshot(json!(1), json!({"a.x": wide.clone()}), json!({"ui.y": wide.clone()}));
+    assert!(
+        compare_snapshots(&snapshot(json!(2), json!({"a.x": wide.clone()}), json!({"ui.y": wide.clone()})), &fallen).unwrap_err()[0]
+            .contains("fell from 2 to 1")
+    );
+    for version in [json!(0), json!(1.0), json!("1")] {
+        let bad = snapshot(version, json!({"a.x": wide.clone()}), json!({"ui.y": wide.clone()}));
+        assert!(compare_snapshots(&base, &bad).unwrap_err()[0].contains("not a whole number"));
+    }
+}
+
+/// The committed snapshot compared with itself passes: what the CI step checks on an unchanged
+/// snapshot.
+#[test]
+fn the_committed_snapshot_matches_itself_as_base() {
+    let snapshot: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    assert_eq!(compare_snapshots(&snapshot, &snapshot), Ok(vec![]));
+}

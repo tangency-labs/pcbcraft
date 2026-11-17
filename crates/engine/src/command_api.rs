@@ -487,6 +487,49 @@ pub fn check_snapshot(snapshot: &Value, section: &str, described: &[Value], api_
     Err(SnapshotMismatch::Stale { changes, section: snapshot_section(described), api_version })
 }
 
+/// The sections of a contract snapshot that list commands.
+pub const SNAPSHOT_SECTIONS: &[&str] = &["commands", "window_commands"];
+
+/// Compare two committed contract snapshots, `base` (for example the target branch's) and `head`
+/// (the change's), so that a breaking change committed together with a rewritten snapshot is
+/// still seen. Returns every difference, compatible and breaking, labelled as [`compare`] does.
+///
+/// # Errors
+///
+/// The list of problems when `head`'s `command_api_version` is not a whole number of at least 1,
+/// when it is below `base`'s, or when any section has a breaking difference (a command removed
+/// included) while it equals `base`'s. A `base` without a valid version is compared as version 1.
+pub fn compare_snapshots(base: &Value, head: &Value) -> Result<Vec<String>, Vec<String>> {
+    let base_api = base["command_api_version"].as_u64().filter(|version| *version >= 1).unwrap_or(1);
+    let Some(head_api) = head["command_api_version"].as_u64().filter(|version| *version >= 1) else {
+        let found = shown(head.get("command_api_version"));
+        return Err(vec![format!("the new snapshot's command_api_version is {found}, not a whole number of at least 1")]);
+    };
+    if head_api < base_api {
+        return Err(vec![format!("command_api_version fell from {base_api} to {head_api}; it never falls")]);
+    }
+    let empty = Map::new();
+    let mut changes = Vec::new();
+    for section in SNAPSHOT_SECTIONS {
+        let old = base[*section].as_object().unwrap_or(&empty);
+        let new = head[*section].as_object().unwrap_or(&empty);
+        for id in old.keys().chain(new.keys()).collect::<BTreeSet<_>>() {
+            match (old.get(id), new.get(id)) {
+                (Some(before), Some(after)) => changes.extend(compare(id, before, after)),
+                (None, Some(_)) => changes.push(Change { breaking: false, what: format!("`{id}`: added") }),
+                (Some(_), None) => changes.push(Change { breaking: true, what: format!("`{id}`: removed") }),
+                (None, None) => {}
+            }
+        }
+    }
+    if head_api == base_api && changes.iter().any(|change| change.breaking) {
+        let mut problems: Vec<String> = changes.iter().filter(|change| change.breaking).map(ToString::to_string).collect();
+        problems.push(format!("raise COMMAND_API_VERSION above {base_api} if this break is intended, or keep the old contract"));
+        return Err(problems);
+    }
+    Ok(changes.iter().map(ToString::to_string).collect())
+}
+
 /// The snapshot section for `described` commands: one line per command, sorted by id, mapping
 /// the id to its [`contract_of`], so a change shows as a one-line diff.
 pub fn snapshot_section(described: &[Value]) -> String {
