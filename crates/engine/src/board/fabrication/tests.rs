@@ -252,8 +252,8 @@ fn manifest_counts_bytes_not_characters_or_lines() {
 }
 
 /// The command, GUI capture helper and compatibility output API describe the same bytes,
-/// without changing native documents, revision or either history stack. Later edits cannot
-/// change a capture, and an old sidecar's ZIP digest cannot identify a changed board's ZIP.
+/// without changing native documents, revision or either history stack. Adding the tested route
+/// changes the output bytes and their digest, while leaving the earlier capture unchanged.
 #[test]
 fn manifest_is_read_only_and_stays_bound_to_its_capture() {
     use crate::persistence::encode_documents;

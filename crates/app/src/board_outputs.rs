@@ -178,7 +178,25 @@ fn sync_directory(path: &std::path::Path) -> std::io::Result<()> {
 use wasm_bindgen::prelude::*;
 #[cfg(all(target_arch = "wasm32", not(test)))]
 #[wasm_bindgen(inline_js = "
-export function downloadFabrication(bytes,name,type){const url=URL.createObjectURL(new Blob([bytes],{type}));const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+export function downloadFabrication(bytes,name,type){
+    const url=URL.createObjectURL(new Blob([bytes],{type}));
+    let a;
+    let requested=false;
+    try{
+        a=document.createElement('a');
+        a.href=url;
+        a.download=name;
+        document.body.appendChild(a);
+        a.click();
+        requested=true;
+    }finally{
+        try{a?.remove();}
+        finally{
+            if(requested){setTimeout(()=>URL.revokeObjectURL(url),30000);}
+            else{URL.revokeObjectURL(url);}
+        }
+    }
+}
 ")]
 extern "C" {
     #[wasm_bindgen(catch, js_name = downloadFabrication)]
