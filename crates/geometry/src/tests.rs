@@ -12,7 +12,7 @@ fn block() -> (Body, BoundingBox) {
     (Body::cuboid("Block", origin, size).unwrap(), expected)
 }
 
-/// The error codes keep the names that callers and saved results rely on.
+/// The error codes keep the names that command replies rely on.
 #[test]
 fn error_codes_keep_their_names() {
     let names: Vec<&str> = [
@@ -71,12 +71,17 @@ fn every_body_of_a_part_reads_back() {
     assert_eq!(names, ["Spacer", "Block"]);
 }
 
-/// The writer is deterministic: the same bodies give the same bytes.
+/// Writing the same bodies twice gives the same bytes, and the header's time stamp is empty, so
+/// the bytes do not depend on when they were written.
 #[test]
 fn writing_the_same_bodies_twice_gives_the_same_bytes() {
     let (body, _) = block();
     let bodies = [body];
-    assert_eq!(write_step("fixture", &bodies).unwrap(), write_step("fixture", &bodies).unwrap());
+    let bytes = write_step("fixture", &bodies).unwrap();
+    assert_eq!(bytes, write_step("fixture", &bodies).unwrap());
+    // FILE_NAME(name, time_stamp, ...): two writes in the same second would match even with a clock.
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(text.contains("FILE_NAME('fixture','',"), "{text}");
 }
 
 /// A panic inside or outside the kernel's own guard is `kernel_internal`, and the kernel keeps working.
@@ -84,7 +89,8 @@ fn writing_the_same_bodies_twice_gives_the_same_bytes() {
 fn a_kernel_panic_is_reported_as_kernel_internal() {
     let error = kernel_crash_test().unwrap_err();
     assert_eq!(error.code(), ErrorCode::KernelInternal);
-    assert!(error.message().starts_with("crash test: "), "{error}");
+    // solidcore's crash test panics with this text; only the panic, reported, carries it.
+    assert!(error.message().contains("an internal error in the kernel"), "{error}");
 
     // A panic outside solidcore's own session guard, as in the STEP reader, is caught here.
     let error = guard("probe", || -> Result<()> { panic!("probe failure") }).unwrap_err();
@@ -99,7 +105,7 @@ fn a_kernel_panic_is_reported_as_kernel_internal() {
 /// Bytes that are not UTF-8, text that is not STEP and an empty input are `model_unreadable`.
 #[test]
 fn unreadable_bytes_are_model_unreadable() {
-    // Each input fails one check only, and the message names that check.
+    // The message names the check that refused each input.
     let inputs: [(&[u8], &str); 3] = [
         (b"\xff\xfe\x00", "STEP text is not UTF-8"),
         (b"not a STEP file", "not a STEP file (no ISO-10303-21 header)"),
@@ -120,8 +126,9 @@ fn a_file_without_solids_reads_as_empty() {
     assert!(read.refused.is_empty());
 }
 
-/// A solid on a surface entity the reader does not know is refused alone, with its entity number:
-/// the other solid of the part is read and placed where it was written.
+/// A solid on a surface entity the reader does not know is refused alone, with its own entity
+/// number and the surface's name: the other solid of the part is read and placed where it was
+/// written.
 #[test]
 fn an_unsupported_surface_refuses_only_its_solid() {
     let (first, first_box) = block();
@@ -139,12 +146,12 @@ fn an_unsupported_surface_refuses_only_its_solid() {
     let theirs: Vec<&str> = planes.iter().copied().filter(|line| plane_origin_x_mm(&text, line) >= 20.0).collect();
     assert_eq!(theirs.len(), 6);
     let edited = text.replacen(theirs[0], &theirs[0].replacen("=PLANE(", "=UNKNOWN_SURFACE(", 1), 1);
+    let second_solid = solid_lines(&edited).into_iter().find(|s| s.2 == "Second").unwrap().0;
     let read = read_step(edited.as_bytes()).unwrap();
     assert_eq!(read.refused.len(), 1);
     assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
-    assert!(read.refused[0].message.contains("UNKNOWN_SURFACE"), "{}", read.refused[0].message);
-    assert!(read.refused[0].message.contains("not supported yet"), "{}", read.refused[0].message);
-    assert!(read.refused[0].entity > 0);
+    assert!(read.refused[0].message.contains("not supported yet: surface UNKNOWN_SURFACE"), "{}", read.refused[0].message);
+    assert_eq!(read.refused[0].entity, second_solid, "{}", read.refused[0].message);
     assert_eq!(read.bodies.len(), 1);
     assert_eq!(read.bodies[0].name(), "Block", "the solid left whole is the one read");
     assert_eq!(read.placements.len(), 1, "a refused solid is not placed");
@@ -196,7 +203,7 @@ fn bad_arguments_are_refused_before_the_kernel() {
 fn millimetre_conversion_rounds_once_to_the_nanometre() {
     assert_eq!(point_nm(point_mm([1, -2_540_001, MAX_LENGTH_NM]).unwrap()).unwrap(), [1, -2_540_001, MAX_LENGTH_NM]);
     assert_eq!(point_nm([0.000_000_4, -0.000_000_6, 1.5]).unwrap(), [0, -1, 1_500_000]);
-    for mm in [[f64::NAN, 0.0, 0.0], [2e6, 0.0, 0.0]] {
+    for mm in [[f64::NAN, 0.0, 0.0], [0.0, f64::INFINITY, 0.0], [0.0, 0.0, f64::NEG_INFINITY], [2e6, 0.0, 0.0]] {
         let error = point_nm(mm).unwrap_err();
         assert_eq!(error.code(), ErrorCode::OperationFailed, "{error}");
         assert!(error.message().contains("the kernel gave a coordinate outside the supported range"), "{error}");
@@ -393,8 +400,8 @@ fn a_surface_model_with_shells_out_of_order_reads_back_in_entity_order() {
     let (first, second) = (&solids[0], &solids[1]);
     let (low, high) = (first.1.min(second.1), first.1.max(second.1));
     // The first solid becomes an open shell of one face, and the second a surface model holding
-    // both closed shells, the higher-numbered first, and that open shell. The reader expands the
-    // model into its closed shells in that order, then the model.
+    // both closed shells, the higher-numbered first, and that open shell. The reader gives the
+    // closed shells lowest-numbered first; the first two bodies read are checked.
     let text: Vec<String> = text
         .lines()
         .map(|line| {
