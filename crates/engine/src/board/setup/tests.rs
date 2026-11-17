@@ -687,16 +687,29 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
 fn board_format_23_carries_zone_outlines() {
     for with_origin in [false, true] {
         let mut s = session(2);
-        apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+        for x_nm in [0, 25_400_000] {
+            apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":0}));
+        }
+        let symbols = s.inspect()["project"]["schematic"]["symbols"].clone();
+        assert_eq!(symbols.as_array().unwrap().len(), 2);
+        apply(
+            &mut s,
+            crate::CONNECT_PINS,
+            json!({"from":{"symbol":symbols[0]["id"],"terminal":"1"},"to":{"symbol":symbols[1]["id"],"terminal":"1"}}),
+        );
         let layer = s.project().unwrap().board_setup().unwrap().copper_stack().next().unwrap().layer;
         let nets = s.project().unwrap().inspect_net_registry().unwrap();
+        assert_eq!(nets["nets"].as_array().unwrap().len(), 1);
+        let anchor: crate::nets::Anchor = serde_json::from_value(nets["nets"][0]["anchor"].clone()).unwrap();
+        anchor.validate_form().unwrap();
+        assert_eq!(anchor.scope, s.project().unwrap().net_scope());
         apply(
             &mut s,
             crate::board::zones::ADD_ZONE,
             json!({
                 "layer":layer,
                 "points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},{"x_nm":10_000_000,"y_nm":10_000_000},{"x_nm":0,"y_nm":10_000_000}],
-                "target":{"kind":"derived","anchor":nets["nets"][0]["anchor"]}
+                "target":{"kind":"derived","anchor":anchor}
             }),
         );
         if with_origin {
