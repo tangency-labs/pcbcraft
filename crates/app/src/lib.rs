@@ -127,6 +127,8 @@ const ADD_POWER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
 const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
+const POUR_COPPER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::B);
+const REMOVE_POURS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
 const PLACE_VIA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
@@ -2023,6 +2025,13 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
                 self.start_route();
             }
+            if !self.views.active.board.editing_footprint() {
+                if pressed(&REMOVE_POURS) {
+                    self.unfill_zones();
+                } else if pressed(&POUR_COPPER) {
+                    self.refill_zones();
+                }
+            }
             if pressed(&PLACE_VIA) {
                 self.start_via();
             }
@@ -2711,6 +2720,8 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("PCB Layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB Layout", "Route track", "X".to_owned()));
     list.push(("PCB Layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
+    list.push(("PCB Layout", "Pour copper", key(&POUR_COPPER)));
+    list.push(("PCB Layout", "Remove pours", key(&REMOVE_POURS)));
     list.push(("PCB Layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB Layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB Layout", "Select connected copper", "U".to_owned()));

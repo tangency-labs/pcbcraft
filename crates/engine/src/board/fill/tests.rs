@@ -346,3 +346,72 @@ fn fill_bridges_are_visible_to_accepted_net_short_diagnostics() {
     while !job.step(7) {}
     assert_eq!(json!(job.take_report().unwrap()), report);
 }
+
+/// Explicit removal persists across authored edits/checks while revoking previously captured
+/// work; an explicit pour restores physical connections without changing saved intent/history.
+#[test]
+fn remove_pours_revokes_jobs_and_stays_unfilled_until_explicit_pour() {
+    let mut s = fixture(Connection::Solid, 0);
+    s.execute(REFILL_ZONES, &json!({})).unwrap();
+    let connected = view(&s).ratsnest().unwrap().lines.len();
+    let bytes = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let target = view(&s).target;
+    let mut old = s.prepare_zone_fill(target, true).unwrap();
+    let response = super::worker::execute(&old.worker_request().unwrap());
+    let check = s.design_check_job(&json!({})).unwrap();
+    let route = s.copper_preparation(target).unwrap();
+    let result = s.execute(UNFILL_ZONES, &json!({})).unwrap();
+    assert_eq!(result["zone_fill"]["result"]["state"], "unfilled");
+    assert!(!old.source().is_current(&s));
+    assert!(!check.source().is_current(&s));
+    assert!(!route.source().is_current(&s));
+    assert!(old.accept_worker_response(&response).is_err());
+    old.step(1);
+    assert!(old.take_result().unwrap().is_none());
+    assert!(view(&s).filled_zones().is_none());
+    assert!(view(&s).ratsnest().unwrap().lines.len() > connected);
+    assert_eq!(s.revision(), revision);
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+    let mut check = s.design_check_job(&json!({})).unwrap();
+    assert!(check.browser_zone_request().is_none());
+    while !check.step(7) {}
+    let report = check.take_report().unwrap();
+    assert!(report.counts.get(&super::super::drc::Kind::ZoneFillUnavailable).copied().unwrap_or(0) > 0);
+    assert!(!view(&s).zone_fill_enabled());
+    let zone = view(&s).zones()[0].id;
+    s.apply(super::super::zones::SET_ZONE, &json!({"zone":zone,"options":Options{priority:1,..Options::default()},"expected_revision":s.revision()}))
+        .unwrap();
+    assert!(s.prepare_zone_fill(target, false).is_err());
+    assert!(s.execute(REFILL_ZONES, &json!({"board":Uuid::nil()})).is_err());
+    assert!(!view(&s).zone_fill_enabled());
+    let before = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    assert_eq!(s.execute(REFILL_ZONES, &json!({})).unwrap()["zone_fill"]["result"]["state"], "ready");
+    assert_eq!(view(&s).ratsnest().unwrap().lines.len(), connected);
+    assert_eq!(s.revision(), revision);
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// The explicit Pour copper command clips oversize zone intent to the board's authored edge
+/// limit. A numeric boundary sample checks the 2 nm reserve beside the allowed inset.
+#[test]
+fn explicit_pour_respects_board_edge_clearance_after_removal() {
+    let mut s = fixture(Connection::Solid, 0);
+    let zone = view(&s).zones()[0].id;
+    let points = [[-8_000_000, -8_000_000], [28_000_000, -8_000_000], [28_000_000, 38_000_000], [-8_000_000, 38_000_000]]
+        .map(|[x_nm, y_nm]| Point { x_nm, y_nm });
+    s.apply(super::super::zones::SET_ZONE, &json!({"zone":zone,"points":points,"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::SET_RULES,&json!({"board":view(&s).target.board,"rules":super::super::rules::Values{edge_clearance_nm:600_000,..super::super::rules::Values::default()},"expected_revision":s.revision()})).unwrap();
+    s.execute(UNFILL_ZONES, &json!({})).unwrap();
+    s.execute(REFILL_ZONES, &json!({})).unwrap();
+    let filled = view(&s).filled_zones().unwrap().unwrap();
+    let inset = board_region(view(&s)).unwrap().offset(-600_000).unwrap();
+    assert!(!filled.zones[0].islands.is_empty());
+    for island in &filled.zones[0].islands {
+        assert!(clip(&island.region, &inset, Operation::Difference).unwrap().is_empty());
+    }
+    let material = &filled.zones[0].islands[0].region;
+    assert_eq!(material.contains([-4_400_001, 0]).unwrap(), Some(false));
+    assert_eq!(material.contains([-4_399_997, 0]).unwrap(), Some(true));
+}

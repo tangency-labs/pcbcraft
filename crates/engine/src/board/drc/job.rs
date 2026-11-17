@@ -33,10 +33,11 @@ impl Session {
         self.validate_project_command(CHECK_DESIGN, params)?;
         let (view, effective) = self.design_check_inputs(params)?;
         let target = view.target;
-        let zone_worker = if view.zones().is_empty() { None } else { Some(self.prepare_zone_fill(target, false)?) };
+        let zone_worker = if view.zones().is_empty() || !view.zone_fill_enabled() { None } else { Some(self.prepare_zone_fill(target, false)?) };
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         Ok(CheckJob {
             source: CheckSource {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 opening: self.history_root_revision(),

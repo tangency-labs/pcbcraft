@@ -11,6 +11,8 @@ pub(super) type Slot = Arc<OnceLock<Result<Arc<Fill>, String>>>;
 /// Weak allocation identities prevent ABA while allowing old project history to be released.
 #[derive(Debug, Default)]
 pub(crate) struct Cache {
+    suppressed: bool,
+    authority: Arc<()>,
     target: Option<BoardTarget>,
     board: Weak<super::super::Board>,
     components: Weak<BTreeMap<u64, crate::PartInstance>>,
@@ -32,6 +34,10 @@ impl Cache {
     }
     /// Capture a slot while holding only the short cache lock; calculation runs after release.
     fn slot(&mut self, project: &Project, refresh: bool) -> Slot {
+        if refresh {
+            self.suppressed = false;
+            self.authority = Arc::new(());
+        }
         if refresh || !self.matches(project) {
             self.target = project.board_target();
             self.board = Arc::downgrade(&project.board);
@@ -45,6 +51,10 @@ impl Cache {
     }
 }
 impl Project {
+    /// Derived pour/unfill changes invalidate read-only jobs independently of authored revision.
+    pub(crate) fn fill_authority(&self) -> Arc<()> {
+        self.board_fill.lock().unwrap_or_else(std::sync::PoisonError::into_inner).authority.clone()
+    }
     /// A slot contains no snapshot reference. An old calculation can finish into its old slot
     /// without replacing the one now addressed by a newer geometry or electrical input.
     fn fill_slot(&self, refresh: bool) -> Slot {
@@ -52,16 +62,25 @@ impl Project {
     }
 }
 impl BoardView<'_> {
+    /// Whether this board permits derived pouring. Explicit removal suppresses all automatic
+    /// and checker-driven fill until Pour copper; zone records and native bytes are untouched.
+    pub fn zone_fill_enabled(self) -> bool {
+        !self.project().board_fill.lock().unwrap_or_else(std::sync::PoisonError::into_inner).suppressed
+    }
+
     /// Inspect only already completed current-source fill; canvas calls never start calculation
     /// or wait on a worker. Failed/unavailable fill cannot provide conductive connectivity.
     pub fn filled_zones(self) -> Option<Result<Arc<Fill>, String>> {
         let cache = self.project().board_fill.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.matches(self.project()).then(|| cache.slot.get().cloned()).flatten()
+        (!cache.suppressed && cache.matches(self.project())).then(|| cache.slot.get().cloned()).flatten()
     }
 
     /// Drain the same calculation synchronously for explicit headless checking/refill. UI
     /// owners schedule FillJob instead of calling this from layout or paint.
     pub(crate) fn fill_for_check(self) -> Result<Arc<Fill>, String> {
+        if !self.zone_fill_enabled() {
+            return Err("Copper pours are removed. Use Pour copper to fill zones.".into());
+        }
         let slot = self.project().fill_slot(false);
         if let Some(result) = slot.get() {
             return result.clone();
@@ -83,6 +102,22 @@ pub struct FillJob {
     canceled: Arc<AtomicBool>,
 }
 impl Session {
+    /// Remove current derived pours and revoke in-flight fill/check/edit authority without
+    /// changing zone outlines, project bytes, revision or undo. Only an explicit pour resumes.
+    pub(crate) fn unfill_zones(&self, params: &serde_json::Value) -> Result<serde_json::Value, CommandError> {
+        self.validate_project_command(super::UNFILL_ZONES, params)?;
+        let project = self.open_project()?;
+        let target = project.resolve_board(params.get("board").and_then(serde_json::Value::as_str))?;
+        {
+            let mut cache = project.board_fill.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !cache.suppressed {
+                cache.suppressed = true;
+                cache.authority = Arc::new(());
+                cache.slot = Arc::default();
+            }
+        }
+        self.zone_fill_status(target)
+    }
     /// Record a terminal host/transport failure only for a still-current source. Ready material
     /// is never overwritten, and obsolete host work cannot poison a replacement document.
     pub fn fail_zone_fill(&self, source: &super::super::work::Source, message: String) -> bool {
@@ -102,11 +137,15 @@ impl Session {
     pub fn zone_fill_status(&self, target: BoardTarget) -> Result<serde_json::Value, CommandError> {
         let project = self.open_project()?;
         let view = project.board_view(target).ok_or_else(|| CommandError::InvalidParams("Unknown board.".into()))?;
-        let fill = match view.filled_zones() {
-            None => serde_json::json!({"state":"pending"}),
-            Some(Err(message)) => serde_json::json!({"state":"unavailable","message":message}),
-            Some(Ok(fill)) => {
-                serde_json::json!({"state":"ready","zones":fill.zones.iter().map(|z|serde_json::json!({"id":z.id,"net":z.net,"layer":z.layer,"islands":z.islands.len(),"dropped":z.dropped})).collect::<Vec<_>>(),"problems":fill.problems})
+        let fill = if !view.zone_fill_enabled() {
+            serde_json::json!({"state":"unfilled"})
+        } else {
+            match view.filled_zones() {
+                None => serde_json::json!({"state":"pending"}),
+                Some(Err(message)) => serde_json::json!({"state":"unavailable","message":message}),
+                Some(Ok(fill)) => {
+                    serde_json::json!({"state":"ready","zones":fill.zones.iter().map(|z|serde_json::json!({"id":z.id,"net":z.net,"layer":z.layer,"islands":z.islands.len(),"dropped":z.dropped})).collect::<Vec<_>>(),"problems":fill.problems})
+                }
             }
         };
         Ok(serde_json::json!({"revision":self.revision(),"zone_fill":{"board":target,"result":fill}}))
@@ -127,11 +166,15 @@ impl Session {
     pub fn prepare_zone_fill(&self, target: BoardTarget, refresh: bool) -> Result<FillJob, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("No project is open.".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("Unknown board.".into()))?;
+        if !refresh && !view.zone_fill_enabled() {
+            return Err(CommandError::Unavailable("Copper pours are removed. Use Pour copper to fill zones.".into()));
+        }
         let effective = view.effective_rules();
         let slot = snapshot.fill_slot(refresh);
         Ok(FillJob {
             worker_hash: None,
             source: super::super::work::Source {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 opening: self.history_root_revision(),
@@ -170,7 +213,7 @@ impl FillJob {
         if self.complete || budget == 0 {
             return self.complete;
         }
-        if self.canceled.load(Ordering::Acquire) {
+        if self.canceled.load(Ordering::Acquire) || !self.source.fill_current() {
             self.complete = true;
             return true;
         }
@@ -185,7 +228,7 @@ impl FillJob {
             .board_view(self.source.target)
             .ok_or_else(|| "Fill board is unavailable.".to_owned())
             .and_then(|view| super::compute_cancellable(view, Some(&self.canceled)));
-        if !self.canceled.load(Ordering::Acquire) {
+        if !self.canceled.load(Ordering::Acquire) && self.source.fill_current() {
             let _ = self.slot.set(result.clone());
             self.output = Some(result);
         }

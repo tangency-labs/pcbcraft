@@ -807,7 +807,14 @@ Open `/tmp/pcbcraft-zone-demo/project/project.json` on desktop, or upload
 `/tmp/pcbcraft-zone-demo/zone-fill.pc` in the browser. Switch to **PCB Layout**
 and choose **Fit board**. The front-copper zone connects three resistor pads with
 thermal spokes while clearing their other pads. Move a footprint or zone and
-wait for automatic refill; **Layout → Route → Refill zones** requests another
+wait for automatic refill; **Layout → Route → Pour copper** requests another
 calculation. Change the selected zone's Connection to Solid or None in Properties
 to compare pad contact and airwires. See the [zone guide](copper-zone-outlines.md)
 for checking, worker failures and current output limits.
+
+**Layout → Route → Remove pours** (Ctrl+B, or Command+B on macOS) removes the
+copper while retaining zone outlines and settings; affected airwires return.
+**Pour copper** (B) restores the fill and resumes automatic refill after edits.
+Each zone belongs to a chosen net and copper layer; other layers do not flood
+automatically. Full-board zone generation from a layer's assigned default net
+is planned in #263.

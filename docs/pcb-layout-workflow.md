@@ -166,7 +166,7 @@ This is #57.
 
 **Implemented authoring and fill.** [Copper zones](copper-zone-outlines.md)
 (#231/#232) draws and edits single-layer, net-addressed outlines and derives their
-conductive material. Automatic and explicit **Refill zones**, thermal connections,
+conductive material. Automatic and explicit **Pour copper**, thermal connections,
 priority, island filtering, connectivity/ratsnest and zone DRC share that result.
 Fabrication output remains #233; advanced policy remains #304.
 
@@ -178,7 +178,7 @@ Fabrication output remains #233; advanced policy remains #304.
 - The fill connects same-net pads with thermal spokes or a solid connection.
   Islands smaller than a minimum area are dropped.
 - Overlapping zones fill by priority.
-- A refill runs after edits, or on demand with **Refill zones**. A changed fill
+- A refill runs after edits, or on demand with **Pour copper**. A changed fill
   updates connectivity and the ratsnest.
 
 **Model and commands.**

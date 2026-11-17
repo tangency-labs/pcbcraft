@@ -1736,3 +1736,11 @@ EDA implementation, artwork or native file format was added. The existing Craft
 Route menu and status surfaces are reused through chrome; no toolkit gap required
 custom controls. Worker lifecycle code is independently authored over standard
 Web Worker APIs, with the existing native codecs retaining document authority.
+
+
+The explicit Pour copper/Remove pours commands, B/Ctrl-or-Command+B routing,
+shared derived authority and current unfilled-state handling are original
+PCBcraft work. Their behavior follows the published KiCad 9 PCB Editor manual's
+zone fill/unfill workflow, without consulting implementation sources. They
+reuse the existing shared Craft ribbon/menu rows and command host; no artwork,
+dependency, saved project vocabulary or custom control was introduced.

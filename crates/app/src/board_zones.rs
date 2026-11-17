@@ -97,11 +97,15 @@ pub(super) fn properties(
     }
     let choices = &state.zone_choices.as_ref()?.2;
     let fill = view.filled_zones();
-    let fill_status = match &fill {
-        Some(Ok(result)) if result.zones.iter().any(|z| z.id == zone.id) => "Filled copper",
-        Some(Ok(_)) => "Net unavailable",
-        Some(Err(_)) => "Fill unavailable",
-        None => "Fill pending",
+    let fill_status = if !view.zone_fill_enabled() {
+        "Unfilled"
+    } else {
+        match &fill {
+            Some(Ok(result)) if result.zones.iter().any(|z| z.id == zone.id) => "Filled copper",
+            Some(Ok(_)) => "Net unavailable",
+            Some(Err(_)) => "Fill unavailable",
+            None => "Fill pending",
+        }
     };
     properties::identity(ui, "Zone", fill_status);
     let status = view.zone_net_state(zone.net);

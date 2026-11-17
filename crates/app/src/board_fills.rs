@@ -29,6 +29,14 @@ impl std::fmt::Debug for State {
     }
 }
 impl State {
+    /// Revoke this owner's current and pending work after explicit removal, without joining.
+    fn cancel(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.requested = None;
+        self.notice = None;
+        self.queue.cancel();
+    }
+
     /// Queue a previously validated shared command without starting engine work in the UI.
     fn submit_job(&mut self, job: FillJob) {
         self.requested = Some(job.source().clone());
@@ -55,7 +63,7 @@ impl State {
 
     /// Revoke obsolete work immediately and expose only a complete result with current source
     /// authority. Capacity failures may retry; geometry failures wait for an edit or explicit refill.
-    fn poll(&mut self, session: &Session, target: Option<BoardTarget>, zones: bool) -> bool {
+    fn poll(&mut self, session: &Session, target: Option<BoardTarget>, zones: bool, ctx: &egui::Context) -> bool {
         if !zones || target.is_none() {
             if self.requested.take().is_some() {
                 self.queue.cancel();
@@ -70,6 +78,9 @@ impl State {
             && Some(completion.source.target()) == target
             && completion.source.is_current(session)
         {
+            // Canvas painting precedes this poll. Completion needs one more frame even when
+            // the queue becomes idle and authored revision did not change.
+            ctx.request_repaint();
             self.notice = completion.report.err();
             if !completion.retryable
                 && let Some(error) = &self.notice
@@ -84,6 +95,29 @@ impl State {
     }
 }
 impl crate::PcbApp {
+    /// Remove pours through the shared engine command and immediately retire every view's
+    /// in-flight work for that board. Other layers, zone outlines and authored history stay intact.
+    pub(crate) fn queue_zone_unfill(&mut self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let result = self.session.execute(pcbcraft_engine::UNFILL_ZONES, params).map_err(|e| e.to_string())?;
+        let target = self
+            .session
+            .project()
+            .ok_or("No project is open.")?
+            .resolve_board(params.get("board").and_then(serde_json::Value::as_str))
+            .map_err(|e| e.to_string())?;
+        for view in self.views.all_mut().filter(|view| view.board.target == Some(target)) {
+            view.board.fills.cancel();
+        }
+        Ok(result)
+    }
+
+    /// Remove all derived pours on the focused board, retaining selectable authored outlines.
+    pub(super) fn unfill_zones(&mut self) {
+        if let Some(target) = self.views.active.board.target {
+            self.message = self.queue_zone_unfill(&serde_json::json!({"board":target.board})).err();
+        }
+    }
+
     /// Live and GUI refill share engine validation/preparation while the view owns scheduling.
     pub(crate) fn queue_zone_refill(&mut self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
         let target = self
@@ -113,8 +147,8 @@ impl crate::PcbApp {
             if target.is_some_and(|t| !owners.insert(t)) {
                 continue;
             }
-            let zones = target.and_then(|t| self.session.project()?.board_view(t)).is_some_and(|v| !v.zones().is_empty());
-            if view.board.fills.poll(&self.session, target, zones) {
+            let zones = target.and_then(|t| self.session.project()?.board_view(t)).is_some_and(|v| !v.zones().is_empty() && v.zone_fill_enabled());
+            if view.board.fills.poll(&self.session, target, zones, ctx) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(if view.board.fills.queue.busy() { 8 } else { 250 }));
             }
         }

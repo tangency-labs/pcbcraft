@@ -52,10 +52,14 @@ identity. Choose another current net explicitly when that is the desired edit.
 ## Filling and checking
 
 Fill runs automatically after committed board or electrical edits. **Layout →
-Route → Refill zones** explicitly recalculates it. The status bar shows active
+Route → Pour copper** explicitly recalculates it. The status bar shows active
 work or a calculation failure, while zone Properties shows whether current fill
 is ready. Pending or failed fill contributes no copper; a previous revision's
-material is never displayed as current. A closed Board Outline is required.
+material is never displayed as current. A closed Board Outline is required. **Layout → Route → Remove pours** removes
+the actual derived copper while retaining zone outlines, so affected airwires
+return. It stays unfilled across edits and DRC until **Pour copper** is used again.
+B pours; Ctrl+B (Command+B on macOS) removes pours. These actions apply to all
+zones on the addressed board, each on its own assigned copper layer.
 Multiple closed outlines use the board checker's existing union interpretation.
 
 Foreign and unknown copper is cleared by the larger applicable board, object
@@ -102,9 +106,10 @@ clearance, 0.3 mm gap/spoke width, thermal connections and zero minimum area.
 An omitted `clearance_nm` within a replacement options object restores inherited
 clearance. Explicit stored null is not an alternate encoding.
 
-`pcb.refill_zones` accepts an optional explicit `board` and replaces only derived
+`pcb.unfill_zones` removes derived copper until the next explicit pour, without
+deleting zone records. `pcb.refill_zones` accepts an optional explicit `board` and replaces only derived
 fill. Headless execution completes synchronously; the live editor schedules work
-and returns its pending state. `pcb.inspect_zone_fill` reports pending, ready or
+and returns its pending state. `pcb.inspect_zone_fill` reports pending, ready, unfilled or
 unavailable without starting work. Neither command dirties native files or adds
 a document undo entry.
 

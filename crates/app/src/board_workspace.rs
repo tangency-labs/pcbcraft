@@ -280,17 +280,34 @@ impl PcbApp {
                 menu_check: None,
             },
         ];
+        let fill_shortcut = ui.ctx().format_shortcut(&crate::POUR_COPPER);
+        let unfill_shortcut = ui.ctx().format_shortcut(&crate::REMOVE_POURS);
         let planned = [
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
             RibbonTool {
                 icon: ToolIcon::Refill,
-                label: "Refill zones",
-                description: "Recalculate copper zones",
-                shortcut: "",
+                label: "Pour copper",
+                description: "Fill zone outlines with copper",
+                shortcut: &fill_shortcut,
                 enabled: enabled
                     && !editing
                     && self.session.project().and_then(|p| p.board_target().and_then(|t| p.board_view(t))).is_some_and(|v| !v.zones().is_empty()),
+                active: false,
+                menu_check: None,
+            },
+            RibbonTool {
+                icon: ToolIcon::Delete,
+                label: "Remove pours",
+                description: "Remove poured copper and keep zone outlines",
+                shortcut: &unfill_shortcut,
+                enabled: enabled
+                    && !editing
+                    && self
+                        .session
+                        .project()
+                        .and_then(|p| p.board_target().and_then(|t| p.board_view(t)))
+                        .is_some_and(|v| !v.zones().is_empty() && v.zone_fill_enabled()),
                 active: false,
                 menu_check: None,
             },
@@ -300,6 +317,7 @@ impl PcbApp {
             Some(1) => self.start_via(),
             Some(2) => self.begin_zone(),
             Some(5) => self.refill_zones(),
+            Some(6) => self.unfill_zones(),
             _ => {}
         }
     }

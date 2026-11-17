@@ -72,6 +72,9 @@ impl FillJob {
 
     /// Checkers request zone diagnostics in the same isolated execution as fill geometry.
     pub(crate) fn worker_request_with_diagnostics(&mut self, diagnostics: Option<super::super::rules::Values>) -> Result<String, String> {
+        if !self.source.fill_current() {
+            return Err("Obsolete pour request.".into());
+        }
         let documents = encode_documents(self.source.snapshot.clone())?
             .into_iter()
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(|e| e.to_string()))
@@ -98,6 +101,9 @@ impl FillJob {
             return Err("Fill worker response exceeds its bound.".into());
         }
         super::check_cancel(Some(&self.cancellation()))?;
+        if !self.source.fill_current() {
+            return Err("Obsolete pour response.".into());
+        }
         let response: Response = serde_json::from_str(response).map_err(|e| e.to_string())?;
         if response.version != 1 || self.worker_hash.as_ref() != Some(&response.source) {
             return Err("Obsolete or foreign fill worker response.".into());

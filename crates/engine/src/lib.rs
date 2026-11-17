@@ -37,7 +37,7 @@ pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFI
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
-pub use board::fill::REFILL_ZONES;
+pub use board::fill::{REFILL_ZONES, UNFILL_ZONES};
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
@@ -2182,8 +2182,14 @@ const CATALOG: &[Command] = &[
     },
     Command {
         id: REFILL_ZONES,
-        title: "Refill Zones",
+        title: "Pour Copper",
         summary: "Recalculate source-owned copper zones without changing native files, dirty state or undo. Headless execution returns ready fill; a live editor may return pending while its worker calculates.",
+        params: &[BOARD],
+    },
+    Command {
+        id: UNFILL_ZONES,
+        title: "Remove Pours",
+        summary: "Remove derived zone copper and its connections until the next explicit pour, retaining authored outlines without changing native files or undo.",
         params: &[BOARD],
     },
     Command {
@@ -3009,6 +3015,7 @@ impl Session {
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
             | REFILL_ZONES
+            | UNFILL_ZONES
             | board::fill::INSPECT_FILL
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
@@ -3185,6 +3192,9 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_plan_query(params);
         }
+        if id == UNFILL_ZONES {
+            return self.unfill_zones(params);
+        }
         if id == REFILL_ZONES {
             self.validate_project_command(id, params)?;
             return self.refill_zones(params);
@@ -3309,6 +3319,7 @@ impl Session {
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
                 | REFILL_ZONES
+                | UNFILL_ZONES
                 | board::fill::INSPECT_FILL
                 | board::class_rules::ROUTE_RULES
                 | board::route::PLAN_ROUTE
@@ -3587,6 +3598,9 @@ impl Session {
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
+            UNFILL_ZONES => {
+                self.unfill_zones(params)?;
+            }
             REFILL_ZONES => {
                 self.refill_zones(params)?;
             }

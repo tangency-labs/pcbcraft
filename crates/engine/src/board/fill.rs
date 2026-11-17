@@ -26,6 +26,8 @@ pub use cache::FillJob;
 pub const CLEARANCE_RESERVE_NM: i64 = 2;
 /// Recalculate current board copper without changing authored intent or document history.
 pub const REFILL_ZONES: &str = "pcb.refill_zones";
+/// Remove derived zone copper until an explicit pour, retaining all authored zone intent.
+pub const UNFILL_ZONES: &str = "pcb.unfill_zones";
 /// Inspect the current source's pending/ready/unavailable fill without scheduling work.
 pub const INSPECT_FILL: &str = "pcb.inspect_zone_fill";
 

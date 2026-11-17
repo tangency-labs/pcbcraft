@@ -33,3 +33,8 @@ Native window interaction, realistic-board serialization/decode costs, large
 native kernel-call cancellation latency and Wayland endurance remain unmeasured.
 Assigned-via integration (#369), routing integration (#248), class pour intent
 (#304) and zone output (#233) remain separate qualification/work.
+
+
+The [explicit pour/remove follow-up](pour-controls/README.md) records physical
+unfill/resume, board-edge acceptance, current authority, the completion-repaint
+fix and its separately bounded checks/navigation sample.
