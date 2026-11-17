@@ -72,6 +72,7 @@ const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
+const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -302,6 +303,8 @@ struct BoardDocument {
     #[serde(default, deserialize_with = "present")]
     rules: Option<crate::board::rules::Settings>,
     #[serde(default, deserialize_with = "present")]
+    placement_origin: Option<crate::board::origin::Origin>,
+    #[serde(default, deserialize_with = "present")]
     baseline: Option<crate::board::update::Baseline>,
     #[serde(default, deserialize_with = "present")]
     setup: Option<Box<serde_json::value::RawValue>>,
@@ -349,7 +352,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
 /// Reject locked tracks or vias under older board headers; board format 18 requires
 /// at least one authored track or via lock. Board format 19 requires validated rules and
-/// may also carry locks; older board headers reject the rules field.
+/// may also carry locks; older board headers reject the rules field. Board format 21
+/// requires a validated placement origin and may carry rules and every earlier field.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
@@ -760,6 +764,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         BoardDocument {
             format: BOARD_FORMAT.into(),
             rules: None,
+            placement_origin: None,
             setup: None,
             silkscreen: None,
             assignments: None,
@@ -775,9 +780,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let originated = board.format == ORIGIN_BOARD_FORMAT;
+    if originated != board.placement_origin.is_some() {
+        return Err("board.json: a placement origin requires format 21, which requires a placement origin.".into());
+    }
+    if let Some(origin) = &board.placement_origin {
+        origin.validate()?;
+    }
     let ruled = board.format == RULES_BOARD_FORMAT;
-    if ruled != board.rules.is_some() {
-        return Err("board.json: authored rules require format 19, which requires rules.".into());
+    if (ruled && board.rules.is_none()) || (!ruled && !originated && board.rules.is_some()) {
+        return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
     if let Some(rules) = &board.rules {
         rules.validate()?;
@@ -785,10 +797,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !ruled && locked != authored_locks {
+    if !ruled && !originated && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled;
+    let locked = locked || ruled || originated;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -818,6 +830,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | MULTIPAD_BOARD_FORMAT
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
+            | ORIGIN_BOARD_FORMAT
     );
     if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
@@ -833,6 +846,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | MULTIPAD_BOARD_FORMAT
                     | LOCKED_COPPER_BOARD_FORMAT
                     | RULES_BOARD_FORMAT
+                    | ORIGIN_BOARD_FORMAT
             ))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
@@ -917,6 +931,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | MULTIPAD_BOARD_FORMAT
             | LOCKED_COPPER_BOARD_FORMAT
             | RULES_BOARD_FORMAT
+            | ORIGIN_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -937,6 +952,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | MULTIPAD_BOARD_FORMAT
                 | LOCKED_COPPER_BOARD_FORMAT
                 | RULES_BOARD_FORMAT
+                | ORIGIN_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -955,8 +971,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (RULES_BOARD_FORMAT, None) => None,
+        (ORIGIN_BOARD_FORMAT | RULES_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (ORIGIN_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, None) => None,
@@ -1142,6 +1158,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     Arc::make_mut(&mut project_data.board).setup = setup;
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
     Arc::make_mut(&mut project_data.board).rules = board.rules;
+    Arc::make_mut(&mut project_data.board).placement_origin = board.placement_origin;
     Arc::make_mut(&mut project_data.board).outline = board.outline;
     for assignment in board.assignments.into_iter().flatten() {
         if !assignment.valid(project_data) || project_data.board.assignments.contains_key(&assignment.component) {
@@ -1807,7 +1824,8 @@ impl DocumentsEncoder {
 
 /// Keep legacy bytes until newer authored data requires a newer format. Locked copper
 /// uses format 18 while an authored lock exists, unless board defaults require format 19.
-/// Format 19 requires validated rules and accepts earlier physical fields. Independent
+/// Format 19 requires validated rules and accepts earlier physical fields. Format 21
+/// requires a placement origin and accepts every earlier field, including rules. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,
@@ -1834,7 +1852,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         });
 
     if let Some(setup) = setup {
-        let format = if board.rules.is_some() {
+        let format = if board.placement_origin.is_some() {
+            ORIGIN_BOARD_FORMAT
+        } else if board.rules.is_some() {
             RULES_BOARD_FORMAT
         } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
             LOCKED_COPPER_BOARD_FORMAT
@@ -1892,7 +1912,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if board.rules.is_some() {
+        let format = if board.placement_origin.is_some() {
+            ORIGIN_BOARD_FORMAT
+        } else if board.rules.is_some() {
             RULES_BOARD_FORMAT
         } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
             LOCKED_COPPER_BOARD_FORMAT
@@ -1943,6 +1965,10 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     if let Some(rules) = &board.rules {
         rules.validate()?;
         writeln!(bytes, "  \"rules\": {},", serde_json::to_string(rules).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    if let Some(origin) = &board.placement_origin {
+        origin.validate()?;
+        writeln!(bytes, "  \"placement_origin\": {},", serde_json::to_string(origin).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     if let Some(settings) = silkscreen {
         writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;

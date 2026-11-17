@@ -3,14 +3,15 @@
 //!
 //! Each copper layer, the top and bottom solder mask, paste and silkscreen, and the
 //! Board Outline get one Gerber file in millimeters with nanometer resolution (format 4.6).
-//! Plated holes (vias and through-hole pads) go in one Excellon file. Board Y grows downward on
-//! screen, so every output negates Y, giving the usual Y-up fabrication view seen from the top.
+//! Plated holes (vias and through-hole pads) go in one Excellon file. Every coordinate is written
+//! in the board's output frame: measured from its placement origin with Y up, seen from the top.
 //! Mask and paste openings follow the pad copper exactly; any expansion is left to the
 //! fabricator's process. Vias are tented (no mask opening). Bottom-side footprints put their
 //! pads on back copper, mask and paste and their silkscreen on the bottom legend. Arcs and
 //! zones are not produced yet.
 use super::{
     definition::{GraphicPurpose, PadShape},
+    origin::{Frame, Resolved},
     setup::{LayerPurpose, Side, Stratum},
     view::{BoardView, CopperLayers, PadView},
 };
@@ -39,16 +40,26 @@ pub struct Output {
     pub contents: String,
 }
 
+/// Every fabrication file of one board and the origin their coordinates are measured from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Fabrication {
+    /// The origin every coordinate in these files is measured from.
+    pub origin: Resolved,
+    /// The files in a fixed order with unique portable names.
+    pub files: Vec<Output>,
+}
+
 /// Accumulates Gerber drawing operations and the circular apertures they use.
 struct Gerber {
     apertures: BTreeMap<i64, usize>,
     body: String,
     current: Option<usize>,
+    frame: Frame,
 }
 
 impl Gerber {
-    fn new() -> Self {
-        Self { apertures: BTreeMap::new(), body: String::new(), current: None }
+    fn new(frame: Frame) -> Self {
+        Self { apertures: BTreeMap::new(), body: String::new(), current: None, frame }
     }
 
     /// Select (defining on first use) the circular aperture of this diameter.
@@ -66,12 +77,12 @@ impl Gerber {
         self.aperture(width_nm);
         let Some(first) = points.first() else { return };
         if points.len() == 1 {
-            let _ = writeln!(self.body, "{}D03*", xy(*first));
+            let _ = writeln!(self.body, "{}D03*", xy(self.frame, *first));
             return;
         }
-        let _ = writeln!(self.body, "{}D02*", xy(*first));
+        let _ = writeln!(self.body, "{}D02*", xy(self.frame, *first));
         for point in &points[1..] {
-            let _ = writeln!(self.body, "{}D01*", xy(*point));
+            let _ = writeln!(self.body, "{}D01*", xy(self.frame, *point));
         }
     }
 
@@ -79,9 +90,9 @@ impl Gerber {
     fn region(&mut self, polygon: &[Point]) {
         let Some(first) = polygon.first() else { return };
         self.body.push_str("G36*\n");
-        let _ = writeln!(self.body, "{}D02*", xy(*first));
+        let _ = writeln!(self.body, "{}D02*", xy(self.frame, *first));
         for point in polygon[1..].iter().chain(std::iter::once(first)) {
-            let _ = writeln!(self.body, "{}D01*", xy(*point));
+            let _ = writeln!(self.body, "{}D01*", xy(self.frame, *point));
         }
         self.body.push_str("G37*\n");
     }
@@ -129,14 +140,25 @@ impl Gerber {
     }
 }
 
-/// A Gerber coordinate pair in integer nanometers (format 4.6 mm), with Y pointing up.
-fn xy(point: Point) -> String {
-    format!("X{}Y{}", point.x_nm, -point.y_nm)
+/// A Gerber coordinate pair in integer nanometers (format 4.6 mm) in the output frame.
+fn xy(frame: Frame, point: Point) -> String {
+    let point = frame.to_output(point);
+    format!("X{}Y{}", point.x_nm, point.y_nm)
 }
 
 /// Millimeters with a fixed number of decimals, from nanometers.
+///
+/// Rounds in integers, with halves going up, so the rounding does not depend on where the
+/// origin is: shifting every point by a whole number of output units shifts every written
+/// value by exactly that amount. Zero is written without a sign.
 fn mm(nm: i64, decimals: usize) -> String {
-    format!("{:.*}", decimals, nm as f64 / 1_000_000.)
+    let decimals = decimals.min(6) as u32;
+    let unit = 10_i64.pow(6 - decimals);
+    let scale = 10_u64.pow(decimals);
+    let units = (nm + unit / 2).div_euclid(unit);
+    let sign = if units < 0 { "-" } else { "" };
+    let magnitude = units.unsigned_abs();
+    format!("{sign}{}.{:0width$}", magnitude / scale, magnitude % scale, width = decimals as usize)
 }
 
 /// A rectangle's outline with each corner replaced by a quarter arc of `radius`.
@@ -184,8 +206,10 @@ fn board_graphics(gerber: &mut Gerber, view: BoardView<'_>, purpose: LayerPurpos
     }
 }
 
-/// Keep file names portable: letters, digits, `-` and `_` only.
-fn file_part(text: &str) -> String {
+/// Keep file names portable: ASCII letters, digits and `-` are kept, and every other
+/// character, including spaces, dots and non-ASCII letters, becomes `_`. A name with nothing
+/// left but underscores, such as an empty one, falls back to `board`.
+pub(crate) fn file_part(text: &str) -> String {
     let cleaned: String = text.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     if cleaned.trim_matches('_').is_empty() { "board".into() } else { cleaned }
 }
@@ -209,10 +233,16 @@ fn unique_file_names(files: &mut [Output], copper_count: usize) {
 }
 
 impl BoardView<'_> {
-    /// Build every fabrication file for this board, in a fixed order. Requires a board setup
-    /// with copper layers and a closed Board Outline; returns why when either is missing.
-    /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
+    /// Build every fabrication file for this board, in a fixed order. See [`Self::fabrication`].
     pub fn fabrication_outputs(self) -> Result<Vec<Output>, String> {
+        self.fabrication().map(|fabrication| fabrication.files)
+    }
+
+    /// Build every fabrication file for this board, in a fixed order, measured from the board's
+    /// placement origin, and name that origin. Requires a board setup with copper layers and a
+    /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
+    /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
+    pub fn fabrication(self) -> Result<Fabrication, String> {
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();
         // Copper layers in physical stack order, top first.
@@ -231,6 +261,8 @@ impl BoardView<'_> {
         if !outline.iter().any(|drawing| drawing.closed) {
             return Err("Draw a closed Board Outline before generating fabrication outputs.".into());
         }
+        let origin = self.placement_origin()?;
+        let frame = origin.frame();
         let base = file_part(&self.project().name);
         let pads: Vec<PadView> = self.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.copper.is_some()).collect();
         let on =
@@ -239,7 +271,7 @@ impl BoardView<'_> {
 
         for (index, layer_id) in order.iter().enumerate() {
             let Some(layer) = copper.iter().find(|layer| layer.id == *layer_id) else { continue };
-            let mut gerber = Gerber::new();
+            let mut gerber = Gerber::new(frame);
             for pad in pads.iter().filter(|pad| on(pad, layer.id)) {
                 gerber.pad(pad);
             }
@@ -266,7 +298,7 @@ impl BoardView<'_> {
         let front = order.first().copied();
         let back = order.last().copied().filter(|_| order.len() > 1);
         for (side, label, layer) in [("Top", "Mask_Top", front), ("Bot", "Mask_Bottom", back)] {
-            let mut gerber = Gerber::new();
+            let mut gerber = Gerber::new(frame);
             for pad in pads.iter().filter(|pad| layer.is_some_and(|layer| on(pad, layer))) {
                 gerber.pad(pad);
             }
@@ -274,7 +306,7 @@ impl BoardView<'_> {
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Soldermask,{side}"), "Negative") });
         }
         for (side, label, layer) in [("Top", "Paste_Top", front), ("Bot", "Paste_Bottom", back)] {
-            let mut gerber = Gerber::new();
+            let mut gerber = Gerber::new(frame);
             for pad in pads.iter().filter(|pad| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
                 gerber.pad(pad);
             }
@@ -283,7 +315,7 @@ impl BoardView<'_> {
         }
 
         for (side, position, label) in [(Side::Front, "Top", "Silkscreen_Top"), (Side::Back, "Bot", "Silkscreen_Bottom")] {
-            let mut silk = Gerber::new();
+            let mut silk = Gerber::new(frame);
             for footprint in self.footprints() {
                 for graphic in footprint.graphics.iter().filter(|graphic| graphic.purpose == GraphicPurpose::Silkscreen && graphic.side == side) {
                     let mut points = graphic.points.clone();
@@ -297,7 +329,7 @@ impl BoardView<'_> {
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive") });
         }
 
-        let mut profile = Gerber::new();
+        let mut profile = Gerber::new(frame);
         for drawing in &outline {
             let mut points = drawing.points.clone();
             if drawing.closed {
@@ -307,13 +339,14 @@ impl BoardView<'_> {
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 
-        files.push(Output { name: format!("{base}-PTH.drl"), contents: self.drill_file() });
+        files.push(Output { name: format!("{base}-PTH.drl"), contents: self.drill_file(frame) });
         unique_file_names(&mut files, copper_count);
-        Ok(files)
+        Ok(Fabrication { origin, files })
     }
 
     /// One Excellon file for every plated hole: vias and through-hole pads, grouped by tool.
-    fn drill_file(self) -> String {
+    /// Holes are sorted in board coordinates, so moving the origin never reorders them.
+    fn drill_file(self, frame: Frame) -> String {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
             holes.entry(via.drill_nm).or_default().push(via.at);
@@ -331,8 +364,8 @@ impl BoardView<'_> {
         for (index, points) in holes.values_mut().enumerate() {
             points.sort_by_key(|point| (point.x_nm, point.y_nm));
             let _ = writeln!(text, "T{}", index + 1);
-            for point in points.iter() {
-                let _ = writeln!(text, "X{}Y{}", mm(point.x_nm, 3), mm(-point.y_nm, 3));
+            for point in points.iter().map(|point| frame.to_output(*point)) {
+                let _ = writeln!(text, "X{}Y{}", mm(point.x_nm, 3), mm(point.y_nm, 3));
             }
         }
         text.push_str("M30\n");
@@ -360,15 +393,21 @@ pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
 impl Session {
     /// Generate the addressed board's fabrication files without editing anything.
     pub fn export_fabrication(&self, params: &Value) -> Result<Vec<Output>, CommandError> {
+        self.fabrication(params).map(|fabrication| fabrication.files)
+    }
+
+    /// Generate the addressed board's fabrication files and the origin they use, without editing.
+    fn fabrication(&self, params: &Value) -> Result<Fabrication, CommandError> {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        view.fabrication_outputs().map_err(CommandError::Unavailable)
+        view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// The execute result for MCP: every file's name and text.
+    /// The execute result for MCP: every file's name and text, and the origin they use.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
-        Ok(json!({"files": self.export_fabrication(params)?}))
+        let fabrication = self.fabrication(params)?;
+        Ok(json!({"files": fabrication.files, "origin": fabrication.origin}))
     }
 }
 

@@ -356,6 +356,16 @@ draws a simplified, theme-colored version of SolidCraft's
 the PCBcraft Next launcher. The Codex and Claude Code process adapters are
 implemented in PCBCraft.
 
+The panic guard in `crates/geometry/src/guard.rs` adapts SolidCraft's `guard` in
+`crates/kernel/src/lib.rs` at `73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR
+Apache-2.0, copyright (c) 2026 SolidCraft contributors). It keeps the
+catch-and-report structure and the panic message, returns PCBcraft's
+`kernel_internal` error code and drops the per-thread depth that SolidCraft's
+crash reports use. The geometry crate's kernel-neutral API follows the same
+boundary rule as SolidCraft's `solidcraft-kernel`: no kernel type in the public
+API. The kernel dependency itself is described under
+[Solid geometry kernel](#solid-geometry-kernel).
+
 ## Adapted from PCBcraft Next
 
 PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apache-2.0. This is the independent prototype.
@@ -1645,3 +1655,18 @@ scoped qualification, accepted display snapshots and view-only copper labels for
 through chrome; annotations extend PCBcraft's existing scaled canvas-text and
 copper painters. No external EDA source, artwork, library data or dependency was
 introduced. Test projects use production commands and native codecs.
+
+## Solid geometry kernel
+
+`crates/geometry` depends on `solidcore`, `solidcore-ops` and `solidcore-step`
+from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
+`73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision already pinned for the
+Craft UI crates. Unlike the rest of SolidCraft, which is MIT OR Apache-2.0,
+these kernel crates are Apache-2.0 only, copyright (c) 2026 The solidcore
+contributors. `solidcore` is a Rust port of the SMLib and SM_API components of
+NVIDIA's [USD BRep](https://github.com/NVIDIA-Omniverse/usd-brep) (v1.0.1,
+Apache-2.0). Its `NOTICE` is retained unchanged in
+`crates/geometry/SOLIDCORE-NOTICE`; Apache-2.0 requires it to ship with
+distributed builds, so the release notices file described under
+[Dependencies](#dependencies) must include it. No kernel source is copied into
+this repository.

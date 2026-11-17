@@ -914,7 +914,9 @@ fn recent_history_records_only_successful_file_jobs() {
     let mut files = ProjectFiles::default();
     assert!(matches!(complete(&mut files, &mut session, load(&path).map(Outcome::Opened)), Some(Update::Opened)));
     let before = files.recent.to_text();
-    assert_eq!(files.recent.entries()[0].path, path);
+    // The worker records the canonical spelling, even if the temp root is a short-name alias.
+    let recorded = pcbcraft_storage::plain_path_if_equivalent(fs::canonicalize(&path).unwrap());
+    assert_eq!(files.recent.entries()[0].path, recorded);
     for outcome in [Ok(Outcome::Cancelled), Err("Failed to open".to_owned())] {
         complete(&mut files, &mut session, outcome);
         assert_eq!(files.recent.to_text(), before);
