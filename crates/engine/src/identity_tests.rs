@@ -41,6 +41,7 @@ enum Kind {
     Port,
     Net,
     NetClass,
+    PartGroup,
     FootprintInstance,
     TrackSegment,
     Arc,
@@ -60,7 +61,7 @@ enum Kind {
 }
 
 impl Kind {
-    const ALL: [Kind; 27] = [
+    const ALL: [Kind; 28] = [
         Kind::Component,
         Kind::SymbolUnit,
         Kind::Wire,
@@ -72,6 +73,7 @@ impl Kind {
         Kind::Port,
         Kind::Net,
         Kind::NetClass,
+        Kind::PartGroup,
         Kind::FootprintInstance,
         Kind::TrackSegment,
         Kind::Arc,
@@ -107,6 +109,7 @@ impl Kind {
             Kind::Port => Records(&["sheets/*:labels[]"]),
             Kind::Net => Records(&["instances.json:net_registry.records[]"]),
             Kind::NetClass => Records(&["project.json:net_classes.definitions[]"]),
+            Kind::PartGroup => Records(&["project.json:part_groups.groups[]"]),
             Kind::FootprintInstance => Records(&["board.json:footprints[]"]),
             Kind::TrackSegment => Records(&["board.json:tracks[]"]),
             Kind::Via => Records(&["board.json:vias[]"]),
@@ -149,6 +152,8 @@ const RECORDS: &[(&str, &[Form], &str)] = &[
     ("project.json:net_classes", &[Form::Owned], "net class catalog"),
     ("project.json:net_classes.definitions[]", &[Form::Uuid], "net class"),
     ("project.json:net_classes.definitions[].rules", &[Form::Owned], "net class rule values"),
+    ("project.json:part_groups", &[Form::Owned], "part group catalog"),
+    ("project.json:part_groups.groups[]", &[Form::Uuid], "part group"),
     ("project.json:parameters", &[Form::Owned], "project parameters"),
     ("sheets/*:", &[Form::Uuid], "sheet document"),
     ("sheets/*:page", &[Form::Owned], "sheet page"),
@@ -211,6 +216,7 @@ const RECORDS: &[(&str, &[Form], &str)] = &[
     ("instances.json:", &[Form::Owned], "instance document of the registered board"),
     ("instances.json:circuit_uses[]", &[Form::Uuid], "circuit use"),
     ("instances.json:sheet_occurrences[]", &[Form::Uuid], "sheet occurrence"),
+    ("instances.json:part_group_memberships[]", &[Form::Owned], "membership addressed by part instance and group"),
     ("instances.json:net_registry", &[Form::Owned], "net registry"),
     ("instances.json:net_registry.records[]", &[Form::Uuid], "net"),
     ("instances.json:net_registry.records[].state", &[Form::Owned], "net state"),
@@ -287,6 +293,9 @@ fn fixture() -> Session {
         terminal: "1".into(),
     };
     apply(&mut s, nets::SET_CLASSES, json!({"target":ClassTarget::Derived{anchor},"classes":[class]}));
+    apply(&mut s, part_groups::CREATE, json!({"name":"Analog parts"}));
+    let group = s.project().unwrap().part_groups().groups[0].id;
+    apply(&mut s, part_groups::SET_GROUPS, json!({"part_instance":part_groups::part_instance_address(component),"groups":[group]}));
 
     let net = s.project().unwrap().net_registry.records.iter().find(|r| matches!(r.state, nets::State::Active {})).unwrap().id;
     apply(
