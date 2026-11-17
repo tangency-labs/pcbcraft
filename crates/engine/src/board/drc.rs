@@ -388,15 +388,9 @@ impl BoardView<'_> {
     /// clearance from every outline segment. Penetration remains a finding at zero required
     /// clearance. Open outline paths still count as edges.
     fn check_outline(self, items: &[Item], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
-        let layers = self.layers();
-        let outline: Vec<_> = self
-            .drawings()
-            .into_iter()
-            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
-            .collect();
-        let polygons: Vec<_> = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
+        let Outline { drawn, polygons, edges } = self.outline_edges();
         if polygons.is_empty() {
-            if !items.is_empty() || !outline.is_empty() {
+            if !items.is_empty() || drawn {
                 found.push(Violation {
                     kind: Kind::NoOutline,
                     message: "The board has no closed Board Outline".into(),
@@ -407,18 +401,9 @@ impl BoardView<'_> {
             }
             return;
         }
-        let edges: Vec<(Point, Point)> = outline
-            .iter()
-            .flat_map(|drawing| {
-                let points = &drawing.points;
-                let count = if drawing.closed { points.len() } else { points.len().saturating_sub(1) };
-                (0..count).map(move |i| (points[i], points[(i + 1) % points.len()]))
-            })
-            .collect();
         for item in items {
             let rules = context.map_or(rules, |context| context.limits_for(&item.name, rules));
-            let anchors = &item.contour.core;
-            if !anchors.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon))) {
+            if !contains(&polygons, &item.contour) {
                 found.push(Violation {
                     kind: Kind::OutsideBoard,
                     message: "Copper lies outside the Board Outline".into(),
@@ -428,12 +413,7 @@ impl BoardView<'_> {
                 });
                 continue;
             }
-            let (distance, crosses) = edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
-                let distance = item.contour.gap(&Contour::capsule(*a, *b, 0.));
-                // A contained edge can have gap zero even though it enters a pad's copper.
-                let penetrates = distance < 0. || (distance == 0. && item.contour.penetrates_segment(*a, *b));
-                (best.min(distance), crosses || penetrates)
-            });
+            let (distance, crosses) = edge_gap(&edges, &item.contour);
             if crosses || distance < rules.edge_clearance_nm as f64 {
                 found.push(Violation {
                     kind: Kind::EdgeClearance,
@@ -483,6 +463,53 @@ impl BoardView<'_> {
                 }
             }
         }
+    }
+}
+
+/// The board's Board Outline drawings: closed polygons that must contain copper, and every
+/// edge, closed or open, that copper must keep its edge clearance from.
+pub(super) struct Outline {
+    /// Whether any outline drawing exists, even one that is not closed.
+    pub(super) drawn: bool,
+    pub(super) polygons: Vec<Vec<Point>>,
+    pub(super) edges: Vec<(Point, Point)>,
+}
+
+/// Whether every core anchor of the copper lies inside some closed outline polygon.
+pub(super) fn contains(polygons: &[Vec<Point>], contour: &Contour) -> bool {
+    contour.core.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon)))
+}
+
+/// The copper's smallest distance to any outline edge, and whether an edge enters its interior.
+/// A contained edge can have gap zero even though it enters a pad's copper.
+pub(super) fn edge_gap(edges: &[(Point, Point)], contour: &Contour) -> (f64, bool) {
+    edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
+        let distance = contour.gap(&Contour::capsule(*a, *b, 0.));
+        let penetrates = distance < 0. || (distance == 0. && contour.penetrates_segment(*a, *b));
+        (best.min(distance), crosses || penetrates)
+    })
+}
+
+impl BoardView<'_> {
+    /// Collect Board Outline drawings shared by DRC and route planning. Open paths contribute
+    /// edges only; closed drawings contribute a polygon and their closing edge.
+    pub(super) fn outline_edges(self) -> Outline {
+        let layers = self.layers();
+        let outline: Vec<_> = self
+            .drawings()
+            .into_iter()
+            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
+            .collect();
+        let polygons = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
+        let edges = outline
+            .iter()
+            .flat_map(|drawing| {
+                let points = &drawing.points;
+                let count = if drawing.closed { points.len() } else { points.len().saturating_sub(1) };
+                (0..count).map(move |i| (points[i], points[(i + 1) % points.len()]))
+            })
+            .collect();
+        Outline { drawn: !outline.is_empty(), polygons, edges }
     }
 }
 

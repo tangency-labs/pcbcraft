@@ -65,6 +65,7 @@ reported.
 | Pin | placed symbol plus pin number, `{"symbol":"symbol-N","terminal":"1"}` | Owner token on a counter |
 | Net | `net_registry.records[]` | UUID |
 | Net class | `project.json` `net_classes.definitions[]` | UUID |
+| Part group | `project.json` `part_groups.groups[]` | UUID |
 | Footprint instance | `board.json` `footprints[]` | Counter |
 | Pad | footprint plus pad number, `{"footprint":"footprint-N","pad":"1"}` | Owner token on a counter |
 | Track segment | `board.json` `tracks[]` | UUID |
@@ -79,8 +80,12 @@ reported.
 The stackup, its dielectric strata, circuit uses and the project itself also carry
 UUIDs. Copper strata are addressed by their layer. Wire bends, drawing vertices,
 zone vertices and fill settings, no-connect intent on pins and wire ends, package choices, accepted board
-connections, net anchors and class bindings belong to their owner and have no id
-of their own.
+connections, net anchors, class bindings and part-group memberships belong to their owner
+and have no id of their own. A part-group membership names its part instance's counter
+and its group's UUID; the display name and designator are not identity. Compact
+membership storage uses a local UUID dictionary and numeric references, expanded
+back to those same IDs before adoption; dictionary positions are not identities.
+The inventory exercises both expanded and compact instance envelopes.
 
 Pins are addressed differently by different consumers. Commands and inspection
 name a pin by its placed symbol unit, while net anchors and the accepted board

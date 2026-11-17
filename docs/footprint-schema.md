@@ -221,6 +221,52 @@ override. The whole edit validates and commits as one transaction. Physical prin
 appearance requires a native footprint definition. The legacy marker's editor
 annotation retains its earlier offset-only behavior.
 
+## Placement output conventions
+
+PCBCraft does not write a placement file yet. The engine can already compute a
+placement row for each footprint (`Frame::place`), and a placement file will use
+these rows when it is added. A row measures the footprint origin from the board's
+[placement origin](mcp.md#placement-origin), with X right and Y up as seen from
+the top. Rotation is in whole degrees from the library's zero orientation. Top-side
+rows keep that X and the board rotation. Bottom-side rows follow one of two
+conventions (`BottomSide` in the engine):
+
+| Convention | Bottom-side X | Bottom-side rotation |
+| --- | --- | --- |
+| `viewed_from_top` (default) | Same frame as top-side rows | The board rotation, counterclockwise seen from the top |
+| `viewed_from_bottom` | Negated about the placement origin | `(360 - r) mod 360`, counterclockwise seen from below |
+
+A bottom placement at board rotation `r` is the library footprint with local X
+mirrored, then turned by `r`. Read from the top, the mirror is implied by the
+side and the rotation stays positive counterclockwise, as IPC-2581 section 3.3.2
+specifies for bottom-side parts. Read from below, the X axis is reversed and the
+part is its unmirrored library footprint at the stated rotation. For example, a
+bottom part at board X 40 mm and 30 degrees, with the origin at X 10 mm, is
+written as X 30 mm at 30 degrees from the top and X -30 mm at 330 degrees from
+below. Y is the same in both. Any rotation is reduced to 0 through 359, and both
+conventions are exact within the board coordinate range.
+
+For the generic `Frame::place` calculation, the caller supplies the convention;
+the calculation neither saves a project setting nor selects an assembly output
+profile.
+
+Generic rows use `viewed_from_top`. An adopted [assembly output profile](mcp.md#assembly-output-profiles)
+names its convention and carries corrections per footprint definition, for packages
+whose output zero orientation or centroid differs from the library's, such as a
+connector whose reel orientation differs from the IPC-7351
+zero component orientation. A rotation offset `o` is counterclockwise seen from the
+component side, so it adds on top-side rows and on bottom-side rows read from below,
+and subtracts on bottom-side rows read from the top, all modulo 360. A centroid
+offset is a point of the library footprint; the profile-adjusted row reports where the board
+puts that point (mirrored and turned with the footprint, then measured in the row's
+convention) instead of the footprint origin. A +180 degree offset on a top part at
+30 degrees writes 210 degrees; on a bottom part at 30 degrees it writes 210 read
+from the top and 150 read from below. Definition-specific corrections do not affect
+other packages. The selected convention applies to every bottom-side row in that
+profile; generic rows and other profiles are unchanged. A board explicitly adopts
+an immutable project-pinned content revision; pinning a newer revision does not
+change an existing adoption.
+
 ## Semantic validation
 
 JSON Schema checks object shapes, required fields, enumerations and numeric

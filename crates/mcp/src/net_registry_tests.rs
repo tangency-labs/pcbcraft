@@ -49,6 +49,46 @@ fn net_class_commands_share_live_and_headless_revision_and_query_behavior() {
     assert!(editor.session.project().unwrap().board_target().is_none());
 }
 
+/// Part-group edits and membership reads behave the same in the live editor and headless,
+/// including queries with inspection disabled and the editor's ordinary Undo history.
+#[test]
+fn part_group_commands_share_live_and_headless_behavior() {
+    use pcbcraft_engine::part_groups as groups;
+    let mut setup = circuit(2);
+    let part_instance = setup.project().unwrap().part_instance_addresses().next().unwrap();
+    apply(&mut setup, groups::CREATE, json!({"name":"Power"}));
+    let group = setup.project().unwrap().part_groups().groups[0].id;
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut session = Session::default();
+    session.open_snapshot(snapshot.clone());
+    let mut editor = OpenEditor { session, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    for command in [groups::CREATE, groups::UPDATE, groups::REMOVE, groups::INSPECT, groups::SET_GROUPS, groups::INSPECT_GROUPS] {
+        assert!(catalog.as_array().unwrap().iter().any(|entry| entry["id"] == command));
+    }
+    let run = |editor: &mut OpenEditor, headless: &mut Headless, request: Value| {
+        let live = call_editor(editor, &json!({"method":"engine.execute","params":request})).unwrap();
+        assert_eq!(live, headless.call("engine.execute", request).unwrap());
+        live
+    };
+    let report = run(&mut editor, &mut headless, json!({"command":groups::INSPECT,"inspect":false,"params":{}}));
+    assert!(report.get("project").is_none());
+    assert_eq!(report["part_groups"]["groups"][0]["id"], json!(group));
+    let revision = editor.session.revision();
+    let edit =
+        json!({"command":groups::SET_GROUPS,"inspect":false,"params":{"part_instance":part_instance,"groups":[group],"expected_revision":revision}});
+    run(&mut editor, &mut headless, edit);
+    let query = json!({"command":groups::INSPECT_GROUPS,"inspect":false,"params":{}});
+    let report = run(&mut editor, &mut headless, query);
+    assert_eq!(report["part_instance_memberships"], json!([{"part_instance":part_instance,"groups":[group]}]));
+    call_editor(&mut editor, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(editor.session.snapshot().unwrap()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(snapshot).unwrap()
+    );
+}
+
 /// Model the real live adapter's ownership/refusal boundary without opening an OS window.
 struct OpenEditor {
     session: Session,
@@ -285,8 +325,9 @@ fn assignment_discovery_promotes_derived_targets_in_one_shared_transaction() {
     );
 }
 
-/// Scoped routing inspection and class-aware edits use the same live/headless transaction path,
-/// retain read results with inspection disabled and reject stale or weakened dimensions atomically.
+/// Scoped routing inspection, route planning and class-aware edits use the same live/headless
+/// transaction path, retain read results with inspection disabled and reject stale or weakened
+/// dimensions atomically.
 #[test]
 fn class_routing_queries_and_commits_have_live_headless_parity() {
     use pcbcraft_engine::{
@@ -333,6 +374,10 @@ fn class_routing_queries_and_commits_have_live_headless_parity() {
     let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
     assert_eq!(report, headless.call("engine.execute", query.clone()).unwrap());
     assert_eq!(report["route_rules"]["applied"]["resolution"]["values"]["preferred_track_width_nm"], 500000);
+    let plan = json!({"command":pcbcraft_engine::board::route::PLAN_ROUTE,"inspect":false,"params":{"board":board.board,"from":at,"to":{"x_nm":at.x_nm,"y_nm":at.y_nm+2000000},"layer":layer}});
+    let planned = call_editor(&mut live, &json!({"method":"engine.execute","params":plan})).unwrap();
+    assert_eq!(planned, headless.call("engine.execute", plan).unwrap());
+    assert_eq!((planned["route_plan"]["width_nm"].as_i64(), planned["route_plan"]["outcome"]["kind"].as_str()), (Some(500000), Some("reached")));
     assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
     assert_eq!(live.session.revision(), revision);
     let edit = json!({"command":pcbcraft_engine::ADD_TRACKS,"inspect":false,"params":{"board":board.board,"layer":layer,"points":[at,{"x_nm":at.x_nm,"y_nm":at.y_nm+2000000}],"expected_revision":revision}});

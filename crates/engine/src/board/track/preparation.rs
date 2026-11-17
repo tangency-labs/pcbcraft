@@ -44,6 +44,8 @@ pub struct PreparedCopperEdit {
     source: Source,
     candidate: Option<Arc<Project>>,
     command: &'static str,
+    /// The parameters the edit was prepared with, reported with it once committed.
+    params: Value,
     class_rules: Option<crate::board::class_rules::Context>,
 }
 impl PreparedCopperEdit {
@@ -131,12 +133,14 @@ impl Session {
     }
     /// Consume an engine-validated candidate in one shared history transaction. Another session,
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
+    /// A committed candidate is reported to the edit observer as its prepared command.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
         if let Some(candidate) = prepared.candidate {
             self.change((*candidate).clone())?;
+            self.report_committed(prepared.command, &prepared.params);
         }
         Ok(self.revision())
     }
@@ -200,6 +204,7 @@ impl CopperEditJob {
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
                         command: self.command,
+                        params: self.params.clone(),
                         class_rules: None,
                     }));
                     return Ok(true);
@@ -291,6 +296,7 @@ impl CopperEditJob {
                     source: self.context.source.clone(),
                     candidate: self.candidate.take(),
                     command: self.command,
+                    params: self.params.clone(),
                     class_rules,
                 }));
             }

@@ -1,6 +1,8 @@
 //! Library definitions are document workspaces, separate from project instances and history.
 mod canvas;
 pub(super) mod editing;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod export_tests;
 mod form;
 mod io;
 pub(super) mod publishing;
@@ -204,6 +206,10 @@ impl Editors {
     pub(super) fn open_picker(&mut self, ctx: &Context) -> Result<(), String> {
         self.files.start(ctx, None)
     }
+    /// Export a whole library through the same single file-job slot as item saves.
+    pub(super) fn export_library(&mut self, ctx: &Context, export: pcbcraft_engine::library::sources::Export) -> Result<(), String> {
+        self.files.start_bundle(ctx, export)
+    }
     /// Include unapplied field input in leave/close protection, independently of the project.
     pub(super) fn unsaved(&self) -> bool {
         self.publisher.unconfirmed().is_some()
@@ -304,7 +310,7 @@ impl Editors {
                 }
                 Ok("Saved library copy".into())
             }
-            Ok(io::Outcome::Exported) => Ok("Exported library item".into()),
+            Ok(io::Outcome::Exported(notice)) => Ok(notice),
             Ok(io::Outcome::Cancelled) => return,
             Err(error) => Err(error),
         };

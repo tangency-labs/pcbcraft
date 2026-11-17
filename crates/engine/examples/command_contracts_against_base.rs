@@ -1,6 +1,6 @@
 //! Compare two command contract snapshots: `command_contracts_against_base BASE.json HEAD.json`.
 //!
-//! If the pull request's merge base contains `docs/schemas/command-contracts.json`, CI compares
+//! If the pull request's target commit contains `docs/schemas/command-contracts.json`, CI compares
 //! it with the change's snapshot. A detected breaking difference requires a higher command API
 //! version. Success prints reported changes; failure prints comparison problems. Exit status
 //! is 1 for a comparison failure, 2 for unreadable input or incorrect arguments.

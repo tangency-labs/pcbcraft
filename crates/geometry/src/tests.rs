@@ -126,27 +126,50 @@ fn a_file_without_solids_reads_as_empty() {
     assert!(read.refused.is_empty());
 }
 
-/// A solid on a surface entity the reader does not know is refused with its own entity number,
-/// and the other solid of the file is still read.
+/// A solid on a surface entity the reader does not know is refused alone, with its own entity
+/// number and the surface's name: the other solid of the part is read and placed where it was
+/// written.
 #[test]
 fn an_unsupported_surface_refuses_only_its_solid() {
-    let (block, _) = block();
-    let spacer = Body::cuboid("Spacer", [20_000_000, 0, 0], [3_000_000, 3_000_000, 5_000_000]).unwrap();
-    let bytes = write_step("fixture", &[block, spacer]).unwrap();
-    // The same file with its planes intact reads both, so only the unknown surface refuses a solid.
+    let (first, first_box) = block();
+    let second_box = BoundingBox { min_nm: [20_000_000, 0, 0], max_nm: [21_000_000, 1_000_000, 1_000_000] };
+    let second = Body::cuboid("Second", second_box.min_nm, [1_000_000; 3]).unwrap();
+    let bytes = write_step("fixture", &[first, second]).unwrap();
+    // The same file with its planes intact reads, so only the unknown surface refuses the solid.
     let intact = read_step(&bytes).unwrap();
     assert_eq!((intact.bodies.len(), intact.refused.len()), (2, 0));
-    // Only the first plane, one face of the first solid written, becomes unknown.
-    let text = String::from_utf8(bytes).unwrap().replacen("=PLANE(", "=UNKNOWN_SURFACE(", 1);
-    let block_solid = solid_lines(&text).into_iter().find(|s| s.2 == "Block").unwrap().0;
-    let read = read_step(text.as_bytes()).unwrap();
-    let names: Vec<&str> = read.bodies.iter().map(Body::name).collect();
-    assert_eq!(names, ["Spacer"], "{:?}", read.refused);
+    let text = String::from_utf8(bytes).unwrap();
+    let planes: Vec<&str> = text.lines().filter(|line| line.contains("=PLANE(")).collect();
+    assert_eq!(planes.len(), 12);
+    // One face of the second solid only: the planes at x = 20 mm and beyond are its own, the
+    // block's end at 10.5 mm.
+    let theirs: Vec<&str> = planes.iter().copied().filter(|line| plane_origin_x_mm(&text, line) >= 20.0).collect();
+    assert_eq!(theirs.len(), 6);
+    let edited = text.replacen(theirs[0], &theirs[0].replacen("=PLANE(", "=UNKNOWN_SURFACE(", 1), 1);
+    let second_solid = solid_lines(&edited).into_iter().find(|s| s.2 == "Second").unwrap().0;
+    let read = read_step(edited.as_bytes()).unwrap();
     assert_eq!(read.refused.len(), 1);
-    let refusal = &read.refused[0];
-    assert_eq!(refusal.code, ErrorCode::ModelUnsupportedEntity, "{}", refusal.message);
-    assert!(refusal.message.contains("not supported yet: surface UNKNOWN_SURFACE"), "{}", refusal.message);
-    assert_eq!(refusal.entity, block_solid, "{}", refusal.message);
+    assert_eq!(read.refused[0].code, ErrorCode::ModelUnsupportedEntity, "{}", read.refused[0].message);
+    assert!(read.refused[0].message.contains("not supported yet: surface UNKNOWN_SURFACE"), "{}", read.refused[0].message);
+    assert_eq!(read.refused[0].entity, second_solid, "{}", read.refused[0].message);
+    assert_eq!(read.bodies.len(), 1);
+    assert_eq!(read.bodies[0].name(), "Block", "the solid left whole is the one read");
+    assert_eq!(read.placements.len(), 1, "a refused solid is not placed");
+    let kept = read.bounding_box().unwrap().unwrap();
+    assert!(kept.max_deviation_nm(&first_box) <= ROUND_TRIP_TOLERANCE_NM, "the block, where it was written: {kept:?}");
+    assert!(kept.max_deviation_nm(&second_box) > ROUND_TRIP_TOLERANCE_NM);
+}
+
+/// The x coordinate, in millimetres, of the origin of the plane on `line` of `text`, which writes
+/// one entity a line: `#n=PLANE('',#axis);`, `#axis=AXIS2_PLACEMENT_3D('',#point,..);` and
+/// `#point=CARTESIAN_POINT('',(x,y,z));`.
+fn plane_origin_x_mm(text: &str, line: &str) -> f64 {
+    let first_reference =
+        |line: &str| line.split_once('=').unwrap().1.split_once('#').unwrap().1.split(|c: char| !c.is_ascii_digit()).next().unwrap().to_owned();
+    let entity = |id: &str| text.lines().find(|l| l.starts_with(&format!("#{id}="))).unwrap().to_owned();
+    let axis = entity(&first_reference(line));
+    let point = entity(&first_reference(&axis));
+    point.split_once("',(").unwrap().1.split(',').next().unwrap().parse().unwrap()
 }
 
 /// Non-positive sizes, out-of-range corners and an empty write are `invalid_params`.
@@ -187,7 +210,70 @@ fn millimetre_conversion_rounds_once_to_the_nanometre() {
     }
 }
 
-/// Blocks touching either end of the coordinate range are exact, and one nanometre past is refused.
+/// A transformed copy turns and moves the body without changing the original; a flat or
+/// non-finite transform and a translation outside the coordinate range are refused.
+#[test]
+fn a_transformed_copy_moves_and_leaves_the_original() {
+    let (body, expected) = block();
+    // A quarter turn about z (x to y, y to -x), then a move.
+    let turn = Transform { axes: [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [1_000_000, 0, 5_000_000] };
+    let moved = body.transformed(&turn).unwrap();
+    assert_eq!(moved.name(), "Block");
+    let turned = BoundingBox { min_nm: [-10_500_000, -2_000_000, 5_000_000], max_nm: [-2_500_000, 10_500_000, 6_600_000] };
+    let got = moved.bounding_box().unwrap();
+    assert!(got.max_deviation_nm(&turned) <= ROUND_TRIP_TOLERANCE_NM, "{got:?}");
+    assert!(body.bounding_box().unwrap().max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM);
+
+    let flat = Transform { axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]], translation_nm: [0; 3] };
+    let refused = |transform: Transform, reason: &str| {
+        let error = body.transformed(&transform).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+        assert!(error.to_string().contains(reason), "{reason}: {error}");
+    };
+    refused(flat, "transform: the kernel refused an argument");
+    let not_finite = Transform { axes: [[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [0; 3] };
+    refused(not_finite, "a transform axis is not finite");
+    assert!(body.transformed(&Transform::translation([-MAX_LENGTH_NM, 0, MAX_LENGTH_NM])).is_ok());
+    refused(Transform::translation([MAX_LENGTH_NM + 1, 0, 0]), "a coordinate lies outside the supported range");
+    refused(Transform::translation([0, -MAX_LENGTH_NM - 1, 0]), "a coordinate lies outside the supported range");
+}
+
+/// A placement naming a body the read does not hold is `invalid_params` for the placed bodies
+/// and the box; without it the read places its body.
+#[test]
+fn a_placement_of_a_missing_body_is_refused() {
+    let (body, _) = block();
+    let mut read = read_step(&write_step("fixture", &[body]).unwrap()).unwrap();
+    read.placements.push(Placement { body: 1, transform: Transform::IDENTITY });
+    for error in [read.placed_bodies().unwrap_err(), read.bounding_box().unwrap_err()] {
+        assert_eq!(error.code(), ErrorCode::InvalidParams, "{error}");
+        assert!(error.to_string().contains("placement of body 1 out of range"), "{error}");
+    }
+    read.placements.truncate(1);
+    assert_eq!(read.placed_bodies().unwrap().len(), 1);
+}
+
+/// A body no product places is placed once by the identity; an empty file has no box.
+#[test]
+fn bodies_outside_any_assembly_are_placed_once_where_they_are() {
+    let (body, expected) = block();
+    let read = read_step(&write_step("fixture", &[body]).unwrap()).unwrap();
+    assert_eq!(read.placements, [Placement { body: 0, transform: Transform::IDENTITY }]);
+    let whole = read.bounding_box().unwrap().unwrap();
+    assert!(whole.max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM, "{whole:?}");
+    assert_eq!(read_step(b"ISO-10303-21;DATA;ENDSEC;END-ISO-10303-21;").unwrap().bounding_box().unwrap(), None);
+}
+
+/// The union of two boxes is the smallest box holding both.
+#[test]
+fn a_union_holds_both_boxes() {
+    let a = BoundingBox { min_nm: [0, -5, 2], max_nm: [10, 0, 3] };
+    let b = BoundingBox { min_nm: [-1, -2, 4], max_nm: [3, 7, 9] };
+    assert_eq!(a.union(&b), BoundingBox { min_nm: [-1, -5, 2], max_nm: [10, 7, 9] });
+}
+
+/// Blocks touching either end of the coordinate range are made with exact boxes, and a point at
+/// either end converts exactly; one nanometre past either end is refused.
 #[test]
 fn both_ends_of_the_coordinate_range_are_accepted_and_one_past_is_refused() {
     // One-millimetre blocks: a one-nanometre block a kilometre out is below the kernel's

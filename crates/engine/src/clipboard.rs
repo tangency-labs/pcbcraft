@@ -151,7 +151,8 @@ impl Fragment {
 
     /// Keep only captured sheets, their live components and exact package intent. This shared
     /// boundary excludes board placements and unrelated project assets for flat/tree captures.
-    /// Persistent net IDs stay with the source; pasted named networks receive destination IDs.
+    /// Persistent net IDs and project-owned part groups stay with the source; pasted named
+    /// networks receive destination IDs and duplicated parts start without group membership.
     /// Internal sheet remapping retains intent already qualified by the enclosing capture.
     fn captured(
         project: &Project,
@@ -164,6 +165,8 @@ impl Fragment {
         let symbols: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.ordinal)).collect();
         let mut fragment = project.clone();
         fragment.net_registry = Arc::default();
+        fragment.part_groups = Arc::default();
+        fragment.part_group_memberships = Arc::default();
         fragment.sheets = Arc::new(sheets);
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
@@ -478,6 +481,7 @@ impl Session {
 
     /// Cut only selected objects. Unselected incident routes remain at their old coordinates with
     /// shared free endpoints, so moving a component through the clipboard cannot delete other wiring.
+    /// Removed part instances lose their memberships before the candidate's native-codec validation.
     pub(crate) fn cut_schematic(&mut self, params: &Value) -> Result<(), CommandError> {
         let objects = hierarchy_objects(params.get("objects")).ok_or_else(|| invalid("invalid hierarchy object selection"))?;
         if !objects.is_empty() {
@@ -529,6 +533,7 @@ impl Session {
             }
         }
         next.prune_junctions();
+        next.prune_part_group_memberships();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         let next = validate_candidate(next)?;
         self.change(next)?;

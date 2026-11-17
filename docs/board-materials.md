@@ -141,6 +141,52 @@ display between mm and mil never rescales them. Construction edits advance the
 shared document revision but preserve net identity. A future derived-result
 cache must invalidate on changed material, construction or geometry inputs.
 
+## Copper strata and board thickness
+
+A copper stratum's `thickness_nm` is the finished conductor thickness, including
+any plating on outer layers. Two optional qualifiers sit beside it and both require
+it: `thickness_tolerance_nm`, a symmetric tolerance with the same bounds as the
+dielectric tolerance, and `thickness_basis`, which states whether the value is
+`nominal` or a guaranteed `minimum`. Without a basis the value's basis is unknown.
+Finished copper on inner layers can be thinner than the foil, so no relation
+between the two is enforced.
+
+Optional `role` is `signal`, `plane` or `mixed`. It describes how the layer is
+used and does not assign nets. Optional `base_copper` describes the foil as ordered:
+`weight_milli_oz`, the nominal weight in thousandths of an ounce per square foot
+(1000 is 1 oz, accepted from 1 to 100 000), and/or the foil `thickness_nm`. At least
+one is required. Neither is derived from the other, and neither changes the finished
+thickness. The `role` and `thickness_basis` fields accept only their listed strings,
+not singleton objects naming a variant.
+
+Base copper weight and foil thickness, copper tolerance, and the three board-thickness
+fields require parsed integer-kind numbers: decimal/exponent spellings (including `-0`)
+are refused even when JSON Schema considers their values integral, and the existing
+JSON parser does not promise lossless decimal precision.
+
+The stackup may declare the finished board thickness: `finished_thickness_nm`
+(nominal), a symmetric `finished_thickness_tolerance_nm`, which requires the
+nominal, and `declared_minimum_thickness_nm`, the lowest thickness the board is
+stated to have.
+Each thickness is a positive whole number of nanometers up to 100 mm, and a tolerance
+keeps the lower bound positive and the upper bound within 100 mm. The minimum may not
+exceed the nominal value. These are declarations: they cover plating, coatings and
+fabrication variation and are never computed from, or checked against, the laminate
+sum. `BoardSetup::board_thickness_for_checks` returns the declared minimum when
+present, otherwise the nominal value, together with its basis. Existing checks do
+not yet consume this declaration.
+
+Every field is optional and omitted means unknown; zero is never a placeholder.
+Engine accessors are `BoardSetup::copper`, `copper_stack` and
+`board_thickness_for_checks`; MCP clients read the fields from the inspected setup and
+change them with `pcb.set_board_setup`, as one undo step. `with_copper_count` and
+the Board setup copper-count control refuse to drop a copper layer carrying these
+facts; the complete setup command instead accepts an explicit replacement, subject
+to ordinary topology and occupancy validation. The two-layer starting
+stackups replace copper thickness, so they clear its tolerance, basis and base copper
+and keep roles and the board thickness. The Board setup form keeps these fields
+when it applies other edits but does not edit them yet.
+
 ## Persistence and limits
 
 Material-aware fields use `pcbcraft-board/3`. A project using only the original
@@ -150,6 +196,9 @@ Version 3 embeds all selected definitions in `board.json`; it needs no source
 library to reopen. Each material revision and each dielectric gap has a stable
 record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
+
+Copper roles, base copper, copper thickness qualifiers and finished board
+thickness use `pcbcraft-board/23` when one of them is present.
 
 Version 3 does not introduce a reusable material library, thermal expansion,
 manufacturing qualification, rule requirements, flex regions or an impedance
@@ -170,7 +219,8 @@ clearance checks and preparation actions. PCBcraft currently clips against coppe
 bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
 
 Profiles imports/exports a named `.pcsetup.json` file with format
-`pcbcraft-setup-profile/1`, an independent UUID and positive revision, a complete
+`pcbcraft-setup-profile/1`, or `/2` when the setup uses the copper and board
+thickness fields above, an independent UUID and positive revision, a complete
 validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
 material definitions, reports and references are embedded. The bounded, strict decoder
 rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.
@@ -178,9 +228,11 @@ These setup snapshots carry no required electrical/fabrication constraints or pr
 paths and do not establish a live link to their source file. Every export creates a
 new snapshot identity. Broader fabrication/process profiles remain planned.
 
-Import stages a preview. Layer IDs are rebased to the target's physical stack and
-unambiguous technical roles while extra target layers survive, preserving drawing
-ownership. Existing immutable material pins cannot be replaced by contradictory data.
+Import stages a preview. Layer IDs are rebased to the target's surviving physical
+stack and unambiguous technical roles. Extra target technical layers survive,
+preserving their drawing ownership; copper-count changes use the ordinary
+authored-stratum/removal checks. Existing immutable material pins cannot be replaced
+by contradictory data.
 Apply publishes stackup/materials/silkscreen through the shared revision-checked command,
 with one Undo; Cancel leaves the project unchanged. Export captures the current draft
 without saving or dirtying the project. Desktop publication uses an atomic new file

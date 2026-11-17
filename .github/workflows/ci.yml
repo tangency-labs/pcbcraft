@@ -68,15 +68,15 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
-          if git cat-file -e "$base:docs/schemas/command-contracts.json" 2>/dev/null; then
-            git show "$base:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
+          if git cat-file -e "$BASE_SHA:docs/schemas/command-contracts.json" 2>/dev/null; then
+            git show "$BASE_SHA:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
             cargo run --locked -q -p pcbcraft-engine --example command_contracts_against_base -- "$RUNNER_TEMP/base-command-contracts.json" docs/schemas/command-contracts.json
           else
-            echo "No command contract snapshot at the merge base; checking the first snapshot against the catalog in workspace tests."
+            echo "No command contract snapshot on the base branch; checking the first snapshot against the catalog in workspace tests."
           fi
+      - name: Test command-contract workflow baseline
+        run: python -B -m unittest discover -s scripts -p 'test_command_contract_workflow.py'
       - name: Check opt-in performance harness
         run: |
           cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
