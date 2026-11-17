@@ -369,8 +369,8 @@ pub(crate) fn schema() -> Value {
     },"required":["revision","name","provenance"],"additionalProperties":false}]})
 }
 
-/// Read JSON's integer-valued decimal spellings exactly, without comparing through floating point.
-/// Bounded profile numbers must fit i64; fractional or larger numbers remain invalid.
+/// Read integer tokens exactly, then normalize integer-valued numbers already parsed by serde_json.
+/// Conversion adds no rounding; decimal digits lost at the shared Value boundary are not recovered.
 pub(crate) fn integer(value: &Value) -> Option<i64> {
     if let Some(integer) = value.as_i64() {
         return Some(integer);

@@ -721,16 +721,16 @@ fn legacy_pin_round_trip(project: Arc<Project>) {
 fn legacy_pin_only_round_trips_flat_split_and_packed_projects() {
     use crate::persistence::{decode, decode_packed, encode};
     for bytes in [
-        include_bytes!("../../../app/tests/fixtures/two-resistors-format-1.pc").as_slice(),
-        include_bytes!("../../../app/tests/fixtures/two-resistors-format-2.pc").as_slice(),
-        include_bytes!("../../../app/tests/fixtures/two-resistors.pc").as_slice(),
+        include_bytes!("../../../../app/tests/fixtures/two-resistors-format-1.pc").as_slice(),
+        include_bytes!("../../../../app/tests/fixtures/two-resistors-format-2.pc").as_slice(),
+        include_bytes!("../../../../app/tests/fixtures/two-resistors.pc").as_slice(),
     ] {
         let project = decode(bytes).unwrap();
         assert_eq!(project.layout_root(), None);
         assert!(!project.has_sheet_occurrences());
         legacy_pin_round_trip(project);
     }
-    let old_split = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap().project;
+    let old_split = decode_packed(include_bytes!("../../../../app/tests/fixtures/split/two-resistors.pc")).unwrap().project;
     assert_eq!(old_split.layout_root(), None);
     legacy_pin_round_trip(old_split.clone());
     let mut registered = Session::default();
@@ -891,6 +891,9 @@ fn command_numeric_spellings_match_the_schema_snapshot() {
         ("9007199254740993", Some(9007199254740993)),
         ("9223372036854775806", Some(i64::MAX - 1)),
         ("9223372036854775807", Some(i64::MAX)),
+        ("9223372036854775808", None),
+        ("-9223372036854775808", Some(i64::MIN)),
+        ("-9223372036854775809", None),
         ("18446744073709551615", None),
     ] {
         assert_eq!(integer(&serde_json::from_str::<Value>(number).unwrap()), expected, "{number}");
@@ -928,6 +931,57 @@ fn command_numeric_spellings_match_the_schema_snapshot() {
         let before = s.snapshot().unwrap();
         refused_because(parse(&profile), reason);
         invalid_because(pin(&mut s, None, profile), "immutable profile content");
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+}
+
+/// Raw decimal input follows the shared Value precision; conversion never rounds a remaining fraction.
+#[test]
+fn command_numbers_use_the_shared_parsed_value_precision() {
+    let parsed = |revision: &str, rotation: &str, x: &str| {
+        serde_json::from_str::<Value>(&format!(
+            r#"{{"revision":{revision},"name":"Parsed","provenance":{{"kind":"authored"}},"corrections":[{{"library":"{LIBRARY}","definition":"resistor-0402","rotation":{rotation},"centroid":{{"x_nm":{x},"y_nm":1}}}}]}}"#
+        ))
+        .unwrap()
+    };
+    for (revision, rotation, x, expected_revision, expected_rotation, expected_x) in [
+        ("1.00000000000000000001", "90.00000000000000000001", "1e-400", 1, 90, 0),
+        ("4294967295.0000001", "359.00000000000000000001", "100000000.000000001", u32::MAX, 359, MAX_OFFSET_NM),
+        ("1e0", "-0", "-100000000.000000001", 1, 0, -MAX_OFFSET_NM),
+    ] {
+        let value = parsed(revision, rotation, x);
+        crate::ParamKind::AssemblyProfile.validate(&value).unwrap();
+        let (mut s, _) = fixture();
+        let id = Uuid::from_u128(93);
+        pin(&mut s, Some(id), value.clone()).unwrap();
+        let snapshot = s.snapshot().unwrap();
+        let content = &snapshot.assembly_profiles.revisions[0].content;
+        assert_eq!(content.revision, expected_revision);
+        assert_eq!(content.corrections[0].rotation, expected_rotation);
+        assert_eq!(content.corrections[0].centroid, Some(Point { x_nm: expected_x, y_nm: 1 }));
+        let board = snapshot.board_target().unwrap().board;
+        let mut adoption = json!({"board":board,"expected_revision":s.revision(),"profile":id,"revision":value["revision"]});
+        let preview = s.execute(PREVIEW_ASSEMBLY_PROFILE, &adoption).unwrap();
+        adoption["acceptance"] = preview["acceptance"].clone();
+        s.apply(ADOPT_ASSEMBLY_PROFILE, &adoption).unwrap();
+        assert_eq!(view(&s).assembly_profiles()[0].revision, expected_revision);
+        let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+    }
+    for (revision, rotation, x, reason) in [
+        ("1.0000000000000002", "90", "1", "expected u32"),
+        ("4294967295.000001", "90", "1", "expected u32"),
+        ("1", "90.00000000000001", "1", "expected u16"),
+        ("1", "359.99999999999999999", "1", "rotation correction"),
+        ("1", "90", "1.0000000000000002", "expected i64"),
+        ("1", "90", "100000000.00000002", "expected i64"),
+        ("1", "90", "1e-100", "expected i64"),
+    ] {
+        let (mut s, _) = fixture();
+        let before = s.snapshot().unwrap();
+        let value = parsed(revision, rotation, x);
+        refused_because(parse(&value), reason);
+        invalid_because(pin(&mut s, None, value), "immutable profile content");
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
 }

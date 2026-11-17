@@ -412,8 +412,9 @@ Optional `corrections` has one entry per `library` and footprint `definition`,
 with a `rotation` (0–359 whole degrees, counterclockwise from the component side)
 and/or a nonzero `centroid` (`x_nm`, `y_nm` in library footprint coordinates, Y
 down, each within 100 mm). Each entry must change something. Commands sort entries
-and omit zero rotation; an empty array is refused. Integer-valued JSON decimal
-spellings are accepted. Corrections apply across definition revisions; legacy
+and omit zero rotation; an empty array is refused. Integer-valued numbers already
+parsed by serde_json are accepted without further rounding. Digits beyond what
+the JSON parser keeps are not preserved. Corrections apply across definition revisions; legacy
 markers never match. See [placement conventions](footprint-schema.md#placement-output-conventions).
 
 An existing ID and content revision is a no-op only for identical content;
