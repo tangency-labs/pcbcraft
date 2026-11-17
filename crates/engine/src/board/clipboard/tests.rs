@@ -44,6 +44,7 @@ fn all(s: &Session) -> BoardSelection {
         drawings: board.drawings().iter().map(|d| d.id).collect(),
         tracks: board.tracks().iter().map(|t| t.id).collect(),
         vias: board.vias().iter().map(|v| v.id).collect(),
+        zones: board.zones().iter().map(|z| z.id).collect(),
     }
 }
 /// Submit a duplicate at a distinct physical and schematic anchor with explicit source-sheet mapping.

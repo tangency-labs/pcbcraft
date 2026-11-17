@@ -674,34 +674,60 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
 #[cfg(test)]
 mod net_label_tests;
 
-/// Light screen-space hatching distinguishes zone intent from conductive fill. Scan conversion
-/// clips the work to the viewport and pairs intersections, supporting concave outlines.
+/// Short diagonal strokes at the real polygon boundary distinguish zone intent from fill.
+/// Screen-space spacing stays stable while panning; viewport clipping never creates fake edges.
 pub fn zone_hatch(p: &Painter, points: &[Pos2], color: Color32) {
+    zone_hatch_segments(points, p.clip_rect(), |segment| {
+        p.line_segment(segment, Stroke::new(0.7, color.gamma_multiply(0.5)));
+    });
+}
+
+/// Scan globally phased 45-degree lines through the polygon, retaining only bounded end strokes.
+/// Pairing half-open edge intersections handles concavity and either winding. Work is bounded
+/// by the visible diagonal range and 512 scan lines, independently of offscreen polygon area.
+fn zone_hatch_segments(points: &[Pos2], clip: Rect, mut emit: impl FnMut([Pos2; 2])) {
+    const SPACING: f32 = 18.;
+    const LENGTH: f32 = 18.;
     if points.len() < 3 {
         return;
     }
-    let bounds = Rect::from_points(points).intersect(p.clip_rect());
+    let bounds = Rect::from_points(points).intersect(clip.expand(LENGTH));
     if !bounds.is_positive() {
         return;
     }
-    let spacing = 12.0_f32;
-    let lines = ((bounds.height() / spacing).ceil() as usize).min(512);
-    for index in 0..lines {
-        let y = bounds.top() + index as f32 * spacing;
-        let mut xs: Vec<f32> = points
-            .iter()
-            .zip(points.iter().cycle().skip(1))
-            .take(points.len())
-            .filter(|(a, b)| (a.y <= y && b.y > y) || (b.y <= y && a.y > y))
-            .map(|(a, b)| a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y))
-            .collect();
-        xs.sort_by(f32::total_cmp);
-        for pair in xs.as_chunks::<2>().0 {
-            let a = pair[0].max(bounds.left());
-            let b = pair[1].min(bounds.right());
-            if a < b {
-                p.line_segment([egui::pos2(a, y), egui::pos2(b, y)], Stroke::new(0.7, color.gamma_multiply(0.3)));
+    let first = ((bounds.left() + bounds.top()) / SPACING).floor() * SPACING;
+    let count = (((bounds.right() + bounds.bottom() - first) / SPACING).ceil() as usize).min(512);
+    let mut intersections = Vec::with_capacity(points.len());
+    for index in 0..count {
+        let diagonal = first + index as f32 * SPACING;
+        intersections.clear();
+        for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len()) {
+            let (start, end) = (a.x + a.y, b.x + b.y);
+            if (start <= diagonal && end > diagonal) || (end <= diagonal && start > diagonal) {
+                intersections.push(a.x + (diagonal - start) * (b.x - a.x) / (end - start));
+            }
+        }
+        intersections.sort_by(f32::total_cmp);
+        for pair in intersections.as_chunks::<2>().0 {
+            let a = egui::pos2(pair[0], diagonal - pair[0]);
+            let b = egui::pos2(pair[1], diagonal - pair[1]);
+            let delta = b - a;
+            let length = delta.length();
+            if length <= 2. * LENGTH {
+                if Rect::from_two_pos(a, b).intersects(clip) {
+                    emit([a, b]);
+                }
+            } else {
+                let stub = delta * (LENGTH / length);
+                for segment in [[a, a + stub], [b - stub, b]] {
+                    if Rect::from_two_pos(segment[0], segment[1]).intersects(clip) {
+                        emit(segment);
+                    }
+                }
             }
         }
     }
 }
+
+#[cfg(test)]
+mod zone_hatch_tests;

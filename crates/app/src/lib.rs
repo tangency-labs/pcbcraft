@@ -1957,11 +1957,7 @@ impl PcbApp {
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
                 if !board_clipboard::busy(&self.views.active.board) {
-                    if self.views.active.board.zones.selected.is_some() {
-                        self.views.active.board.zones.delete_requested = true;
-                    } else {
-                        self.delete_board_items();
-                    }
+                    self.delete_board_items();
                 } else if !self.views.active.board.tracks.selected.is_empty() {
                     self.views.active.board.tracks.delete_requested = true;
                 } else if self.views.active.board.zones.selected.is_some() {

@@ -1682,3 +1682,8 @@ and text controls through chrome. No external EDA source, artwork, library asset
 or new dependency was incorporated. No toolkit gap required custom interface
 presentation; the hatch is original PCB geometry. Fill and zone output remain
 separate work.
+
+The boundary-hatch follow-up uses @travle1's supplied KiCad screenshot only as
+a black-box appearance reference. Its bounded diagonal scan conversion and
+shared modifier/marquee selection integration are independently authored
+PCBcraft code; no external implementation or artwork was incorporated.

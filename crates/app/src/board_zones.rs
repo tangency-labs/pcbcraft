@@ -225,6 +225,7 @@ struct Scalar {
     pass: u64,
 }
 /// Reuse the shared text control for priority and mm² area, preserving exact untouched model values.
+/// Focus-lock Escape belongs to the field so cancellation cannot commit or clear canvas selection.
 fn scalar(ui: &mut egui::Ui, label: &str, zone: uuid::Uuid, model: u64, scale: u64, max: u64, revision: u64) -> Option<u64> {
     let id = ui.scope_id().with((label, zone));
     let pass = ui.ctx().cumulative_pass_nr();
@@ -236,7 +237,12 @@ fn scalar(ui: &mut egui::Ui, label: &str, zone: uuid::Uuid, model: u64, scale: u
     let response = controls::text(ui, &mut draft.text).accessible_name(label);
     draft.edited |= response.changed();
     let mut result = None;
-    if response.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    let escaped = response.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    if response.has_focus() && !escaped {
+        let filter = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, ..Default::default() };
+        ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, filter));
+    }
+    if escaped {
         response.surrender_focus();
         draft = fresh();
     } else if response.lost_focus() && draft.edited && draft.text != shown {

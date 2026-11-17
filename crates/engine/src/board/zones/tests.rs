@@ -41,6 +41,60 @@ fn points() -> Vec<Point> {
         Point { x_nm: 0, y_nm: 10_000_000 },
     ]
 }
+
+/// Mixed deletion publishes once, while refused zone references and unsupported copy preserve all objects.
+#[test]
+fn mixed_zone_selection_deletes_atomically_and_refuses_partial_copy() {
+    use crate::board::clipboard::{BoardSelection, COPY, CUT, DELETE};
+    let mut s = fixture();
+    for _ in 0..2 {
+        let params = add_params(&s);
+        edit(&mut s, ADD_ZONE, params).unwrap();
+    }
+    let layer = s
+        .project()
+        .unwrap()
+        .board_view(s.project().unwrap().board_target().unwrap())
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|l| l.purpose == crate::board::setup::LayerPurpose::Silkscreen)
+        .unwrap()
+        .id;
+    edit(&mut s, crate::ADD_DRAWING, json!({"layer":layer,"points":points(),"closed":true,"stroke_nm":150_000})).unwrap();
+    let p = s.snapshot().unwrap();
+    let view = p.board_view(p.board_target().unwrap()).unwrap();
+    let selection = BoardSelection {
+        zones: view.zones().iter().take(1).map(|z| z.id).collect(),
+        drawings: view.drawings().iter().map(|d| d.id).collect(),
+        ..Default::default()
+    };
+    let before = encode_documents(p.clone()).unwrap();
+    let mut malformed = p.as_ref().clone();
+    Arc::make_mut(&mut malformed.board).zones[0].points = vec![Point { x_nm: 0, y_nm: 0 }];
+    assert!(crate::clipboard::validate_candidate(malformed).is_err());
+    let revision = s.revision();
+    let mut invalid = selection.clone();
+    invalid.zones.insert(Uuid::nil());
+    for command in [COPY, CUT, DELETE] {
+        let params = json!({"items":if command==DELETE {&invalid}else{&selection},"expected_revision":s.revision()});
+        assert!(s.execute(command, &params).is_err());
+        assert_eq!(s.revision(), revision);
+        assert!(Arc::ptr_eq(&p, &s.snapshot().unwrap()));
+    }
+    for value in [json!({"zones":[Uuid::nil(),Uuid::nil()]}), json!({"zones":vec![Uuid::nil();MAX_ZONES+1]})] {
+        assert!(BoardSelection::parse(&value).is_none());
+    }
+    s.apply(DELETE, &json!({"items":selection,"expected_revision":revision})).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(s.project().unwrap().board.zones.len(), 1);
+    assert!(s.project().unwrap().board_view(s.project().unwrap().board_target().unwrap()).unwrap().drawings().is_empty());
+    let after = encode_documents(s.snapshot().unwrap()).unwrap();
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
+}
 fn add_params(s: &Session) -> Value {
     let p = s.project().unwrap();
     let board = p.board_view(p.board_target().unwrap()).unwrap();

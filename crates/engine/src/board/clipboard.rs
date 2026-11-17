@@ -41,6 +41,9 @@ pub struct BoardSelection {
     #[serde(default)]
     /// Board graphic UUIDs.
     pub drawings: BTreeSet<Uuid>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    /// Authored zone UUIDs; selectable and deletable, but not yet portable clipboard content.
+    pub zones: BTreeSet<Uuid>,
     #[serde(default)]
     /// Copper track segment UUIDs.
     pub tracks: BTreeSet<Uuid>,
@@ -51,7 +54,7 @@ pub struct BoardSelection {
 impl BoardSelection {
     /// Count selected physical objects independently of their owning components.
     pub fn len(&self) -> usize {
-        self.footprints.len() + self.drawings.len() + self.tracks.len() + self.vias.len()
+        self.footprints.len() + self.drawings.len() + self.zones.len() + self.tracks.len() + self.vias.len()
     }
     /// Whether the selection contains no physical objects.
     pub fn is_empty(&self) -> bool {
@@ -63,6 +66,7 @@ impl BoardSelection {
         for (key, count, limit) in [
             ("footprints", selection.footprints.len(), 4096),
             ("drawings", selection.drawings.len(), 512),
+            ("zones", selection.zones.len(), super::zones::MAX_ZONES),
             ("tracks", selection.tracks.len(), super::track::MAX_TRACKS),
             ("vias", selection.vias.len(), super::track::MAX_VIAS),
         ] {
@@ -331,7 +335,11 @@ fn circuit_selection(project: &Project, components: &BTreeSet<u64>) -> Selection
 impl BoardFragment {
     /// Capture selected physical objects plus their exact placed packages and closed logical
     /// component scope. Circuit fragments retain source sheet identities; no flattening is implicit.
+    /// Selections containing zones are refused in full until their clipboard format is supported.
     pub fn capture(project: &Project, selection: &BoardSelection, cut: bool) -> Result<Self, CommandError> {
+        if !selection.zones.is_empty() {
+            return Err(invalid("Zone clipboard copying is not supported yet. Deselect zones before copying or cutting."));
+        }
         let target = project.resolve_board(None)?;
         let view = project.board_view(target).ok_or_else(|| invalid("board unavailable"))?;
         let footprints: Vec<_> =
@@ -870,6 +878,12 @@ impl Session {
         }
         for drawing in selection.drawings {
             transaction.apply(crate::DELETE_DRAWING, &json!({"board":target.board,"drawing":drawing,"expected_revision":transaction.revision()}))?;
+        }
+        if !selection.zones.is_empty() {
+            transaction.apply(
+                super::zones::DELETE_ZONES,
+                &json!({"board":target.board,"zones":selection.zones,"expected_revision":transaction.revision()}),
+            )?;
         }
         let next = transaction.open_project()?.clone();
         let next = crate::clipboard::validate_candidate(next)?;

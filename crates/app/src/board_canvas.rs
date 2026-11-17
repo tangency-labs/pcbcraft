@@ -193,6 +193,7 @@ pub(super) fn show(
     }
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
+    let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
     let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
     let reference_press = response.contains_pointer()
         && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary))
@@ -340,24 +341,25 @@ pub(super) fn show(
         reference_pick,
         ..Interaction::default()
     };
-    if (edge.consumed || route.consumed || zone.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some()) {
+    if !extend_selection && (edge.consumed || route.consumed || zone.consumed) && (!state.selection.is_empty() || state.reference.selected.is_some())
+    {
         out.selection = Some(BTreeSet::new());
     }
-    if zone.consumed {
+    if zone.consumed && !extend_selection {
         state.drawing.select(None);
         state.tracks.selected.clear();
     }
-    if route.consumed || edge.consumed {
+    if !extend_selection && (route.consumed || edge.consumed) {
         state.zones.select(None);
     }
-    if route.consumed {
+    if route.consumed && !extend_selection {
         state.drawing.select(None);
     }
     // A via moved the route to another copper layer; follow it without cancelling the route.
     if let Some(layer) = route.switch_layer {
         state.active_layer = Some(layer);
     }
-    if edge.consumed {
+    if edge.consumed && !extend_selection {
         state.tracks.selected.clear();
     }
     if !enabled || state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source) {
@@ -398,12 +400,7 @@ pub(super) fn show(
         state.box_drag = Some(BoxDrag {
             source,
             start,
-            base: pcbcraft_engine::board::clipboard::BoardSelection {
-                footprints: state.selection.clone(),
-                drawings: state.drawing.selection(),
-                tracks: state.tracks.selected.iter().filter(|id| !project.vias().iter().any(|v| v.id == **id)).copied().collect(),
-                vias: state.tracks.selected.iter().filter(|id| project.vias().iter().any(|v| v.id == **id)).copied().collect(),
-            },
+            base: crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id)),
             add: modifiers.shift,
             toggle: modifiers.ctrl || modifiers.command,
             button: if box_with_secondary { PointerButton::Secondary } else { PointerButton::Primary },
@@ -483,7 +480,13 @@ pub(super) fn show(
                     selection.insert(footprint.id.clone());
                 }
             }
-            out.selection = Some(selection);
+            if extend_selection {
+                let mut items = crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id));
+                items.footprints = selection;
+                out.items = Some(items);
+            } else {
+                out.selection = Some(selection);
+            }
         }
     }
     let p = ui.painter().with_clip_rect(rect);
@@ -662,14 +665,15 @@ pub(super) fn show(
         response.context_menu(|ui| {
             use crate::board_clipboard::Action;
             use pcbcraft_chrome::menu::MenuItem;
-            let selected = !state.selection.is_empty() || !state.tracks.selected.is_empty() || !state.drawing.selection().is_empty();
+            let zones = !state.zones.selection().is_empty();
+            let portable = !zones && (!state.selection.is_empty() || !state.tracks.selected.is_empty() || !state.drawing.selection().is_empty());
             out.clipboard = [
-                ("Copy", "Ctrl+C", Action::Copy, selected),
-                ("Cut", "Ctrl+X", Action::Cut, selected),
+                ("Copy", "Ctrl+C", Action::Copy, portable),
+                ("Cut", "Ctrl+X", Action::Cut, portable),
                 ("Paste", "Ctrl+V", Action::Paste, true),
                 ("Paste Options…", "Ctrl+Shift+V", Action::Options, true),
-                ("Duplicate", "Ctrl+D", Action::Duplicate, selected),
-                ("Delete", "Del", Action::Delete, selected),
+                ("Duplicate", "Ctrl+D", Action::Duplicate, portable),
+                ("Delete", "Del", Action::Delete, portable || zones),
                 ("Select all", "Ctrl+A", Action::SelectAll, true),
             ]
             .into_iter()
@@ -1037,7 +1041,7 @@ fn segment_in_box(a: egui::Pos2, b: egui::Pos2, window: egui::Rect) -> bool {
     true
 }
 
-/// Copper and graphic marquee hits follow physical strokes and via circles, respecting hidden layers
+/// Copper, zone and graphic marquee hits follow physical strokes and via circles, respecting hidden layers
 /// and category filters. A containment box requires the complete object; crossing needs one contact.
 #[allow(clippy::too_many_arguments)]
 fn geometry_for_box(
@@ -1075,6 +1079,13 @@ fn geometry_for_box(
         .filter(|t| stroke(vec![camera.screen(t.start, rect), camera.screen(t.end, rect)], false, radius(t.width_nm)))
         .map(|t| t.id)
         .collect();
+    let zones = project
+        .zones()
+        .iter()
+        .filter(|z| filters.zones && !state.hidden_layers.contains(&z.layer.to_string()))
+        .filter(|z| stroke(z.points.iter().map(|p| camera.screen(*p, rect)).collect(), true, 0.))
+        .map(|z| z.id)
+        .collect();
     let visible_copper = project.layers().iter().any(|l| l.purpose == LayerPurpose::Copper && !state.hidden_layers.contains(&l.id.to_string()));
     let vias = project
         .vias()
@@ -1091,7 +1102,7 @@ fn geometry_for_box(
         })
         .map(|v| v.id)
         .collect();
-    BoardSelection { drawings, tracks, vias, ..Default::default() }
+    BoardSelection { drawings, zones, tracks, vias, ..Default::default() }
 }
 
 /// Select every visible supported physical object through the same geometry/category policy as
@@ -1142,6 +1153,7 @@ fn combine_box(
     pcbcraft_engine::board::clipboard::BoardSelection {
         footprints: combine(&base.footprints, hits.footprints, add, toggle),
         drawings: combine(&base.drawings, hits.drawings, add, toggle),
+        zones: combine(&base.zones, hits.zones, add, toggle),
         tracks: combine(&base.tracks, hits.tracks, add, toggle),
         vias: combine(&base.vias, hits.vias, add, toggle),
     }

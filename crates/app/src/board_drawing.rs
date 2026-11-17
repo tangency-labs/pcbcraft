@@ -247,7 +247,10 @@ pub(super) fn interact(
     if state.selected.as_ref().is_some_and(|id| !drawings.iter().any(|drawing| drawing.id.to_string() == *id)) {
         state.select(None);
     }
-    state.selected_many.retain(|id| drawings.iter().any(|drawing| drawing.id == *id));
+    if !state.selected_many.is_empty() {
+        state.selected_many.retain(|id| drawings.iter().any(|drawing| drawing.id == *id));
+        state.selected = if state.selected_many.len() == 1 { state.selected_many.first().map(ToString::to_string) } else { None };
+    }
     if state.edit.as_ref().is_some_and(|edit| hidden.contains(&edit.drawing.layer.to_string())) {
         state.cancel();
     }
@@ -359,7 +362,9 @@ pub(super) fn interact(
     if !selectable {
         return out;
     }
-    if state.edit.is_none() && (response.drag_started_by(PointerButton::Primary) || (move_requested && selected.is_some())) {
+    let modifiers = ui.input(|input| input.modifiers);
+    let extend = modifiers.shift || modifiers.ctrl || modifiers.command;
+    if state.edit.is_none() && ((!extend && response.drag_started_by(PointerButton::Primary)) || (move_requested && selected.is_some())) {
         let origin = if move_requested {
             pointer
                 .filter(|point| rect.contains(*point))
@@ -423,11 +428,20 @@ pub(super) fn interact(
             state.edit = None;
         }
     } else if response.clicked() {
-        let selected = pointer
-            .and_then(|pointer| drawings.iter().rev().find(|drawing| hit(pointer, camera, rect, drawing)))
-            .map(|drawing| drawing.id.to_string());
-        state.select(selected);
-        out.consumed = state.selected.is_some();
+        let selected =
+            pointer.and_then(|pointer| drawings.iter().rev().find(|drawing| hit(pointer, camera, rect, drawing))).map(|drawing| drawing.id);
+        if extend {
+            if let Some(id) = selected {
+                let mut selection = state.selection();
+                if !(modifiers.ctrl || modifiers.command) || !selection.remove(&id) {
+                    selection.insert(id);
+                }
+                state.select_many(selection);
+            }
+        } else {
+            state.select(selected.map(|id| id.to_string()));
+        }
+        out.consumed = selected.is_some();
     }
     out
 }

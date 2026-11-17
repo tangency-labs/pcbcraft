@@ -66,10 +66,15 @@ pub(super) struct Options {
 /// Collect editing selections, never correspondence highlights. Unknown copper identities remain
 /// in the request so validation fails rather than silently omitting a stale selected object.
 pub(super) fn selection(state: &BoardState, project: &Project) -> BoardSelection {
-    let vias: BTreeSet<_> = state.target.and_then(|t| project.board_view(t)).into_iter().flat_map(|b| b.vias().iter().map(|v| v.id)).collect();
+    selection_with_vias(state, state.target.and_then(|t| project.board_view(t)).into_iter().flat_map(|b| b.vias().iter().map(|v| v.id)))
+}
+/// Classify copper IDs from the addressed view without granting highlights editing authority.
+pub(super) fn selection_with_vias(state: &BoardState, vias: impl IntoIterator<Item = Uuid>) -> BoardSelection {
+    let vias: BTreeSet<_> = vias.into_iter().collect();
     BoardSelection {
         footprints: state.selection.clone(),
         drawings: state.drawing.selection(),
+        zones: state.zones.selection(),
         tracks: state.tracks.selected.difference(&vias).copied().collect(),
         vias: state.tracks.selected.intersection(&vias).copied().collect(),
     }
@@ -428,6 +433,7 @@ impl PcbApp {
             drawings: board.drawings().iter().map(|d| d.id).filter(|id| !drawings.contains(id)).collect(),
             tracks: board.tracks().iter().map(|t| t.id).filter(|id| !tracks.contains(id)).collect(),
             vias: board.vias().iter().map(|v| v.id).filter(|id| !vias.contains(id)).collect(),
+            ..Default::default()
         };
         if let Ok(mapping) = placement.fragment.layer_mapping(self.session.project().ok_or("Project unavailable.")?, &o.layers) {
             for layer in mapping.values() {
@@ -440,8 +446,8 @@ impl PcbApp {
     }
     /// Apply one mixed editing selection after correspondence handling has cleared old categories.
     pub(super) fn select_board_items(&mut self, selected: BoardSelection) {
-        self.views.active.board.zones.select(None);
         self.views.select_board(selected.footprints, &self.session, self.preferences.selection_follow);
+        self.views.active.board.zones.select_many(selected.zones);
         self.views.active.board.drawing.select_many(selected.drawings);
         self.views.active.board.tracks.selected = selected.tracks.union(&selected.vias).copied().collect();
     }

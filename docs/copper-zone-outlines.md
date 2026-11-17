@@ -26,6 +26,11 @@ zone; Undo and Redo restore its authored records. Hiding its layer or turning of
 **Selection filters → Zones** prevents picking it and cancels pending edits.
 Zone outlines use the Board Outline gesture implementation, while their shared
 commands store zone intent rather than graphics or tracks.
+Ctrl/Command-click toggles individual zones and Shift-click adds them to the
+selection. A left-to-right box contains whole outlines; a right-to-left box
+crosses their edges. Zones can join a mixed board selection, and Delete removes
+the complete selection in one undo step. Hatch marks are short diagonal strokes
+along the boundary, leaving the interior clear.
 
 With a zone selected, **Properties** edits its net, copper layer, priority,
 clearance override, thermal gap, spoke width, connection style and minimum island
@@ -75,5 +80,5 @@ vertices per zone. Closure is implicit, area must be nonzero and edges must not
 self-intersect or touch. Priority is 0–1000. Clearance overrides, thermal gaps
 and spoke widths are 10 µm–10 mm, and minimum island area is 0–1 m². Layer UUIDs
 must name copper on the owning board, and net UUIDs must exist in its registry.
-Zone clipboard duplication and mixed-category marquee selection remain outside
-this outline-authoring slice.
+Zone clipboard copying and duplication remain outside this slice; a selection
+containing zones is refused as a whole rather than copying or cutting a subset.

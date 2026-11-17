@@ -199,6 +199,11 @@ transactions as PCB Layout. A derived typed net target is promoted in the same
 undo step as creation; inspection reports authored zone records and current net
 identity state. These commands do not create conductive fill.
 
+`pcb.delete_items` also accepts zone UUIDs in `items.zones` and deletes mixed
+board selections in one transaction. Copy, Cut and Duplicate refuse a selection
+containing zones until zone clipboard support is available; they never omit the
+zones and operate on a subset.
+
 `pcb.add_drawing`, `pcb.set_drawing` and `pcb.delete_drawing` use the same
 transactions as canvas Board Outline editing. Each takes `board` and
 `expected_revision`; creation also takes a `layer` UUID, ordered `points`

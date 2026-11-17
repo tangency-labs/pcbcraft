@@ -141,6 +141,43 @@ fn zone_properties_edit_the_shared_options() {
     assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().zones()[0].options.priority, 7);
 }
 
+/// Escape belongs to each scalar field; it discards text and leaves the zone selected.
+#[test]
+fn zone_scalar_escape_discards_without_clearing_selection() {
+    for (field, value) in [("Priority", "7"), ("Minimum island area", "0.25")] {
+        let mut h = fixture();
+        draw(&mut h, true);
+        let edge = at(&h, 5_080_000, 0);
+        click_canvas_at(&mut h, edge);
+        h.state_mut().views.active.board.properties_collapsed = false;
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, field).scroll_to_me();
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.get_by_role_and_label(Role::TextInput, field).click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.get_by_role_and_label(Role::TextInput, field).type_text(value);
+        h.run();
+        h.key_press(Key::Escape);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision, "{field}");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        assert!(h.state().views.active.board.zones.selected.is_some());
+        h.get_by_role_and_label(Role::TextInput, field).click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.get_by_role_and_label(Role::TextInput, field).type_text(value);
+        h.key_press(Key::Enter);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision + 1);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// Net, layer and connection choices each commit once, while Escape preserves exact bytes.
 #[test]
 fn zone_properties_choices_commit_and_restore_exact_history() {
@@ -332,4 +369,169 @@ fn zone_extents_are_included_in_fit() {
     for point in points {
         assert!(rect.contains(at(&h, point.x_nm, point.y_nm)));
     }
+}
+
+/// Separate authored rectangles expose real click and box selection without overlapping targets.
+fn two_zones() -> Harness<'static, PcbApp> {
+    let mut h = fixture();
+    draw(&mut h, true);
+    let zone = h.state().session.project().unwrap().boards().next().unwrap().zones()[0].clone();
+    let points: Vec<_> = zone.points.iter().map(|p| Point { x_nm: p.x_nm - 20_320_000, y_nm: p.y_nm }).collect();
+    run(&mut h, pcbcraft_engine::board::zones::SET_ZONE, json!({"zone":zone.id,"points":points}));
+    h.run();
+    draw(&mut h, true);
+    h
+}
+
+/// Preserve modifiers for the whole native-style press/release pair, then restore ordinary input.
+fn zone_click(h: &mut Harness<'_, PcbApp>, point: egui::Pos2, modifiers: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.event(egui::Event::PointerMoved(point));
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers });
+        h.run();
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+}
+
+/// The canvas owns a directional window from press through release, including modifier state.
+fn zone_box(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.run();
+    h.event(egui::Event::PointerMoved(from + (to - from) * 0.5));
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.run();
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+}
+
+/// Ctrl/Command toggle zones independently; Shift adds, and selecting never changes documents.
+#[test]
+fn zone_modifier_clicks_keep_multiple_targets() {
+    for modifier in [Modifiers::CTRL, Modifiers::COMMAND] {
+        let mut h = two_zones();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let a = at(&h, -15_240_000, 0);
+        let b = at(&h, 5_080_000, 0);
+        zone_click(&mut h, a, Modifiers::NONE);
+        zone_click(&mut h, b, modifier);
+        assert_eq!(h.state().views.active.board.zones.selection().len(), 2);
+        zone_click(&mut h, a, modifier);
+        assert_eq!(h.state().views.active.board.zones.selection().len(), 1);
+        zone_click(&mut h, a, Modifiers::SHIFT);
+        assert_eq!(h.state().views.active.board.zones.selection().len(), 2);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        let revision = h.state().session.revision();
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().zones().is_empty());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// Left-to-right boxes contain whole zones, right-to-left crosses edges; modifier boxes combine.
+#[test]
+fn zone_boxes_follow_direction_modifiers_and_visibility() {
+    let mut h = two_zones();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let from = at(&h, -22_860_000, -2_540_000);
+    let to = at(&h, 12_700_000, 12_700_000);
+    zone_box(&mut h, from, to, Modifiers::NONE);
+    assert_eq!(h.state().views.active.board.zones.selection().len(), 2);
+    let partial = at(&h, -15_240_000, 2_540_000);
+    zone_box(&mut h, from, partial, Modifiers::NONE);
+    assert!(h.state().views.active.board.zones.selection().is_empty());
+    zone_box(&mut h, partial, from, Modifiers::NONE);
+    assert_eq!(h.state().views.active.board.zones.selection().len(), 1);
+    zone_box(&mut h, from, to, Modifiers::SHIFT);
+    assert_eq!(h.state().views.active.board.zones.selection().len(), 2);
+    zone_box(&mut h, partial, from, Modifiers::CTRL);
+    assert_eq!(h.state().views.active.board.zones.selection().len(), 1);
+    let id = h.state().views.active.id();
+    h.state_mut().set_selection_filters(id, &json!({"zones":false})).unwrap();
+    zone_box(&mut h, from, to, Modifiers::NONE);
+    assert!(h.state().views.active.board.zones.selection().is_empty());
+    h.state_mut().set_selection_filters(id, &json!({"zones":true})).unwrap();
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    h.state_mut().views.active.board.hidden_layers.insert(layer);
+    zone_box(&mut h, from, to, Modifiers::NONE);
+    assert!(h.state().views.active.board.zones.selection().is_empty());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// The ordinary shared context menu enables Delete for zone-only groups in either theme.
+#[test]
+fn zone_context_menu_deletes_the_complete_selection() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = two_zones();
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        let a = at(&h, -15_240_000, 0);
+        let b = at(&h, 5_080_000, 0);
+        zone_click(&mut h, a, Modifiers::NONE);
+        zone_click(&mut h, b, Modifiers::CTRL);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+            h.run();
+        }
+        assert!(!h.get_by_label("Delete").accesskit_node().is_disabled());
+        click(&mut h, "Delete");
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().zones().is_empty());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// Modifier clicks preserve other categories in either order; a shared mixed Delete is one edit.
+#[test]
+fn zones_join_mixed_selection_without_losing_footprints() {
+    let mut h = two_zones();
+    for (symbol, x) in [("symbol-2", 0), ("symbol-3", 25_400_000)] {
+        run(
+            &mut h,
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":x,"y_nm":0}),
+        );
+    }
+    h.run();
+    let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().last().unwrap().position;
+    let fp = at(&h, footprint.x_nm, footprint.y_nm);
+    let zone = at(&h, -15_240_000, 0);
+    zone_click(&mut h, zone, Modifiers::NONE);
+    zone_click(&mut h, fp, Modifiers::CTRL);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    assert_eq!(h.state().views.active.board.zones.selection().len(), 1);
+    zone_click(&mut h, zone, Modifiers::CTRL);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    assert!(h.state().views.active.board.zones.selection().is_empty());
+    zone_click(&mut h, zone, Modifiers::CTRL);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::Delete);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let board = h.state().session.project().unwrap().boards().next().unwrap();
+    assert_eq!(board.zones().len(), 1);
+    assert_eq!(board.footprints().count(), 1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run();
+    assert_eq!(h.state().views.active.board.zones.selection().len(), 2);
 }
