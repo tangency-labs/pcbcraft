@@ -196,9 +196,9 @@ fn diagnostic_codec_refuses_footprint_locks() {
     assert!(error.contains("footprint locks") && error.contains("use split documents"));
     let mut document: Value = serde_json::from_slice(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap();
     // Malformed diagnostic input: the active lock must be rejected before placement ownership validation.
-    document["board"] =
-        json!({"footprints":[{"id":99,"component":2,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"locked":true}]});
-    assert!(
-        crate::persistence::decode(&serde_json::to_vec(&document).unwrap()).unwrap_err().contains("footprint locks require split board format 25")
-    );
+    let mut footprint = serde_json::to_value(&original.board.footprints[0]).unwrap();
+    footprint["locked"] = json!(true);
+    document["board"] = json!({"footprints":[footprint]});
+    let error = crate::persistence::decode(&serde_json::to_vec(&document).unwrap()).unwrap_err();
+    assert!(error.contains("footprint locks require split board format 25"), "{error}");
 }
