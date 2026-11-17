@@ -645,9 +645,10 @@ fn membership_validation_looks_up_each_group_once() {
     assert_eq!(decode_documents(&docs).unwrap().part_group_memberships().len(), stored.len());
 }
 
-/// Undo history keeps only what each membership edit changed. Setting one part instance's groups
-/// builds that instance's set and shares every other set with the previous snapshot, which Undo
-/// retains, so the whole history holds one set per edit; undo returns the earlier shared sets.
+/// Setting one part instance's groups builds that instance's set and shares every other set with
+/// the previous snapshot, which Undo retains, so the whole history holds one set per edit; undo
+/// returns the earlier shared sets. Only set allocations are counted: each edit also copies the
+/// index of grouped part instances (one key and one pointer each), which this test does not measure.
 #[test]
 fn membership_edits_share_untouched_sets_with_history() {
     let (mut s, part_instances) = parts(3, false);

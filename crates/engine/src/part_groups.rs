@@ -141,8 +141,9 @@ fn check_memberships(
 /// Explicit memberships held per part instance, sorted by key. Each part instance's group set
 /// (sorted, unique, never empty) is its own shared allocation, so an edit to one part instance
 /// copies this index (one key and one pointer per grouped part instance) and builds only that
-/// instance's set; every other set stays shared with the previous snapshot. Undo history
-/// therefore keeps the changed data of each step, not a copy of every membership.
+/// instance's set; every other set stays shared with the previous snapshot. Each Undo step
+/// therefore keeps one copy of this index (at most 4,096 entries of 24 bytes) plus the edited
+/// set, not a copy of every membership.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Memberships {
     by_part_instance: Vec<(PartInstanceKey, Arc<[Uuid]>)>,
