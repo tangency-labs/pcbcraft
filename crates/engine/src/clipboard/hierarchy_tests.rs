@@ -62,6 +62,81 @@ fn paste(s: &Session, text: &str, sheet: SheetTarget) -> Value {
     json!({"text":text,"sheet":sheet.id(),"x_nm":50*crate::schematic::GRID_NM,"y_nm":50*crate::schematic::GRID_NM,"expected_revision":s.revision()})
 }
 
+/// Hierarchy copies and cuts exclude both captured and unrelated part groups. Duplicated parts
+/// start ungrouped while existing source memberships and their undo history remain intact.
+#[test]
+fn hierarchy_copy_and_cut_keep_part_groups_project_owned() {
+    for command in [COPY, CUT] {
+        let mut s = fixture();
+        apply(&mut s, crate::part_groups::CREATE, json!({"name":"Source group"}));
+        let group = s.project().unwrap().part_groups().groups[0].id;
+        let grouped: Vec<_> = s
+            .project()
+            .unwrap()
+            .sheets()
+            .filter(|sheet| matches!(sheet.name, "Power" | "Other"))
+            .map(|sheet| s.project().unwrap().for_sheet(sheet.target).unwrap().symbols()[0].component)
+            .collect();
+        for key in grouped {
+            apply(&mut s, crate::part_groups::SET_GROUPS, json!({"part_instance":crate::part_groups::part_instance_address(key),"groups":[group]}));
+        }
+        let before = s.snapshot().unwrap();
+        let text = s.execute(command, &selection(&s, false)).unwrap()["clipboard"].as_str().unwrap().to_owned();
+        let fragment = Fragment::from_text(&text).unwrap();
+        assert!(fragment.has_hierarchy());
+        assert!(fragment.project.part_groups().groups.is_empty());
+        assert!(fragment.project.part_group_memberships().is_empty());
+        let after_copy_or_cut = s.snapshot().unwrap();
+        assert_eq!(after_copy_or_cut.part_group_memberships(), before.part_group_memberships());
+        if command == COPY {
+            assert!(Arc::ptr_eq(&before, &after_copy_or_cut));
+        }
+        let root = s.project().unwrap().sheet_target();
+        s.apply(PASTE, &paste(&s, &text, root)).unwrap();
+        assert_eq!(s.project().unwrap().part_groups(), before.part_groups());
+        assert_eq!(s.project().unwrap().part_group_memberships(), before.part_group_memberships());
+        let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+        s.apply("edit.undo", &Value::Null).unwrap();
+        crate::assert_same_content(&after_copy_or_cut, &s.snapshot().unwrap());
+        if command == CUT {
+            s.apply("edit.undo", &Value::Null).unwrap();
+            crate::assert_same_content(&before, &s.snapshot().unwrap());
+        }
+    }
+}
+
+/// A hierarchy Cut retires a grouped root part before codec validation, preserving memberships
+/// of retained child and unrelated parts. Native reopen and Undo/Redo preserve authored content,
+/// allowing the existing allocation watermark to remain monotonic after Cut creates free ends.
+#[test]
+fn hierarchy_cut_prunes_retired_root_part_memberships_before_validation() {
+    let mut s = fixture();
+    apply(&mut s, crate::part_groups::CREATE, json!({"name":"Retained group"}));
+    let group = s.project().unwrap().part_groups().groups[0].id;
+    let root_part = s.project().unwrap().symbols()[0].component;
+    let grouped: Vec<_> = s.project().unwrap().part_instance_addresses().collect();
+    for part in grouped {
+        apply(&mut s, crate::part_groups::SET_GROUPS, json!({"part_instance":part,"groups":[group]}));
+    }
+    let before = s.snapshot().unwrap();
+    let retained: Vec<_> = before.part_group_memberships().iter().filter(|membership| membership.part_instance != root_part).collect();
+    let copied = s.execute(CUT, &selection(&s, true)).unwrap();
+    let fragment = Fragment::from_text(copied["clipboard"].as_str().unwrap()).unwrap();
+    assert!(fragment.project.part_groups().groups.is_empty());
+    assert!(fragment.project.part_group_memberships().is_empty());
+    let after = s.snapshot().unwrap();
+    assert!(!after.has_part_instance(root_part));
+    assert_eq!(after.part_groups(), before.part_groups());
+    assert_eq!(after.part_group_memberships().iter().collect::<Vec<_>>(), retained);
+    let after_documents = encode_documents(after).unwrap();
+    assert_eq!(encode_documents(decode_documents(&after_documents).unwrap()).unwrap(), after_documents);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after_documents);
+}
+
 /// A closed nested circuit duplicates independently with fresh sheet/component/interface IDs,
 /// exact internal connectivity, pinned mappings, one history step and native persistence.
 #[test]

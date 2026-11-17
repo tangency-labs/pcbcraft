@@ -1,0 +1,10 @@
+{
+  "hardware": "Apple M5 Max; 128 GB RAM; physical host",
+  "os": "macOS 27.2.1 (Darwin 27.2.0)",
+  "runtime": "native CPU replay",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-apple-darwin\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "profile": "release",
+  "power": "AC power; macOS default power mode; developer desktop with a macOS guest VM running alongside; CPU exclusivity and thermal state not controlled.",
+  "notes": "Issue246 walkaround solver after the other-side retry: walkaround diagnostic only, 100 iterations on channels-v1 and dense-v1. Engine-only change limited to walks that block; no other boundary changed.",
+  "revision": "dbe01680875a52c3aaf713c6cf7528d046f24782"
+}

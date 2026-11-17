@@ -1,0 +1,25 @@
+{
+  "base": "8b1afe729023abe67b04fa435dd397272f4d0f15",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\n",
+  "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "profile": "debug",
+  "scope": "Three failing placement regressions, full geometry fixture/boundary qualification and a 2-part/16-pin board smoke; one before/after sample, no speed/memory bound or 500-part requalification claim.",
+  "power": "Shared development host; power/thermal/background load uncontrolled.",
+  "fixtures": {
+    "crates/geometry/tests/fixtures/step/assembly.step": "935666e3007a92d75b5f2d825e7fa310a2549ee0bd6e72e21911c8d0ca4cbdd6",
+    "crates/geometry/tests/fixtures/step/assembly_inch.step": "6ced0615a0d8e1865aab10b8f7e84f446ee46eb6a31057ae6d174fb99d4493e4",
+    "crates/geometry/tests/fixtures/step/assembly_mapped_rotated.step": "6234f2ac5c0014b448b0b490f79244c7fbe64ea591958509678ba02a2914a298",
+    "crates/geometry/tests/fixtures/step/assembly_nested_rotated.step": "1283e1559479f05346f7b292220cc8c9bb5108c3523024ef4860d89d614fb4d8",
+    "crates/geometry/tests/fixtures/step/assembly_shared_part_turned.step": "a79ff4c0d18b1cd2fe7dc83e22428f49f977f91bec3b5df7ce9175cd58273b29",
+    "crates/geometry/tests/fixtures/step/box.step": "d102e777b3b93b7091b0317578f5d460772a6379d7228138e3903df3f4493e7b",
+    "crates/geometry/tests/fixtures/step/box_inch.step": "d5ae34a6168d4ae88ac7918ae4b19fce6c5413ee50c9a330f1fdd80447fb9337",
+    "crates/geometry/tests/fixtures/step/box_metre.step": "e9e1114eed475d26360d18b0a0762affbf02d2a32c71aef4afa1aa52b8d244ee",
+    "crates/geometry/tests/fixtures/step/cylinder.step": "aca4204126f2199c909e2bb2f5586e698b497929a8b6a25a5e63a81172771a51",
+    "crates/geometry/tests/fixtures/step/cylinder_x_axis_ap203.step": "3d081053b7e1306aa2cec40c09c4b30788e1abac759e5e4f6b4264166857a899",
+    "crates/geometry/tests/fixtures/step/expected.json": "e68e7e6dcdd0a2b6db44ac6d5cd7e3078b80c69e1fbdf5f18c08b3fda4d1a133",
+    "crates/geometry/tests/fixtures/step/hole_plate.step": "b20d6472e6a6da2a3384344bcab9f0a50e79c2fa6db82b229dc9a5e20efacd8d",
+    "crates/geometry/tests/fixtures/step/mapped_offset_origin.step": "85d229056889582eb7895051506fa2a8f7c1cbd493bd89b21a57cbecfca0c02d",
+    "crates/geometry/tests/fixtures/step/y_up.step": "50e9842363f366a1bab73377c4060d9f2e5bcd7a450b1f2ae6f66688c3010737"
+  },
+  "unchanged_original_fixtures": 10
+}

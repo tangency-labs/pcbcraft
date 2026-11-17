@@ -1,0 +1,41 @@
+pcbcraft-geometry v0.1.0 (/home/travisl/projects/PCBcraft/work/pr387-review/crates/geometry)
+├── log v0.4.35
+├── pcbcraft-units v0.1.0 (/home/travisl/projects/PCBcraft/work/pr387-review/crates/units)
+│   └── serde v1.0.229
+│       ├── serde_core v1.0.229
+│       └── serde_derive v1.0.229 (proc-macro)
+│           ├── proc-macro2 v1.0.107
+│           │   └── unicode-ident v1.0.27
+│           ├── quote v1.0.47
+│           │   └── proc-macro2 v1.0.107 (*)
+│           └── syn v3.0.9
+│               ├── proc-macro2 v1.0.107 (*)
+│               ├── quote v1.0.47 (*)
+│               └── unicode-ident v1.0.27
+├── solidcore-ops v0.1.0 (/home/travisl/projects/PCBcraft/work/pr387-review/vendor/solidcore-ops)
+│   ├── solidcore v1.0.1 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd)
+│   │   ├── serde v1.0.229 (*)
+│   │   └── thiserror v2.0.21
+│   │       └── thiserror-impl v2.0.21 (proc-macro)
+│   │           ├── proc-macro2 v1.0.107 (*)
+│   │           ├── quote v1.0.47 (*)
+│   │           └── syn v3.0.9 (*)
+│   ├── solidcore-convert v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd)
+│   │   ├── solidcore v1.0.1 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd) (*)
+│   │   └── solidcore-record v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd)
+│   │       ├── serde v1.0.229 (*)
+│   │       ├── serde_json v1.0.154
+│   │       │   ├── itoa v1.0.18
+│   │       │   ├── memchr v2.8.3
+│   │       │   ├── serde_core v1.0.229
+│   │       │   └── zmij v1.0.23
+│   │       └── thiserror v2.0.21 (*)
+│   └── solidcore-record v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd) (*)
+├── solidcore-record v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd) (*)
+└── solidcore-step v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd)
+    ├── solidcore v1.0.1 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd) (*)
+    ├── solidcore-convert v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd) (*)
+    ├── solidcore-ops v0.1.0 (/home/travisl/projects/PCBcraft/work/pr387-review/vendor/solidcore-ops) (*)
+    └── solidcore-record v0.1.0 (https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cd) (*)
+[dev-dependencies]
+└── serde_json v1.0.154 (*)

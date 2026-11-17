@@ -408,14 +408,14 @@ mod live {
         WindowCommand {
             id: "app.library_source",
             title: "Manage Library Source",
-            summary: "Run Library workspace source management. Add/relocate use native pickers; Delete requires the same folder/count confirmation as the GUI. No project edits.",
+            summary: "Run Library workspace source management. Add/relocate/export use native pickers; Delete requires the same folder/count confirmation as the GUI. No project edits.",
             params: &[
                 VIEW,
                 Param {
                     name: "action",
                     summary: "Source operation",
                     required: true,
-                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete"]),
+                    kind: Kind::Choice(&["new", "add", "refresh", "relocate", "remove", "delete", "export"]),
                 },
                 Param { name: "source", summary: "Registration ID, defaults to selected source", required: false, kind: Kind::Name },
             ],
@@ -1773,6 +1773,25 @@ mod live {
                 assert!(command.params.iter().all(|param| !param.summary.is_empty()));
             }
             assert!(!pcbcraft_engine::catalog().iter().any(|command| pcbcraft_mcp::is_window_command(command.id)));
+        }
+
+        /// Window and UI input commands are compared with the committed snapshot. Against an
+        /// unchanged snapshot, detected breaking differences require a higher API version and
+        /// other detected differences request a refresh; a rewrite needs prior-snapshot comparison.
+        #[test]
+        fn window_commands_match_the_committed_snapshot() {
+            use pcbcraft_engine::command_api::{COMMAND_API_VERSION, SnapshotMismatch, check_snapshot};
+            let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
+            let mut described = window_catalog();
+            described.extend(crate::ui_automation::catalog());
+            match check_snapshot(&snapshot, "window_commands", &described, COMMAND_API_VERSION) {
+                Ok(()) => {}
+                Err(SnapshotMismatch::Breaking(problems)) => panic!("{}", problems.join("\n")),
+                Err(SnapshotMismatch::Stale { changes, section, api_version }) => panic!(
+                    "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
+                    changes.join("\n")
+                ),
+            }
         }
 
         /// GUI and live discovery preferences share typed validation; refusal changes no state.

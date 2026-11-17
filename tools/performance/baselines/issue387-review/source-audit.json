@@ -1,0 +1,11 @@
+{
+  "original_files": 51,
+  "modified_source_files": [
+    "src/step_assembly.rs"
+  ],
+  "functional_product_order_changes": 3,
+  "extra_changes": "only provenance notice and two helper doc comments",
+  "unchanged_original_fixtures": 10,
+  "kernel_copies": 1,
+  "lockfile": "only solidcore-ops source removed; registry versions and toolkit pin preserved"
+}

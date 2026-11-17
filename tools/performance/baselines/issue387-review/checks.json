@@ -1,0 +1,110 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit_code": 0,
+    "seconds": 1.5790033340454102
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 14.24863576889038
+  },
+  {
+    "name": "workspace",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace"
+    ],
+    "exit_code": 0,
+    "seconds": 121.40366744995117
+  },
+  {
+    "name": "web",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "pcbcraft-web",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "exit_code": 0,
+    "seconds": 8.604129076004028
+  },
+  {
+    "name": "geometry-wasi",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "pcbcraft-geometry",
+      "--target",
+      "wasm32-wasip1",
+      "--lib",
+      "--",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 2.8918933868408203
+  },
+  {
+    "name": "deny",
+    "command": [
+      "cargo",
+      "deny",
+      "--locked",
+      "check",
+      "licenses",
+      "sources",
+      "bans"
+    ],
+    "exit_code": 0,
+    "seconds": 0.7177844047546387
+  },
+  {
+    "name": "markdown",
+    "command": [
+      "python",
+      "-B",
+      "scripts/check-markdown-links.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.10276150703430176
+  },
+  {
+    "name": "python",
+    "command": [
+      "python",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts",
+      "-p",
+      "test_*.py"
+    ],
+    "exit_code": 0,
+    "seconds": 2.211717128753662
+  }
+]

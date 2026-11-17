@@ -88,12 +88,16 @@ impl PcbApp {
         let names_pending = net_presentation.names_pending;
         let unit = self.preferences.units;
         let revision = self.session.revision();
+        if target.vias().iter().any(|v| state.tracks.selected.contains(&v.id)) {
+            state.tracks.refresh_net_choices(target, revision);
+        }
         // The ratsnest for this revision, through the same per-input cache the canvas reads.
         let unrouted = state.ratsnest(target, input).map(|ratsnest| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
         let mut reference_action = None;
         let mut reference_pick = None;
         let mut net_rules = false;
+        let mut via_net_pick = None;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
             host.with("properties"),
@@ -160,7 +164,20 @@ impl PcbApp {
                         if !nets.is_empty() {
                             property(ui, "Nets", &nets.into_iter().map(String::as_str).collect::<Vec<_>>().join(", "));
                         }
-                        copper_edit = copper_properties(ui, target, &state.tracks.selected, unit, view_id, revision);
+                        let action = copper_properties(
+                            ui,
+                            target,
+                            &state.tracks.selected,
+                            unit,
+                            view_id,
+                            revision,
+                            state.tracks.via_choices.as_ref().map(|(_, _, choices)| choices.as_slice()).unwrap_or_default(),
+                        );
+                        match action {
+                            Some(properties::CopperAction::Command(command, params)) => copper_edit = Some((command, params)),
+                            Some(properties::CopperAction::ChooseViaNet(ids)) => via_net_pick = Some((ids, state.tracks.selected.clone())),
+                            None => {}
+                        }
                     }
                     [] => {
                         property(ui, "Board", target.name());
@@ -209,6 +226,11 @@ impl PcbApp {
         if let Some(footprint) = reference_pick {
             self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
             self.repaint_editors(ui.ctx());
+        }
+        if let Some((ids, selection)) = via_net_pick
+            && let Some(source) = input
+        {
+            self.begin_via_net_choice(source, crate::board_net_choice::Destination::Vias { ids, selection });
         }
         if let Some((command, mut params)) = copper_edit
             && (command != pcbcraft_engine::board::zones::SET_ZONE

@@ -87,6 +87,7 @@ impl PcbApp {
     pub(crate) fn arrangement_dialog_host(&self) -> Option<HostId> {
         match &self.dialog {
             Dialog::Arrangement(edit) => Some(edit.host),
+            Dialog::ViaNet(state) => Some(if self.views.hosts.contains_key(&state.host()) { state.host() } else { self.views.main }),
             Dialog::PartReference(state) => Some(if self.views.hosts.contains_key(&state.host()) { state.host() } else { self.views.main }),
             _ => None,
         }

@@ -74,6 +74,7 @@ enum Action {
     Relocate,
     Remove,
     Delete,
+    Export,
     Split,
     Detach,
     Window,
@@ -192,6 +193,7 @@ impl PcbApp {
         let entries = self.workspace_entries();
         let mut tab = self.views.active.library.as_ref().map_or(0, |s| s.tab);
         let source = self.views.active.library.as_ref().and_then(|s| s.source.as_deref());
+        let project = self.views.active.library.as_ref().and_then(|s| s.project);
         let loaded = self.session.libraries().inspect();
         let builtin = source.is_some_and(|id| loaded.as_array().into_iter().flatten().any(|s| s["source"] == id && s["builtin"] == true));
         let folder = source.is_some_and(|id| self.library_sources.registered.iter().any(|r| r.source == id && !r.path.is_empty()));
@@ -329,7 +331,16 @@ impl PcbApp {
                                 ("Compare", ToolIcon::Shared("compare"), "Compare items · Planned", false),
                             ],
                         ),
-                        (2, "Share", vec![("Export", ToolIcon::Shared("export"), "Export library item · Planned", false)]),
+                        (
+                            2,
+                            "Share",
+                            vec![(
+                                "Export",
+                                ToolIcon::Shared("export"),
+                                "Export library as a bundle file",
+                                idle && project.is_none() && source.is_some(),
+                            )],
+                        ),
                     ] {
                         workspace::ribbon_separator(ui);
                         let entries: Vec<_> = labels
@@ -345,7 +356,7 @@ impl PcbApp {
                             })
                             .collect();
                         if let Some(index) = workspace::ribbon_group(ui, title, &entries) {
-                            authoring_action = Some(if group == 0 { index } else { index + 4 });
+                            authoring_action = Some(group * 4 + index);
                         }
                     }
                 }
@@ -359,6 +370,9 @@ impl PcbApp {
         }
         if let Some(folder) = acquisition {
             self.message = self.acquire_library(ui.ctx(), None, folder).err();
+        }
+        if authoring_action == Some(8) {
+            action = Some(Action::Export);
         }
         if let Some(action) = authoring_action {
             match action {
@@ -465,6 +479,9 @@ impl PcbApp {
                 }
             }
             Action::Delete => self.begin_library_delete(ctx, source.as_deref()),
+            Action::Export => {
+                self.library_editors.export_library(ctx, self.session.libraries().export_bundle(source.as_deref().unwrap_or_default())?)
+            }
         }
     }
 
@@ -502,6 +519,7 @@ impl PcbApp {
                 Some("relocate") => Action::Relocate,
                 Some("remove") => Action::Remove,
                 Some("delete") => Action::Delete,
+                Some("export") => Action::Export,
                 _ => return Err("Unknown library action".into()),
             };
             let source = params["source"]

@@ -41,6 +41,7 @@ enum Kind {
     Port,
     Net,
     NetClass,
+    PartGroup,
     FootprintInstance,
     TrackSegment,
     Arc,
@@ -60,7 +61,7 @@ enum Kind {
 }
 
 impl Kind {
-    const ALL: [Kind; 27] = [
+    const ALL: [Kind; 28] = [
         Kind::Component,
         Kind::SymbolUnit,
         Kind::Wire,
@@ -72,6 +73,7 @@ impl Kind {
         Kind::Port,
         Kind::Net,
         Kind::NetClass,
+        Kind::PartGroup,
         Kind::FootprintInstance,
         Kind::TrackSegment,
         Kind::Arc,
@@ -107,6 +109,7 @@ impl Kind {
             Kind::Port => Records(&["sheets/*:labels[]"]),
             Kind::Net => Records(&["instances.json:net_registry.records[]"]),
             Kind::NetClass => Records(&["project.json:net_classes.definitions[]"]),
+            Kind::PartGroup => Records(&["project.json:part_groups.groups[]"]),
             Kind::FootprintInstance => Records(&["board.json:footprints[]"]),
             Kind::TrackSegment => Records(&["board.json:tracks[]"]),
             Kind::Via => Records(&["board.json:vias[]"]),
@@ -149,6 +152,8 @@ const RECORDS: &[(&str, &[Form], &str)] = &[
     ("project.json:net_classes", &[Form::Owned], "net class catalog"),
     ("project.json:net_classes.definitions[]", &[Form::Uuid], "net class"),
     ("project.json:net_classes.definitions[].rules", &[Form::Owned], "net class rule values"),
+    ("project.json:part_groups", &[Form::Owned], "part group catalog"),
+    ("project.json:part_groups.groups[]", &[Form::Uuid], "part group"),
     ("project.json:parameters", &[Form::Owned], "project parameters"),
     ("sheets/*:", &[Form::Uuid], "sheet document"),
     ("sheets/*:page", &[Form::Owned], "sheet page"),
@@ -211,6 +216,11 @@ const RECORDS: &[(&str, &[Form], &str)] = &[
     ("instances.json:", &[Form::Owned], "instance document of the registered board"),
     ("instances.json:circuit_uses[]", &[Form::Uuid], "circuit use"),
     ("instances.json:sheet_occurrences[]", &[Form::Uuid], "sheet occurrence"),
+    ("instances.json:part_group_memberships[]", &[Form::Owned], "membership addressed by part instance and group"),
+    ("instances.json:compact_part_group_memberships", &[Form::Owned], "compressed membership envelope"),
+    ("instances.json:compact_part_group_memberships.groups[]", &[Form::Value], "group UUID dictionary reference"),
+    ("instances.json:compact_part_group_memberships.part_instances[]", &[Form::Owned], "membership set addressed by part instance"),
+    ("instances.json:compact_part_group_memberships.part_instances[].groups[]", &[Form::Value], "local dictionary reference, not an object identity"),
     ("instances.json:net_registry", &[Form::Owned], "net registry"),
     ("instances.json:net_registry.records[]", &[Form::Uuid], "net"),
     ("instances.json:net_registry.records[].state", &[Form::Owned], "net state"),
@@ -287,6 +297,9 @@ fn fixture() -> Session {
         terminal: "1".into(),
     };
     apply(&mut s, nets::SET_CLASSES, json!({"target":ClassTarget::Derived{anchor},"classes":[class]}));
+    apply(&mut s, part_groups::CREATE, json!({"name":"Analog parts"}));
+    let group = s.project().unwrap().part_groups().groups[0].id;
+    apply(&mut s, part_groups::SET_GROUPS, json!({"part_instance":part_groups::part_instance_address(component),"groups":[group]}));
 
     let net = s.project().unwrap().net_registry.records.iter().find(|r| matches!(r.state, nets::State::Active {})).unwrap().id;
     apply(
@@ -451,6 +464,11 @@ fn inventory_problems(documents: &Documents) -> (Vec<String>, String) {
         }
     }
     for path in declared.keys().filter(|path| !seen.forms.contains_key(**path)) {
+        let compact = path.starts_with("instances.json:compact_part_group_memberships");
+        let alternate = if compact { "instances.json:part_group_memberships[]" } else { "instances.json:compact_part_group_memberships" };
+        if (compact || *path == "instances.json:part_group_memberships[]") && seen.forms.contains_key(alternate) {
+            continue;
+        }
         problems.push(format!("fixture saves no {path} record"));
     }
     for kind in Kind::ALL {
@@ -476,9 +494,15 @@ fn inventory_problems(documents: &Documents) -> (Vec<String>, String) {
 /// a persistent UUID are exactly the listed gaps.
 #[test]
 fn every_saved_object_kind_has_a_stable_identity_or_is_a_listed_gap() {
-    let documents: Documents = encode_documents(fixture().snapshot().unwrap()).unwrap();
-    let (problems, saved) = inventory_problems(&documents);
-    assert!(problems.is_empty(), "{}\nsaved records:\n{saved}", problems.join("\n"));
+    let project = fixture().snapshot().unwrap();
+    // Vary only storage preference, as reopening the compact envelope does; authored fixture
+    // contents still come exclusively from the shared commands above.
+    for compact in [false, true] {
+        let project = Arc::new(Project { prefer_compact_part_groups: compact, ..Project::clone(&project) });
+        let documents = encode_documents(project).unwrap();
+        let (problems, saved) = inventory_problems(&documents);
+        assert!(problems.is_empty(), "{}\nsaved records:\n{saved}", problems.join("\n"));
+    }
 }
 
 /// A new kind is reported whatever shape it is saved in: a nested object without an id, a list of
@@ -538,6 +562,10 @@ fn pin_and_pad_tokens_name_their_saved_owners() {
 /// shown by the inventory survives a save and reopen unchanged.
 #[test]
 fn audited_identities_survive_save_and_reopen() {
-    let documents = encode_documents(fixture().snapshot().unwrap()).unwrap();
-    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    let project = fixture().snapshot().unwrap();
+    for compact in [false, true] {
+        let project = Arc::new(Project { prefer_compact_part_groups: compact, ..Project::clone(&project) });
+        let documents = encode_documents(project).unwrap();
+        assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    }
 }

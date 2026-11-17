@@ -33,6 +33,7 @@ before treating an older plan as implemented behavior.
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
 | Intentional unused connections | [No-connect markers](no-connect-markers.md) |
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
+| Explicit via nets | [Placement, Properties and storage](via-net-assignments.md) |
 | Copper-zone outline authoring | [Zone drawing, editing and storage](copper-zone-outlines.md) |
 | Board rules and materials | [Board rules](board-rules.md) · [Materials and dielectric construction](board-materials.md) |
 | Create classes, assign nets and inspect effective rules | [Shared net-class editor](net-class-editor.md) |
@@ -51,10 +52,11 @@ supported versions and deferred work before extending a format or consumer.
 | Netlist export | [JSON netlist format](netlist-format.md) · [Schema](schemas/netlist-v1.schema.json) |
 | Object identities | [Identity inventory](object-identity.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |
+| Part groups | [Catalog, membership and storage](part-groups.md) |
 | Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
-| Shared geometry | [Snapshot copper queries](copper-clearance-query.md) |
+| Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Walkaround route planning](route-planning.md) |
 | Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
 | Shared interface toolkit | [Craft UI migration and current pin](shared-ui-migration.md) |
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |

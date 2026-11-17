@@ -609,8 +609,8 @@ impl Session {
     /// Set, rename or remove one parameter of the project or a sheet as one undo step. Setting a
     /// value equal to the current one changes nothing and records no step; setting a standard
     /// parameter to its default removes its own value. Project parameters
-    /// adopt the current storage layout first, like net classes, because only project/22 stores
-    /// them.
+    /// adopt the current storage layout first, like net classes, because parameter-capable
+    /// project formats require that layout.
     pub(crate) fn set_parameter(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let original = self.open_project()?;

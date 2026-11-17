@@ -1,0 +1,28 @@
+{
+  "os": "Linux",
+  "architecture": "x86_64",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "cargo": "cargo 1.100.0 (3acc79c0c 2026-11-05)",
+  "profile": {
+    "name": "release",
+    "opt_level": "s",
+    "lto": "thin",
+    "codegen_units": 16,
+    "incremental": false
+  },
+  "build_jobs": 8,
+  "resource_collection": "existing 10 ms Linux RSS/VmHWM collector; one process per revision",
+  "workload": {
+    "parts": 256,
+    "groups": 64,
+    "retained_edits": 1000
+  },
+  "unmeasured": [
+    "allocator totals",
+    "maximum supported density",
+    "native GUI",
+    "Windows",
+    "browser",
+    "endurance"
+  ]
+}
