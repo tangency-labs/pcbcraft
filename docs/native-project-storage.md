@@ -972,9 +972,10 @@ document set. Restoring the original directory permits ordinary recovery.
 ## Unsaved-work recovery store
 
 The save transaction above protects saved files. `pcbcraft_storage::recovery`
-provides an API for recording unsaved edits in a separate per-user recovery
-store, never in a project folder, its `.pcbcraft-save` transaction or its lock
-file. Desktop sessions do not yet attach a recorder; that integration is a
+provides an API for recording unsaved edits, with a per-user recovery store
+as its default. Callers can choose another directory; the API does not check
+whether it is outside a project. Hosts should keep recovery separate from
+project files, the `.pcbcraft-save` transaction and the save lock. Desktop sessions do not yet attach a recorder; that integration is a
 follow-up, so recovery is not yet available in the app.
 The API's default store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
 `%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
@@ -987,7 +988,7 @@ share it:
 | File | Contents |
 |---|---|
 | `<id>.pc` | Versioned recovery envelope around a packed project snapshot |
-| `<id>.journal` | Every edit committed since that snapshot |
+| `<id>.journal` | Successfully recorded changes since that snapshot |
 | `<id>.lock` | Held locked by the writing session while it runs |
 
 [`Session::observe_edits`](../crates/engine/src/lib.rs) reports every edit
@@ -1011,11 +1012,15 @@ when both generation and document hash match the snapshot. Unknown header fields
 are ignored within this version; required fields must be present.
 
 Each frame has a little-endian u32 payload length, the payload and its SHA-256.
-Every edit record is flushed before the next. Recovery reads the snapshot and
-applies records in order. It stops at the first torn, damaged or inconsistent
-record and keeps the last complete state. A kill loses the edit being written
-and any edits still queued for the writer thread; every record already written
-is kept. The snapshot is published first, so a stale journal is ignored even
+The writer attempts to flush each edit record before processing the next
+notification. Recovery reads the snapshot and applies records in order. It
+stops at the first torn, damaged or inconsistent record and keeps the last
+complete readable state. A kill can lose edits being written or still queued.
+Earlier edits can also be absent after encoding or write failures, or after
+removal of the recovery entry; receipt of a notification is not proof of
+persistence. `sync` waits for prior notifications to be processed and returns
+the first error since the previous call, rather than guaranteeing every edit
+was written. The snapshot is published first, so a stale journal is ignored even
 when its base documents equal the new snapshot's. Unsupported versions,
 including the earlier unwrapped snapshot and `pcbcraft-recovery/1` journal, are
 refused for the caller to offer for discard. These are recovery files, not
@@ -1026,8 +1031,9 @@ as saves.
 Windows refuses to rename a file over one that is open, so the writer closes its
 journal before publishing the next one. While another process has the snapshot
 or journal open, for example while reading the entry, publishing over it fails
-there; the old snapshot and journal stay valid, or the new snapshot already
-holds every edit, and the writer starts a new snapshot at the next edit.
+there; recovery can read the previous recorded state, or the new snapshot
+already holds the state supplied for publication. The writer tries another
+snapshot at the next edit.
 
 The journal has a size limit. When it grows past twice the size of its snapshot,
 or past 1 MiB if that is larger, the state after the edit that crossed the limit
@@ -1043,7 +1049,7 @@ flush, adopts the new snapshot and closes the old journal. The next edit starts
 another snapshot rather than appending records recovery would ignore. While
 snapshots keep failing and writes to the open journal still succeed, edits
 continue to be appended, so the journal can grow past the limit until a snapshot
-succeeds or the session ends. A full recovery filesystem can also make an
+succeeds, an append fails or the session ends. A full recovery filesystem can also make an
 append fail; then the writer closes the journal and the next edit tries a new
 snapshot. Removing the recovery folder while a session runs
 is different: on Unix it deletes the snapshot and journal, and bytes written to

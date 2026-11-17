@@ -1,10 +1,12 @@
 //! Per-user crash recovery for unsaved work.
 //!
-//! Each editing session owns one entry in the recovery folder, kept apart from every project:
-//! `<id>.pc` (a versioned recovery envelope around the portable archive), `<id>.journal` (every edit
-//! committed since that snapshot) and `<id>.lock`, which the writer holds locked while it runs.
-//! Recovery reads the snapshot and replays the journal in order. Nothing here writes into a
-//! project folder, its save transaction or its save lock.
+//! A host can give each editing session an entry in a caller-selected recovery folder:
+//! `<id>.pc` (a versioned recovery envelope around the portable archive), `<id>.journal`
+//! (successfully recorded changes since that snapshot) and `<id>.lock`, which the writer holds
+//! locked while it runs. Recovery reads the snapshot and replays the journal in order.
+//! The default folder is in per-user storage; neither an override nor a caller's folder is
+//! checked for separation from projects. Hosts should keep recovery outside their project,
+//! save transaction and save lock.
 //!
 //! The journal records the documents each edit produced, not just its command, because commands
 //! that create objects draw fresh random identities and would not reproduce the same project
@@ -61,10 +63,11 @@ const MAX_ID_LEN: usize = 64;
 /// one large edit can make the new snapshot as large as the old one and the journal together.
 /// While new snapshots succeed, recovery reads at most the snapshot, records up to the larger of
 /// twice its size and the floor, and the one record that crossed the limit. While they keep
-/// failing with the old journal still open, every edit still appends, so the journal grows until
-/// a snapshot succeeds or the session ends. With no journal open (after a failed append, a failed
-/// journal publish or a root that could not be snapshotted), edits are not recorded until a
-/// snapshot succeeds, and recovery returns the last recorded state.
+/// failing with the old journal still open and record writes succeeding, recorded changes keep
+/// appending, so the journal can grow until a snapshot succeeds, an append fails or the session
+/// ends. With no journal open (after a failed append, a failed journal publish or a root that
+/// could not be snapshotted), edits are not recorded until a snapshot succeeds. A detected removed
+/// entry stays disabled until a new recorder is started. Recovery returns the last recorded state.
 const REBASE_RATIO: u64 = 2;
 /// The least journal size that starts a new snapshot, so a small project is not snapshotted
 /// and flushed every few edits.
@@ -543,8 +546,10 @@ enum Message {
 /// [`pcbcraft_engine::Session::observe_edits`]. The entry is created from the first state it
 /// is told about; a later open starts a new snapshot in the same entry.
 ///
-/// Dropping the recorder lets the worker finish what is queued in the background. An edit still
-/// queued when the process dies is lost; every edit before it is on disk.
+/// Dropping the recorder lets the worker finish what is queued in the background. A process kill
+/// can lose queued or in-flight edits. Earlier notifications need not have been recorded either:
+/// encoding or disk writes can fail, and a detected removed entry stays disabled. Recovery returns
+/// the last complete state that was successfully recorded and remains readable.
 #[derive(Debug)]
 pub struct JournalRecorder {
     sender: mpsc::Sender<Message>,
@@ -566,8 +571,10 @@ impl JournalRecorder {
         Ok(Self { sender, worker: Some(worker) })
     }
 
-    /// Wait until every edit reported so far is on disk. Returns the first error since the last
-    /// call; the worker keeps recording after an error, starting a new snapshot.
+    /// Wait until the worker has processed notifications reported so far. Returns the first error
+    /// since the last call; this is a queue barrier, not a guarantee that every edit is on disk.
+    /// Recording failures can leave edits unrecorded until a snapshot succeeds; a detected removed
+    /// entry stays disabled. A later successful snapshot can include earlier unrecorded changes.
     pub fn sync(&self) -> Result<(), String> {
         let (reply, done) = mpsc::sync_channel(1);
         self.sender.send(Message::Sync(reply)).map_err(|_| "The recovery journal has stopped.".to_owned())?;

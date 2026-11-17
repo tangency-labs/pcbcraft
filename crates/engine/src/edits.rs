@@ -1,6 +1,7 @@
 //! Notification of committed project changes for hosts that keep their own record of them,
 //! such as a crash-recovery journal. Observers see the same commands from the GUI, the CLI
-//! and MCP because every edit passes through [`crate::Session::apply`].
+//! and MCP through shared session notification hooks, including [`crate::Session::apply`]
+//! and prepared copper commits.
 
 use std::sync::Arc;
 
