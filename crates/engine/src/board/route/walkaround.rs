@@ -90,9 +90,9 @@ pub(super) struct Walker<'a> {
     own_islands: BTreeSet<usize>,
     /// Resolved membership of the head's copper (empty for free space).
     route_nets: Vec<usize>,
-    /// Complete membership/islands during final connected-path validation only. Search probes
+    /// Complete net membership during final connected-path validation only. Search probes
     /// must not inherit contacts from speculative detours, retries or discarded previous plans.
-    path_membership: Option<(Vec<usize>, BTreeSet<usize>)>,
+    path_membership: Option<Vec<usize>>,
     outline: drc::Outline,
     budget: usize,
     probes: usize,
@@ -202,18 +202,17 @@ impl<'a> Walker<'a> {
         self.probes += 1;
         let contour = Contour::capsule(a, b, self.half);
         let results = match &self.path_membership {
-            Some((nets, _)) => self.query.probe_membership(&contour, &self.layers, nets, None),
+            Some(nets) => self.query.probe_membership(&contour, &self.layers, nets, None),
             None => self.query.probe(&contour, &self.layers, self.intended_from),
         }
         .map_err(Stop::Failed)?;
-        let (route_nets, own_islands) =
-            self.path_membership.as_ref().map_or((&self.route_nets, &self.own_islands), |(nets, islands)| (nets, islands));
+        let route_nets = self.path_membership.as_ref().unwrap_or(&self.route_nets);
         let objects = self.query.objects();
         let mut legal = true;
         let mut blockers = Vec::new();
         for decision in results.decisions.iter().filter(|d| d.clearance_violation || d.conflicting_nets) {
             let object = &objects[decision.second];
-            if !decision.conflicting_nets && own_islands.contains(&object.island) {
+            if !decision.conflicting_nets && self.own_islands.contains(&object.island) {
                 continue;
             }
             legal = false;
@@ -372,7 +371,8 @@ impl<'a> Walker<'a> {
     }
 
     /// Revalidate a complete connected path, including earlier legs, with the union of every
-    /// physical contact's membership and islands. If a leg fails, shorten to its legal prefix
+    /// physical contact's net membership. Only head-contact islands are exempt from clearance;
+    /// crossing another island does not authorize joining it. If a leg fails, shorten to its legal prefix
     /// and recompute membership: discarded contacts must not authorize that prefix. Speculative
     /// search/reuse checks never retain this context or its cached clear legs.
     fn confirm(&mut self, points: Vec<Point>) -> Result<Walked, Stop> {
@@ -384,7 +384,7 @@ impl<'a> Walker<'a> {
 
     /// Trim failing legs until the entire prefix is legal under its own complete membership.
     /// Each pass discards a segment or shortens its last leg; the explicit bound also covers
-    /// pathological changes in same-island exemptions while contacts disappear.
+    /// pathological changes in net-class rules while contacts disappear.
     fn confirm_path(&mut self, mut points: Vec<Point>) -> Result<Walked, Stop> {
         let mut reached = true;
         let mut blocker = None;
@@ -406,8 +406,7 @@ impl<'a> Walker<'a> {
             }
             let objects = self.query.objects();
             let nets = contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
-            let islands = contacts.iter().map(|i| objects[*i].island).collect();
-            self.path_membership = Some((nets, islands));
+            self.path_membership = Some(nets);
             self.clear.clear();
             let mut trimmed = None;
             for (index, leg) in points.windows(2).enumerate() {

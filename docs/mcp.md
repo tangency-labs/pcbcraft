@@ -289,8 +289,10 @@ optional `width_nm`, `posture` (`diagonal` or `orthogonal`), `flipped`, `previou
 width, `points`, an `outcome` (`reached`, `blocked` with `last_legal`, `incomplete`,
 `canceled` or `stale`), any `blocker` and the `probes` charged, also with
 `inspect: false`. The points go round existing copper with the effective width,
-pair clearances and board-edge clearance, and feed `pcb.add_tracks` with the same
-`layer` and `width_nm`. See [walkaround route planning](route-planning.md).
+pair clearances and board-edge clearance. Check that there are at least two points
+before passing them to `pcb.add_tracks` with the same `layer` and `width_nm`;
+`from` equal to `to` produces a one-point `reached` plan with nothing to add.
+See [walkaround route planning](route-planning.md).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

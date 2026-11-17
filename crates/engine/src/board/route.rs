@@ -72,7 +72,7 @@ pub struct Plan {
     pub probes: usize,
 }
 
-/// Plan a route over a captured board. Validates the request first: bounded points, a supported
+/// Plan a route over a captured board. Validates the request first: bounded endpoints and previous hints, a supported
 /// width and a copper layer of the query's board; an invalid request charges nothing. Copper
 /// the head touches lends the route its membership and island, so the route may join it; all
 /// other copper, including copper of unknown membership, is an obstacle at its pair clearance.
@@ -80,6 +80,9 @@ pub struct Plan {
 pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, cancel: &dyn Fn() -> bool) -> Result<Plan, CommandError> {
     if !crate::wire::valid_point(&request.head) || !crate::wire::valid_point(&request.target) {
         return Err(CommandError::InvalidParams("Route points must be bounded board coordinates.".into()));
+    }
+    if request.previous.len() > super::track::MAX_PATH_POINTS || request.previous.iter().any(|point| !crate::wire::valid_point(point)) {
+        return Err(CommandError::InvalidParams("Previous routes must contain at most 256 bounded board points.".into()));
     }
     super::geometry::Contour::segment(request.head, request.target, request.width_nm)?;
     if request.width_nm < query.authority().rules().values.min_track_width_nm {

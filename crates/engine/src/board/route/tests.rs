@@ -479,3 +479,57 @@ fn later_class_contact_revalidates_earlier_clearance_and_width() {
         }
     }
 }
+
+/// Direct Rust clients get the same bounded previous hints as command clients, before side
+/// arithmetic, cancellation or a probe. Empty and bounded singleton hints remain valid.
+#[test]
+fn direct_planner_validates_previous_hints_before_using_them() {
+    let s = board();
+    let q = query(&s);
+    let mut r = request(&s, p(-1, 0), p(-1, 1));
+    let cancellations = std::cell::Cell::new(0);
+    let cancel = || {
+        cancellations.set(cancellations.get() + 1);
+        false
+    };
+    for previous in [vec![p(i64::MAX, 0)], vec![p(i64::MIN, 0)], vec![r.head; 257]] {
+        r.previous = previous;
+        assert!(matches!(walkaround(&q, &r, DEFAULT_BUDGET, &cancel), Err(CommandError::InvalidParams(_))));
+        assert_eq!(cancellations.get(), 0);
+    }
+    for previous in [Vec::new(), vec![r.head]] {
+        r.previous = previous;
+        assert_eq!(walkaround(&q, &r, DEFAULT_BUDGET, &|| false).unwrap().outcome, Outcome::Reached);
+    }
+}
+
+/// A new unknown-net obstacle invalidates a previous route rather than becoming an implicitly
+/// authorized island. Head-contact islands retain their existing departure exemption.
+#[test]
+fn previous_route_goes_around_new_unconnected_copper() {
+    for via in [false, true] {
+        let mut s = board();
+        let mut r = request(&s, p(1_000_000, 15_000_000), p(7_000_000, 15_000_000));
+        let first = plan(&s, &r);
+        assert_eq!(first.outcome, Outcome::Reached);
+        assert_eq!(first.points, vec![r.head, r.target]);
+        if via {
+            add(&mut s, ADD_VIA, json!({"at":p(4_000_000,15_000_000),"via_diameter_nm":600000,"via_drill_nm":300000}));
+        } else {
+            add(&mut s, ADD_TRACKS, json!({"layer":r.layer,"width_nm":WIDTH,"points":[p(4_000_000,14_000_000),p(4_000_000,16_000_000)]}));
+        }
+        let obstacle = query(&s)
+            .objects()
+            .iter()
+            .find(|o| o.contour.gap(&Contour::capsule(p(4_000_000, 15_000_000), p(4_000_000, 15_000_000), 0.)) <= 0.)
+            .unwrap()
+            .name
+            .clone();
+        r.previous = first.points;
+        let replanned = plan(&s, &r);
+        assert_eq!(replanned.outcome, Outcome::Reached, "{replanned:?}");
+        assert_ne!(replanned.points, r.previous, "must not authorize new copper by crossing it");
+        assert!(gap_to(&s, &replanned, &obstacle) >= 200000.);
+        commit_and_agree(&mut s, &replanned, r.layer, r.width_nm);
+    }
+}

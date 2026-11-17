@@ -96,3 +96,6 @@ against the exhaustive pair reference outside the timed boundary. These are solv
 preview or commit latency. The [#246 evidence](../tools/performance/baselines/issue246/README.md)
 records the first measurements, and the [PR #376 follow-up](../tools/performance/baselines/issue246/review376/README.md)
 records the connected-path validation cost and corrected search-limit outcomes.
+
+The [review follow-up](../tools/performance/baselines/issue246/review376-followup/README.md)
+records bounded previous hints and obstacle avoidance when reusing a plan.
