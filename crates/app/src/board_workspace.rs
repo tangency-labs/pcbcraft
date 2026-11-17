@@ -340,7 +340,6 @@ impl PcbApp {
         if self.views.active.board.tracks.via_tool {
             let revision = self.session.revision();
             if let Some(project) = self.session.project() {
-                let view_id = self.views.active.id();
                 let state = &mut self.views.active.board.tracks;
                 if let Some(board) = project.board_target() {
                     if let Some(view) = project.board_view(board) {
@@ -351,20 +350,12 @@ impl PcbApp {
                         || "Automatic".to_owned(),
                         |target| choices.iter().find(|c| &c.target == target).map_or_else(|| "Selected net".into(), |c| c.label.clone()),
                     );
-                    let mut action = None;
-                    workspace::ribbon_field(ui, "Via net", compact, |ui| {
-                        let (response, choice) = crate::board_net_choice::picker(
-                            ui,
-                            "Via placement net",
-                            egui::Id::unique(("via_net", view_id, revision)),
-                            choices,
-                            &current,
-                        );
-                        action = choice;
-                        response
-                    });
-                    if let Some(choice) = action {
-                        state.via_target = choice;
+                    let response =
+                        workspace::ribbon_field(ui, "Via net", compact, |ui| crate::board_net_choice::trigger(ui, "Via placement net", &current));
+                    if response.clicked()
+                        && let Some(source) = self.views.active.input(&self.session)
+                    {
+                        self.begin_via_net_choice(source, crate::board_net_choice::Destination::Placement);
                     }
                 }
             }

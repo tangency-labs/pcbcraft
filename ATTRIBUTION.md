@@ -1717,7 +1717,11 @@ continuity. No Sparksmith world model, shove, dependency or file format was impo
 
 The optional scoped via target, snapshot-local membership projection and shared
 assignment command for #369 are original MIT OR Apache-2.0 PCBcraft work.
-Placement and Properties compose the existing Craft chooser through chrome and
-share chooser data with zones. No custom interface control, external EDA source,
+Placement and Properties compose the existing Craft search field, table and modal
+form through chrome, with bounded result pages and keyboard row reveal. The
+chrome table adapter exposes the toolkit's existing reveal behavior. PCBcraft
+owns typed net identities, filtering and pagination, which have no domain-specific
+toolkit component. Both forms share typed chooser data with zones.
+No custom-drawn control, external EDA source,
 artwork, library data or dependency was added. Physical island construction,
 accepted-board review, the net registry and native codecs retain their ownership.

@@ -11,11 +11,24 @@ fn ground(h: &mut Harness<'_, PcbApp>) {
     assert_eq!(h.state().message, None);
     h.run();
 }
-/// Choose net intent using the same shared Craft dropdown used by native and browser hosts.
+/// Choose net intent through the shared searchable form, then explicitly confirm.
 fn choose(h: &mut Harness<'_, PcbApp>, field: &str, option: &str) {
     click(h, field);
-    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, option).click();
-    h.run();
+    assert!(
+        matches!(h.state().dialog, Dialog::ViaNet(_)),
+        "dialog={:?} message={:?} via={}",
+        h.state().dialog,
+        h.state().message,
+        h.state().views.active.board.tracks.via_tool
+    );
+    if option == "Automatic" {
+        click(h, "Choose automatic net");
+    } else {
+        h.get_by_label("Search nets").type_text(option);
+        h.run();
+        click(h, &format!("Choose net {option}"));
+    }
+    click(h, "Use net");
 }
 /// Wait only for the already submitted bounded native preparation, without sending further input.
 fn settle(h: &mut Harness<'_, PcbApp>) {
@@ -70,7 +83,7 @@ fn via_assignment_controls_place_clear_and_restore_history() {
     }
 }
 
-/// Dismissing the chooser or placement leaves native bytes/history untouched; new projects reset intent.
+/// Dismissing the search form or placement leaves native bytes/history untouched; new projects reset intent.
 #[test]
 fn via_assignment_cancel_and_project_replacement_preserve_authority() {
     let mut h = routable();
@@ -140,4 +153,25 @@ fn split_via_placement_choices_stay_view_local() {
     h.state_mut().start_via();
     h.run();
     assert!(h.state().views.active.board.tracks.via_target.is_none());
+}
+
+/// A Properties chooser cannot apply to a selection replaced while the form is open.
+#[test]
+fn via_net_properties_reject_replaced_selection() {
+    let mut h = routable();
+    ground(&mut h);
+    h.state_mut().start_via();
+    h.run();
+    place(&mut h);
+    let id = vias(&h)[0].id;
+    h.state_mut().views.active.board.tracks.selected.insert(id);
+    h.state_mut().views.active.board.properties_collapsed = false;
+    h.run();
+    click(&mut h, "Via net");
+    click(&mut h, "Choose net GND");
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().views.active.board.tracks.selected.clear();
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

@@ -247,7 +247,13 @@ pub enum ItemAction {
 }
 
 /// Read-only tables use the kit's selectable rows, clipping, cell widths and accessibility.
-pub fn table(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], mut select: impl FnMut(ItemAction)) {
+pub fn table(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], select: impl FnMut(ItemAction)) {
+    table_with_reveal(ui, headers, rows, false, select);
+}
+
+/// Reuse the selectable table while revealing a keyboard-selected row within its scroll area.
+/// Callers bound the supplied result set and retain data identities and selection policy.
+pub fn table_with_reveal(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], reveal: bool, mut select: impl FnMut(ItemAction)) {
     ui.spacing_mut().scroll.floating = false;
     ui.spacing_mut().scroll.bar_width = Tokens::get().space_6;
     let columns: Vec<_> = headers
@@ -260,36 +266,37 @@ pub fn table(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], mut select: imp
             table.headers(ui, |_, _| false);
             for (index, entry) in rows.iter().enumerate() {
                 let mut fold = false;
-                if table
-                    .row_visible(ui, &entry.key, entry.selected, false, |row| {
-                        for (column, cell) in entry.cells.iter().enumerate() {
-                            row.cell(|ui| {
-                                if column == 0 {
-                                    if entry.nested {
-                                        ui.add_space(Tokens::get().space_24);
-                                    }
-                                    if let Some(open) = entry.branch {
-                                        let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_16, Tokens::get().control_height));
-                                        fold = kit::panel_disclosure_button_at(
-                                            ui,
-                                            rect,
-                                            open,
-                                            &format!("{} {}", if open { "Collapse" } else { "Expand" }, cell),
-                                        )
-                                        .clicked();
-                                    }
+                let response = table.row_visible(ui, &entry.key, entry.selected, entry.selected && reveal, |row| {
+                    for (column, cell) in entry.cells.iter().enumerate() {
+                        row.cell(|ui| {
+                            if column == 0 {
+                                if entry.nested {
+                                    ui.add_space(Tokens::get().space_24);
                                 }
-                                ui.add(
-                                    egui::Label::new(if entry.selected && column == 0 { RichText::new(cell).strong() } else { RichText::new(cell) })
-                                        .selectable(false)
-                                        .truncate(),
-                                )
-                                .on_hover_text(cell);
-                            });
-                        }
-                    })
-                    .clicked()
-                {
+                                if let Some(open) = entry.branch {
+                                    let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_16, Tokens::get().control_height));
+                                    fold = kit::panel_disclosure_button_at(
+                                        ui,
+                                        rect,
+                                        open,
+                                        &format!("{} {}", if open { "Collapse" } else { "Expand" }, cell),
+                                    )
+                                    .clicked();
+                                }
+                            }
+                            ui.add(
+                                egui::Label::new(if entry.selected && column == 0 { RichText::new(cell).strong() } else { RichText::new(cell) })
+                                    .selectable(false)
+                                    .truncate(),
+                            )
+                            .on_hover_text(cell);
+                        });
+                    }
+                });
+                if entry.selected && reveal {
+                    table.reveal_row(response.rect);
+                }
+                if response.clicked() {
                     select(ItemAction::Select(index));
                 }
                 if fold {

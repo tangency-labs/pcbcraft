@@ -1,9 +1,12 @@
 # Via net assignments
 
 Standalone vias support **Automatic** mode and an explicit net target. While the
-Via tool is active, choose its Net in the ribbon before placing it. In Properties,
-select one or more vias and choose Net; Automatic clears their explicit targets.
-Locked vias must be unlocked before assignment edits.
+Via tool is active, the ribbon's Via net button shows its placement choice. In
+Properties, select one or more vias and click Net. Both buttons open the same
+searchable chooser: type part of a net name, select a result and confirm Use net.
+Results have at most 50 net rows per page, with Automatic always available to
+clear explicit intent. Canceling preserves the previous choice. Locked vias must
+be unlocked before assignment edits.
 
 Automatic vias inherit the single resolved intent of contacted copper. A via in
 empty space has no net unless explicitly assigned. Routing inserts automatic

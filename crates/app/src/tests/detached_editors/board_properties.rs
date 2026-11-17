@@ -93,10 +93,10 @@ fn detached_via_net_properties_share_intent_without_leaking_placement_state() {
     focus(&mut h, &peer, true);
     let at = child_rect(&peer, "Via net").center();
     child_click_at(&mut h, &peer, at);
-    // The independent child input stream exercises keyboard activation of the focused chooser.
-    child_key(&mut h, &peer, Key::Space, Modifiers::NONE);
-    let automatic = child_rect(&peer, "Automatic").center();
+    let automatic = child_rect(&peer, "Choose automatic net").center();
     child_click_at(&mut h, &peer, automatic);
+    let confirm = child_rect(&peer, "Use net").center();
+    child_click_at(&mut h, &peer, confirm);
     let project = h.state().session.project().unwrap();
     assert!(project.boards().next().unwrap().vias()[0].net_assignment.is_none());
     assert_eq!(child_value(&peer, "Via net").as_deref(), Some("Automatic"));

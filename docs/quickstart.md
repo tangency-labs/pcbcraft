@@ -795,7 +795,8 @@ Browse. When both are present, complete the pin mapping before publishing.
 Schematic placement requires a symbol; the current placement command does not
 create board-owned symbol-less instances.
 
-For standalone vias, choose **Via** and set its ribbon **Via net** to Automatic or
-a current board net before placing. Selected-via Properties can change or clear
+For standalone vias, choose **Via** and click its ribbon **Via net** to search for
+a current board net and confirm **Use net** before placing, or keep **Automatic**.
+Selected-via Properties uses the same search form to change or clear
 that assignment; [via net assignments](via-net-assignments.md) explains how intent
 remains distinct from physical copper connections.
