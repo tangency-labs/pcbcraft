@@ -13,9 +13,9 @@ pub(super) const MAX_CTI_V: u32 = 1_000;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DielectricStrengthReport {
-    /// Breakdown voltage in whole volts, 1 to 10,000,000.
+    /// Breakdown voltage in whole volts, 1 to 10,000,000, as a JSON integer-kind token.
     pub breakdown_v: u32,
-    /// Thickness of the tested specimen, 1 to 100,000,000 nm.
+    /// Specimen thickness, 1 to 100,000,000 nm, as a JSON integer-kind token.
     pub specimen_thickness_nm: i64,
     /// Direction of the applied field; absent means unknown.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
@@ -73,7 +73,7 @@ impl MaterialGroup {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CtiReport {
-    /// Comparative tracking index in whole volts, 1 to 1000.
+    /// Comparative tracking index in whole volts, 1 to 1000, as a JSON integer-kind token.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub cti_v: Option<u32>,
     /// Material group; must hold `cti_v` when both are given.

@@ -1,4 +1,6 @@
 //! Thermal conductivity, thermal expansion, dielectric strength and tracking reports.
+mod number_spellings;
+
 use super::*;
 use crate::CommandError;
 use crate::board::materials::{MaterialGroup, MeasurementAxis, TgRegion};

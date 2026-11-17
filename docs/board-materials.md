@@ -130,6 +130,12 @@ A missing report or condition means unknown, never zero.
 | `dielectric_strength` | `breakdown_v`, V, 1–10,000,000 | required `specimen_thickness_nm`, 1–100,000,000; optional `axis` |
 | `cti` | `cti_v`, V, 1–1000, and/or `material_group` (`I`, `II`, `IIIa`, `IIIb`) | at least one of the two |
 
+The numeric fields in these four lists require parsed JSON integer-kind tokens:
+`1` is accepted within the field's range, while `1.0`, `1e0`, `-0`, strings and
+fractional numbers are refused. This token-kind restriction is stricter than the
+mathematical-integer meaning of JSON Schema's `integer`. The existing Tg and Dk/Df
+field readers are unchanged.
+
 For example, 1.0 W/(m·K) through the thickness is `conductivity_mw_per_m_k: 1000` with
 `axis: z`, 50 ppm/K is `cte_ppb_per_k: 50000`, and 40 kV across a 1.0 mm specimen is
 `breakdown_v: 40000` with `specimen_thickness_nm: 1000000`. Breakdown voltage is kept with

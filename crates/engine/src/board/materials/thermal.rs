@@ -14,12 +14,12 @@ pub(super) const MAX_CTE_PPB_PER_K: i64 = 10_000_000;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThermalConductivityReport {
-    /// Conductivity in whole mW/(m·K), 1 to 10,000,000.
+    /// Conductivity in whole mW/(m·K), 1 to 10,000,000, as a JSON integer-kind token.
     pub conductivity_mw_per_m_k: u32,
     /// Direction measured; absent means unknown, not isotropic.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub axis: Option<MeasurementAxis>,
-    /// Specimen temperature, in the Tg report range.
+    /// Specimen temperature, in the Tg report range, as a JSON integer-kind token.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub temperature_milli_c: Option<i64>,
     /// Test method or standard as written by the source, up to 80 characters.
@@ -46,7 +46,7 @@ pub enum TgRegion {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CteReport {
-    /// Expansion in whole ppb/K, -1,000,000 to 10,000,000.
+    /// Expansion in whole ppb/K, -1,000,000 to 10,000,000, as a JSON integer-kind token.
     pub cte_ppb_per_k: i64,
     /// Direction measured; absent means unknown, not isotropic.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
@@ -54,10 +54,10 @@ pub struct CteReport {
     /// Side of the glass transition, when the source states it.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub region: Option<TgRegion>,
-    /// Lower end of the averaging range; given together with `to_milli_c`.
+    /// Lower end of the averaging range, as a JSON integer-kind token; given with `to_milli_c`.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub from_milli_c: Option<i64>,
-    /// Upper end of the averaging range, above `from_milli_c`.
+    /// Upper end, as a JSON integer-kind token, above `from_milli_c`.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub to_milli_c: Option<i64>,
     /// Test method or standard as written by the source, up to 80 characters.
