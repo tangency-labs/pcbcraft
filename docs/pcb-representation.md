@@ -136,9 +136,11 @@ of the initial model.
 Thickness is an exact integer length when specified. An unspecified value stays
 unknown rather than becoming zero or an invented material property. The sum of
 known copper and dielectric thicknesses is the laminate thickness only when all
-its constituents are known. Surface coatings, finished-board tolerances and
-manufacturer specifications need explicit future fields; do not silently include
-them in that sum or label the result a guaranteed finished thickness.
+its constituents are known. The stackup's separate [finished board thickness,
+tolerance and declared minimum](board-materials.md#copper-strata-and-board-thickness)
+are declarations, not inferred from or checked against that sum. Surface-coating
+records and manufacturer qualification remain future work; do not silently include
+them in the sum or label the result a guaranteed finished thickness.
 
 The first presets are two and four copper layers. Their thicknesses and materials
 start unspecified. The representation is a bounded collection, not a fixed

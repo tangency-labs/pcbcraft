@@ -212,8 +212,10 @@ not yet consume this declaration.
 Every field is optional and omitted means unknown; zero is never a placeholder.
 Engine accessors are `BoardSetup::copper`, `copper_stack` and
 `board_thickness_for_checks`; MCP clients read the fields from the inspected setup and
-change them with `pcb.set_board_setup`, as one undo step. A copper-count reduction
-refuses to drop a copper layer that carries any of them. The two-layer starting
+change them with `pcb.set_board_setup`, as one undo step. `with_copper_count` and
+the Board setup copper-count control refuse to drop a copper layer carrying these
+facts; the complete setup command instead accepts an explicit replacement, subject
+to ordinary topology and occupancy validation. The two-layer starting
 stackups replace copper thickness, so they clear its tolerance, basis and base copper
 and keep roles and the board thickness. The Board setup form keeps these fields
 when it applies other edits but does not edit them yet.
