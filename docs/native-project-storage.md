@@ -256,6 +256,35 @@ rule record. Older headers reject rules. Boards without rules retain their earli
 encoding; removing rules restores the format required by the remaining data.
 See [board-rules.md](board-rules.md) for validation, resolution and reset behavior.
 
+Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin with a
+stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
+in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier
+physical field, including optional zone outlines, and requires the origin record;
+older headers reject the origin. Boards
+without an origin retain their earlier encoding and measure outputs from board zero;
+removing the origin restores the format required by the remaining data.
+
+### Zone outline records
+
+Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
+all board/19 fields, with board rules optional. A zone board with a placement
+origin uses format 21, preserving both records; removing either feature retains
+the other and selects its required format. Without zones the encoder chooses
+the format required by the remaining content. An absent array in board/20, an
+empty or null array in either format, or zones in a format below 20, is refused. Zones are
+UUID-sorted, one authored record per line, with `id`, `layer`, `net`, `points` and
+`options`; no derived fill is stored. Layer UUIDs resolve to copper on that board,
+and net UUIDs resolve to its persistent registry, including retained ambiguous
+and retired identities. Inspection reports their state without retargeting them.
+
+The [zone guide](copper-zone-outlines.md#storage-and-limits) defines the integer
+geometry and settings bounds. Options require priority, thermal gap, spoke width,
+connection style and minimum island area; omitted clearance inherits the board's
+rules. Explicit stored null and unknown fields are refused. Diagnostic single-file
+encoding refuses zone intent; folders, archives and recovery use the production
+split codec. Deleting the last zone removes the extension without dropping the
+registry's retained identities.
+
 ## Document ownership
 
 | File | Format | Contents |
@@ -263,7 +292,7 @@ See [board-rules.md](board-rules.md) for validation, resolution and reset behavi
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23` or `/24` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, and version 24 adds the part-group catalog with the earlier records optional |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, and version 5 adds part-group memberships; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/19` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/21` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -1002,8 +1031,14 @@ pcbcraft-cli convert /path/to/old-project.pc.zip /path/to/converted-project.pc
 A source folder or its `project.pc` entry point must contain a supported split
 project. Archives must use container version 2, or be manifest-less ZIPs of that
 previous split layout. A destination ending in `.pc` creates a container-v3 ZIP;
-other destinations create a new folder. Both forms validate all managed documents
-and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
+other destinations create a new folder. On Windows, a destination named like a
+device, such as `con.pc`, `aux` or `COM1.pc`, is refused before anything is written.
+This includes `COM¹`–`COM³` and `LPT¹`–`LPT³`, with or without extensions and
+ignoring ASCII case, as specified by [Windows naming conventions](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions).
+Trailing ASCII spaces in the text before the first dot do not bypass the check:
+`NUL ` and `COM¹  .pc` are also refused. The check does not rename the destination.
+Other platforms accept these as ordinary destination names. Both forms validate
+all managed documents and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
 bytes. The entry point becomes project/16 with a board-folder registration and
 single-use occurrence records; the entry-point path, physical board path and
 packed manifest change. Unrelated root files such

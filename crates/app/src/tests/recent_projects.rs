@@ -8,6 +8,14 @@ use std::{
 
 use super::*;
 
+/// Use the canonical, display-safe root that native file jobs record, retaining cleanup ownership.
+/// Temporary roots can otherwise carry Windows short names or symlink aliases on Unix.
+fn project_directory() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = pcbcraft_storage::plain_path_if_equivalent(dir.path().canonicalize().unwrap());
+    (dir, root)
+}
+
 /// The file worker keeps requesting repaints, so step until its result is adopted rather than
 /// asking the harness to wait for idle while I/O may still be running.
 pub(super) fn finish_file(h: &mut Harness<'_, PcbApp>) {
@@ -76,8 +84,8 @@ fn restore(storage: &dyn eframe::Storage) -> PcbApp {
 /// converge on one row. Removing history leaves both the open session and disk data intact.
 #[test]
 fn saved_projects_reopen_from_home_and_history_survives_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("Power controller");
+    let (_dir, root) = project_directory();
+    let path = root.join("Power controller");
     let mut h = harness();
     saved_project(&mut h, &path);
     assert_eq!(h.state().files.recent.entries()[0].name, "Power controller");
@@ -118,10 +126,10 @@ fn saved_projects_reopen_from_home_and_history_survives_restart() {
 /// the active project and Home intact when their opens fail.
 #[test]
 fn current_archives_reopen_and_legacy_or_missing_files_preserve_the_session() {
-    let dir = tempfile::tempdir().unwrap();
-    let legacy = dir.path().join("original.pc");
+    let (_dir, root) = project_directory();
+    let legacy = root.join("original.pc");
     std::fs::write(&legacy, include_bytes!("../../tests/fixtures/two-resistors.pc")).unwrap();
-    let archive = dir.path().join("archive.pc");
+    let archive = root.join("archive.pc");
     std::fs::copy("tests/fixtures/split/two-resistors.pc", &archive).unwrap();
     let mut h = harness();
     h.state_mut().show_home();
@@ -157,9 +165,9 @@ fn current_archives_reopen_and_legacy_or_missing_files_preserve_the_session() {
 /// another recent entry. Cancel keeps the draft; Save opens the originally chosen project.
 #[test]
 fn recent_open_asks_before_replacing_unsaved_work_and_keeps_its_target_through_save() {
-    let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("Target");
-    let draft = dir.path().join("Draft");
+    let (_dir, root) = project_directory();
+    let target = root.join("Target");
+    let draft = root.join("Draft");
     let mut h = harness();
     saved_project(&mut h, &target);
     new_project(&mut h);
@@ -186,16 +194,16 @@ fn recent_open_asks_before_replacing_unsaved_work_and_keeps_its_target_through_s
 /// last row and remove it without opening it or affecting its equally named neighbor.
 #[test]
 fn narrow_history_keeps_long_paths_reachable_and_duplicate_names_distinct() {
-    let dir = tempfile::tempdir().unwrap();
+    let (_dir, root) = project_directory();
     let mut h = harness();
     h.set_size(egui::vec2(420.0, 700.0));
     let name = "A very long Unicode project name — Power controller";
     for index in 0..12 {
-        h.state_mut().files.recent.remember(name, dir.path().join(format!("a-long-parent-directory/project-{index}.pc")));
+        h.state_mut().files.recent.remember(name, root.join(format!("a-long-parent-directory/project-{index}.pc")));
     }
     h.state_mut().show_home();
     finish_previews(&mut h);
-    let path = dir.path().join("a-long-parent-directory/project-0.pc");
+    let path = root.join("a-long-parent-directory/project-0.pc");
     let label = format!("Remove {name} ({}) from recent projects", path.display());
     h.get_by_label(&label).scroll_to_me();
     h.run();
@@ -212,8 +220,8 @@ fn narrow_history_keeps_long_paths_reachable_and_duplicate_names_distinct() {
 #[test]
 fn cancelled_and_failed_saves_do_not_open_the_recent_target() {
     for error in [None, Some("Destination is read-only")] {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("Target");
+        let (_dir, root) = project_directory();
+        let target = root.join("Target");
         let mut h = harness();
         saved_project(&mut h, &target);
         new_project(&mut h);
@@ -240,16 +248,16 @@ fn cancelled_and_failed_saves_do_not_open_the_recent_target() {
 /// current session, dirty state or file bytes. Empty and unavailable previews remain actionable.
 #[test]
 fn restored_home_cards_preview_saved_schematics_without_opening_them() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("two-resistors.pc");
+    let (_dir, root) = project_directory();
+    let path = root.join("two-resistors.pc");
     std::fs::copy("tests/fixtures/split/two-resistors.pc", &path).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     let mut h = harness();
-    let empty = dir.path().join("empty");
+    let empty = root.join("empty");
     saved_project(&mut h, &empty);
     let before = h.state().session.snapshot().unwrap();
     let revision = h.state().session.revision();
-    let missing = dir.path().join("missing.pc");
+    let missing = root.join("missing.pc");
     h.state_mut().files.recent.remember("Two resistors", path.clone());
     h.state_mut().files.recent.remember("Missing", missing.clone());
     open_home(&mut h);
@@ -286,8 +294,8 @@ fn recent_cards_show_native_power_symbols_in_both_themes() {
         bytes
     }
     for theme in [preferences::ThemeChoice::Dark, preferences::ThemeChoice::Light] {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Power preview");
+        let (_dir, root) = project_directory();
+        let path = root.join("Power preview");
         let mut h = harness();
         new_project(&mut h);
         h.state_mut().preferences.theme = theme;

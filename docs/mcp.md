@@ -193,6 +193,23 @@ IDs, anchors, lineage and decisions only when a registry exists, and never
 creates records. See the [storage and command contract](net-registry-storage.md)
 for scope and version details. There are no new editor controls in this slice.
 
+`pcb.add_zone`, `pcb.set_zone` and `pcb.delete_zones` edit
+[zone outlines](copper-zone-outlines.md#shared-commands) through the same revision-checked
+transactions as PCB Layout. A derived typed net target is promoted in the same
+undo step as creation; inspection reports authored zone records and current net
+identity state. These commands do not create conductive fill.
+
+`pcb.move_items` takes `board`, `expected_revision`, a mixed `items` selection
+and integer `dx_nm`/`dy_nm` displacements. It translates the complete selection in
+one transaction, preserving identities and carrying unselected track ends on moved
+pads. Explicitly selected tracks translate once. Unknown/locked objects, stale
+revisions, out-of-range geometry or a new physical short refuse the complete move.
+
+`pcb.delete_items` also accepts zone UUIDs in `items.zones` and deletes mixed
+board selections in one transaction. Copy, Cut and Duplicate refuse a selection
+containing zones until zone clipboard support is available; they never omit the
+zones and operate on a subset.
+
 `pcb.add_drawing`, `pcb.set_drawing` and `pcb.delete_drawing` use the same
 transactions as canvas Board Outline editing. Each takes `board` and
 `expected_revision`; creation also takes a `layer` UUID, ordered `points`
@@ -222,13 +239,23 @@ maximums downward. The report includes per-property `sources`. Kinds are `short`
 `no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
 
 `pcb.export_fabrication` generates the addressed board's fabrication files without
-editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`:
+editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
+and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask and paste top and bottom, top silkscreen and the outline,
 and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. One
 `execute` request generates the file contents once; `apply` still validates
 exportability without changing the project or revision.
+
+`project.export_netlist` generates the project's netlist without editing it;
+`execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
+fabrication files) with its `name`
+and text `contents`, and `netlist.findings` for unplaced units and nets without a
+persistent ID. `dry_run: true` returns only the file name and the findings. The
+document lists every component with its logical terminals and every net across all
+sheets with its persistent UUID and joined terminals; see the
+[netlist format](netlist-format.md). Exporting an unchanged project gives the same bytes.
 
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
@@ -346,6 +373,25 @@ Schematic inspection reports `available_units` and `display_reference`; the
 base `reference` stays shared by the part. The library authoring transaction
 accepts `select_unit` and `add_unit` actions. See the
 [multi-unit contract](symbol-schema.md#multiple-schematic-units).
+
+## Placement origin
+
+`pcb.set_placement_origin` requires an explicit `board`, `expected_revision` and
+`origin`: `{"kind":"board_zero"}`, `{"kind":"outline_lower_left"}` (the lower-left
+corner of the Board Outline's bounds, following later outline edits), or
+`{"kind":"point","x_nm":...,"y_nm":...}` in board coordinates. `null` removes the saved
+origin. It is one undo step, keeps the origin's UUID while its anchor changes, and
+ignores a repeat of the current value. Board inspection reports `placement_origin`
+with the `authored` record and the `effective` origin outputs use, which is null when
+an outline-attached origin has no outline yet.
+
+Fabrication outputs shift every coordinate to this origin and write Y up, as seen
+from the top; rotations are unchanged. The export result's `fabrication.origin` names
+the `anchor`, its `source` (`{"kind":"builtin"}` without a saved origin, otherwise
+`{"kind":"board","origin":"<uuid>"}`), the resolved `at` point in board coordinates, and `axes: "x_right_y_up"`. Without a saved origin, outputs
+are measured from board zero. Gerber writes exact nanometres; Excellon rounds each
+millimetre value to three decimals from integer nanometres with halves going up, so
+moving the origin by whole micrometres shifts every written value by exactly that amount.
 
 ## Saved board defaults
 

@@ -69,6 +69,9 @@ browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, schematic grid outside paper, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
+Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
+same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
+bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).
 The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
 **Off**, **Dots** or **Lines** for all PCB views and windows. This choice is remembered
 between sessions and leaves snapping unchanged. **Grid opacity** fades visible grids
@@ -723,7 +726,9 @@ stroke. Esc cancels unfinished geometry before exiting the tool.
 On copper, these tools create conductive linework: a rectangle outline becomes
 four connected segments. It participates in connectivity, short checks, DRC and
 fabrication and uses the ordinary copper selection/editing tools. Filled copper
-zones remain a planned Route subtool. Non-copper shapes remain independent
+zones use **Layout → Route → Zone** to draw
+[editable zone outlines](copper-zone-outlines.md), with fill and refill remaining
+separate follow-ups. Non-copper shapes remain independent
 editable graphics: select a line, drag a vertex or segment, use M to move it, or
 Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
 fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics
@@ -790,7 +795,11 @@ not a manufacturing sign-off.
 **Manufacture → Fabrication → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
 files for each copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
-through-hole pads). Coordinates are in millimeters with Y up, as seen from the top. Mask
+through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
+measured from the board's placement origin: board zero unless an origin has been set
+with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
+are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,
+so both shift exactly when the origin moves by a whole micrometre. Mask
 and paste openings match the pads exactly, leaving any expansion to the fabricator, and
 vias are tented. It needs a board setup and a closed Board Outline, says so otherwise,
 and never edits the project; the same board always produces the same archive. Run DRC
