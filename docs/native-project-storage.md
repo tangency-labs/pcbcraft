@@ -971,15 +971,18 @@ document set. Restoring the original directory permits ordinary recovery.
 
 ## Unsaved-work recovery store
 
-The save transaction above protects saved files. Unsaved edits are kept in a
-separate per-user recovery store, `pcbcraft_storage::recovery`, which never
-writes into a project folder, its `.pcbcraft-save` transaction or its lock file.
-The store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
+The save transaction above protects saved files. `pcbcraft_storage::recovery`
+provides an API for recording unsaved edits in a separate per-user recovery
+store, never in a project folder, its `.pcbcraft-save` transaction or its lock
+file. Desktop sessions do not yet attach a recorder; that integration is a
+follow-up, so recovery is not yet available in the app.
+The API's default store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
 `%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
 `$XDG_DATA_HOME/pcbcraft` (`~/.local/share/pcbcraft`). The browser has no store.
 
-Each editing session owns one entry, named by the project UUID, the process and
-a time stamp so two sessions never share it:
+A host that attaches a recorder gives each editing session its own entry,
+named by the project UUID, the process and a time stamp so two sessions never
+share it:
 
 | File | Contents |
 |---|---|
@@ -1037,10 +1040,12 @@ as the old snapshot and the journal together. A failure before the new snapshot'
 rename leaves the old snapshot and journal unchanged, already holding that edit,
 and the next edit tries again. A failure after the rename, including the folder
 flush, adopts the new snapshot and closes the old journal. The next edit starts
-another snapshot rather than appending records recovery would ignore. While snapshots keep failing, for example
-because the recovery folder became read-only or full, every edit is still
-appended to the open journal, so it grows past the limit until a snapshot
-succeeds or the session ends. Removing the recovery folder while a session runs
+another snapshot rather than appending records recovery would ignore. While
+snapshots keep failing and writes to the open journal still succeed, edits
+continue to be appended, so the journal can grow past the limit until a snapshot
+succeeds or the session ends. A full recovery filesystem can also make an
+append fail; then the writer closes the journal and the next edit tries a new
+snapshot. Removing the recovery folder while a session runs
 is different: on Unix it deletes the snapshot and journal, and bytes written to
 the still-open, unlinked journal cannot be recovered. The next changed append
 checks whether the journal path is missing; if it is, the entry is disabled and
