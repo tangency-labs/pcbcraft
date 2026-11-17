@@ -243,7 +243,7 @@ fn profiles_leave_fabrication_and_legacy_markers_alone() {
         content: ProfileContent {
             revision: 1,
             name: "Marker".into(),
-            provenance: Provenance::Authored,
+            provenance: Provenance::Authored {},
             vendor: None,
             bottom_side: BottomSide::ViewedFromTop,
             corrections: Arc::new(vec![Arc::new(PackageCorrection {
@@ -743,7 +743,7 @@ fn legacy_pin_only_round_trips_flat_split_and_packed_projects() {
         )
         .unwrap();
     let flat = encode(registered.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&flat).unwrap()["format"], "pcbcraft-project/7");
+    assert_eq!(serde_json::from_slice::<Value>(&flat).unwrap()["format"], "pcbcraft-project/10");
     let flat = decode(&flat).unwrap();
     assert_eq!(flat.boards().next().unwrap().name(), "Board");
     assert_eq!(flat.layout_root(), None);
@@ -1004,6 +1004,9 @@ fn saved_catalog_and_adoption_edges_are_refused() {
     let mut missing = project.clone();
     missing["assembly_profiles"]["revisions"][0]["content"].as_object_mut().unwrap().remove("bottom_side");
     check("project.json", missing, "bottom_side");
+    let mut authored_extra = project.clone();
+    authored_extra["assembly_profiles"]["revisions"][0]["content"]["provenance"]["source"] = json!("Not imported");
+    check("project.json", authored_extra, "unknown field `source`");
     let mut nil = project.clone();
     nil["assembly_profiles"]["heads"][0]["profile"] = json!(Uuid::nil());
     check("project.json", nil, "non-nil");
