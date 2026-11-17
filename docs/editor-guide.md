@@ -770,7 +770,12 @@ listing up to 1,000 findings. It reports a short when one copper island joins pa
 different intended nets, copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
 connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
-of its edge, and overlapping footprint courtyards. Short checks include direct pad
+of its edge, and overlapping footprint courtyards. Courtyards on the same side are
+compared by their actual rectangle and closed-polyline shapes after rotation and flip,
+so empty space between separate courtyard elements or inside a concave outline is free.
+Courtyards that only touch at an edge or corner pass; overlap and containment are
+reported. Circles, arcs, open lines and self-intersecting outlines are still compared by
+their bounds, and those findings say they are conservative. Short checks include direct pad
 contact and via-mediated connections, even with a zero clearance rule. A board with
 reviewed connectivity uses its accepted terminal membership; pending schematic edits
 do not change that intent until accepted. Clearance remains a separate check, so

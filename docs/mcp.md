@@ -236,7 +236,10 @@ most 1000 findings. Saved board defaults apply unless a request supplies a
 supported hard-limit override; authored minimums can only tighten upward and
 maximums downward. The report includes per-property `sources`. Kinds are `short`,
 `clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,
-`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`. A
+`courtyard_overlap` lists both footprints and marks a point inside the overlap; touching
+courtyards pass. When unsupported courtyard geometry (circles, arcs, open paths) decided
+the finding by bounds, its message says the comparison is conservative.
 
 `pcb.export_fabrication` generates the addressed board's fabrication files without
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
