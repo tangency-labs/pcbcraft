@@ -500,8 +500,9 @@ impl EditJournal {
     /// After a failed append the journal may end in a torn record, so the next call starts a new
     /// snapshot rather than appending past it. Detected removal disables the entry, since its
     /// lock path may have been removed too. An edit that changed no document is not recorded.
-    /// Once the journal passes its size limit, the recorded state becomes a new snapshot; if that
-    /// fails the edit stays recorded in the old journal and the error is returned.
+    /// Once the journal passes its size limit, the recorded state becomes a new snapshot. If
+    /// rebasing fails after a successful append, that edit remains in either the old journal or
+    /// the new snapshot, depending on the publication stage, and the error is returned.
     pub fn append(&mut self, edit: &CommittedEdit, documents: Documents) -> Result<(), String> {
         let Some(file) = self.file.as_mut() else {
             return self.rebase(documents);
