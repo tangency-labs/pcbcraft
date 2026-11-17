@@ -1019,6 +1019,106 @@ the replacement to an external symlink target. A final visible-tree check stops
 adoption and retains the journal if registered paths no longer match the completed
 document set. Restoring the original directory permits ordinary recovery.
 
+## Unsaved-work recovery store
+
+The save transaction above protects saved files. `pcbcraft_storage::recovery`
+provides an API for recording unsaved edits, with a per-user recovery store
+as its default. Callers can choose another directory; the API does not check
+whether it is outside a project. Hosts should keep recovery separate from
+project files, the `.pcbcraft-save` transaction and the save lock. Desktop sessions do not yet attach a recorder; that integration is a
+follow-up, so recovery is not yet available in the app.
+The API's default store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
+`%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
+`$XDG_DATA_HOME/pcbcraft` (`~/.local/share/pcbcraft`). The browser has no store.
+
+A host that attaches a recorder gives each editing session its own entry,
+named by the project UUID, the process and a time stamp so two sessions never
+share it:
+
+| File | Contents |
+|---|---|
+| `<id>.pc` | Versioned recovery envelope around a packed project snapshot |
+| `<id>.journal` | Successfully recorded changes since that snapshot |
+| `<id>.lock` | Held locked by the writing session while it runs |
+
+[`Session::observe_edits`](../crates/engine/src/lib.rs) reports every edit
+committed through the shared command path, from the GUI, CLI or MCP, including
+prepared copper edits, and each new history root: an open, or the name and
+layout a completed save adopts into the live project. `JournalRecorder` encodes
+and writes them on its own thread,
+so neither editing nor saving waits for it. Each record names its command,
+command version and parameters, and stores the documents the edit added, changed
+or removed with the same codec a save uses, plus fingerprints of the complete
+document set before and after. Records hold results rather than commands to run
+again, because commands that create objects draw fresh random identities.
+
+Both snapshot and journal start with `pcbcraft-recovery/2`, followed by a framed
+JSON header with `generation` and `base_sha256`. The snapshot then holds the
+ordinary packed project bytes. Its generation is its staging filename, with 24
+random characters, and changes on each publication even if the documents are
+identical. The version and framed snapshot header fit within 4096 bytes; the
+packed project retains its ordinary archive limits. A journal is replayed only
+when both generation and document hash match the snapshot. Unknown header fields
+are ignored within this version; required fields must be present.
+
+Each frame has a little-endian u32 payload length, the payload and its SHA-256.
+The writer attempts to flush each edit record before processing the next
+notification. Recovery reads the snapshot and applies records in order. It
+stops at the first torn, damaged or inconsistent record and keeps the last
+complete readable state. A kill can lose edits being written or still queued.
+Earlier edits can also be absent after encoding or write failures, or after
+removal of the recovery entry; receipt of a notification is not proof of
+persistence. `sync` waits for prior notifications to be processed and returns
+the first error since the previous call, rather than guaranteeing every edit
+was written. The snapshot is published first, so a stale journal is ignored even
+when its base documents equal the new snapshot's. Unsupported versions,
+including the earlier unwrapped snapshot and `pcbcraft-recovery/1` journal, are
+refused for the caller to offer for discard. These are recovery files, not
+ordinary `.pc` project files; saved project formats are unchanged. The store's
+layout and record encoding are private to PCBCraft and carry no compatibility
+promise beyond that refusal. Directory flushes have the same Unix-only limit
+as saves.
+Windows refuses to rename a file over one that is open, so the writer closes its
+journal before publishing the next one. While another process has the snapshot
+or journal open, for example while reading the entry, publishing over it fails
+there; recovery can read the previous recorded state, or the new snapshot
+already holds the state supplied for publication. The writer tries another
+snapshot at the next edit.
+
+The journal has a size limit. When it grows past twice the size of its snapshot,
+or past 1 MiB if that is larger, the state after the edit that crossed the limit
+becomes a new snapshot and the journal starts again empty. Recovery then reads
+the snapshot, records up to the larger of twice its size and 1 MiB, and the one
+record that crossed the limit. While a project stays about the same size,
+rewriting snapshots adds at most about half again to the bytes the journal
+writes; one large edit, such as a big paste, can make the new snapshot as large
+as the old snapshot and the journal together. A failure before the new snapshot's
+rename leaves the old snapshot and journal unchanged, already holding that edit,
+and the next edit tries again. A failure after the rename, including the folder
+flush, adopts the new snapshot and closes the old journal. The next edit starts
+another snapshot rather than appending records recovery would ignore. While
+snapshots keep failing and writes to the open journal still succeed, edits
+continue to be appended, so the journal can grow past the limit until a snapshot
+succeeds, an append fails or the session ends. A full recovery filesystem can also make an
+append fail; then the writer closes the journal and the next edit tries a new
+snapshot. Removing the recovery folder while a session runs
+is different: on Unix it deletes the snapshot and journal, and bytes written to
+the still-open, unlinked journal cannot be recovered. The next changed append
+checks whether the journal path is missing; if it is, the entry is disabled and
+the error is held for `sync`. Recreating the folder does not re-enable that
+entry, since the original lock handle cannot protect a recreated lock path; a
+new recorder and entry are needed. This check detects a missing path, not an
+arbitrary replacement or a concurrent removal after the check. Other write
+failures with no journal open, including a record or new journal that could not
+be written or an opened or saved project that could not be snapshotted, leave
+edits unrecorded until a snapshot succeeds; recovery returns the last recorded
+state. A recorder keeps the entry lock even if its first snapshot fails.
+
+Each recorded edit encodes the whole project and fingerprints the complete
+document set, on the writer thread. Nothing yet removes the entry of a session
+that has ended: its snapshot, journal and lock file stay in the store. Removing
+them belongs to the recovery offer on start, which is not built yet.
+
 ## Compatibility and fixtures
 
 App version 0.1.0 introduces this layout. Earlier working
