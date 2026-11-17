@@ -157,3 +157,21 @@ fn expansion_removes_a_collapsed_hole_instead_of_reversing_it() {
     assert_eq!(expanded.contains([5 * MM, 5 * MM]).unwrap(), Some(true));
     area_is(&expanded, 220. + 9. * std::f64::consts::PI);
 }
+
+#[test]
+fn multi_island_offset_preserves_holes_and_merges_expanding_neighbours() {
+    let left = rectangle(0, 0, 4 * MM, 4 * MM);
+    let hole = Regions::circle([2 * MM, 2 * MM], MM).unwrap();
+    let ring = left.boolean(&hole, Operation::Difference).unwrap();
+    let right = rectangle(5 * MM, 0, 4 * MM, 4 * MM);
+    let separate = ring.boolean(&right, Operation::Union).unwrap();
+    assert_eq!(separate.region_count(), 2);
+    let expanded = separate.offset(200_000).unwrap();
+    assert_eq!(expanded.region_count(), 2);
+    assert_eq!(expanded.contains([2 * MM, 2 * MM]).unwrap(), Some(false));
+    let merged = separate.offset(600_000).unwrap();
+    assert_eq!(merged.region_count(), 1);
+    assert_eq!(merged.contains([4_500_000, 2 * MM]).unwrap(), Some(true));
+    assert_eq!(merged.contains([2 * MM, 2 * MM]).unwrap(), Some(true));
+    area_is(&separate, 32. - std::f64::consts::PI / 4.);
+}

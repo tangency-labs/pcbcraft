@@ -50,6 +50,15 @@ pub(super) fn read(kernel: &Kernel, body: &Brep) -> Result<Vec<Region2>> {
     Ok(sheet::sheet_regions(kernel, body, &frame, TOLERANCE_MM)?.regions.iter().map(solidcore_convert::record_region2).collect())
 }
 
+/// Convert each completed offset region once, then combine its owned sheet in balanced
+/// rounds. Previously a left fold rebuilt every earlier region on every added island.
+pub(super) fn union(kernel: &mut Kernel, regions: &[Region2]) -> Result<Vec<Region2>> {
+    match operand(kernel, regions)? {
+        Some(body) => read(kernel, &body),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// Consume two complete temporary sheets and retain only a successfully assigned result.
 fn combine(kernel: &mut Kernel, a: Brep, b: Brep, operation: Boolean2d) -> Result<Brep> {
     match boolean_2d(kernel, a, b, operation)? {

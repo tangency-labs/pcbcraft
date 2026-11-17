@@ -151,11 +151,12 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   assemblies, inch units, Y-up files) with expected bounding boxes in a
   kernel-neutral file is still to come, so every later kernel bump or swap passes
   the same gate.
-- **Browser.** `solidcore` itself checks for `wasm32-unknown-unknown`, but
-  `solidcore-step` has not been built for it, and the kernel README asks for a
-  wasm stack larger than the default 1 MB. Until that is qualified, every operation
-  of the crate on `wasm32` that reaches the kernel returns `kernel_unavailable`,
-  and a browser 3D view would use meshes.
+- **Browser 3D/STEP.** `solidcore-step` remains unqualified for the browser,
+  so the crate's 3D/STEP operations return `kernel_unavailable` on `wasm32`.
+  This restriction does not apply to `planar::Regions`, whose focused native,
+  WASI and browser cases are described below. The kernel README asks for a wasm
+  stack larger than the default 1 MB; those small planar cases do not qualify
+  larger 3D workloads, stack exhaustion or browser abort recovery.
 - **Input size.** `read_step` takes the whole STEP text in memory and has no size
   limit; its bodies and refusals grow with the file. The caller (the later STEP
   import command) bounds the input.

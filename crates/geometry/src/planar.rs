@@ -130,7 +130,6 @@ impl Regions {
             let frame = solidcore_convert::plane(&Plane::XY);
             let mut regions = Vec::new();
             // Offset each material region, then union the results: expanded islands can merge.
-            let mut result = Self::default();
             for region in &self.regions {
                 let profile = solidcore_convert::region2(region);
                 let curves = profile
@@ -151,10 +150,8 @@ impl Regions {
                 .map_err(kernel_error)?;
                 regions.extend(kernel::read(&kernel, &body).map_err(kernel_error)?);
             }
-            for region in regions {
-                result = result.boolean(&checked(vec![region])?, Operation::Union)?;
-            }
-            Ok(result)
+            let expanded = checked(regions)?;
+            checked(kernel::union(&mut kernel, &expanded.regions).map_err(kernel_error)?)
         })
     }
 
