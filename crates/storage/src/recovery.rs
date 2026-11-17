@@ -1,7 +1,7 @@
 //! Per-user crash recovery for unsaved work.
 //!
 //! Each editing session owns one entry in the recovery folder, kept apart from every project:
-//! `<id>.pc` (a recovery snapshot in the portable archive format), `<id>.journal` (every edit
+//! `<id>.pc` (a versioned recovery envelope around the portable archive), `<id>.journal` (every edit
 //! committed since that snapshot) and `<id>.lock`, which the writer holds locked while it runs.
 //! Recovery reads the snapshot and replays the journal in order. Nothing here writes into a
 //! project folder, its save transaction or its save lock.
@@ -15,7 +15,7 @@
 //! The folder rules (`default_dir`, `data_dir`) and the `<id>` entry layout with its lock follow
 //! SolidCraft `crates/engine/src/recovery.rs` at 73bdb6c (MIT OR Apache-2.0).
 //!
-//! A journal file is the line `pcbcraft-recovery/1`, then frames of a little-endian `u32` payload
+//! A journal file is the line `pcbcraft-recovery/2`, then frames of a little-endian `u32` payload
 //! length, the payload and the payload's SHA-256. The first frame is a JSON header naming the
 //! snapshot it continues; every later frame is one edit. A frame cut short by a crash fails its
 //! length or hash check and ends the replay before it.
@@ -43,8 +43,11 @@ use std::{
 };
 
 /// First line of every journal. A reader refuses any other version rather than guess at it.
-pub const FORMAT: &str = "pcbcraft-recovery/1";
-const MAGIC: &[u8] = b"pcbcraft-recovery/1\n";
+pub const FORMAT: &str = "pcbcraft-recovery/2";
+const MAGIC: &[u8] = b"pcbcraft-recovery/2\n";
+/// Room for the version and framed snapshot header, in addition to the bounded project archive.
+const SNAPSHOT_OVERHEAD_BYTES: usize = 4096;
+const REMOVED_ENTRY: &str = "The recovery journal was removed; start a new recovery entry to record further edits.";
 /// Overrides the recovery folder, for tests, portable installs and headless runs.
 pub const DIR_VARIABLE: &str = "PCBCRAFT_RECOVERY_DIR";
 /// Version recorded for every command until the catalog versions commands individually.
@@ -138,15 +141,17 @@ pub fn documents_sha256(documents: &Documents) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// The journal's first frame. Like [`Record`], unknown fields are ignored within format 1.
+/// The snapshot's and journal's first frame. Unknown fields are ignored within format 2.
 #[derive(Deserialize, Serialize)]
 struct Header {
+    /// The snapshot publication, distinct even when its documents have not changed.
+    generation: String,
     /// Fingerprint of the snapshot documents the journal continues.
     base_sha256: String,
 }
 
 /// One committed edit. Unknown fields are ignored so later writers can add fields within
-/// format 1; anything a reader must understand needs a new format line.
+/// format 2; anything a reader must understand needs a new format line.
 #[derive(Deserialize, Serialize)]
 struct Record {
     command: String,
@@ -265,12 +270,19 @@ fn decode_record(payload: &[u8]) -> Result<(Record, WrittenDocuments), String> {
 /// the folder flush that makes the rename durable did not complete.
 fn publish(dir: &Path, path: &Path, bytes: &[u8]) -> Result<File, PublishError> {
     let before = |error: String| PublishError { replaced: false, message: error };
+    let mut staged = tempfile::Builder::new().prefix(".recovery-").tempfile_in(dir).map_err(|e| before(e.to_string()))?;
+    staged.write_all(bytes).map_err(|e| before(e.to_string()))?;
+    publish_staged(dir, path, staged)
+}
+
+/// Flush and rename a staged file. Before the rename the destination is unchanged; after it,
+/// even a failed folder flush means the destination holds the staged bytes.
+fn publish_staged(dir: &Path, path: &Path, staged: tempfile::NamedTempFile) -> Result<File, PublishError> {
+    let before = |error: String| PublishError { replaced: false, message: error };
     #[cfg(test)]
     if faults::fails(dir, faults::Fault::Publish) {
         return Err(before("The recovery file could not be staged.".to_owned()));
     }
-    let mut staged = tempfile::Builder::new().prefix(".recovery-").tempfile_in(dir).map_err(|e| before(e.to_string()))?;
-    staged.write_all(bytes).map_err(|e| before(e.to_string()))?;
     staged.as_file().sync_all().map_err(|e| before(e.to_string()))?;
     let file = staged.persist(path).map_err(|e| before(e.error.to_string()))?;
     sync_after_rename(dir).map_err(|message| PublishError { replaced: true, message })?;
@@ -355,18 +367,25 @@ fn write_record(dir: &Path, file: &mut File, bytes: &[u8]) -> std::io::Result<()
     file.write_all(bytes).and_then(|()| file.sync_data())
 }
 
-/// Publish `<id>.pc` holding `base`, returning its size in bytes.
-fn publish_snapshot(dir: &Path, id: &str, base: &Documents) -> Result<u64, PublishError> {
-    let packed = encode_packed_documents(base.clone()).map_err(|message| PublishError { replaced: false, message })?;
-    publish(dir, &entry_file(dir, id, "pc"), &packed)?;
-    Ok(u64::try_from(packed.len()).unwrap_or(u64::MAX))
+/// Stage a private recovery snapshot: its version and framed header, then the ordinary packed
+/// project. The staging name's 24 random characters identify this publication, not its content.
+/// Nothing at the entry's destination changes until the caller publishes the staged file.
+fn stage_snapshot(dir: &Path, base: &Documents) -> Result<(tempfile::NamedTempFile, Header, u64), String> {
+    let packed = encode_packed_documents(base.clone())?;
+    let mut staged = tempfile::Builder::new().prefix(".recovery-").rand_bytes(24).tempfile_in(dir).map_err(|e| e.to_string())?;
+    let generation = staged.path().file_name().ok_or("The recovery staging file has no name.")?.to_string_lossy().into_owned();
+    let header = Header { generation, base_sha256: documents_sha256(base) };
+    let metadata = frame(&serde_json::to_vec(&header).map_err(|e| e.to_string())?)?;
+    staged.write_all(MAGIC).and_then(|()| staged.write_all(&metadata)).and_then(|()| staged.write_all(&packed)).map_err(|e| e.to_string())?;
+    let size = MAGIC.len().saturating_add(metadata.len()).saturating_add(packed.len());
+    Ok((staged, header, u64::try_from(size).unwrap_or(u64::MAX)))
 }
 
-/// Publish `<id>.journal` holding only the header for the snapshot fingerprinted `base_sha256`,
-/// returning the open file and its size in bytes.
-fn publish_journal(dir: &Path, id: &str, base_sha256: &str) -> Result<(File, u64), PublishError> {
+/// Publish `<id>.journal` holding only `header`, which names the snapshot's generation and
+/// fingerprint, returning the open file and its size in bytes.
+fn publish_journal(dir: &Path, id: &str, header: &Header) -> Result<(File, u64), PublishError> {
     let before = |message: String| PublishError { replaced: false, message };
-    let header = serde_json::to_vec(&Header { base_sha256: base_sha256.to_owned() }).map_err(|e| before(e.to_string()))?;
+    let header = serde_json::to_vec(header).map_err(|e| before(e.to_string()))?;
     let mut journal = MAGIC.to_vec();
     journal.extend(frame(&header).map_err(before)?);
     let file = publish(dir, &entry_file(dir, id, "journal"), &journal)?;
@@ -390,14 +409,10 @@ pub struct EditJournal {
     /// failed part-way or the journal was removed, and after a rebase failed once something was
     /// renamed into place; the next edit then starts a new snapshot instead of appending.
     file: Option<File>,
+    /// A removed entry may have lost its lock path too; never reuse it after detecting removal.
+    removed: bool,
     documents: Documents,
     sha256: String,
-    /// Fingerprint of the snapshot file on disk, once one was renamed into place.
-    snapshot_sha256: Option<String>,
-    /// Size of that snapshot file in bytes.
-    snapshot_bytes: u64,
-    /// Fingerprint the header of the journal file on disk names, once one was renamed into place.
-    journal_sha256: Option<String>,
     /// Bytes in the journal file, header included.
     journal_bytes: u64,
     /// Journal size above which the next recorded edit starts a new snapshot.
@@ -431,11 +446,9 @@ impl EditJournal {
             id: id.to_owned(),
             _lock: lock,
             file: None,
+            removed: false,
             documents: Documents::new(),
             sha256: String::new(),
-            snapshot_sha256: None,
-            snapshot_bytes: 0,
-            journal_sha256: None,
             journal_bytes: 0,
             rebase_after: REBASE_FLOOR_BYTES,
             floor: REBASE_FLOOR_BYTES,
@@ -452,81 +465,38 @@ impl EditJournal {
         &self.sha256
     }
 
-    /// Replace the snapshot with `base` and start an empty journal. Recovery replays a journal
-    /// only onto a snapshot with the content its header names, so a snapshot with the same
-    /// content as the journal on disk is never put under that journal's records:
-    ///
-    /// - Usually the journal on disk names other content. The snapshot is published first: a
-    ///   crash before the new journal leaves a journal recovery ignores, under a snapshot that
-    ///   already holds every recorded edit. If the snapshot cannot be written, nothing on disk
-    ///   changes and the old snapshot and journal stay valid; the size count is kept, so the next
-    ///   edit tries again.
-    /// - If the journal on disk names `base`'s content (an unchanged project reopened after
-    ///   edits, or a stale journal left by a failed rebase), the empty journal is published
-    ///   first, and the snapshot only if the one on disk differs. A crash in between leaves the
-    ///   old snapshot under a journal recovery ignores.
-    ///
-    /// Once anything was renamed into place, a failure leaves no journal open and `base` as the
-    /// recorded state, and the next edit starts another snapshot. The old journal is closed
-    /// before a new one is renamed over it, because Windows refuses to replace an open file.
+    /// Replace the snapshot with `base` and start an empty journal. A failure before the
+    /// snapshot's rename preserves the existing pair and the open journal. After that rename,
+    /// `base` becomes the recorded state and the old journal is closed, even if the folder flush
+    /// fails; the next edit retries with a new snapshot. A journal belongs to one publication,
+    /// so an old journal is ignored even when the new snapshot's documents have not changed.
+    /// The old journal closes before replacement because Windows refuses to replace an open file.
+    /// Once removal was detected, the entry stays disabled even if its folder is recreated: its
+    /// original lock handle cannot protect a recreated lock path.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
-        let sha256 = documents_sha256(&base);
-        if self.journal_sha256.as_deref() == Some(sha256.as_str()) {
-            drop(self.file.take());
-            self.adopt(base, sha256);
-            let journal = self.publish_journal()?;
-            if self.snapshot_sha256.as_deref() != Some(self.sha256.as_str()) {
-                self.publish_snapshot()?;
-            }
-            return Ok(self.open(journal));
+        if self.removed {
+            return Err(REMOVED_ENTRY.to_owned());
         }
-        let published = publish_snapshot(&self.dir, &self.id, &base);
+        let (staged, header, snapshot_bytes) = stage_snapshot(&self.dir, &base)?;
+        let published = publish_staged(&self.dir, &entry_file(&self.dir, &self.id, "pc"), staged);
         if let Err(PublishError { replaced: false, message }) = published {
             return Err(message);
         }
-        self.snapshot_sha256 = Some(sha256.clone());
         drop(self.file.take());
-        self.adopt(base, sha256);
-        self.snapshot_bytes = published?;
-        let journal = self.publish_journal()?;
-        Ok(self.open(journal))
-    }
-
-    /// Take `base`, fingerprinted `sha256`, as the recorded state.
-    fn adopt(&mut self, base: Documents, sha256: String) {
         self.documents = base;
-        self.sha256 = sha256;
-    }
-
-    /// Publish the recorded state as the snapshot.
-    fn publish_snapshot(&mut self) -> Result<(), String> {
-        let published = publish_snapshot(&self.dir, &self.id, &self.documents);
-        if !matches!(published, Err(PublishError { replaced: false, .. })) {
-            self.snapshot_sha256 = Some(self.sha256.clone());
-        }
-        self.snapshot_bytes = published?;
-        Ok(())
-    }
-
-    /// Publish an empty journal for the recorded state, returning it and its size in bytes.
-    fn publish_journal(&mut self) -> Result<(File, u64), String> {
-        let published = publish_journal(&self.dir, &self.id, &self.sha256);
-        if !matches!(published, Err(PublishError { replaced: false, .. })) {
-            self.journal_sha256 = Some(self.sha256.clone());
-        }
-        Ok(published?)
-    }
-
-    /// Append to `journal` from now on, with the size limit set from the current snapshot.
-    fn open(&mut self, (file, journal_bytes): (File, u64)) {
+        self.sha256 = header.base_sha256.clone();
+        drop(published?);
+        let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &header)?;
         self.file = Some(file);
         self.journal_bytes = journal_bytes;
-        self.rebase_after = rebase_limit(self.snapshot_bytes, self.floor);
+        self.rebase_after = rebase_limit(snapshot_bytes, self.floor);
+        Ok(())
     }
 
     /// Record that `edit` produced `documents`, and flush the record to disk before returning.
     /// After a failed append the journal may end in a torn record, so the next call starts a new
-    /// snapshot rather than appending past it. An edit that changed no document is not recorded.
+    /// snapshot rather than appending past it. Detected removal disables the entry, since its
+    /// lock path may have been removed too. An edit that changed no document is not recorded.
     /// Once the journal passes its size limit, the recorded state becomes a new snapshot; if that
     /// fails the edit stays recorded in the old journal and the error is returned.
     pub fn append(&mut self, edit: &CommittedEdit, documents: Documents) -> Result<(), String> {
@@ -549,7 +519,8 @@ impl EditJournal {
             && error.kind() == ErrorKind::NotFound
         {
             self.file = None;
-            return Err("The recovery journal was removed; edits are not recorded until a snapshot can be written.".to_owned());
+            self.removed = true;
+            return Err(REMOVED_ENTRY.to_owned());
         }
         self.journal_bytes = self.journal_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         self.documents = documents;
@@ -711,22 +682,53 @@ pub fn recover(dir: &Path, id: &str) -> Result<Recovered, String> {
     if !valid_id(id) {
         return Err(format!("`{id}` is not a recovery entry id."));
     }
-    let snapshot = read_bounded(&entry_file(dir, id, "pc"), MAX_ARCHIVE_BYTES)?;
-    let mut documents = decode_packed(&snapshot)?.documents;
+    let snapshot = read_bounded(&entry_file(dir, id, "pc"), MAX_ARCHIVE_BYTES + SNAPSHOT_OVERHEAD_BYTES)?;
+    let (header, mut documents) = decode_snapshot(&snapshot)?;
     let mut sha256 = documents_sha256(&documents);
     let mut commands = Vec::new();
     let stop = match File::open(entry_file(dir, id, "journal")) {
         Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => Some(Stop::Header(error.to_string())),
-        Ok(file) => replay(&mut BufReader::new(file), &mut documents, &mut sha256, &mut commands)?,
+        Ok(file) => replay(&mut BufReader::new(file), &header.generation, &mut documents, &mut sha256, &mut commands)?,
     };
     let project = decode_documents(&documents)?;
     Ok(Recovered { documents, project, commands, stop })
 }
 
-/// Apply the journal's records to `documents`, keeping `sha256` and `commands` current.
-/// Only an unknown format is an error; every other problem ends the replay with its reason.
-fn replay(reader: &mut impl Read, documents: &mut Documents, sha256: &mut String, commands: &mut Vec<String>) -> Result<Option<Stop>, String> {
+/// Decode a versioned recovery snapshot without treating it as a user project archive. Earlier
+/// unwrapped snapshots are explicitly refused, not paired with a generation-less journal.
+fn decode_snapshot(bytes: &[u8]) -> Result<(Header, Documents), String> {
+    if bytes.starts_with(b"PK") {
+        return Err("This recovery entry uses pcbcraft-recovery/1, which this version can't read.".to_owned());
+    }
+    let (magic, mut rest) = bytes.split_at_checked(MAGIC.len()).ok_or("Recovery snapshot is cut short.")?;
+    if magic != MAGIC {
+        let line = magic.split(|byte| *byte == b'\n').next().unwrap_or_default();
+        return Err(format!("Unsupported recovery snapshot format: {}.", String::from_utf8_lossy(line)));
+    }
+    if let Some(length) = rest.first_chunk::<4>()
+        && u64::from(u32::from_le_bytes(*length)) + 36 + MAGIC.len() as u64 > SNAPSHOT_OVERHEAD_BYTES as u64
+    {
+        return Err("Recovery snapshot header exceeds its size limit.".to_owned());
+    }
+    let metadata = read_frame(&mut rest)?.ok_or("Recovery snapshot has no header.")?;
+    let header: Header = serde_json::from_slice(&metadata).map_err(|e| e.to_string())?;
+    let documents = decode_packed(rest)?.documents;
+    if header.base_sha256 != documents_sha256(&documents) {
+        return Err("Recovery snapshot documents do not match its header.".to_owned());
+    }
+    Ok((header, documents))
+}
+
+/// Apply records only if the journal names `generation` and the documents' hash. Only an
+/// unsupported format is an error; every other problem ends replay with its reason.
+fn replay(
+    reader: &mut impl Read,
+    generation: &str,
+    documents: &mut Documents,
+    sha256: &mut String,
+    commands: &mut Vec<String>,
+) -> Result<Option<Stop>, String> {
     let mut magic = [0; MAGIC.len()];
     if reader.read_exact(&mut magic).is_err() {
         return Ok(Some(Stop::Header("journal is cut short".to_owned())));
@@ -746,7 +748,7 @@ fn replay(reader: &mut impl Read, documents: &mut Documents, sha256: &mut String
         Ok(None) => return Ok(Some(Stop::Header("journal has no header".to_owned()))),
         Err(reason) => return Ok(Some(Stop::Header(reason))),
     };
-    if header.base_sha256 != *sha256 {
+    if header.generation != generation || header.base_sha256 != *sha256 {
         return Ok(Some(Stop::OtherSnapshot));
     }
     let mut index = 0;

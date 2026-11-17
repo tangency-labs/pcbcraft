@@ -267,9 +267,9 @@ fn a_journal_for_an_older_snapshot_is_ignored() {
 fn a_newer_journal_format_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     drop(journal_with(dir.path(), 1));
-    fs::write(entry_file(dir.path(), "entry", "journal"), b"pcbcraft-recovery/2\n{}").unwrap();
+    fs::write(entry_file(dir.path(), "entry", "journal"), b"pcbcraft-recovery/3\n{}").unwrap();
     let error = recover(dir.path(), "entry").unwrap_err();
-    assert!(error.contains("pcbcraft-recovery/2"), "{error}");
+    assert!(error.contains("pcbcraft-recovery/3"), "{error}");
 }
 
 /// One writer per entry: a second writer is refused while the first holds the lock.
@@ -585,46 +585,60 @@ fn a_record_write_cut_short_closes_the_journal() {
     assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (fourth, 1, None));
 }
 
-/// Reopening the unchanged project after edits never puts the edits under a snapshot with the
-/// same content: the empty journal is written first and the snapshot on disk is kept, so
-/// recovery returns the project with no commands, also when the flush after that journal fails.
-/// If the new journal cannot be written at all, the old pair stays, as for any write that fails
-/// before its rename: recovery returns the last recorded state.
+/// Reopening the unchanged project after edits uses a fresh publication. Failures before the
+/// snapshot rename preserve both files and the open journal; failures after it adopt the new
+/// state and close the journal. A stale journal cannot resurrect the discarded edits, even
+/// though its base hash matches. The second publish failure exercises the crash boundary
+/// between renaming the snapshot and replacing its journal.
 #[test]
 fn reopening_the_unchanged_project_drops_its_edits() {
-    for fault in [None, Some(Fault::Flush), Some(Fault::Publish)] {
+    for fault in [None, Some((Fault::Publish, 1)), Some((Fault::Flush, 1)), Some((Fault::Publish, 2)), Some((Fault::Flush, 2))] {
         let dir = tempfile::tempdir().unwrap();
         let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
-        let opened = encode_documents(session.snapshot().unwrap()).unwrap();
+        let original = session.snapshot().unwrap();
+        let opened = encode_documents(original.clone()).unwrap();
         let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
         place_and_append(&mut session, &mut journal).1.unwrap();
         let (edited, result) = place_and_append(&mut session, &mut journal);
         result.unwrap();
-        if let Some(fault) = fault {
-            faults::arm(dir.path(), fault, 1);
+        let old_journal = fs::read(entry_file(dir.path(), "entry", "journal")).unwrap();
+        if let Some((fault, nth)) = fault {
+            faults::arm(dir.path(), fault, nth);
         }
         let result = journal.rebase(opened.clone());
-        assert_eq!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
         let recovered = recover(dir.path(), "entry").unwrap();
-        match fault {
-            None => result.unwrap(),
-            Some(Fault::Flush) => assert_eq!(result.unwrap_err(), "The recovery folder could not be flushed."),
-            Some(_) => {
-                assert_eq!(result.unwrap_err(), "The recovery file could not be staged.");
-                assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (edited, 2, None));
-                continue;
-            }
+        if let Some((fault, _)) = fault {
+            let expected = match fault {
+                Fault::Publish => "The recovery file could not be staged.",
+                _ => "The recovery folder could not be flushed.",
+            };
+            assert_eq!(result.unwrap_err(), expected);
+        } else {
+            result.unwrap();
         }
-        assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (opened.clone(), 0, None));
+        if fault == Some((Fault::Publish, 1)) {
+            assert_eq!(fs::read(entry_file(dir.path(), "entry", "pc")).unwrap(), snapshot);
+            assert_eq!(fs::read(entry_file(dir.path(), "entry", "journal")).unwrap(), old_journal);
+            assert!(journal.file.is_some());
+            assert_eq!(journal.sha256(), documents_sha256(&edited));
+            assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (edited, 2, None));
+        } else {
+            let replacement = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
+            assert_ne!(decode_snapshot(&replacement).unwrap().0.generation, decode_snapshot(&snapshot).unwrap().0.generation);
+            assert_eq!(journal.file.is_none(), fault.is_some());
+            assert_eq!(journal.sha256(), documents_sha256(&opened));
+            let stop = if matches!(fault, Some((Fault::Flush, 1) | (Fault::Publish, 2))) { Some(Stop::OtherSnapshot) } else { None };
+            assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (opened, 0, stop));
+        }
+        session.open_snapshot(original);
         let (next, result) = place_and_append(&mut session, &mut journal);
         result.unwrap();
         assert_eq!(recover(dir.path(), "entry").unwrap().documents, next);
     }
 }
 
-/// A journal left behind by a failed rebase is stale. When the project returns to the content
-/// that journal names, the empty journal is written before the snapshot, so a crash between the
-/// two leaves the snapshot on disk under a journal recovery ignores.
+/// A stale journal left by a failed publication stays stale when another snapshot returns to
+/// its original content. Identity is checked across repeated failed rebases, not just once.
 #[test]
 fn a_stale_journal_is_never_replayed_onto_a_snapshot_with_its_content() {
     let dir = tempfile::tempdir().unwrap();
@@ -632,39 +646,40 @@ fn a_stale_journal_is_never_replayed_onto_a_snapshot_with_its_content() {
     let opened = encode_documents(session.snapshot().unwrap()).unwrap();
     place_and_append(&mut session, &mut journal).1.unwrap();
     let edited = encode_documents(session.snapshot().unwrap()).unwrap();
-    // The new snapshot is renamed into place; the new journal is not, so the journal on disk,
-    // naming the opened project, is stale.
     faults::arm(dir.path(), Fault::Publish, 2);
     assert_eq!(journal.rebase(edited.clone()).unwrap_err(), "The recovery file could not be staged.");
     let recovered = recover(dir.path(), "entry").unwrap();
-    assert_eq!((recovered.documents, recovered.stop), (edited.clone(), Some(Stop::OtherSnapshot)));
+    assert_eq!((recovered.documents, recovered.stop), (edited, Some(Stop::OtherSnapshot)));
 
-    // Back to the opened project. The empty journal comes first; the snapshot after it fails,
-    // standing in for a crash between the two renames.
-    faults::arm(dir.path(), Fault::Publish, 2);
-    assert_eq!(journal.rebase(opened.clone()).unwrap_err(), "The recovery file could not be staged.");
+    faults::arm(dir.path(), Fault::Flush, 1);
+    assert_eq!(journal.rebase(opened.clone()).unwrap_err(), "The recovery folder could not be flushed.");
     let recovered = recover(dir.path(), "entry").unwrap();
-    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (edited, 0, Some(Stop::OtherSnapshot)));
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (opened.clone(), 0, Some(Stop::OtherSnapshot)));
     journal.rebase(opened.clone()).unwrap();
     let recovered = recover(dir.path(), "entry").unwrap();
     assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (opened, 0, None));
 }
 
-/// On Unix, removing the recovery folder leaves the open journal writable but unreachable. The
-/// next append reports it instead of succeeding, and later edits keep failing while no snapshot
-/// can be written, so `sync` reports the loss.
+/// On Unix, removing the recovery folder leaves the open journal writable but unreachable.
+/// The next append reports the loss and disables the entry. Recreating the folder cannot reuse
+/// the old lock handle: a rebase to the original state and later edits are refused, and the
+/// recorder reports the loss through `sync`/`finish`.
 #[cfg(unix)]
 #[test]
 fn a_removed_recovery_folder_is_reported() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("recovery");
     let (mut session, mut journal) = limited_journal(&folder, u64::MAX / 2);
+    let opened = encode_documents(session.snapshot().unwrap()).unwrap();
     place_and_append(&mut session, &mut journal).1.unwrap();
     fs::remove_dir_all(&folder).unwrap();
     let result = place_and_append(&mut session, &mut journal).1;
-    assert!(result.unwrap_err().starts_with("The recovery journal was removed"));
+    assert_eq!(result.unwrap_err(), REMOVED_ENTRY);
     assert!(journal.file.is_none());
-    assert!(place_and_append(&mut session, &mut journal).1.unwrap_err().contains("No such file"));
+    assert_eq!(place_and_append(&mut session, &mut journal).1.unwrap_err(), REMOVED_ENTRY);
+    fs::create_dir(&folder).unwrap();
+    assert_eq!(journal.rebase(opened).unwrap_err(), REMOVED_ENTRY);
+    assert!(fs::read_dir(&folder).unwrap().next().is_none());
 
     let recorder = Arc::new(JournalRecorder::start(folder.clone(), "entry".to_owned()).unwrap());
     session.observe_edits(Some(recorder.clone()));
@@ -672,5 +687,107 @@ fn a_removed_recovery_folder_is_reported() {
     fs::remove_dir_all(&folder).unwrap();
     session.apply("project.rename", &json!({"name":"Lost"})).unwrap();
     session.observe_edits(None);
-    assert!(Arc::into_inner(recorder).unwrap().finish().unwrap_err().starts_with("The recovery journal was removed"));
+    assert_eq!(Arc::into_inner(recorder).unwrap().finish().unwrap_err(), REMOVED_ENTRY);
+}
+
+/// Old unwrapped snapshots and generation-less journals are refused explicitly; the caller can
+/// offer discard without changing the saved project. Future snapshot versions are refused too.
+#[test]
+fn unsupported_recovery_formats_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (journal, states) = journal_with(dir.path(), 0);
+    drop(journal);
+    let snapshot_path = entry_file(dir.path(), "entry", "pc");
+    let snapshot = fs::read(&snapshot_path).unwrap();
+    fs::write(&snapshot_path, encode_packed_documents(states[0].clone()).unwrap()).unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap_err(), "This recovery entry uses pcbcraft-recovery/1, which this version can't read.");
+    fs::write(&snapshot_path, b"pcbcraft-recovery/3\n{}").unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap_err(), "Unsupported recovery snapshot format: pcbcraft-recovery/3.");
+    fs::write(&snapshot_path, snapshot).unwrap();
+    fs::write(entry_file(dir.path(), "entry", "journal"), b"pcbcraft-recovery/1\n{}").unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap_err(), "This recovery entry uses pcbcraft-recovery/1, which this version can't read.");
+}
+
+/// The snapshot envelope is checked before replay: a torn header, invalid metadata, a changed
+/// document hash or a truncated archive cannot be returned as a recovered project.
+#[test]
+fn a_damaged_snapshot_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (journal, _) = journal_with(dir.path(), 0);
+    drop(journal);
+    let snapshot_path = entry_file(dir.path(), "entry", "pc");
+    let snapshot = fs::read(&snapshot_path).unwrap();
+    let (header, documents) = decode_snapshot(&snapshot).unwrap();
+    let packed = encode_packed_documents(documents).unwrap();
+    for (metadata, reason) in [
+        (json!({"generation":header.generation,"base_sha256":"wrong"}), "do not match its header"),
+        (json!({"base_sha256":header.base_sha256}), "missing field `generation`"),
+        (json!({"generation":null,"base_sha256":header.base_sha256}), "invalid type: null"),
+    ] {
+        let mut damaged = MAGIC.to_vec();
+        damaged.extend(frame(&serde_json::to_vec(&metadata).unwrap()).unwrap());
+        damaged.extend_from_slice(&packed);
+        fs::write(&snapshot_path, damaged).unwrap();
+        assert!(recover(dir.path(), "entry").unwrap_err().contains(reason));
+    }
+    for (length, reason) in [(MAGIC.len() - 1, "snapshot is cut short"), (MAGIC.len() + 2, "record is cut short")] {
+        fs::write(&snapshot_path, &snapshot[..length]).unwrap();
+        assert!(recover(dir.path(), "entry").unwrap_err().contains(reason));
+    }
+    let mut damaged = snapshot.clone();
+    damaged[MAGIC.len() + 8] ^= 1;
+    fs::write(&snapshot_path, damaged).unwrap();
+    assert!(recover(dir.path(), "entry").unwrap_err().contains("record is damaged"));
+    fs::write(&snapshot_path, &snapshot[..snapshot.len() - 100]).unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap_err(), "missing ZIP end of directory");
+    fs::write(&snapshot_path, snapshot).unwrap();
+    assert!(recover(dir.path(), "entry").unwrap().stop.is_none());
+}
+
+/// The snapshot header accepts unknown fields up to its exact byte cap, refusing the first byte
+/// beyond it before decoding the archive. The project bytes remain production-codec output.
+#[test]
+fn snapshot_header_size_has_an_exact_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let (journal, states) = journal_with(dir.path(), 0);
+    drop(journal);
+    let path = entry_file(dir.path(), "entry", "pc");
+    let (header, _) = decode_snapshot(&fs::read(&path).unwrap()).unwrap();
+    let mut value = serde_json::to_value(header).unwrap();
+    value["padding"] = json!("");
+    let unpadded = serde_json::to_vec(&value).unwrap().len();
+    let padding = SNAPSHOT_OVERHEAD_BYTES - MAGIC.len() - 36 - unpadded;
+    for extra in [0, 1] {
+        value["padding"] = json!("x".repeat(padding + extra));
+        let mut snapshot = MAGIC.to_vec();
+        snapshot.extend(frame(&serde_json::to_vec(&value).unwrap()).unwrap());
+        assert_eq!(snapshot.len(), SNAPSHOT_OVERHEAD_BYTES + extra);
+        snapshot.extend(encode_packed_documents(states[0].clone()).unwrap());
+        fs::write(&path, snapshot).unwrap();
+        if extra == 0 {
+            assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[0]);
+        } else {
+            assert_eq!(recover(dir.path(), "entry").unwrap_err(), "Recovery snapshot header exceeds its size limit.");
+        }
+    }
+}
+
+/// A matching generation is insufficient when the journal's base hash differs; no edit from
+/// that journal is applied even if its framing is intact.
+#[test]
+fn a_matching_generation_still_requires_the_document_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let (journal, states) = journal_with(dir.path(), 1);
+    drop(journal);
+    let path = entry_file(dir.path(), "entry", "journal");
+    let old = fs::read(&path).unwrap();
+    let mut rest = &old[MAGIC.len()..];
+    let mut header: Header = serde_json::from_slice(&read_frame(&mut rest).unwrap().unwrap()).unwrap();
+    header.base_sha256 = "wrong".to_owned();
+    let mut changed = MAGIC.to_vec();
+    changed.extend(frame(&serde_json::to_vec(&header).unwrap()).unwrap());
+    changed.extend_from_slice(rest);
+    fs::write(path, changed).unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (states[0].clone(), 0, Some(Stop::OtherSnapshot)));
 }
