@@ -288,12 +288,16 @@ impl TryFrom<SetupRecords> for BoardSetup {
                     if thickness_basis.is_some() && thickness_nm.is_none() {
                         return Err("copper thickness basis requires a specified thickness".to_owned());
                     }
-                    if let Some(base) = base_copper
-                        && (base.weight_milli_oz.is_none() && base.thickness_nm.is_none()
-                            || base.weight_milli_oz.is_some_and(|weight| !(1..=MAX_COPPER_WEIGHT_MILLI_OZ).contains(&weight))
-                            || base.thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)))
-                    {
-                        return Err("base copper needs a weight from 0.001 to 100 oz or a foil thickness from 1 nm to 100 mm".to_owned());
+                    if let Some(base) = base_copper {
+                        if base.weight_milli_oz.is_none() && base.thickness_nm.is_none() {
+                            return Err("base copper needs a weight or a foil thickness".to_owned());
+                        }
+                        if base.weight_milli_oz.is_some_and(|weight| !(1..=MAX_COPPER_WEIGHT_MILLI_OZ).contains(&weight)) {
+                            return Err("base copper weight must be from 0.001 to 100 oz".to_owned());
+                        }
+                        if base.thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)) {
+                            return Err("base copper foil thickness must be from 1 nm to 100 mm".to_owned());
+                        }
                     }
                     let record = records
                         .layers
@@ -339,10 +343,11 @@ impl TryFrom<SetupRecords> for BoardSetup {
             return Err("specified stackup thickness exceeds 100 mm".to_owned());
         }
         let stackup = &records.stackup;
-        if stackup.finished_thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness))
-            || stackup.declared_minimum_thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness))
-        {
+        if stackup.finished_thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)) {
             return Err("finished board thickness must be a positive whole number of nanometers, at most 100 mm".to_owned());
+        }
+        if stackup.declared_minimum_thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)) {
+            return Err("declared minimum board thickness must be a positive whole number of nanometers, at most 100 mm".to_owned());
         }
         if !symmetric_tolerance(stackup.finished_thickness_tolerance_nm, stackup.finished_thickness_nm) {
             return Err("board thickness tolerance requires a finished thickness with positive lower and at most 100 mm upper bounds".to_owned());

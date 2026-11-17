@@ -198,7 +198,8 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
 
 /// Format 23 carries the stack fields together with a placement origin: a board with an origin,
 /// a copper role and a finished thickness saves as format 23, reopens with every value and
-/// re-encodes to the same bytes, and is refused under headers 21 and 20. Removing the origin
+/// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
+/// fields (header 20 is no board format; the setup tests show it refused). Removing the origin
 /// keeps format 23; removing the stack fields instead falls back to format 21.
 #[test]
 fn stack_format_carries_the_placement_origin() {
@@ -223,10 +224,11 @@ fn stack_format_carries_the_placement_origin() {
     assert_eq!(encode_documents(reopened).unwrap(), documents);
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    for older in ["pcbcraft-board/21", "pcbcraft-board/20"] {
-        let mut altered = documents.clone();
-        altered.insert(path.clone(), text.replacen("pcbcraft-board/23", older, 1).into_bytes());
-        assert!(decode_documents(&altered).is_err(), "{older}");
+    let mut altered = documents.clone();
+    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    match decode_documents(&altered) {
+        Ok(_) => panic!("format 21 opened the stack fields"),
+        Err(error) => assert!(error.contains("require board format 23"), "{error}"),
     }
 
     let format = |s: &Session| {

@@ -4,6 +4,9 @@ use super::*;
 use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, persistence};
 use std::sync::Arc;
 
+/// The reader's reason for refusing the stack fields under any header but 23.
+const STACK_REFUSAL: &str = "require board format 23";
+
 /// Start an ordinary project and initialize its board through the command catalog.
 fn session(copper_layers: u64) -> Session {
     let mut s = Session::default();
@@ -72,6 +75,26 @@ fn reject(s: &mut Session, command: &str, params: Value) {
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     assert_eq!(s.inspect(), state);
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Like `reject`, and the error names `reason`, so no other check refused the edit first.
+fn reject_because(s: &mut Session, command: &str, params: Value, reason: &str) {
+    let snapshot = s.snapshot().unwrap();
+    let state = s.inspect();
+    let saved = persistence::encode_documents(snapshot.clone()).unwrap();
+    let error = s.apply(command, &params).expect_err(&format!("accepted {params}")).to_string();
+    assert!(error.contains(reason), "{params}: expected {reason:?}, got {error:?}");
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+    assert_eq!(s.inspect(), state);
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// The saved documents fail to open, and the error names `reason`.
+fn refused_because(documents: &persistence::Documents, reason: &str) {
+    match persistence::decode_documents(documents) {
+        Ok(_) => panic!("opened; expected {reason:?}"),
+        Err(error) => assert!(error.contains(reason), "expected {reason:?}, got {error:?}"),
+    }
 }
 
 /// Availability follows initialization, undo, reopen and legacy footprints, while execution
@@ -642,10 +665,14 @@ fn copper_strata_and_board_thickness_round_trip_in_board_format_23() {
     s.apply("edit.redo", &json!({})).unwrap();
     assert_eq!(saved_board(&s, "pcbcraft-board/23"), documents);
 
-    for older in ["pcbcraft-board/3", "pcbcraft-board/5", "pcbcraft-board/19", "pcbcraft-board/20", "pcbcraft-board/21"] {
-        assert!(persistence::decode_documents(&with_header(&documents, "pcbcraft-board/23", older)).is_err(), "{older}");
+    // Headers 19 and 21 need rules or an origin, which this board lacks; their refusal of the
+    // stack fields is shown on boards that have them (`board_format_23_carries_rules` and
+    // `board::origin::tests::stack_format_carries_the_placement_origin`).
+    for older in ["pcbcraft-board/3", "pcbcraft-board/5"] {
+        refused_because(&with_header(&documents, "pcbcraft-board/23", older), STACK_REFUSAL);
     }
-    assert!(persistence::decode_documents(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23")).is_err());
+    refused_because(&with_header(&documents, "pcbcraft-board/23", "pcbcraft-board/20"), "unsupported board format");
+    refused_because(&with_header(&original, "pcbcraft-board/2", "pcbcraft-board/23"), STACK_REFUSAL);
 }
 
 /// Without a declared minimum, checks use the nominal finished thickness and say so.
@@ -750,32 +777,41 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
         saved_board(&s, "pcbcraft-board/23");
     }
     let bad = [
-        (json!({"base_copper":{"weight_milli_oz":100_001}}), json!({})),
-        (json!({"base_copper":{"weight_milli_oz":-1}}), json!({})),
-        (json!({"base_copper":{"weight_milli_oz":4_294_967_296_u64}}), json!({})),
-        (json!({"base_copper":{"weight_milli_oz":"1000"}}), json!({})),
-        (json!({"base_copper":{"weight_milli_oz":Value::Null}}), json!({})),
-        (json!({"base_copper":{"thickness_nm":100_000_001}}), json!({})),
-        (json!({"base_copper":{"thickness_nm":-1}}), json!({})),
-        (json!({"thickness_nm":99_000_000,"thickness_tolerance_nm":1_000_001}), json!({})),
-        (json!({"thickness_nm":35_000,"thickness_basis":"typical"}), json!({})),
-        (json!({"thickness_nm":35_000,"thickness_basis":Value::Null}), json!({})),
-        (json!({"thickness_nm":35_000,"thickness_tolerance_nm":Value::Null}), json!({})),
-        (json!({"base_copper":Value::Null}), json!({})),
-        (json!({"role":1}), json!({})),
-        (json!({}), json!({"finished_thickness_nm":100_000_001})),
-        (json!({}), json!({"finished_thickness_nm":-1})),
-        (json!({}), json!({"finished_thickness_nm":"1600000"})),
-        (json!({}), json!({"finished_thickness_nm":99_000_000,"finished_thickness_tolerance_nm":1_000_001})),
-        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":-1})),
-        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":Value::Null})),
-        (json!({}), json!({"declared_minimum_thickness_nm":100_000_001})),
-        (json!({}), json!({"declared_minimum_thickness_nm":Value::Null})),
-        (json!({}), json!({"finish":"enig"})),
+        (json!({"base_copper":{"weight_milli_oz":100_001}}), json!({}), "base copper weight must be from 0.001 to 100 oz"),
+        (json!({"base_copper":{"weight_milli_oz":0}}), json!({}), "base copper weight must be from 0.001 to 100 oz"),
+        (json!({"base_copper":{}}), json!({}), "base copper needs a weight or a foil thickness"),
+        (json!({"base_copper":{"weight_milli_oz":-1}}), json!({}), "invalid value: integer `-1`"),
+        (json!({"base_copper":{"weight_milli_oz":4_294_967_296_u64}}), json!({}), "invalid value: integer `4294967296`"),
+        (json!({"base_copper":{"weight_milli_oz":"1000"}}), json!({}), "invalid type: string \"1000\""),
+        (json!({"base_copper":{"weight_milli_oz":Value::Null}}), json!({}), "invalid type: null"),
+        (json!({"base_copper":{"thickness_nm":100_000_001}}), json!({}), "base copper foil thickness must be from 1 nm to 100 mm"),
+        (json!({"base_copper":{"thickness_nm":-1}}), json!({}), "base copper foil thickness must be from 1 nm to 100 mm"),
+        (json!({"base_copper":{"thickness_nm":0}}), json!({}), "base copper foil thickness must be from 1 nm to 100 mm"),
+        (json!({"thickness_nm":99_000_000,"thickness_tolerance_nm":1_000_001}), json!({}), "copper tolerance requires"),
+        (json!({"thickness_nm":35_000,"thickness_basis":"typical"}), json!({}), "unknown variant `typical`"),
+        (json!({"thickness_nm":35_000,"thickness_basis":Value::Null}), json!({}), "invalid type: null"),
+        (json!({"thickness_nm":35_000,"thickness_tolerance_nm":Value::Null}), json!({}), "invalid type: null"),
+        (json!({"base_copper":Value::Null}), json!({}), "invalid type: null"),
+        (json!({"role":1}), json!({}), "invalid type: integer `1`"),
+        (json!({}), json!({"finished_thickness_nm":100_000_001}), "finished board thickness must be"),
+        (json!({}), json!({"finished_thickness_nm":-1}), "finished board thickness must be"),
+        (json!({}), json!({"finished_thickness_nm":"1600000"}), "invalid type: string \"1600000\""),
+        (json!({}), json!({"finished_thickness_nm":99_000_000,"finished_thickness_tolerance_nm":1_000_001}), "board thickness tolerance requires"),
+        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":-1}), "board thickness tolerance requires"),
+        (json!({}), json!({"finished_thickness_nm":1_600_000,"finished_thickness_tolerance_nm":Value::Null}), "invalid type: null"),
+        (json!({}), json!({"declared_minimum_thickness_nm":100_000_001}), "declared minimum board thickness must be a positive"),
+        (json!({}), json!({"declared_minimum_thickness_nm":0}), "declared minimum board thickness must be a positive"),
+        (json!({}), json!({"declared_minimum_thickness_nm":Value::Null}), "invalid type: null"),
+        (
+            json!({}),
+            json!({"finished_thickness_nm":1_600_000,"declared_minimum_thickness_nm":1_600_001}),
+            "declared minimum board thickness cannot exceed",
+        ),
+        (json!({}), json!({"finish":"enig"}), "unknown field `finish`"),
     ];
-    for (copper, stackup) in bad {
+    for (copper, stackup, reason) in bad {
         let revision = s.revision();
-        reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(copper, stackup),"expected_revision":revision}));
+        reject_because(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(copper, stackup),"expected_revision":revision}), reason);
     }
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate(json!({"base_copper":{"weight_milli_oz":100_000}}), json!({}))}));
     let saved = saved_board(&s, "pcbcraft-board/23");
@@ -785,7 +821,7 @@ fn copper_and_board_thickness_bounds_accept_the_last_good_value() {
     let value = field + text[field..].find("100000").unwrap();
     let mut changed = saved.clone();
     changed.insert(path, format!("{}100001{}", &text[..value], &text[value + 6..]).into_bytes());
-    assert!(persistence::decode_documents(&changed).is_err());
+    refused_because(&changed, "base copper weight must be from 0.001 to 100 oz");
 }
 
 /// A copper-count reduction refuses to discard an inner layer that has only a role.
@@ -797,7 +833,14 @@ fn reducing_copper_count_keeps_authored_roles() {
     candidate["stackup"]["finished_thickness_nm"] = json!(1_600_000);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
     let stack = s.project().unwrap().board_setup().unwrap();
-    assert!(stack.with_copper_count(2).is_err());
+    let error = stack.with_copper_count(2).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(m) if m.contains("before reducing the layer count")), "{error}");
+    let mut plain = candidate.clone();
+    plain["stackup"]["strata"][2].as_object_mut().unwrap().remove("role");
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":plain}));
+    assert!(s.project().unwrap().board_setup().unwrap().with_copper_count(2).is_ok(), "only the role blocks the reduction");
+    s.apply("edit.undo", &json!({})).unwrap();
+    let stack = s.project().unwrap().board_setup().unwrap();
     let grown = stack.with_copper_count(6).unwrap();
     assert_eq!(grown.stackup().finished_thickness_nm, Some(1_600_000));
     assert_eq!(grown.copper_stack().filter(|copper| copper.role == Some(CopperRole::Plane)).count(), 1);
@@ -814,9 +857,7 @@ fn board_format_23_carries_rules() {
     candidate["stackup"]["strata"][0]["role"] = json!("mixed");
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
     let stacked = saved_board(&s, "pcbcraft-board/23");
-    for older in ["pcbcraft-board/19", "pcbcraft-board/21"] {
-        assert!(persistence::decode_documents(&with_header(&stacked, "pcbcraft-board/23", older)).is_err(), "{older}");
-    }
+    refused_because(&with_header(&stacked, "pcbcraft-board/23", "pcbcraft-board/19"), STACK_REFUSAL);
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(saved_board(&s, "pcbcraft-board/19"), ruled);
 }
