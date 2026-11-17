@@ -16,11 +16,11 @@ const ENUM_FIELDS: &[(&str, &[&str])] = &[
     ("/cti/0/basis", &["typical", "minimum", "maximum", "measured"]),
 ];
 
-/// Every report enum field accepts each named string and refuses its known-variant singleton
-/// map on all three paths. Valid command-built fixtures establish the prerequisites before
-/// type refusals; commands use the current revision and leave snapshot, history and bytes alone.
+/// Each listed enum field accepts its named strings and refuses known-variant maps, other
+/// non-string shapes and unknown strings on all three paths. Valid command-built fixtures
+/// establish the prerequisites; refusals leave snapshot, history and bytes alone.
 #[test]
-fn report_enum_strings_refuse_singleton_maps_on_every_path() {
+fn report_enum_strings_and_wrong_shapes_on_every_path() {
     let schema = crate::board::materials::schema::catalog();
     for &(path, variants) in ENUM_FIELDS {
         let parts: Vec<_> = path.split('/').collect();
@@ -51,22 +51,41 @@ fn report_enum_strings_refuse_singleton_maps_on_every_path() {
             s.apply("edit.undo", &json!({})).unwrap();
             assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), original);
 
-            let map = json!({(variant):null});
-            let reason = "invalid type: map, expected a string";
-            let mut rejected = canonical;
-            *rejected["materials"][0].pointer_mut(path).unwrap() = map.clone();
-            refuse(&mut s, rejected, reason);
+            let mut cases = vec![
+                (json!({(variant):null}), "invalid type: map, expected a string"),
+                (json!({(variant):[]}), "invalid type: map, expected a string"),
+            ];
+            if variant == variants[0] {
+                for value in [
+                    Value::Null,
+                    json!([]),
+                    json!({}),
+                    json!(true),
+                    json!(false),
+                    json!(0),
+                    json!(1.0),
+                    json!({(variants[0]):null,(variants[1]):null}),
+                ] {
+                    cases.push((value, "expected a string"));
+                }
+                cases.extend([(json!("other"), "unknown variant `other`"), (json!(""), "unknown variant ``")]);
+            }
+            for (value, reason) in cases {
+                let mut rejected = canonical.clone();
+                *rejected["materials"][0].pointer_mut(path).unwrap() = value.clone();
+                refuse(&mut s, rejected, reason);
 
-            let pointer = format!("/setup/materials/0{path}");
-            *board.pointer_mut(&pointer).unwrap() = map.clone();
-            let mut changed = documents.clone();
-            changed.insert(board_path, serde_json::to_vec(&board).unwrap());
-            let error = persistence::decode_documents(&changed).map(|_| ()).unwrap_err();
-            assert!(error.contains(reason), "native {path} = {variant:?} map: {error}");
-            *profile_json.pointer_mut(&pointer).unwrap() = map;
-            let error = SetupProfile::decode(&serde_json::to_vec(&profile_json).unwrap()).unwrap_err();
-            assert!(error.contains(reason), "profile {path} = {variant:?} map: {error}");
-            assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), original);
+                let pointer = format!("/setup/materials/0{path}");
+                *board.pointer_mut(&pointer).unwrap() = value.clone();
+                let mut changed = documents.clone();
+                changed.insert(board_path.clone(), serde_json::to_vec(&board).unwrap());
+                let error = persistence::decode_documents(&changed).map(|_| ()).unwrap_err();
+                assert!(error.contains(reason), "native {path} = {value}: {error}");
+                *profile_json.pointer_mut(&pointer).unwrap() = value.clone();
+                let error = SetupProfile::decode(&serde_json::to_vec(&profile_json).unwrap()).unwrap_err();
+                assert!(error.contains(reason), "profile {path} = {value}: {error}");
+                assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), original);
+            }
         }
     }
 }
