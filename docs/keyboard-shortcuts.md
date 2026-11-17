@@ -4,8 +4,8 @@ This page inventories the schematic editor's current keyboard bindings and the
 application-level shortcuts that apply while a schematic view is focused. It is a
 record of observed behavior, not a policy: each entry describes what the key
 does today and the conditions that decide whether it fires. The in-app
-**Preferences → Shortcuts** page shows the same bindings formatted for the host
-platform.
+**Preferences → Shortcuts** page shows a subset of these bindings formatted for
+the host platform; this page is the fuller inventory.
 
 **Verification.** Checked against the desktop build on Linux (X11) in the
 schematic workspace: each placement key below was pressed in a live session and
@@ -65,18 +65,20 @@ field owns input.
 
 ## Schematic placement keys
 
-Each of these starts a tool when the schematic canvas owns keyboard focus and
-no placement tool is already running, except where noted.
+These keys are not gated on the canvas being idle: pressing one while a tool is
+active replaces that tool (or redirects focus) rather than doing nothing. The
+shared focus gates above — no dialog or popup, no text field, no assistant
+focus — still apply.
 
 | Key | Action | Conditions |
 | --- | --- | --- |
-| A | Add symbol | Focuses the parts search; the catalog offers symbols to place |
-| P | Place power/ground | Focuses the power-symbol section of the parts panel — a different target from A |
-| W | Draw wire | Starts the wire tool at the pointer; click to place vertices |
-| L | Place local label | Opens the net-label form for a wire-local name |
-| Ctrl+L | Place global label | Same form producing a project-wide net name |
-| H | Place hierarchical label | Names a net exported to the parent sheet |
-| S | Place hierarchical sheet | Draws a subsheet symbol on the canvas |
+| A | Add symbol | Focuses the parts search (`parts.focus_search`); the catalog offers symbols to place |
+| P | Place power/ground | Focuses the power-symbol collection of the parts panel (`parts.focus_power`) — a different target from A |
+| W | Draw wire | `begin_wire` resets the draft and replaces any active tool; click to place vertices |
+| L | Place local label | `begin_net_label` clears the selection and tool, then opens the net-label form for a wire-local name |
+| Ctrl+L | Place global label | Same path producing a project-wide net name |
+| H | Place hierarchical label | `begin_hierarchy` replaces the tool with label placement; names a net exported to the parent sheet |
+| S | Place hierarchical sheet | Same path; draws a subsheet symbol on the canvas |
 
 ## Schematic editing keys
 
@@ -105,17 +107,44 @@ selection action.
 | --- | --- | --- |
 | Space | Flip wire bend | While drawing a wire, swaps horizontal-first and vertical-first routing |
 | Backspace | Remove last vertex | While drawing a wire; with no vertices, abandons the start point |
-| Enter | Finish wire | Commits the drawn wire |
-| Ctrl (hold) | Bypass grid | While the wire tool is active, holding Ctrl lets vertices land off-grid |
+| Enter | Finish wire | Commits the wire at the pointer's target. The pointer must be inside the canvas resolving to a wire anchor — Enter alone, with no in-canvas pointer, does nothing |
+| Ctrl (hold) | Bypass grid | While the wire tool is active, holding the physical **Ctrl** key lets vertices land off-grid. On macOS this is still Ctrl, not ⌘ — this row is an exception to the modifier note above |
 | Esc / right-click | Cancel tool | Right-click cancellation applies to wire, no-connect, move and net-label tools |
 | Double-click | Enter sheet | On a sheet symbol, descends into the subsheet; on a symbol or field, opens its edit form |
 
+## Where each binding is handled
+
+Every row above is consumed in `PcbApp::shortcuts` (`crates/app/src/lib.rs`) or
+in the canvas module named here. Focused tests that exercise a binding are
+listed beside it.
+
+| Rows | Consumed by | Focused tests |
+| --- | --- | --- |
+| Project keys (Ctrl+N/O/S/Shift+S/,,/Q) | `PcbApp::shortcuts` → `new_project`, `open_project_file`, `save_project_file`, `open_preferences`, `request_project_close` | — |
+| Undo/Redo (Ctrl+Z/Y) | `PcbApp::shortcuts` → `session.available` + `run` on `edit.undo`/`edit.redo` | — |
+| Clipboard (Ctrl+C/X/V/Shift+V, Ctrl+D) | `clipboard_shortcuts` → `copy_clipboard`, `request_clipboard`, `duplicate_clipboard` in `clipboard.rs` | — (board clipboard is covered in `tests/board_tracks.rs`; the schematic chords have no focused test) |
+| Grid (N, Shift+N) | `PcbApp::shortcuts` → `cycle_grid` | `tests/grid_spacing.rs` (`grid_keys_step_through_the_presets`) |
+| Units (Ctrl+U) | `PcbApp::shortcuts` → `preferences.units.toggled` | `tests/display_units.rs` |
+| A, P | `PcbApp::shortcuts` → `parts.focus_search` / `parts.focus_power` (`parts_browser.rs`) | — |
+| W | `PcbApp::shortcuts` → `begin_wire` (replaces the tool) | `tests/tool_modes.rs` (`wire_mode_stays_armed_for_independent_routes_until_cancelled`) |
+| L, Ctrl+L | `PcbApp::shortcuts` → `begin_net_label` (`net_labels.rs`) | `tests/net_labels.rs` |
+| H, S | `PcbApp::shortcuts` → `begin_hierarchy` (`hierarchy.rs`) | `tests/hierarchy.rs` |
+| M | `PcbApp::shortcuts` → `schematic.move_requested`, applied in the canvas block as `Click::MoveItems`/`SymbolAction::DisconnectMove`; labels and sheets route through `net_labels.rs`/`hierarchy.rs` `Action::Move` | `tests/selection_move.rs` (`group_m_…`, `selected_wire_m_…`) |
+| G | `schematic_canvas.rs` → `Click::MoveItems`/`GrabReshape`/`grab_symbol` | `tests/grab.rs` |
+| R | `PcbApp::shortcuts` → `rotate_requested` or the active tool's turns; `net_labels.rs` rotates a placing/hovered label; `Click::RotateField` rotates a field | `tests/grab.rs` (pickup rotation), `tests/net_labels.rs` |
+| X, Y | `PcbApp::shortcuts` → `mirror_requested` → `SymbolAction::Mirror` | `tests/mirror.rs` (`x_and_y_mirror_hovered_symbols…`) |
+| E | `PcbApp::shortcuts` → `edit_requested`; labels/sheets route through `net_labels.rs`/`hierarchy.rs` `Action::Properties`/`Edit` | `tests/net_labels.rs`, `tests/hierarchy.rs` |
+| D | `PcbApp::shortcuts` → `datasheet_requested` → `open_datasheet` | — |
+| Q | `schematic_canvas.rs` → `Click::BeginNoConnect`/`NoConnect` | `tests/no_connect.rs` |
+| Delete/Backspace | `PcbApp::shortcuts` → `delete_selection`; labels/sheets route through `net_labels.rs`/`hierarchy.rs` `Action::Delete` | — |
+| Esc layers | `workspace_panels.rs` `take_panel_escape` → `parts_browser.rs` `take_escape` → `PcbApp::shortcuts` tool cancel → `select` clear | `tests/selection_move.rs` (`group_m_cancels_on_escape_…`) |
+| Alt+Backspace | `PcbApp::shortcuts` → `leave_sheet` (`hierarchy.rs`) | `tests/hierarchy.rs` |
+| Wire Space/Backspace/Enter | `PcbApp::shortcuts` sets `wire_draft` flags; `schematic_canvas/wires.rs` `preview` consumes them (finish requires the pointer's in-canvas target) | `tests/tool_modes.rs` (Enter finish, right-click cancel) |
+| Ctrl grid bypass | `schematic_canvas/wires.rs` `preview` reads `input.modifiers.ctrl` | — |
+| Double-click | `schematic_canvas.rs` (`EditField`/`Edit`), `hierarchy.rs` `Action::Enter` | `tests/hierarchy.rs` |
+
 ## Notes for contributors
 
-- The authoritative routing lives in `PcbApp::shortcuts` and `shortcut_list` in
-  `crates/app/src/lib.rs`; pointer-scoped schematic keys are consumed in
-  `crates/app/src/schematic_canvas.rs` (`Q`, `G`), `net_labels.rs` and
-  `hierarchy.rs` (label- and sheet-directed `E`, `M`, `R`, `Delete`).
 - The in-app Shortcuts page lists the subset of bindings that are stable for
   users. Some live keys are not listed there — X/Y mirroring, Alt+Backspace,
   the wire-drafting keys and the clipboard chords — so this page is the fuller
