@@ -74,8 +74,10 @@ dimensions and per-object provenance. [Editor controls](net-class-editor.md) use
 repeated instances and system registries remain separate work.
 [Part groups](part-groups.md) collect part instances by stable part-instance
 ID through shared headless/live MCP commands, with a project-wide catalog,
-explicit membership, protected removal, undo and save/reopen; rules that consume
-them are later work.
+explicit membership, protected removal, undo and save/reopen. Dense membership
+uses compact native storage without reducing the supported set of 4,096 part
+instances in 256 groups. Copy/Cut leave groups project-owned; pasted independent
+parts start ungrouped. Rules that consume groups are later work.
 
 The boardless PCB workspace explains setup, footprint updates and routing, with
 explicit Create board and Open schematic actions. Create board opens a disposable

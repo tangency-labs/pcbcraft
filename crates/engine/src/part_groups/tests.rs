@@ -61,12 +61,14 @@ fn document(docs: &crate::persistence::Documents, path: &str) -> Value {
     serde_json::from_slice(&docs[path]).unwrap()
 }
 
-/// Replace one saved document with an edited JSON value.
+/// Change a saved field without pretty-print growth crossing the native byte limits first.
 fn edited(docs: &crate::persistence::Documents, path: &str, edit: impl FnOnce(&mut Value)) -> crate::persistence::Documents {
     let mut value = document(docs, path);
     edit(&mut value);
     let mut docs = docs.clone();
-    docs.insert(path.into(), serde_json::to_vec_pretty(&value).unwrap());
+    docs.insert(path.into(), serde_json::to_vec(&value).unwrap());
+    assert!(docs.values().all(|bytes| bytes.len() <= crate::persistence::MAX_DOCUMENT_BYTES), "mutation exceeds a document byte limit");
+    assert!(docs.values().map(Vec::len).sum::<usize>() <= crate::persistence::MAX_DOCUMENTS_BYTES, "mutation exceeds the total byte limit");
     docs
 }
 
@@ -123,6 +125,108 @@ fn three_memberships_survive_save_and_reload_by_part_instance_id() {
         assert_eq!(home["part_group_memberships"], json!(keys.iter().map(|key| json!({"part_instance":key,"group":power})).collect::<Vec<_>>()));
         let report = s.execute(INSPECT_GROUPS, &json!({"part_instance":part_instances[1]})).unwrap();
         assert_eq!(report["part_instance_memberships"], json!([{"part_instance":part_instances[1],"groups":[power]}]));
+    }
+}
+
+/// Both sides of the old scale-test count remain in the legacy envelope while their bytes fit.
+/// Reopening a valid 4097-membership file must not silently choose a different encoding.
+#[test]
+fn legacy_memberships_keep_their_bytes_above_four_thousand_records() {
+    for board in [false, true] {
+        let (mut s, ids) = parts(17, board);
+        let groups: Vec<_> = (0..MAX_GROUPS).map(|index| create(&mut s, &format!("Group {index}"))).collect();
+        for id in ids.iter().take(16) {
+            apply(&mut s, SET_GROUPS, json!({"part_instance":id,"groups":groups}));
+        }
+        for count in [4096, 4097] {
+            if count == 4097 {
+                apply(&mut s, SET_GROUPS, json!({"part_instance":ids[16],"groups":[groups[0]]}));
+            }
+            assert_eq!(s.project().unwrap().part_group_memberships().len(), count);
+            let docs = round_trip(&s);
+            assert_eq!(document(&docs, ENTRY_POINT)["format"], "pcbcraft-project/24");
+            if let Some(path) = s.project().unwrap().instances_document_path() {
+                assert_eq!(document(&docs, &path)["format"], "pcbcraft-instances/5");
+            }
+        }
+    }
+}
+
+/// Dense accepted membership, including the full 4096-by-256 space, saves through both native
+/// homes under the existing byte limits. The compact representation is idempotent after reopen.
+#[test]
+fn maximum_memberships_save_and_reload_in_both_storage_homes() {
+    for board in [false, true] {
+        let (mut s, _) = parts(0, board);
+        for index in 0..crate::schematic::MAX_SYMBOLS {
+            let spacing = 12 * crate::schematic::GRID_NM;
+            apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":(index % 64) as i64*spacing,"y_nm":(index / 64) as i64*spacing}));
+            if index % 64 == 63 {
+                s.open_snapshot(s.snapshot().unwrap());
+            }
+        }
+        let ids: Vec<_> = s.project().unwrap().part_instance_addresses().collect();
+        let groups: Vec<_> = (0..MAX_GROUPS).map(|index| create(&mut s, &format!("Group {index}"))).collect();
+        s.open_snapshot(s.snapshot().unwrap());
+        for (index, id) in ids.iter().enumerate() {
+            apply(&mut s, SET_GROUPS, json!({"part_instance":id,"groups":groups}));
+            if index % 64 == 63 {
+                s.open_snapshot(s.snapshot().unwrap());
+            }
+            if index == 1023 || index + 1 == ids.len() {
+                let expected = (index + 1) * MAX_GROUPS;
+                assert_eq!(s.project().unwrap().part_group_memberships().len(), expected);
+                let docs = round_trip(&s);
+                assert_eq!(document(&docs, ENTRY_POINT)["format"], "pcbcraft-project/39");
+                assert!(docs.values().all(|bytes| bytes.len() <= crate::persistence::MAX_DOCUMENT_BYTES));
+                assert!(docs.values().map(Vec::len).sum::<usize>() <= crate::persistence::MAX_DOCUMENTS_BYTES);
+                let home_path = s.project().unwrap().instances_document_path();
+                let home = home_path.as_deref().unwrap_or(ENTRY_POINT);
+                let value = document(&docs, home);
+                let scope = if board { &value } else { &value["schematic_instances"] };
+                assert!(scope.get("part_group_memberships").is_none());
+                assert_eq!(scope["compact_part_group_memberships"]["part_instances"].as_array().unwrap().len(), index + 1);
+                assert!(serde_json::to_vec(&scope["compact_part_group_memberships"]).unwrap().len() < 4 * 1024 * 1024);
+                if board {
+                    assert_eq!(value["format"], "pcbcraft-instances/7");
+                }
+                let downgraded = edited(&docs, ENTRY_POINT, |project| project["format"] = json!("pcbcraft-project/24"));
+                refused_on_read(&downgraded, if board { "unsupported instances format" } else { "require project format 39" });
+                for (remove, reason) in [(true, "require project format 39"), (false, "exactly one membership encoding")] {
+                    let malformed = edited(&docs, home, |value| {
+                        let scope = if board { value } else { &mut value["schematic_instances"] };
+                        if remove {
+                            scope.as_object_mut().unwrap().remove("compact_part_group_memberships");
+                        } else {
+                            scope["part_group_memberships"] = json!([{"part_instance":part_instance_key(&ids[0]).unwrap(),"group":groups[0]}]);
+                        }
+                    });
+                    refused_on_read(&malformed, reason);
+                }
+                if board {
+                    let downgraded = edited(&docs, home, |value| value["format"] = json!("pcbcraft-instances/5"));
+                    refused_on_read(&downgraded, "unsupported instances format");
+                }
+                if index + 1 == ids.len() {
+                    for foreign_group in [false, true] {
+                        let foreign = edited(&docs, home, |value| {
+                            let scope = if board { value } else { &mut value["schematic_instances"] };
+                            let compact = &mut scope["compact_part_group_memberships"];
+                            if foreign_group {
+                                compact["groups"][0] = json!(Uuid::from_u128(1));
+                            } else {
+                                compact["part_instances"][0]["part_instance"] = json!(0);
+                            }
+                        });
+                        refused_on_read(&foreign, "must name existing part instances and groups");
+                    }
+                }
+            }
+        }
+        assert_eq!(s.project().unwrap().part_group_memberships().len(), MAX_MEMBERSHIPS);
+        let snapshot = s.snapshot().unwrap();
+        refuse(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}), "already has 4096 symbols");
+        assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     }
 }
 
@@ -491,9 +595,9 @@ fn command_parameter_edges_are_refused() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
-/// Project/24 is a superset of project/23: part groups with members round-trip beside a
-/// net class with an assignment, a project parameter, a no-connect marker and generated net
-/// numbers. A board catalog without members over that registry keeps instances/4.
+/// Expanded and compact memberships preserve a net class with an assignment, a project
+/// parameter, a no-connect marker and generated net numbers in both storage homes.
+/// A board catalog without members over that registry keeps instances/4.
 #[test]
 fn part_groups_round_trip_with_every_project_23_record() {
     for board in [false, true] {
@@ -531,32 +635,40 @@ fn part_groups_round_trip_with_every_project_23_record() {
         for part_instance in &part_instances {
             apply(&mut s, SET_GROUPS, json!({"part_instance":part_instance,"groups":[power]}));
         }
-        let project = s.snapshot().unwrap();
-        let docs = round_trip(&s);
-        let entry = document(&docs, ENTRY_POINT);
-        assert_eq!(entry["format"], "pcbcraft-project/24");
-        let home = match &path {
-            Some(path) => {
-                let instances = document(&docs, path);
-                assert_eq!(instances["format"], "pcbcraft-instances/5");
-                instances
+        for compact in [false, true] {
+            if compact {
+                let mut project = (*s.snapshot().unwrap()).clone();
+                project.prefer_compact_part_groups = true;
+                s.open_snapshot(Arc::new(project));
             }
-            None => entry["schematic_instances"].clone(),
-        };
-        assert_eq!(entry["parameters"], json!({"Revision":"B"}));
-        assert!(entry["net_classes"]["definitions"][0]["id"] == json!(net_class));
-        assert!(String::from_utf8(docs[ENTRY_POINT].clone()).unwrap().contains("no_connects"));
-        assert!(home.get("net_registry").is_some() && home.get("part_group_memberships").is_some());
-        let reopened = decode_documents(&docs).unwrap();
-        assert_eq!(reopened.parameters(), project.parameters());
-        assert_eq!(reopened.net_classes(), project.net_classes());
-        assert_eq!(reopened.net_registry, project.net_registry);
-        assert!(reopened.net_registry.has_generated_numbers());
-        assert_eq!(reopened.part_groups(), project.part_groups());
-        assert_eq!(memberships(&reopened), memberships(&project));
-        let marked = |project: &Project| project.part_instance_map().values().filter(|part| !part.no_connects.is_empty()).count();
-        assert_eq!((marked(&reopened), marked(&project)), (1, 1));
-        assert_eq!(encode_documents(reopened).unwrap(), docs);
+            let project = s.snapshot().unwrap();
+            let docs = round_trip(&s);
+            let entry = document(&docs, ENTRY_POINT);
+            assert_eq!(entry["format"], if compact { "pcbcraft-project/39" } else { "pcbcraft-project/24" });
+            let home = match &path {
+                Some(path) => {
+                    let instances = document(&docs, path);
+                    assert_eq!(instances["format"], if compact { "pcbcraft-instances/7" } else { "pcbcraft-instances/5" });
+                    instances
+                }
+                None => entry["schematic_instances"].clone(),
+            };
+            assert_eq!(entry["parameters"], json!({"Revision":"B"}));
+            assert!(entry["net_classes"]["definitions"][0]["id"] == json!(net_class));
+            assert!(String::from_utf8(docs[ENTRY_POINT].clone()).unwrap().contains("no_connects"));
+            assert!(home.get("net_registry").is_some());
+            assert!(home.get(if compact { "compact_part_group_memberships" } else { "part_group_memberships" }).is_some());
+            let reopened = decode_documents(&docs).unwrap();
+            assert_eq!(reopened.parameters(), project.parameters());
+            assert_eq!(reopened.net_classes(), project.net_classes());
+            assert_eq!(reopened.net_registry, project.net_registry);
+            assert!(reopened.net_registry.has_generated_numbers());
+            assert_eq!(reopened.part_groups(), project.part_groups());
+            assert_eq!(memberships(&reopened), memberships(&project));
+            let marked = |project: &Project| project.part_instance_map().values().filter(|part| !part.no_connects.is_empty()).count();
+            assert_eq!((marked(&reopened), marked(&project)), (1, 1));
+            assert_eq!(encode_documents(reopened).unwrap(), docs);
+        }
     }
 }
 

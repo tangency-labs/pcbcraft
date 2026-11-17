@@ -2399,6 +2399,8 @@ pub struct Project {
     part_groups: Arc<part_groups::Catalog>,
     /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
     part_group_memberships: Arc<part_groups::Memberships>,
+    /// Retain the compact storage choice after opening, independent of membership identity.
+    prefer_compact_part_groups: bool,
 }
 
 impl Project {
@@ -3200,6 +3202,7 @@ impl Session {
                 parameters: Arc::default(),
                 part_groups: Arc::default(),
                 part_group_memberships: Arc::default(),
+                prefer_compact_part_groups: false,
             })?,
             "project.rename" => {
                 let name = name_param(params)?;

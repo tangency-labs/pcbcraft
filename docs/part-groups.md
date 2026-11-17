@@ -106,6 +106,43 @@ folder and occurrence metadata in the same undo step. Projects without part
 groups keep their existing format and bytes, and removing the last group
 returns the entry point to the version its other content needs.
 
+### Dense membership
+
+Every supported part instance may belong to all 256 groups: up to 4,096 instances
+and 1,048,576 memberships. If the expanded representation exceeds the existing
+16 MiB document or 48 MiB total-document bound, the disposable encoder restarts
+once with `pcbcraft-project/39` and, when board-owned, `pcbcraft-instances/7`.
+This is a representation choice inside encoding, not a refused edit or a Save
+precondition. The model capacity and file-size limits do not change.
+
+The instance home then replaces `part_group_memberships` with
+`compact_part_group_memberships`: a sorted, unique, non-nil `groups` UUID
+dictionary and `part_instances` rows, each containing the numeric `part_instance`
+and a sorted, nonempty `groups` array of zero-based integer dictionary references
+(0–255, written as integer JSON literals, not fractional or exponent forms).
+The dictionary contains exactly the UUIDs used by the rows. Positions
+are local compression references, not object identities or catalog positions;
+loading expands them back into ordinary UUID memberships before model validation.
+At the supported maximum the compact membership payload is below 4 MiB.
+
+Both storage homes validate the dictionary, row ordering, uniqueness, integer
+reference range, bounded expansion and existing part/group identities. Compact
+and expanded fields cannot coexist. Older envelopes refuse the compact field,
+and project/39 requires compact memberships. Valid legacy files, including
+4,096 and 4,097 memberships, retain their bytes while their expanded encoding
+fits the limits. Opening a compact file retains its encoding preference, so its
+next unchanged save is also byte-identical.
+
+### Clipboard boundary
+
+Copy and Cut exclude project-owned part-group catalogs and memberships from flat
+and hierarchical fragments. Independent pasted parts start ungrouped; existing
+source and destination memberships remain attached to their original IDs.
+Cut removes membership only when it actually deletes a part instance, in the
+same undo step. Relocating retained child sheets keeps their existing identities
+and memberships. Incoming fragments carrying part groups are refused rather
+than silently transferring or dropping project-owned intent.
+
 ## Not yet covered
 
 Membership is explicit only. Pattern membership by part parameter or sheet,

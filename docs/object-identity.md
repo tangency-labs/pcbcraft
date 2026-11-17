@@ -82,7 +82,10 @@ UUIDs. Copper strata are addressed by their layer. Wire bends, drawing vertices,
 zone vertices and fill settings, no-connect intent on pins and wire ends, package choices, accepted board
 connections, net anchors, class bindings and part-group memberships belong to their owner
 and have no id of their own. A part-group membership names its part instance's counter
-and its group's UUID; the display name and designator are not identity.
+and its group's UUID; the display name and designator are not identity. Compact
+membership storage uses a local UUID dictionary and numeric references, expanded
+back to those same IDs before adoption; dictionary positions are not identities.
+The inventory exercises both expanded and compact instance envelopes.
 
 Pins are addressed differently by different consumers. Commands and inspection
 name a pin by its placed symbol unit, while net anchors and the accepted board

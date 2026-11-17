@@ -20,7 +20,13 @@ manage the catalog, and `part_instances.set_groups` and
 stable ID, so annotation does not change membership. A group that still has
 members cannot be removed. Projects with part groups save as
 `pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
-exist); other projects keep their format and bytes.
+exist). Dense memberships use `pcbcraft-project/39` and board instances
+`pcbcraft-instances/7` through a compact UUID dictionary when expanded records
+exceed existing size limits; no supported membership is dropped. Valid earlier
+files keep their bytes while the expanded representation fits, and compact
+files keep their encoding after reopening. Copy/Cut leave part groups in their
+owning project, so duplicated parts start ungrouped; other projects keep their
+format and bytes.
 
 Nets share readable names across schematic browsing, Rules and PCB inspection.
 Unnamed signals use net-owned numbers such as `Net-0001`, which survive component

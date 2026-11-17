@@ -19,6 +19,7 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub mod layout;
+mod part_group_storage;
 pub use documents::{
     Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
     encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
@@ -1053,6 +1054,7 @@ fn validate_with_hierarchy(
         parameters: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
+        prefer_compact_part_groups: false,
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;

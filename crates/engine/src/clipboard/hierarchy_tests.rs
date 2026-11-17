@@ -62,6 +62,50 @@ fn paste(s: &Session, text: &str, sheet: SheetTarget) -> Value {
     json!({"text":text,"sheet":sheet.id(),"x_nm":50*crate::schematic::GRID_NM,"y_nm":50*crate::schematic::GRID_NM,"expected_revision":s.revision()})
 }
 
+/// Hierarchy copies and cuts exclude both captured and unrelated part groups. Duplicated parts
+/// start ungrouped while existing source memberships and their undo history remain intact.
+#[test]
+fn hierarchy_copy_and_cut_keep_part_groups_project_owned() {
+    for command in [COPY, CUT] {
+        let mut s = fixture();
+        apply(&mut s, crate::part_groups::CREATE, json!({"name":"Source group"}));
+        let group = s.project().unwrap().part_groups().groups[0].id;
+        let grouped: Vec<_> = s
+            .project()
+            .unwrap()
+            .sheets()
+            .filter(|sheet| matches!(sheet.name, "Power" | "Other"))
+            .map(|sheet| s.project().unwrap().for_sheet(sheet.target).unwrap().symbols()[0].component)
+            .collect();
+        for key in grouped {
+            apply(&mut s, crate::part_groups::SET_GROUPS, json!({"part_instance":crate::part_groups::part_instance_address(key),"groups":[group]}));
+        }
+        let before = s.snapshot().unwrap();
+        let text = s.execute(command, &selection(&s, false)).unwrap()["clipboard"].as_str().unwrap().to_owned();
+        let fragment = Fragment::from_text(&text).unwrap();
+        assert!(fragment.has_hierarchy());
+        assert!(fragment.project.part_groups().groups.is_empty());
+        assert!(fragment.project.part_group_memberships().is_empty());
+        let after_copy_or_cut = s.snapshot().unwrap();
+        assert_eq!(after_copy_or_cut.part_group_memberships(), before.part_group_memberships());
+        if command == COPY {
+            assert!(Arc::ptr_eq(&before, &after_copy_or_cut));
+        }
+        let root = s.project().unwrap().sheet_target();
+        s.apply(PASTE, &paste(&s, &text, root)).unwrap();
+        assert_eq!(s.project().unwrap().part_groups(), before.part_groups());
+        assert_eq!(s.project().unwrap().part_group_memberships(), before.part_group_memberships());
+        let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+        s.apply("edit.undo", &Value::Null).unwrap();
+        crate::assert_same_content(&after_copy_or_cut, &s.snapshot().unwrap());
+        if command == CUT {
+            s.apply("edit.undo", &Value::Null).unwrap();
+            crate::assert_same_content(&before, &s.snapshot().unwrap());
+        }
+    }
+}
+
 /// A closed nested circuit duplicates independently with fresh sheet/component/interface IDs,
 /// exact internal connectivity, pinned mappings, one history step and native persistence.
 #[test]

@@ -217,6 +217,10 @@ const RECORDS: &[(&str, &[Form], &str)] = &[
     ("instances.json:circuit_uses[]", &[Form::Uuid], "circuit use"),
     ("instances.json:sheet_occurrences[]", &[Form::Uuid], "sheet occurrence"),
     ("instances.json:part_group_memberships[]", &[Form::Owned], "membership addressed by part instance and group"),
+    ("instances.json:compact_part_group_memberships", &[Form::Owned], "compressed membership envelope"),
+    ("instances.json:compact_part_group_memberships.groups[]", &[Form::Value], "group UUID dictionary reference"),
+    ("instances.json:compact_part_group_memberships.part_instances[]", &[Form::Owned], "membership set addressed by part instance"),
+    ("instances.json:compact_part_group_memberships.part_instances[].groups[]", &[Form::Value], "local dictionary reference, not an object identity"),
     ("instances.json:net_registry", &[Form::Owned], "net registry"),
     ("instances.json:net_registry.records[]", &[Form::Uuid], "net"),
     ("instances.json:net_registry.records[].state", &[Form::Owned], "net state"),
@@ -460,6 +464,11 @@ fn inventory_problems(documents: &Documents) -> (Vec<String>, String) {
         }
     }
     for path in declared.keys().filter(|path| !seen.forms.contains_key(**path)) {
+        let compact = path.starts_with("instances.json:compact_part_group_memberships");
+        let alternate = if compact { "instances.json:part_group_memberships[]" } else { "instances.json:compact_part_group_memberships" };
+        if (compact || *path == "instances.json:part_group_memberships[]") && seen.forms.contains_key(alternate) {
+            continue;
+        }
         problems.push(format!("fixture saves no {path} record"));
     }
     for kind in Kind::ALL {
@@ -485,9 +494,15 @@ fn inventory_problems(documents: &Documents) -> (Vec<String>, String) {
 /// a persistent UUID are exactly the listed gaps.
 #[test]
 fn every_saved_object_kind_has_a_stable_identity_or_is_a_listed_gap() {
-    let documents: Documents = encode_documents(fixture().snapshot().unwrap()).unwrap();
-    let (problems, saved) = inventory_problems(&documents);
-    assert!(problems.is_empty(), "{}\nsaved records:\n{saved}", problems.join("\n"));
+    let project = fixture().snapshot().unwrap();
+    // Vary only storage preference, as reopening the compact envelope does; authored fixture
+    // contents still come exclusively from the shared commands above.
+    for compact in [false, true] {
+        let project = Arc::new(Project { prefer_compact_part_groups: compact, ..Project::clone(&project) });
+        let documents = encode_documents(project).unwrap();
+        let (problems, saved) = inventory_problems(&documents);
+        assert!(problems.is_empty(), "{}\nsaved records:\n{saved}", problems.join("\n"));
+    }
 }
 
 /// A new kind is reported whatever shape it is saved in: a nested object without an id, a list of
@@ -547,6 +562,10 @@ fn pin_and_pad_tokens_name_their_saved_owners() {
 /// shown by the inventory survives a save and reopen unchanged.
 #[test]
 fn audited_identities_survive_save_and_reopen() {
-    let documents = encode_documents(fixture().snapshot().unwrap()).unwrap();
-    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    let project = fixture().snapshot().unwrap();
+    for compact in [false, true] {
+        let project = Arc::new(Project { prefer_compact_part_groups: compact, ..Project::clone(&project) });
+        let documents = encode_documents(project).unwrap();
+        assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    }
 }

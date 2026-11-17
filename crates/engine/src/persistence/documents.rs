@@ -1,5 +1,6 @@
 //! The Git working format: an entry point and independently editable documents.
 
+use super::part_group_storage::{CompactMemberships, StoredInstances};
 use super::*;
 
 /// The fixed, plain-text entry point inside a project folder.
@@ -50,12 +51,14 @@ const BINDING_PROJECT_FORMAT: &str = "pcbcraft-project/21";
 const PARAMETER_PROJECT_FORMAT: &str = "pcbcraft-project/22";
 const GENERATED_NET_PROJECT_FORMAT: &str = "pcbcraft-project/23";
 const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
+const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
 const BINDING_INSTANCES_FORMAT: &str = "pcbcraft-instances/3";
 const GENERATED_NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/4";
 const PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
+const COMPACT_PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/7";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -111,7 +114,7 @@ struct SheetReference {
 struct ProjectDocument {
     format: String,
     #[serde(default, deserialize_with = "present")]
-    schematic_instances: Option<crate::instances::Instances>,
+    schematic_instances: Option<StoredInstances>,
     #[serde(default, deserialize_with = "present")]
     net_classes: Option<crate::net_classes::Catalog>,
     #[serde(default, deserialize_with = "present")]
@@ -143,6 +146,8 @@ struct InstancesDocument {
     net_registry: Option<crate::nets::Registry>,
     #[serde(default, deserialize_with = "crate::part_groups::stored_memberships")]
     part_group_memberships: Option<Vec<crate::part_groups::Membership>>,
+    #[serde(default, deserialize_with = "super::part_group_storage::compact_value")]
+    compact_part_group_memberships: Option<CompactMemberships>,
 }
 
 /// Storage-version-specific board registrations never become independent physical identities.
@@ -162,10 +167,16 @@ struct FolderReference {
 }
 
 impl ProjectDocument {
+    /// Both part-group envelopes have the same layout and project records; version 39 changes
+    /// only membership compression, validated separately against its explicit header.
+    fn layout_format(&self) -> &str {
+        if self.format == COMPACT_PART_GROUP_PROJECT_FORMAT { PART_GROUP_PROJECT_FORMAT } else { &self.format }
+    }
+
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
     fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
         let foldered = matches!(
-            self.format.as_str(),
+            self.layout_format(),
             FOLDER_PROJECT_FORMAT
                 | OCCURRENCE_PROJECT_FORMAT
                 | NET_PROJECT_FORMAT
@@ -177,7 +188,7 @@ impl ProjectDocument {
                 | PART_GROUP_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23, 24 or 39"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -248,7 +259,7 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     if !matches!(
-        project.format.as_str(),
+        project.layout_format(),
         OCCURRENCE_PROJECT_FORMAT
             | NET_PROJECT_FORMAT
             | NO_CONNECT_PROJECT_FORMAT
@@ -368,10 +379,14 @@ pub fn is_document_path(path: &str) -> bool {
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
 /// Project/24 requires a nonempty part-group catalog; its memberships require project/24 and,
-/// when board-owned, instances/5, and must name live part instances and groups.
+/// when board-owned, instances/5, and must name live part instances and groups. Project/39
+/// and board-owned instances/7 carry the same identities through a bounded UUID dictionary.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
+    let compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
+    // The compact envelope shares every non-membership rule with project/24.
+    project.format = project.layout_format().to_owned();
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
@@ -404,12 +419,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PART_GROUP_PROJECT_FORMAT
     );
     if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20, 21, 22, 23 or 24, which requires a nonempty catalog.".into());
+        return Err("Net-class catalog requires project format 20, 21, 22, 23, 24 or 39, which requires a nonempty catalog.".into());
     }
     if (!superset_format && parameter_format != project.parameters.is_some())
         || (superset_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
     {
-        return Err("Project parameters require project format 22, 23 or 24, with a nonempty list.".into());
+        return Err("Project parameters require project format 22, 23, 24 or 39, with a nonempty list.".into());
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
@@ -417,7 +432,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     crate::parameters::check(&project_parameters, crate::parameters::Scope::Project).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     if part_group_format != project.part_groups.is_some() {
-        return Err("Part-group catalog requires project format 24, which requires a nonempty catalog.".into());
+        return Err("Part-group catalog requires project format 24 or 39, which requires a nonempty catalog.".into());
     }
     let mut part_groups = project.part_groups.take();
     if let Some(catalog) = &mut part_groups {
@@ -457,7 +472,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23 or 24.".into());
+        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24 or 39.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
@@ -496,21 +511,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23 or 24".into());
+        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23, 24 or 39".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
         return Err(
-            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24, no board and a nonempty bounded list".into()
+            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24 or 39, no board and a nonempty bounded list".into(),
         );
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23 or 24.".into());
+        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23, 24 or 39.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24 or 39".into());
     }
     if matches!(
         project.format.as_str(),
@@ -532,7 +547,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     ) != project.numeric_id_high_water.is_some()
     {
         return Err(format!(
-            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23 or 24"
+            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24 or 39"
         ));
     }
     if project.sheets.is_empty()
@@ -552,7 +567,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let optional_bindings =
                     (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
                 let numbered = part_group_format && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                let expected = if part_group_format && instance.part_group_memberships.is_some() {
+                let expected = if compact_part_groups {
+                    COMPACT_PART_GROUP_INSTANCES_FORMAT
+                } else if part_group_format && instance.part_group_memberships.is_some() {
                     PART_GROUP_INSTANCES_FORMAT
                 } else if generated_net_format || numbered {
                     GENERATED_NET_INSTANCES_FORMAT
@@ -567,17 +584,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
                 }
                 used.insert(path);
-                Some(crate::instances::Instances {
-                    circuit_uses: instance.circuit_uses,
-                    sheet_occurrences: instance.sheet_occurrences,
-                    net_registry: instance.net_registry,
-                    part_group_memberships: instance.part_group_memberships,
-                })
+                Some(
+                    StoredInstances {
+                        circuit_uses: instance.circuit_uses,
+                        sheet_occurrences: instance.sheet_occurrences,
+                        net_registry: instance.net_registry,
+                        part_group_memberships: instance.part_group_memberships,
+                        compact_part_group_memberships: instance.compact_part_group_memberships,
+                    }
+                    .into_records(compact_part_groups)?,
+                )
             }
             (None, Some(records)) if !part_group_format && records.part_group_memberships.is_some() => {
-                return Err("Part-group memberships require project format 24.".into());
+                return Err("Part-group memberships require project format 24 or 39.".into());
             }
-            (None, Some(records)) => Some(records),
+            (None, Some(records)) => Some(records.into_records(compact_part_groups)?),
             _ => return Err("Instance records require exactly one schematic or registered-board storage home.".into()),
         }
     } else {
@@ -597,12 +618,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
         return Err(
-            "Generated net numbers require project format 23 or 24 and instances format 4 or 5 when board-owned, with a number on every record."
+            "Generated net numbers require project format 23, 24 or 39 and instances format 4, 5 or 7 when board-owned, with a number on every record."
                 .into(),
         );
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err("Net registry records require project format 17, 19, 20, 21, 22, 23 or 24 and the corresponding instance vocabulary.".into());
+        return Err("Net registry records require project format 17, 19, 20, 21, 22, 23, 24 or 39 and the corresponding instance vocabulary.".into());
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -733,6 +754,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         parameters: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
+        prefer_compact_part_groups: compact_part_groups,
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -1168,6 +1190,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     project_data.numeric_id_high_water = numeric_id_high_water;
     project_data.layout = storage_layout;
+    project_data.prefer_compact_part_groups = compact_part_groups;
     let sheets = layouts
         .into_iter()
         .map(|(reference, symbols, junctions, wires, generated, ends)| {
@@ -1344,6 +1367,7 @@ enum InstanceTail {
     Occurrences,
     Registry,
     Memberships,
+    CompactMemberships,
 }
 
 /// Incremental split-document writer. Each step bounds work by editable records so browser
@@ -1359,6 +1383,9 @@ pub struct DocumentsEncoder {
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
     footprint_definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
     instance_records: Option<crate::instances::Instances>,
+    compact_memberships: Option<CompactMemberships>,
+    use_compact_memberships: bool,
+    size_limit_exceeded: bool,
     generated_legs: Vec<GeneratedLegRecord<'static>>,
 }
 
@@ -1379,6 +1406,7 @@ fn collect_definition<T: PartialEq>(
 impl DocumentsEncoder {
     /// Retain the immutable save snapshot without walking its contents in the input handler.
     pub fn new(project: Arc<Project>) -> Self {
+        let use_compact_memberships = project.prefer_compact_part_groups && !project.part_group_memberships.is_empty();
         Self {
             project,
             documents: Documents::new(),
@@ -1390,6 +1418,9 @@ impl DocumentsEncoder {
             definitions: BTreeMap::new(),
             footprint_definitions: BTreeMap::new(),
             instance_records: None,
+            compact_memberships: None,
+            use_compact_memberships,
+            size_limit_exceeded: false,
             generated_legs: Vec::new(),
         }
     }
@@ -1397,8 +1428,23 @@ impl DocumentsEncoder {
     /// Write at most `records` records or phase transitions. The board-header transition also
     /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
     /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
-    /// Stop on completed documents.
+    /// A legacy membership home that exceeds a byte limit restarts once in the compact
+    /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
+    /// introduced. Valid legacy documents retain their encoding while it fits the limits.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
+        match self.step_records(records) {
+            Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
+                let project = self.project.clone();
+                *self = Self::new(project);
+                self.use_compact_memberships = true;
+                Ok(None)
+            }
+            result => result,
+        }
+    }
+
+    /// Advance the current representation within the caller's incremental record budget.
+    fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
                 0 => {
@@ -1409,6 +1455,9 @@ impl DocumentsEncoder {
                         let records = p.sheet_instances();
                         Project::clone(p).install_sheet_instances(records.clone())?;
                         self.instance_records = Some(records);
+                        if self.use_compact_memberships {
+                            self.compact_memberships = Some(CompactMemberships::from_memberships(&p.part_group_memberships)?);
+                        }
                         if p.layout.is_none() {
                             return Err("Occurrence records require the current project folder layout.".into());
                         }
@@ -1473,7 +1522,7 @@ impl DocumentsEncoder {
                         if p.net_registry.has_generated_numbers() || has_bindings {
                             p.net_registry.validate(p)?;
                         }
-                        PART_GROUP_PROJECT_FORMAT
+                        if self.use_compact_memberships { COMPACT_PART_GROUP_PROJECT_FORMAT } else { PART_GROUP_PROJECT_FORMAT }
                     } else if p.net_registry.has_generated_numbers() {
                         p.net_registry.validate(p)?;
                         GENERATED_NET_PROJECT_FORMAT
@@ -1616,7 +1665,7 @@ impl DocumentsEncoder {
                             self.first = true;
                             self.phase = 16;
                         } else if records.part_group_memberships.is_some() {
-                            self.start_part_group_memberships(b"  ],\n");
+                            self.start_part_group_memberships(b"  ],\n")?;
                         } else {
                             self.finish_instance_document(InstanceTail::Occurrences)?;
                         }
@@ -1629,9 +1678,18 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, net)?;
                         self.cursor += 1;
                     } else if self.instance_records.as_ref().is_some_and(|records| records.part_group_memberships.is_some()) {
-                        self.start_part_group_memberships(b"    ]\n  },\n");
+                        self.start_part_group_memberships(b"    ]\n  },\n")?;
                     } else {
                         self.finish_instance_document(InstanceTail::Registry)?;
+                    }
+                }
+                19 if self.use_compact_memberships => {
+                    let memberships = self.compact_memberships.as_ref().ok_or("Missing compact part-group membership encoding state.")?;
+                    if let Some(row) = memberships.part_instances.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, row)?;
+                        self.cursor += 1;
+                    } else {
+                        self.finish_instance_document(InstanceTail::CompactMemberships)?;
                     }
                 }
                 19 => {
@@ -1827,6 +1885,7 @@ impl DocumentsEncoder {
                             bytes,
                         )?;
                     } else {
+                        self.size_limit_exceeded = self.documents.values().map(Vec::len).sum::<usize>() > MAX_DOCUMENTS_BYTES;
                         check_documents(&self.documents)?;
                         self.phase = 13;
                         return Ok(Some(std::mem::take(&mut self.documents)));
@@ -1835,6 +1894,7 @@ impl DocumentsEncoder {
                 _ => return Err("document encoding is already complete".to_owned()),
             }
             if self.bytes.len() > MAX_DOCUMENT_BYTES {
+                self.size_limit_exceeded = true;
                 return Err("encoded document exceeds its size limit".to_owned());
             }
         }
@@ -1849,7 +1909,9 @@ impl DocumentsEncoder {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                let format = if !self.project.part_group_memberships.is_empty() {
+                let format = if self.use_compact_memberships {
+                    COMPACT_PART_GROUP_INSTANCES_FORMAT
+                } else if !self.project.part_group_memberships.is_empty() {
                     PART_GROUP_INSTANCES_FORMAT
                 } else if self.project.net_registry.has_generated_numbers() {
                     GENERATED_NET_INSTANCES_FORMAT
@@ -1878,13 +1940,24 @@ impl DocumentsEncoder {
         Ok(())
     }
 
-    /// Close the occurrence or registry list and open the membership list, one membership per line.
-    fn start_part_group_memberships(&mut self, close: &[u8]) {
+    /// Open either the original membership list or a bounded dictionary and per-instance rows.
+    fn start_part_group_memberships(&mut self, close: &[u8]) -> Result<(), String> {
         self.bytes.extend_from_slice(close);
-        self.bytes.extend_from_slice(b"  \"part_group_memberships\": [\n");
+        if self.use_compact_memberships {
+            let memberships = self.compact_memberships.as_ref().ok_or("Missing compact part-group membership encoding state.")?;
+            write!(
+                self.bytes,
+                "  \"compact_part_group_memberships\": {{\n    \"groups\": {},\n    \"part_instances\": [\n",
+                json(&memberships.groups())?
+            )
+            .map_err(|error| error.to_string())?;
+        } else {
+            self.bytes.extend_from_slice(b"  \"part_group_memberships\": [\n");
+        }
         self.cursor = 0;
         self.first = true;
         self.phase = 19;
+        Ok(())
     }
 
     /// Close the selected instance home after its last list, preserving original bytes when the
@@ -1899,8 +1972,11 @@ impl DocumentsEncoder {
             (false, InstanceTail::Registry) => b"    ]\n  }\n  }\n}\n",
             (true, InstanceTail::Memberships) => b"  ]\n}\n",
             (false, InstanceTail::Memberships) => b"  ]\n  }\n}\n",
+            (true, InstanceTail::CompactMemberships) => b"    ]\n  }\n}\n",
+            (false, InstanceTail::CompactMemberships) => b"    ]\n  }\n  }\n}\n",
         });
         if self.bytes.len() > MAX_DOCUMENT_BYTES {
+            self.size_limit_exceeded = true;
             return Err("Encoded instance document exceeds its size limit.".into());
         }
         self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
@@ -1955,6 +2031,7 @@ impl DocumentsEncoder {
     fn finish_document(&mut self, path: String) -> Result<(), String> {
         self.bytes.extend_from_slice(b"  ]\n}\n");
         if self.bytes.len() > MAX_DOCUMENT_BYTES {
+            self.size_limit_exceeded = true;
             return Err(format!("{path}: encoded document exceeds its size limit"));
         }
         self.documents.insert(path, std::mem::take(&mut self.bytes));

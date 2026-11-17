@@ -127,10 +127,13 @@ impl Fragment {
         fragment.validate_scope(true)?;
         Ok(fragment)
     }
-    /// Reject board owners, orphan payload sheets/components, legacy extended payloads and empty
-    /// roots. The native decoder has already checked geometry, libraries and hierarchy topology.
+    /// Reject board owners, project-owned part groups, orphan payload sheets/components, legacy
+    /// extended payloads and empty roots. Native decoding already checked geometry and hierarchy.
     pub(super) fn validate_scope(&self, extended: bool) -> Result<(), CommandError> {
         let p = &self.project;
+        if !p.part_groups.groups.is_empty() || !p.part_group_memberships.is_empty() {
+            return Err(invalid("clipboard cannot transfer project-owned part groups"));
+        }
         if p.board_target().is_some()
             || self.has_hierarchy() != extended
             || p.symbols().is_empty() && p.wires().is_empty() && p.net_labels().is_empty() && p.labels.is_empty() && p.subsheets.is_empty()

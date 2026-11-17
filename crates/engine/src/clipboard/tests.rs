@@ -60,6 +60,53 @@ fn portable_copy_paste_is_atomic_and_offline() {
     crate::assert_same_content(&after, &target.snapshot().unwrap());
 }
 
+/// Group catalogs and memberships stay project-owned for both selected and unrelated parts;
+/// Copy/Cut remain portable, Paste does not inherit groups, and Undo restores source membership.
+#[test]
+fn part_groups_stay_in_the_source_project_on_copy_and_cut() {
+    for selected in [0, 1] {
+        for command in [COPY, CUT] {
+            let mut source = fixture();
+            source.apply(crate::part_groups::CREATE, &json!({"name":"Source group","expected_revision":source.revision()})).unwrap();
+            let group = source.project().unwrap().part_groups().groups[0].id;
+            let grouped = source.project().unwrap().symbols()[1].component;
+            source.apply(crate::part_groups::SET_GROUPS, &json!({"part_instance":crate::part_groups::part_instance_address(grouped),"groups":[group],"expected_revision":source.revision()})).unwrap();
+            let before = source.snapshot().unwrap();
+            let items = Selection::one_symbol(before.symbols()[selected].id());
+            let result = source.execute(command, &json!({"items":items,"expected_revision":source.revision()})).unwrap();
+            let text = result["clipboard"].as_str().unwrap();
+            let fragment = Fragment::from_text(text).unwrap();
+            assert!(fragment.project.part_groups().groups.is_empty());
+            assert!(fragment.project.part_group_memberships().is_empty());
+            let after_copy_or_cut = source.snapshot().unwrap();
+            if command == COPY {
+                assert!(Arc::ptr_eq(&before, &after_copy_or_cut));
+            }
+            let retained: Vec<_> = after_copy_or_cut.part_group_memberships().iter().collect();
+            assert_eq!(retained.is_empty(), command == CUT && selected == 1);
+            source.apply(PASTE, &json!({"text":text,"x_nm":0,"y_nm":20*GRID_NM,"expected_revision":source.revision()})).unwrap();
+            let after_paste = source.snapshot().unwrap();
+            assert_eq!(after_paste.part_groups(), before.part_groups());
+            assert_eq!(after_paste.part_group_memberships().iter().collect::<Vec<_>>(), retained);
+            let docs = persistence::encode_documents(after_paste).unwrap();
+            assert_eq!(persistence::encode_documents(persistence::decode_documents(&docs).unwrap()).unwrap(), docs);
+            source.apply("edit.undo", &Value::Null).unwrap();
+            crate::assert_same_content(&after_copy_or_cut, &source.snapshot().unwrap());
+            if command == CUT {
+                source.apply("edit.undo", &Value::Null).unwrap();
+                crate::assert_same_content(&before, &source.snapshot().unwrap());
+            }
+            let mut envelope: Value = serde_json::from_str(text).unwrap();
+            let mut native: Value = serde_json::from_str(envelope["documents"][persistence::ENTRY_POINT].as_str().unwrap()).unwrap();
+            native["format"] = json!("pcbcraft-project/24");
+            native["part_groups"] = json!(before.part_groups());
+            envelope["documents"][persistence::ENTRY_POINT] = json!(serde_json::to_string(&native).unwrap());
+            let error = Fragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err().to_string();
+            assert!(error.contains("clipboard cannot transfer project-owned part groups"), "{error}");
+        }
+    }
+}
+
 /// Copying a wire alone retains its route and frees both absent component endpoints.
 #[test]
 fn partial_copy_detaches_absent_endpoints_and_preserves_branches() {
