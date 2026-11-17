@@ -13,6 +13,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 pub(super) enum Outcome {
     Saved,
+    #[cfg(any(test, target_arch = "wasm32"))]
     DownloadsRequested,
     Cancelled,
 }

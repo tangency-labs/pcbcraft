@@ -2488,6 +2488,7 @@ impl PcbApp {
         self.sync_library_bindings();
         match self.fabrication_exports.poll() {
             Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication outputs".into()),
+            #[cfg(any(test, target_arch = "wasm32"))]
             Some(Ok(board_outputs::Outcome::DownloadsRequested)) => {
                 self.file_notice = Some("Requested ZIP and manifest downloads; check that your browser saved both".into());
             }
