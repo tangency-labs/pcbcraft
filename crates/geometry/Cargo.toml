@@ -12,10 +12,13 @@ workspace = true
 
 [dependencies]
 log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 pcbcraft-units = { workspace = true }
 solidcore = { workspace = true }
 solidcore-convert = { workspace = true }
 solidcore-record = { workspace = true }
+solidcore-tess = { workspace = true }
 
 # STEP and 3D bodies remain native-only; planar operations also build for the browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

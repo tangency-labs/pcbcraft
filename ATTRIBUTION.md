@@ -1721,3 +1721,18 @@ interfaces: whole-nanometre integer hulls with even diagonal supports so corners
 and the DRC outline predicates, head-island and membership rules from the snapshot
 query, a probe budget with incomplete, canceled and stale outcomes, and previous-plan
 continuity. No Sparksmith world model, shove, dependency or file format was imported.
+
+
+## Derived copper-zone fill
+
+The #232 fill orchestration, source-keyed cache, worker transport, thermal-spoke
+construction, physical connectivity integration, diagnostics and canvas adapter
+are original MIT OR Apache-2.0 PCBcraft work. The geometry wrapper additionally
+uses `solidcore-tess` from the same `73bdb6cdd39efc3899fb54e7217289a630a89efe`
+SolidCraft pin, Apache-2.0 (solidcore contributors), to triangulate analytic
+material for display only. Its transitive Spade dependency is MIT OR Apache-2.0;
+existing notices and dependency qualification apply. No kernel version, external
+EDA implementation, artwork or native file format was added. The existing Craft
+Route menu and status surfaces are reused through chrome; no toolkit gap required
+custom controls. Worker lifecycle code is independently authored over standard
+Web Worker APIs, with the existing native codecs retaining document authority.

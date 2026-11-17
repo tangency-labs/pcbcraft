@@ -91,8 +91,23 @@ impl Project {
     /// Project current classified terminals onto stable component/pin keys without saved
     /// membership. Unclassified projects skip graph construction entirely; names are unused.
     pub(crate) fn classified_terminals(&self) -> Result<std::collections::BTreeMap<(u64, String), Uuid>, CommandError> {
-        let records: Vec<_> =
-            self.net_registry.records.iter().filter(|record| matches!(record.state, State::Active {}) && !record.class_bindings.is_empty()).collect();
+        self.terminal_net_ids(true)
+    }
+
+    /// Resolve all current persistent net terminals for physical zone projection. Display
+    /// names never provide identity, and historical bindings are omitted rather than reused.
+    pub(crate) fn persistent_terminal_nets(&self) -> Result<std::collections::BTreeMap<(u64, String), Uuid>, CommandError> {
+        self.terminal_net_ids(false)
+    }
+
+    /// Share one graph projection between classified and all-persistent terminal consumers.
+    fn terminal_net_ids(&self, classified_only: bool) -> Result<std::collections::BTreeMap<(u64, String), Uuid>, CommandError> {
+        let records: Vec<_> = self
+            .net_registry
+            .records
+            .iter()
+            .filter(|record| matches!(record.state, State::Active {}) && (!classified_only || !record.class_bindings.is_empty()))
+            .collect();
         if records.is_empty() {
             return Ok(Default::default());
         }

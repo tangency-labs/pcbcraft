@@ -6,7 +6,7 @@
 //! Operations return a complete replacement or an error without changing either operand.
 
 use pcbcraft_units::{MAX_LENGTH_NM, NM_PER_MM};
-use solidcore::{kernel::Kernel, primitive::primitive_creation::p1::offset_profile, prism::profile};
+use solidcore::{primitive::primitive_creation::p1::offset_profile, prism::profile};
 use solidcore_record::{Loop2, Plane, Region2, Vec2};
 
 use crate::{ErrorCode, GeometryError, Result, guard::guard};
@@ -36,6 +36,14 @@ pub struct Area {
     pub error_bound_nm2: f64,
 }
 
+/// Display-only triangles in board nanometres. Connectivity and clearance continue to use
+/// the analytic regions, never these approximated surface triangles.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DisplayMesh {
+    pub vertices_nm: Vec<[f64; 2]>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
 /// A set of planar regions with holes. No kernel type crosses this boundary.
 ///
 /// Cloning copies derived profile data, not a live kernel session or mutable B-rep. Sets can
@@ -46,6 +54,69 @@ pub struct Regions {
 }
 
 impl Regions {
+    /// Encode ephemeral worker transport for this kernel pin. This opaque representation is
+    /// private to identically built worker/host modules and must never enter native files.
+    pub fn worker_bytes(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(&(1_u32, "73bdb6cdd39efc3899fb54e7217289a630a89efe", &self.regions)).map_err(|e| invalid(&e.to_string()))
+    }
+
+    /// Validate ephemeral worker transport before admitting it to the geometry cache. The
+    /// size, version, pin, finite profiles and conservative bounds are all checked.
+    pub fn from_worker_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(invalid("planar worker payload is too large"));
+        }
+        let (version, pin, regions): (u32, String, Vec<Region2>) = serde_json::from_slice(bytes).map_err(|e| invalid(&e.to_string()))?;
+        if version != 1 || pin != "73bdb6cdd39efc3899fb54e7217289a630a89efe" {
+            return Err(invalid("incompatible planar worker payload"));
+        }
+        guard("planar worker transport", || checked(regions))
+    }
+    /// Expand an existing physical copper core by its exact represented radius, including
+    /// half-nanometre values. Repeated capsule/point vertices are collapsed before choosing
+    /// the kernel's polygon offset or the analytic circle/capsule primitive.
+    pub fn rounded_core(core_nm: &[[i64; 2]], radius_nm: f64) -> Result<Self> {
+        if core_nm.is_empty() || core_nm.len() > 256 || !radius_nm.is_finite() || radius_nm < 0. || radius_nm > MAX_LENGTH_NM as f64 {
+            return Err(invalid("a rounded core needs bounded vertices and a finite nonnegative radius"));
+        }
+        guard("rounded copper core", || {
+            let mut points = core_nm.to_vec();
+            points.dedup();
+            if points.len() > 1 && points.first() == points.last() {
+                points.pop();
+            }
+            if points.len() >= 3 {
+                return Self::polygon(&points)?.offset_distance(radius_nm);
+            }
+            if radius_nm == 0. {
+                return Ok(Self::default());
+            }
+            let a = point_mm(points[0])?;
+            let radius = radius_nm / NM_PER_MM as f64;
+            if points.len() == 1 {
+                return checked(vec![Region2 { outer: Loop2::circle(a, radius), holes: Vec::new() }]);
+            }
+            let b = point_mm(points[1])?;
+            let angle = (b.y - a.y).atan2(b.x - a.x);
+            let normal = Vec2::new(-angle.sin() * radius, angle.cos() * radius);
+            let segments = vec![
+                solidcore_record::Seg2::Line { a: a - normal, b: b - normal },
+                solidcore_record::Seg2::Arc { center: b, radius, start: angle - std::f64::consts::FRAC_PI_2, sweep: std::f64::consts::PI },
+                solidcore_record::Seg2::Line { a: b + normal, b: a + normal },
+                solidcore_record::Seg2::Arc { center: a, radius, start: angle + std::f64::consts::FRAC_PI_2, sweep: std::f64::consts::PI },
+            ];
+            checked(vec![Region2 { outer: Loop2 { segs: segments }, holes: Vec::new() }])
+        })
+    }
+
+    /// Tessellate material and holes with SolidCore's shared display mesher. Missing, lenient
+    /// or over-budget faces are errors rather than a silently partial copper picture.
+    pub fn display_mesh(&self, chord_nm: i64) -> Result<DisplayMesh> {
+        if !(1..=1_000_000).contains(&chord_nm) {
+            return Err(invalid("display chord tolerance must be 1–1000000 nm"));
+        }
+        guard("planar display mesh", || kernel::display_mesh(&self.regions, chord_nm))
+    }
     /// Construct an implicitly closed polygon from bounded, distinct integer-nanometre vertices.
     /// Winding is normalized; fewer than three vertices, repeated/zero edges, indeterminate
     /// area, and resource/range violations return `invalid_params`. The caller supplies a simple
@@ -111,6 +182,17 @@ impl Regions {
         guard("planar Boolean", || checked(kernel::boolean(&self.regions, &other.regions, operation).map_err(kernel_error)?))
     }
 
+    /// Unite a batch in balanced kernel rounds, converting each source region once. Holes
+    /// remain attached to their own material; empty inputs produce empty material.
+    pub fn union_all(inputs: &[Self]) -> Result<Self> {
+        guard("planar union batch", || {
+            let regions = inputs.iter().flat_map(|input| input.regions.iter().cloned()).collect();
+            let input = checked(regions)?;
+            let mut kernel = kernel::context();
+            checked(kernel::union(&mut kernel, &input.regions).map_err(kernel_error)?)
+        })
+    }
+
     /// Expand material by a positive distance, or erode it by a negative distance, with rounded
     /// corners. Hole boundaries move in the opposite sense to outer boundaries. A fresh kernel
     /// owns all temporary B-reps, so a failed operation cannot poison a later offset or operand.
@@ -122,11 +204,17 @@ impl Regions {
         if distance_nm.unsigned_abs() > MAX_LENGTH_NM as u64 {
             return Err(invalid("offset exceeds the supported range"));
         }
-        if self.is_empty() || distance_nm == 0 {
+        self.offset_distance(distance_nm as f64)
+    }
+
+    /// Preserve fractional physical pad radii at the kernel boundary; authored dimensions
+    /// continue to use the public whole-nanometre offset entry point.
+    fn offset_distance(&self, distance_nm: f64) -> Result<Self> {
+        if self.is_empty() || distance_nm == 0. {
             return Ok(self.clone());
         }
         guard("planar offset", || {
-            let mut kernel = Kernel::default();
+            let mut kernel = kernel::context();
             let frame = solidcore_convert::plane(&Plane::XY);
             let mut regions = Vec::new();
             // Offset each material region, then union the results: expanded islands can merge.
@@ -142,8 +230,8 @@ impl Regions {
                     &mut kernel,
                     &curves,
                     TOLERANCE_MM,
-                    distance_nm.unsigned_abs() as f64 / NM_PER_MM as f64,
-                    if distance_nm < 0 { 1 } else { 2 },
+                    distance_nm.abs() / NM_PER_MM as f64,
+                    if distance_nm < 0. { 1 } else { 2 },
                     true,
                     false,
                 )

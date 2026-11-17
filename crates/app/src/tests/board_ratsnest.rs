@@ -6,7 +6,7 @@ use pcbcraft_engine::{
 };
 
 /// Author and accept one connection through production commands before opening its PCB view.
-fn board<'a>(accept: bool) -> Harness<'a, PcbApp> {
+pub(super) fn board<'a>(accept: bool) -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
     h.state_mut().run("project.new", &json!({"create_board":true}));

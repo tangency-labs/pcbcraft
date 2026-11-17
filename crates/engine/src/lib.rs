@@ -37,6 +37,7 @@ pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFI
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
+pub use board::fill::REFILL_ZONES;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
@@ -2180,6 +2181,18 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: REFILL_ZONES,
+        title: "Refill Zones",
+        summary: "Recalculate source-owned copper zones without changing native files, dirty state or undo. Headless execution returns ready fill; a live editor may return pending while its worker calculates.",
+        params: &[BOARD],
+    },
+    Command {
+        id: board::fill::INSPECT_FILL,
+        title: "Inspect Zone Fill",
+        summary: "Inspect pending, ready or unavailable fill for the current board source without starting calculation or editing.",
+        params: &[BOARD],
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -2515,6 +2528,8 @@ pub struct Project {
     named_graph: Arc<OnceLock<Connectivity>>,
     /// Disposable technical graphics, keyed to immutable board and component allocations.
     board_graphics: Arc<std::sync::Mutex<board::view::GraphicsCache>>,
+    /// One disposable fill slot, keyed by immutable board/electrical/rule input allocations.
+    board_fill: Arc<std::sync::Mutex<board::fill::Cache>>,
     /// The older format this snapshot was migrated from when it was opened, if any.
     upgraded_from: Option<u32>,
     /// Versioned project storage metadata; absent for untouched flat-board files.
@@ -2993,6 +3008,8 @@ impl Session {
             | DELETE_DRAWING
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
+            | REFILL_ZONES
+            | board::fill::INSPECT_FILL
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
             | EXPORT_FABRICATION
@@ -3168,6 +3185,15 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_plan_query(params);
         }
+        if id == REFILL_ZONES {
+            self.validate_project_command(id, params)?;
+            return self.refill_zones(params);
+        }
+        if id == board::fill::INSPECT_FILL {
+            self.validate_project_command(id, params)?;
+            let target = self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+            return self.zone_fill_status(target);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
@@ -3282,6 +3308,8 @@ impl Session {
                 | DELETE_DRAWING
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
+                | REFILL_ZONES
+                | board::fill::INSPECT_FILL
                 | board::class_rules::ROUTE_RULES
                 | board::route::PLAN_ROUTE
                 | EXPORT_FABRICATION
@@ -3398,6 +3426,7 @@ impl Session {
                 board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
                 named_graph: Arc::default(),
                 board_graphics: Arc::default(),
+                board_fill: Arc::default(),
                 upgraded_from: None,
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
@@ -3558,6 +3587,13 @@ impl Session {
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
+            REFILL_ZONES => {
+                self.refill_zones(params)?;
+            }
+            board::fill::INSPECT_FILL => {
+                let target = self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+                self.zone_fill_status(target)?;
+            }
             board::class_rules::ROUTE_RULES => {
                 self.route_rule_query(params)?;
             }

@@ -5,9 +5,9 @@ regions, builds solid bodies, reads and writes STEP (ISO 10303-21) files and mea
 shared base for 3D board inspection and STEP assembly export
 ([#86](https://github.com/tangency-labs/pcbcraft/issues/86)). This page records
 which kernel it uses, why, how the dependency was qualified and what is still
-open. No command, panel or saved format uses the crate yet. The planar adapter
-is the first implementation step for [zone fill #232](https://github.com/tangency-labs/pcbcraft/issues/232);
-it does not yet turn authored zone outlines into conductive copper.
+open. The planar adapter supplies [zone fill #232](https://github.com/tangency-labs/pcbcraft/issues/232),
+its canvas material, connectivity and DRC. Derived geometry is not saved in native
+files. The 3D/STEP API is not yet exposed by a command or panel.
 
 ## Choice
 
@@ -18,6 +18,7 @@ of NVIDIA's USD BRep. PCBcraft uses these crates from it:
 | --- | --- |
 | `solidcore` | B-rep solids (already in `Cargo.lock` through the Craft UI crates) |
 | `solidcore-record`, `solidcore-convert` | Private planar profile data and kernel conversion |
+| `solidcore-tess` | Display-only triangulation of analytic fill, with refusal/cap checks |
 | `solidcore-ops` | Modelling calls on kernel bodies: primitives, record conversion, bounding boxes, the session's panic guard |
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
 
@@ -206,14 +207,25 @@ as well as normal holes and split material.
 The same planar tests run natively and in the existing WASI CI job; 3D/STEP still
 report `kernel_unavailable` on WebAssembly. Native unwinding panics are caught by
 the shared guard. A browser `panic=abort` trap cannot be caught by Rust's guard,
-and neither stack exhaustion nor abort recovery is certified here. Fill-job
-integration must isolate that failure in its host and revoke obsolete authority.
+and stack exhaustion is not certified here. Fill-job integration isolates browser
+exceptions in a disposable worker and revokes obsolete authority as described below.
 
-This adapter is a foundation, not completed zone fill. Thermal/spoke generation,
-board/rule/net projection, revision-keyed publication, conservative clearance
-allowances, canvas/ratsnest/DRC integration and cancellation remain in #232.
-The 0.1 nm loop/offset tolerance is an approximation setting, not a proof that
-rounded output contours meet clearance; later consumers must retain or bound
-that approximation explicitly. Gerber conversion remains #233 and must consume
-the same authoritative fill. The UI, authored native formats and saved project
-bytes are unchanged by this first step.
+The engine retains analytic material through clearance, thermal and priority
+operations, adds a 2 nm outward reserve to physical clearances, and publishes
+only complete source-keyed results. Both profile and B-rep tolerances are set
+explicitly to PCB scale. Tests sample nanometre boundaries around a rounded
+clearance and check that requested forbidden material does not intersect fill;
+this is a scoped numerical qualification rather than a proof over all inputs.
+The mesher produces display-only triangles, rejecting capped, refused, lenient
+or over-tolerance results. Copper predicates do not use these triangles.
+
+Native fill runs on the bounded snapshot pool and samples cancellation between
+kernel calls. Browser fill and analytic zone diagnostics run in disposable
+same-build Web Workers. Startup errors, traps and a 30-second timeout retire the
+worker; cancellation terminates it immediately. The foreground validates the
+request fingerprint, geometry and display indices before publishing into the
+captured source slot. Source/session/view authority separately rejects obsolete
+completion. Native unwinding uses the existing guard; no hard native kernel-call
+timeout or process isolation is claimed. Gerber conversion remains #233 and must
+consume the same authoritative fill. See the [zone guide](copper-zone-outlines.md)
+for the supported board/rule/connection behavior.

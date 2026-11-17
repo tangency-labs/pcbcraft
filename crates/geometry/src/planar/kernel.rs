@@ -7,13 +7,27 @@
 use solidcore::{
     Brep, Result, SolidError,
     boolean::api_brep::{Boolean2dOutcome, boolean_2d},
-    kernel::Kernel,
+    kernel::{Kernel, KernelOptions, Tolerances},
     primitive::{api_trim_ops::create_planar_faces, primitive_creation::Boolean2d},
     prism::{profile, sheet},
 };
 use solidcore_record::{Plane, Region2};
 
 use super::{Operation, TOLERANCE_MM};
+
+/// PCB model units are millimetres, so configure the B-rep/intersection defaults as well as
+/// the profile reader. Passing a loop tolerance alone leaves the default 10 nm body tolerance.
+pub(super) fn context() -> Kernel {
+    Kernel::new(&KernelOptions {
+        tolerances: Tolerances {
+            zone_tol_3d: TOLERANCE_MM,
+            xsect_tol_3d: 2. * TOLERANCE_MM,
+            approx_tol_3d: TOLERANCE_MM / 2.,
+            ..Tolerances::default()
+        },
+        ..KernelOptions::default()
+    })
+}
 
 /// Clip material using a fresh kernel and propagate every error before returning any result.
 pub(super) fn boolean(a: &[Region2], b: &[Region2], operation: Operation) -> Result<Vec<Region2>> {
@@ -24,7 +38,7 @@ pub(super) fn boolean(a: &[Region2], b: &[Region2], operation: Operation) -> Res
             Operation::Intersection => Vec::new(),
         });
     }
-    let mut kernel = Kernel::default();
+    let mut kernel = context();
     let Some(a) = operand(&mut kernel, a)? else {
         return Err(refused("nonempty operand has no material"));
     };
@@ -113,6 +127,27 @@ fn operand(kernel: &mut Kernel, regions: &[Region2]) -> Result<Option<Brep>> {
         });
     }
     unite(kernel, sheets)
+}
+
+/// Produce complete display triangles from the same analytic region sheet. The mesher's
+/// refusal/cap reports are checked before handing a mesh to the canvas.
+pub(super) fn display_mesh(regions: &[Region2], chord_nm: i64) -> crate::Result<super::DisplayMesh> {
+    let mut kernel = context();
+    let Some(mut body) = operand(&mut kernel, regions).map_err(super::kernel_error)? else {
+        return Ok(super::DisplayMesh::default());
+    };
+    let fail = |e: String| crate::GeometryError::new(crate::ErrorCode::OperationFailed, e);
+    let (record, _) = solidcore_convert::brep::to_record(&mut kernel, &mut body).map_err(|e| fail(e.to_string()))?;
+    let (plan, stats) =
+        solidcore_tess::plan(&record, &solidcore_tess::MeshTolerance::display(chord_nm as f64 / 1e6), 1.).map_err(|e| fail(e.to_string()))?;
+    if !stats.unmeshed.is_empty() || !stats.lenient.is_empty() || !stats.over_tolerance.is_empty() || !stats.edges_capped.is_empty() {
+        return Err(fail("SolidCore could not produce a complete planar display mesh at the requested tolerance".into()));
+    }
+    let (mesh, refused) = plan.evaluate();
+    if !refused.is_empty() {
+        return Err(fail("SolidCore refused planar display evaluation".into()));
+    }
+    Ok(super::DisplayMesh { vertices_nm: mesh.positions.into_iter().map(|p| [p.x * 1e6, p.y * 1e6]).collect(), triangles: mesh.triangles })
 }
 
 /// An unsupported topology construction is explicit instead of an inferred empty region.

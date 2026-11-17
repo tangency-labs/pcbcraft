@@ -16,6 +16,7 @@ mod board_canvas;
 mod board_clipboard;
 mod board_drawing;
 mod board_drc;
+mod board_fills;
 mod board_measure;
 mod board_move;
 mod board_outputs;
@@ -1307,7 +1308,7 @@ impl PcbApp {
                     })
                 },
             );
-        if let Some((input, ratsnest)) = &self.views.active.board.ratsnest_cache
+        if let Some((input, ratsnest, _)) = &self.views.active.board.ratsnest_cache
             && input.revision == self.session.revision()
             && Some(ratsnest.board) == self.views.active.board.target
         {
@@ -1354,6 +1355,9 @@ impl PcbApp {
                     }
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
+                    }
+                    if let Some(status) = self.views.active.board.fills.status() {
+                        ui.add(egui::Label::new(dim(status)).truncate());
                     }
                     // File results, such as a saved fabrication archive, would otherwise be hidden
                     // behind the board status in this workspace.
@@ -2528,6 +2532,7 @@ impl PcbApp {
         self.finish_editor_drag(&ctx);
         self.finish_view_actions(&ctx);
         self.poll_copper_preparations(&ctx);
+        self.poll_zone_fills(&ctx);
         for view in self.views.all_mut() {
             if view.board.drc.poll(&self.session, view.board.target) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(8));

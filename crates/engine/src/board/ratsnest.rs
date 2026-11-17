@@ -78,7 +78,11 @@ impl BoardView<'_> {
         if !self.has_accepted_connectivity() {
             return None;
         }
-        let copper = if self.tracks().is_empty() && self.vias().is_empty() { super::track::Copper::default() } else { self.copper() };
+        let copper = if self.tracks().is_empty() && self.vias().is_empty() && self.zones().is_empty() {
+            super::track::Copper::default()
+        } else {
+            self.copper()
+        };
         self.ratsnest_with_copper(&copper)
     }
 

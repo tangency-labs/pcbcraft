@@ -794,3 +794,20 @@ footprint…** to author a footprint-only part, or add the symbol independently 
 Browse. When both are present, complete the pin mapping before publishing.
 Schematic placement requires a symbol; the current placement command does not
 create board-owned symbol-less instances.
+
+## Try copper-zone fill
+
+Generate a command-built demonstration into a new directory:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example zone_fill_fixture -- /tmp/pcbcraft-zone-demo
+```
+
+Open `/tmp/pcbcraft-zone-demo/project/project.json` on desktop, or upload
+`/tmp/pcbcraft-zone-demo/zone-fill.pc` in the browser. Switch to **PCB Layout**
+and choose **Fit board**. The front-copper zone connects three resistor pads with
+thermal spokes while clearing their other pads. Move a footprint or zone and
+wait for automatic refill; **Layout → Route → Refill zones** requests another
+calculation. Change the selected zone's Connection to Solid or None in Properties
+to compare pad contact and airwires. See the [zone guide](copper-zone-outlines.md)
+for checking, worker failures and current output limits.

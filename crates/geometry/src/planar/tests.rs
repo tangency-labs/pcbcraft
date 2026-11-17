@@ -175,3 +175,37 @@ fn multi_island_offset_preserves_holes_and_merges_expanding_neighbours() {
     assert_eq!(merged.contains([2 * MM, 2 * MM]).unwrap(), Some(true));
     area_is(&separate, 32. - std::f64::consts::PI / 4.);
 }
+
+#[test]
+fn physical_capsule_and_rounded_land_use_the_original_core_and_radius() {
+    let capsule = Regions::rounded_core(&[[0, 0], [2 * MM, 0], [2 * MM, 0], [0, 0]], 500_000.5).unwrap();
+    let r = 0.5000005;
+    area_is(&capsule, 4. * r + std::f64::consts::PI * r * r);
+    let rounded = Regions::rounded_core(&[[0, 0], [2 * MM, 0], [2 * MM, MM], [0, MM]], 100_000.).unwrap();
+    area_is(&rounded, 2. + 0.6 + std::f64::consts::PI * 0.01);
+}
+
+#[test]
+fn shared_mesher_draws_a_planar_hole_without_covering_its_center() {
+    let hole = rectangle(0, 0, 10 * MM, 10 * MM).boolean(&Regions::circle([5 * MM, 5 * MM], 2 * MM).unwrap(), Operation::Difference).unwrap();
+    let mesh = hole.display_mesh(5_000).unwrap();
+    assert!(!mesh.triangles.is_empty());
+    let cross = |a: [f64; 2], b: [f64; 2], p: [f64; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    for [a, b, c] in mesh.triangles {
+        let (a, b, c) = (mesh.vertices_nm[a as usize], mesh.vertices_nm[b as usize], mesh.vertices_nm[c as usize]);
+        let signs = [cross(a, b, [5e6, 5e6]), cross(b, c, [5e6, 5e6]), cross(c, a, [5e6, 5e6])];
+        assert!(signs.iter().any(|v| *v < 0.) && signs.iter().any(|v| *v > 0.), "a display triangle covers the clearance hole");
+    }
+}
+
+#[test]
+fn nanometre_clearance_guard_survives_clipping_near_the_boundary() {
+    let outer = rectangle(-2 * MM, -2 * MM, 4 * MM, 4 * MM);
+    let keepout = Regions::circle([0, 0], 1_400_004).unwrap();
+    let copper = outer.boolean(&keepout, Operation::Difference).unwrap();
+    assert_eq!(copper.contains([699_999, 0]).unwrap(), Some(false));
+    assert_eq!(copper.contains([700_001, 0]).unwrap(), Some(false));
+    assert_eq!(copper.contains([700_004, 0]).unwrap(), Some(true));
+    let forbidden = Regions::circle([0, 0], 1_400_000).unwrap();
+    assert!(copper.boolean(&forbidden, Operation::Intersection).unwrap().is_empty());
+}

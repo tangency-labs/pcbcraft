@@ -252,6 +252,9 @@ impl<'a> BoardView<'a> {
     /// a shared layer, vias on any layer. Legacy center-only markers and unconfigured pads have
     /// no copper and stay isolated.
     pub fn copper(self) -> Copper {
+        if let Some(Ok(fill)) = self.filled_zones() {
+            return fill.copper.clone();
+        }
         islands(&lands(self), self.tracks(), self.vias()).0
     }
 
@@ -281,7 +284,10 @@ impl<'a> BoardView<'a> {
     pub fn copper_with_nets(self) -> (Copper, BTreeMap<Uuid, String>) {
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
-        let (copper, members) = islands(&lands, tracks, vias);
+        let (copper, members) = match self.filled_zones() {
+            Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
+            _ => islands(&lands, tracks, vias),
+        };
         let island_net: Vec<Option<String>> =
             members.iter().map(|island| island.iter().find_map(|node| lands.get(*node).and_then(|land| land.net.clone()))).collect();
         let nets = copper.tracks.iter().chain(&copper.vias).filter_map(|(id, island)| island_net[*island].clone().map(|net| (*id, net))).collect();

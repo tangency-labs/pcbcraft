@@ -22,6 +22,8 @@ pub struct CheckJob {
     found: Findings,
     courtyards: Vec<(String, bool, [i64; 4])>,
     report: Option<Report>,
+    zone_worker: Option<super::super::fill::FillJob>,
+    zone_problems: Option<Vec<super::super::fill::Problem>>,
 }
 
 impl Session {
@@ -31,6 +33,7 @@ impl Session {
         self.validate_project_command(CHECK_DESIGN, params)?;
         let (view, effective) = self.design_check_inputs(params)?;
         let target = view.target;
+        let zone_worker = if view.zones().is_empty() { None } else { Some(self.prepare_zone_fill(target, false)?) };
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         Ok(CheckJob {
             source: CheckSource {
@@ -55,11 +58,26 @@ impl Session {
             found: Findings::default(),
             courtyards: Vec::new(),
             report: None,
+            zone_worker,
+            zone_problems: None,
         })
     }
 }
 
 impl CheckJob {
+    /// Capture analytic zone checking for an isolated browser worker. Remaining checker
+    /// phases continue incrementally after this result, without any foreground kernel call.
+    pub fn browser_zone_request(&mut self) -> Option<Result<String, String>> {
+        self.zone_worker.as_mut().map(|job| job.worker_request_with_diagnostics(Some(self.source.effective.values)))
+    }
+
+    /// Accept same-source zone geometry/diagnostics before resuming incremental checking.
+    pub fn accept_browser_zones(&mut self, response: &str) -> Result<(), String> {
+        let job = self.zone_worker.as_mut().ok_or("No isolated checker zone work was requested.")?;
+        self.zone_problems = Some(job.accept_worker_diagnostics(response)?);
+        Ok(())
+    }
+
     /// Captured source authority; a host must additionally validate its view/request generation.
     pub fn source(&self) -> &CheckSource {
         &self.source
@@ -167,7 +185,14 @@ impl CheckJob {
             4 => {
                 view.check_dimensions(rules, self.class_rules.as_ref(), &mut self.found);
                 if let Some(g) = &self.geometry {
-                    view.check_shorts(&g.lands, &g.members, &g.items, &mut self.found);
+                    if let Some(problems) = self.zone_problems.take() {
+                        BoardView::add_zone_problems(problems, &mut self.found);
+                    } else {
+                        view.check_zones(g, rules, &mut self.found);
+                    }
+                    let fill = view.filled_zones().and_then(Result::ok);
+                    let members = fill.as_ref().map_or(&g.members, |fill| &fill.members);
+                    view.check_shorts(&g.lands, members, &g.items, &mut self.found);
                 }
             }
             5 => {
@@ -222,7 +247,9 @@ impl CheckJob {
                 }
             }
             6 => {
-                if let Some(r) = view.ratsnest_with_copper(&self.copper) {
+                let fill = view.filled_zones().and_then(Result::ok);
+                let copper = fill.as_ref().map_or(&self.copper, |fill| &fill.copper);
+                if let Some(r) = view.ratsnest_with_copper(copper) {
                     for l in r.lines {
                         self.found.push(Violation {
                             kind: Kind::Unconnected,

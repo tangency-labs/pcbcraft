@@ -242,8 +242,8 @@ impl PcbApp {
         }
     }
 
-    /// Tracks and vias share their layer and dimension controls; planned copper tools
-    /// stay in the Route menu and cannot submit commands.
+    /// Tracks and vias share layer/dimension controls. Refill recalculates derived copper;
+    /// unfinished differential-pair and tuning tools stay disabled in the shared Route menu.
     fn board_route_tools(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
@@ -283,12 +283,23 @@ impl PcbApp {
         let planned = [
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
-            planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
+            RibbonTool {
+                icon: ToolIcon::Refill,
+                label: "Refill zones",
+                description: "Recalculate copper zones",
+                shortcut: "",
+                enabled: enabled
+                    && !editing
+                    && self.session.project().and_then(|p| p.board_target().and_then(|t| p.board_view(t))).is_some_and(|v| !v.zones().is_empty()),
+                active: false,
+                menu_check: None,
+            },
         ];
         match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
             Some(2) => self.begin_zone(),
+            Some(5) => self.refill_zones(),
             _ => {}
         }
     }

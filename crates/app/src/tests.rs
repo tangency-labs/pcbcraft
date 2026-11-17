@@ -14,6 +14,7 @@ use super::*;
 mod app_bar_utilities;
 mod board_colors;
 mod board_drawing;
+mod board_fill;
 mod board_layers;
 mod board_properties;
 mod board_ratsnest;
