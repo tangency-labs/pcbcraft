@@ -42,15 +42,17 @@ mod tests {
     use std::sync::Mutex;
 
     #[derive(Debug, Default)]
-    struct Log(Mutex<Vec<(String, u64)>>);
+    struct Log(Mutex<Vec<(String, u64)>>, Mutex<Vec<Value>>);
 
     impl EditObserver for Log {
         fn opened(&self, project: Arc<Project>) {
             self.0.lock().unwrap().push((format!("opened {}", project.name), 0));
         }
 
+        /// Keep parameters as received, separately from the ordered root/command events.
         fn committed(&self, edit: CommittedEdit) {
             self.0.lock().unwrap().push((edit.command, edit.revision));
+            self.1.lock().unwrap().push(edit.params);
         }
     }
 
@@ -109,6 +111,7 @@ mod tests {
         let saved = Arc::new(Project { name: "Saved".to_owned(), ..Project::clone(&original) });
         assert!(session.adopt_saved_metadata(&original, &saved));
         assert!(!session.adopt_saved_metadata(&original, &saved));
+        assert_eq!(*log.1.lock().unwrap(), [params]);
         let log = log.0.lock().unwrap().clone();
         let name = original.name.clone();
         assert_eq!(log, [(format!("opened {name}"), 0), (ADD_TRACKS.to_owned(), revision), ("opened Saved".to_owned(), 0)]);

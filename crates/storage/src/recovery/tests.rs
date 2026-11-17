@@ -61,8 +61,8 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 
-/// The child half of the kill test: save a project, make ten unsaved edits with the journal
-/// attached, record the expected state, then wait to be killed.
+/// The child half of the kill test: save a project and its file baseline, then make ten unsaved
+/// edits with the journal attached, record the expected state and wait to be killed.
 fn child(work: &Path) {
     let recorder = Arc::new(JournalRecorder::start(work.join("recovery"), "kill-test".to_owned()).unwrap());
     let mut session = Session::default();
@@ -70,6 +70,7 @@ fn child(work: &Path) {
     session.apply("project.new", &json!({"name":"Kill"})).unwrap();
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
     crate::save(&work.join("project"), None, &saved, &mut |_| Ok(())).unwrap();
+    fs::write(work.join("saved-files.json"), serde_json::to_vec(&tree(&work.join("project"))).unwrap()).unwrap();
     ten_edits(&mut session);
     recorder.sync().unwrap();
     fs::write(work.join("expected.pc"), encode_packed_documents(encode_documents(session.snapshot().unwrap()).unwrap()).unwrap()).unwrap();
@@ -108,7 +109,8 @@ fn ten_edits_survive_a_kill() {
     assert!(ready, "the child did not journal its edits within {CHILD_LIMIT:?}");
 
     let project = work.path().join("project");
-    let saved_files = tree(&project);
+    let saved_files: BTreeMap<PathBuf, Vec<u8>> = serde_json::from_slice(&fs::read(work.path().join("saved-files.json")).unwrap()).unwrap();
+    assert_eq!(tree(&project), saved_files);
     let recovered = recover(&work.path().join("recovery"), "kill-test").unwrap();
     let expected = decode_packed(&fs::read(work.path().join("expected.pc")).unwrap()).unwrap().documents;
     assert_eq!(recovered.stop, None);
