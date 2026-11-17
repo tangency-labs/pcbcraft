@@ -77,7 +77,6 @@ jobs:
       - run: python -B -m unittest discover -s scripts -p 'test_*.py'
       - run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
       - run: node scripts/test-native-library-picker.cjs
-      - run: node --test scripts/test-wasi-test-runner.cjs
 
   native-tests:
     needs: changes
@@ -235,6 +234,8 @@ jobs:
           shared-key: wasi
           cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - name: Check WASI runner exit status
+        run: node --test scripts/test-wasi-test-runner.cjs
       - run: 'cargo test --locked --profile ci -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1'
       - run: 'cargo test --locked --profile ci -p pcbcraft-engine --target wasm32-wasip1 --lib net_classes:: -- --test-threads=1'
       - run: 'cargo test --locked --profile ci -p pcbcraft-engine --target wasm32-wasip1 --lib nets:: -- --test-threads=1'
