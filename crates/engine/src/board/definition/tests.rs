@@ -24,6 +24,47 @@ fn assign(s: &mut Session, symbol: &str, definition: &str, mapping: Value) -> St
     s.inspect()["project"]["board"]["footprints"].as_array().unwrap().last().unwrap()["id"].as_str().unwrap().into()
 }
 
+/// Isolate footprint codec boundaries from the editor and project integration.
+#[test]
+fn circular_npth_native_codec_is_lazy_and_closed() {
+    let mut definition = (*basic_components("resistor-0402").unwrap()).clone();
+    let legacy = write_saved(&definition).unwrap();
+    let old_writer = serde_json::to_string_pretty(&definition).unwrap() + "\n";
+    assert_eq!(legacy, old_writer.as_bytes());
+    let legacy_value: Value = serde_json::from_slice(&legacy).unwrap();
+    assert_eq!(legacy_value["format"], "pcbcraft-footprint/1");
+    assert!(legacy_value.get("non_plated_holes").is_none());
+
+    definition.non_plated_holes.push(CircularNpth { center: Point { x_nm: MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }, diameter_nm: MAX_OFFSET_NM });
+    assert!(write_saved(&definition).is_err());
+    definition.format = FootprintDefinition::format_for(true).into();
+    let bytes = write_saved(&definition).unwrap();
+    assert_eq!(*read_saved(&bytes).unwrap(), definition);
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    for invalid in [
+        json!([]),
+        Value::Null,
+        json!(vec![value["non_plated_holes"][0].clone(); MAX_MECHANICAL_HOLES + 1]),
+        json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":0}]),
+        json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":MAX_OFFSET_NM + 1}]),
+        json!([{"center":{"x_nm":i64::MIN,"y_nm":0},"diameter_nm":1}]),
+        json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":1,"number":"1"}]),
+    ] {
+        let mut changed = value.clone();
+        changed["non_plated_holes"] = invalid;
+        assert!(read_saved(&serde_json::to_vec(&changed).unwrap()).is_err());
+    }
+    let mut downgraded = value.clone();
+    downgraded["format"] = json!(LEGACY_FORMAT);
+    assert!(read_saved(&serde_json::to_vec(&downgraded).unwrap()).is_err());
+    let mut empty = legacy_value;
+    empty["format"] = json!(NPTH_FORMAT);
+    assert!(read_saved(&serde_json::to_vec(&empty).unwrap()).is_err());
+    definition.non_plated_holes.clear();
+    definition.format = FootprintDefinition::format_for(false).into();
+    assert_eq!(write_saved(&definition).unwrap(), legacy);
+}
+
 /// Library defaults and board adjustments compose before clipping, while authoring preserves pads.
 #[test]
 fn library_and_board_reference_offsets_are_additive() {

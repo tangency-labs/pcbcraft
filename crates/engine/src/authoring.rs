@@ -546,6 +546,9 @@ impl Item {
     /// Reconstruct geometry before choosing fork or published metadata. Intermediate copy labels
     /// cannot invalidate an otherwise editable published definition at its source-text limit.
     fn read_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
+        if !definition.non_plated_holes.is_empty() {
+            return Err("This editor cannot yet represent a footprint with non-plated holes.".into());
+        }
         let mut item = Self::new(Kind::Footprint)?;
         item.objects.clear();
         item.license = definition.license.clone();
@@ -665,7 +668,7 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: "pcbcraft-footprint/1".into(),
+                format: footprint::FootprintDefinition::format_for(false).into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,
@@ -673,6 +676,7 @@ impl Item {
                 license: self.license.clone(),
                 source: footprint::Source { kind: "native-editor".into(), reference: self.source.clone(), locator: self.id.clone() },
                 pads,
+                non_plated_holes: Vec::new(),
                 graphics,
                 artwork,
                 silkscreen,
