@@ -177,7 +177,7 @@ fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
     h
 }
 
-/// Unsupported curved copper is visibly refused instead of drawing a straight-only board.
+/// Unsupported curved copper is visibly refused; opening and cancelling Board Setup still preserves the board.
 #[test]
 fn circular_copper_keeps_native_bytes_and_explains_the_unavailable_canvas() {
     let mut h = routable();
@@ -191,6 +191,13 @@ fn circular_copper_keeps_native_bytes_and_explains_the_unavailable_canvas() {
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     h.run();
     assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    let revision = h.state().session.revision();
+    click(&mut h, "Board setup…");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.revision(), revision);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();

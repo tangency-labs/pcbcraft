@@ -9,7 +9,7 @@ use properties::{copper_properties, footprint_transform};
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
-    /// Layer color remains available when derived copper connectivity is unavailable.
+    /// Layer color and the Board Setup draft remain available without derived copper connectivity.
     /// Dock slots keep Layers, Properties and Selection filters separate on either edge.
     pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 3], Rect) {
         let settings_enabled = matches!(self.dialog, crate::Dialog::None) && !self.project_action_pending() && !self.files.busy();
@@ -97,6 +97,9 @@ impl PcbApp {
                 if let Some(layer) = color_pick {
                     self.begin_layer_color(view_id, layer);
                     self.repaint_editors(ui.ctx());
+                }
+                if setup_open {
+                    self.begin_board_setup(view_id);
                 }
                 return ([browser, layers, Rect::NOTHING], Rect::NOTHING);
             }
