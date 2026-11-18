@@ -839,9 +839,12 @@ match the engine land contour. Mixed-parity or other rotated obrounds retain the
 approximate round-ended stroke (a C flash when both resolved sides are equal). Other
 rectangles remain regions, including net-cardinal poses reached through non-cardinal
 intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
-with zero area. Rounded rectangles emit polygon regions with chorded corners when the
-resolved radius is positive, or the four resolved corners when it clamps to zero.
-Export adds no native arcs and does not change saved pad geometry.
+with zero area. Rounded rectangles flash a Gerber aperture macro with circular
+corners when the authored radius survives nanometre projection and the inner
+shape is a convex quadrilateral, a line or a point. The macro uses the placed pad's
+geometry, including rotation and side. Other rounded rectangles retain resolved
+polygon regions. This changes only the generated pad artwork, not saved pad
+geometry, track or Board Outline output.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,

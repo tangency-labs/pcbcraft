@@ -96,6 +96,15 @@ struct ReadGerber {
     flashes: Vec<(Point, ReadAperture)>,
     strokes: Vec<(Point, Point, ReadAperture)>,
     regions: Vec<Vec<Point>>,
+    rounded: BTreeMap<usize, ReadRounded>,
+    rounded_flashes: Vec<(Point, usize)>,
+}
+
+#[derive(Debug, Default)]
+struct ReadRounded {
+    circles: Vec<(i64, Point)>,
+    strips: Vec<(i64, Point, Point)>,
+    outline: Vec<Point>,
 }
 
 /// Parse a strictly positive unsigned millimeter dimension with exactly six decimals.
@@ -117,6 +126,48 @@ fn read_mm(value: &str) -> Result<i64, &'static str> {
     Ok(size)
 }
 
+/// Parse a signed, canonical macro coordinate in millimeters, on the nanometer grid.
+fn read_macro_coordinate(value: &str) -> Result<i64, &'static str> {
+    if value == "0.000000" {
+        return Ok(0);
+    }
+    if let Some(magnitude) = value.strip_prefix('-') { read_mm(magnitude).map(|n| -n) } else { read_mm(value) }
+}
+
+/// Decode only the emitted fixed-parameter macro subset (Ucamco Gerber 2026.05 §§4.5.1.3,
+/// 4.5.1.4, 4.5.1.6). Exposure must be on; zero rotation means coordinates are already
+/// in the aperture's axes. Refuse unsupported primitive parameters rather than ignoring them.
+fn read_rounded_macro(lines: &mut std::str::Lines<'_>) -> Result<ReadRounded, &'static str> {
+    let mut read = ReadRounded::default();
+    let point = |x, y| Ok::<_, &'static str>(Point { x_nm: read_macro_coordinate(x)?, y_nm: read_macro_coordinate(y)? });
+    for line in lines {
+        if line == "%" {
+            return if read.circles.is_empty() { Err("missing macro circles") } else { Ok(read) };
+        }
+        let fields: Vec<_> = line.strip_suffix('*').ok_or("invalid macro primitive")?.split(',').collect();
+        match fields.as_slice() {
+            ["1", "1", diameter, x, y, "0"] => read.circles.push((read_mm(diameter)?, point(x, y)?)),
+            ["20", "1", width, x, y, end_x, end_y, "0"] => {
+                let (start, end) = (point(x, y)?, point(end_x, end_y)?);
+                if start == end {
+                    return Err("collapsed macro strip");
+                }
+                read.strips.push((read_mm(width)?, start, end));
+            }
+            ["4", "1", "4", xy @ .., "0"] if read.outline.is_empty() && xy.len() == 10 => {
+                for pair in xy.chunks_exact(2) {
+                    read.outline.push(point(pair[0], pair[1])?);
+                }
+                if read.outline.first() != read.outline.last() {
+                    return Err("open macro outline");
+                }
+            }
+            _ => return Err("unsupported macro primitive"),
+        }
+    }
+    Err("unclosed macro")
+}
+
 /// Read canonical signed integer coordinates in the writer's absolute 4.6 millimeter format.
 fn read_coordinate(value: &str) -> Result<i64, &'static str> {
     let number = value.parse::<i64>().map_err(|_| "invalid coordinate")?;
@@ -126,8 +177,8 @@ fn read_coordinate(value: &str) -> Result<i64, &'static str> {
     Ok(number)
 }
 
-/// Read only the explicit linear fixture subset: file identity, modes, aperture syntax,
-/// operation order and structural contour closure, not geometric validity or CAM suitability.
+/// Read the fixture subset: file identity, modes, standard and rounded apertures, operation
+/// order and structural contour closure. This is not a general CAM reader.
 fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str) -> Result<ReadGerber, &'static str> {
     if text.contains('\r') || !text.ends_with('\n') {
         return Err("invalid line endings");
@@ -175,6 +226,7 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
         }
     }
     let mut read = ReadGerber::default();
+    let mut macros = BTreeMap::new();
     let mut selected = None;
     let mut position = None;
     let mut region: Option<Vec<Point>> = None;
@@ -187,13 +239,37 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
             if lines.next().is_some() {
                 return Err("records after end");
             }
+            if !macros.is_empty() {
+                return Err("unused macro definition");
+            }
             return Ok(read);
+        }
+        if let Some(name) = line.strip_prefix("%AMRoundRect") {
+            if body {
+                return Err("late macro definition");
+            }
+            let name = name.strip_suffix('*').and_then(read_aperture_code).ok_or("invalid macro name")?;
+            if macros.contains_key(&name) || read.rounded.contains_key(&name) {
+                return Err("duplicate macro definition");
+            }
+            macros.insert(name, read_rounded_macro(&mut lines)?);
+            continue;
         }
         if let Some(definition) = line.strip_prefix("%ADD") {
             if body {
                 return Err("late aperture definition");
             }
-            let (code_kind, dimensions) = definition.strip_suffix("*%").and_then(|s| s.split_once(',')).ok_or("invalid aperture")?;
+            let definition = definition.strip_suffix("*%").ok_or("invalid aperture")?;
+            if let Some((code, name)) = definition.split_once("RoundRect") {
+                let code = read_aperture_code(code).ok_or("invalid aperture code")?;
+                let name = read_aperture_code(name).ok_or("invalid macro name")?;
+                let aperture = macros.remove(&name).ok_or("undefined macro")?;
+                if name != code || read.apertures.contains_key(&code) || read.rounded.insert(code, aperture).is_some() {
+                    return Err("invalid macro aperture definition");
+                }
+                continue;
+            }
+            let (code_kind, dimensions) = definition.split_once(',').ok_or("invalid aperture")?;
             let kind = code_kind.chars().last().ok_or("invalid aperture")?;
             if !matches!(kind, 'C' | 'R' | 'O') {
                 return Err("unsupported aperture");
@@ -204,7 +280,7 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
                 return Err("invalid aperture arity");
             }
             let aperture = ReadAperture { kind, width: dimensions[0], height: *dimensions.last().unwrap() };
-            if read.apertures.insert(code, aperture).is_some() {
+            if read.rounded.contains_key(&code) || read.apertures.insert(code, aperture).is_some() {
                 return Err("duplicate aperture");
             }
             continue;
@@ -215,7 +291,10 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
                 return Err("selection in region");
             }
             let code = code.strip_suffix('*').and_then(read_aperture_code).ok_or("invalid selection")?;
-            selected = Some(*read.apertures.get(&code).ok_or("undefined aperture")?);
+            if !read.apertures.contains_key(&code) && !read.rounded.contains_key(&code) {
+                return Err("undefined aperture");
+            }
+            selected = Some(code);
         } else if line == "G36*" {
             if region.replace(Vec::new()).is_some() {
                 return Err("nested region");
@@ -237,9 +316,16 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
                 points.push(point);
             } else {
                 match operation {
-                    "03*" => read.flashes.push((point, selected.ok_or("undefined aperture")?)),
+                    "03*" => {
+                        let code = selected.ok_or("undefined aperture")?;
+                        if let Some(&aperture) = read.apertures.get(&code) {
+                            read.flashes.push((point, aperture));
+                        } else {
+                            read.rounded_flashes.push((point, code));
+                        }
+                    }
                     "01*" => {
-                        let aperture = selected.ok_or("undefined aperture")?;
+                        let aperture = *read.apertures.get(&selected.ok_or("undefined aperture")?).ok_or("unsupported stroke aperture")?;
                         if aperture.kind != 'C' {
                             return Err("unsupported stroke aperture");
                         }
@@ -280,7 +366,7 @@ fn read_gerber(outputs: &[Output], (suffix, function, polarity): GerberFile) -> 
     try_read_gerber(file(outputs, suffix), function, polarity).unwrap_or_else(|error| panic!("{suffix}: {error}"))
 }
 
-/// A mixed, command-built package uses C/R/O in one file, including the swapped rectangle.
+/// A mixed, command-built package uses C/R/O and a rounded macro in one file, including the swapped rectangle.
 /// Ucamco Gerber Layer Format Specification 2026.05 section 4.4 defines these standard templates.
 #[test]
 fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
@@ -290,6 +376,7 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
             (PadShape::Rectangle, 800_000, 400_000, 0),
             (PadShape::Rectangle, 800_000, 400_000, 90),
             (PadShape::Oval, 800_000, 400_000, 0),
+            (PadShape::RoundedRectangle, 800_000, 400_000, 0),
         ],
         0,
         false,
@@ -298,6 +385,8 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
     let read = read_gerber(&outputs, TOP_COPPER);
     assert!(read.strokes.is_empty() && read.regions.is_empty());
     assert_eq!(read.apertures.len(), 4);
+    assert_eq!(read.rounded.len(), 1);
+    assert_eq!(read.rounded_flashes, [(Point { x_nm: 38_000_001, y_nm: 25_000_003 }, 14)]);
     let expected = [('C', 400_000, 400_000), ('R', 800_000, 400_000), ('R', 400_000, 800_000), ('O', 800_000, 400_000)];
     assert_eq!(read.flashes.len(), expected.len());
     for (((center, aperture), pad), (kind, width, height)) in read.flashes.iter().zip(view(&s).footprints().next().unwrap().pads).zip(expected) {
@@ -428,11 +517,10 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
     assert_eq!(text.matches("D10*\n").count(), 2, "circle is selected again after the last O flash");
 }
 
-/// Non-cardinal rectangles retain their exact polygon and obrounds their existing round
-/// stroke; this rounded fixture retains a positive radius and uses chorded regions.
+/// Non-cardinal rectangles retain their exact polygon and obrounds their existing round stroke.
 #[test]
-fn rotated_and_rounded_pad_fallbacks_retain_geometry() {
-    for shape in [PadShape::Rectangle, PadShape::Oval, PadShape::RoundedRectangle] {
+fn rotated_rectangular_and_obround_pad_fallbacks_retain_geometry() {
+    for shape in [PadShape::Rectangle, PadShape::Oval] {
         for (pad_rotation, rotation) in [(45, 0), (0, 37), (13, 90)] {
             for bottom in [false, true] {
                 let s = aperture_fixture(shape, 800_000, 400_000, pad_rotation, rotation, bottom);
@@ -462,15 +550,10 @@ fn rotated_and_rounded_pad_fallbacks_retain_geometry() {
                     assert_eq!(read.regions.len(), pads.len());
                     for (region, pad) in read.regions.iter().zip(pads) {
                         assert_eq!(region.first(), region.last());
-                        if shape == PadShape::Rectangle {
-                            let corners = pad.copper.unwrap();
-                            let expected: Vec<_> =
-                                corners.iter().chain(std::iter::once(&corners[0])).map(|p| Point { x_nm: p.x_nm, y_nm: -p.y_nm }).collect();
-                            assert_eq!(*region, expected);
-                        } else {
-                            assert_eq!(region.len(), 29, "four corners of seven chord vertices, closed");
-                            assert_rounded_fixture_contour(region, &pad);
-                        }
+                        let corners = pad.copper.unwrap();
+                        let expected: Vec<_> =
+                            corners.iter().chain(std::iter::once(&corners[0])).map(|p| Point { x_nm: p.x_nm, y_nm: -p.y_nm }).collect();
+                        assert_eq!(*region, expected);
                     }
                 }
             }
@@ -478,42 +561,80 @@ fn rotated_and_rounded_pad_fallbacks_retain_geometry() {
     }
 }
 
-/// Check every rounded-fixture chord against independent local tangent/arc samples transformed
-/// by the placed pad axes. Two nanometers cover projected-corner and vertex rounding.
-fn assert_rounded_fixture_contour(region: &[Point], pad: &PadView) {
-    let c = pad.copper.unwrap();
-    let (ux, uy) = ((c[1].x_nm - c[0].x_nm) as f64, (c[1].y_nm - c[0].y_nm) as f64);
-    let (vx, vy) = ((c[3].x_nm - c[0].x_nm) as f64, (c[3].y_nm - c[0].y_nm) as f64);
-    let (w, h) = (ux.hypot(uy), vx.hypot(vy));
-    assert!((w - 800_000.).abs() <= 2. && (h - 400_000.).abs() <= 2.);
-    assert_eq!(pad.corner_radius_nm, 100_000);
-    let center = ((c[0].x_nm + c[2].x_nm) as f64 / 2., (c[0].y_nm + c[2].y_nm) as f64 / 2.);
-    // Cosine/sine pairs at 15-degree intervals, rounded to one part in a billion.
-    let samples = [
-        (1_000_000_000, 0),
-        (965_925_826, 258_819_045),
-        (866_025_404, 500_000_000),
-        (707_106_781, 707_106_781),
-        (500_000_000, 866_025_404),
-        (258_819_045, 965_925_826),
-        (0, 1_000_000_000),
-    ];
-    for (corner, (cx, cy)) in [(-300_000., -100_000.), (300_000., -100_000.), (300_000., 100_000.), (-300_000., 100_000.)].into_iter().enumerate() {
-        for (step, (cos, sin)) in samples.into_iter().enumerate() {
-            let (a, b) = (-(cos as f64) / 10_000., -(sin as f64) / 10_000.);
-            let (dx, dy) = match corner {
-                0 => (a, b),
-                1 => (-b, a),
-                2 => (-a, -b),
-                _ => (b, -a),
-            };
-            let (x, y) = (cx + dx, cy + dy);
-            let expected = (center.0 + x * ux / w + y * vx / h, -(center.1 + x * uy / w + y * vy / h));
-            let actual = region[corner * 7 + step];
-            assert!(
-                (actual.x_nm as f64 - expected.0).abs() <= 2. && (actual.y_nm as f64 - expected.1).abs() <= 2.,
-                "corner {corner}, chord {step}: {actual:?} vs {expected:?}"
-            );
+/// Read exact corner diameters and verify the whole union: four circles centered on the
+/// inner contour, one diameter-wide strip along each edge, and a filled closed inner outline.
+/// Ucamco Gerber 2026.05 §§4.5.1.3, 4.5.1.4 and 4.5.1.6 specify the parsed primitives.
+#[test]
+fn rounded_pad_macros_read_back_radius_and_orientation() {
+    for (local, placed) in [(0, 0), (0, 90), (0, 37), (37, 0), (13, 37)] {
+        for bottom in [false, true] {
+            let mut s = aperture_fixture(PadShape::RoundedRectangle, 800_000, 400_000, local, placed, bottom);
+            s.apply(crate::SET_PLACEMENT_ORIGIN, &json!({"board":s.project().unwrap().board_target().unwrap().board,"origin":{"kind":"point","x_nm":1_000_003,"y_nm":-2_000_007},"expected_revision":s.revision()})).unwrap();
+            let fabrication = view(&s).fabrication().unwrap();
+            if (local, placed) == (0, 37) {
+                let revision = s.revision();
+                let returned = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+                assert_eq!(returned["fabrication"], serde_json::to_value(&fabrication).unwrap());
+                assert_eq!(s.revision(), revision);
+                assert_eq!(zip(&fabrication.files).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
+            }
+            let pads = view(&s).footprints().next().unwrap().pads;
+            let expected_angle = if bottom { f64::from(placed) - f64::from(local) } else { f64::from(placed) + f64::from(local) };
+            let (sin, cos) = expected_angle.to_radians().sin_cos();
+            for output in surface_files(bottom) {
+                let read = read_gerber(&fabrication.files, output);
+                assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty(), "{}", output.0);
+                assert_eq!(read.rounded_flashes.len(), pads.len());
+                if placed.is_multiple_of(90) {
+                    assert_eq!(read.rounded.len(), 1, "identical projected geometry reuses its aperture");
+                }
+                for (&(at, code), pad) in read.rounded_flashes.iter().zip(&pads) {
+                    assert_eq!(at, Point { x_nm: pad.center.x_nm - 1_000_003, y_nm: -(pad.center.y_nm + 2_000_007) });
+                    assert_eq!(pad.corner_radius_nm, 100_000);
+                    let aperture = &read.rounded[&code];
+                    assert_eq!((aperture.circles.len(), aperture.strips.len(), aperture.outline.len()), (4, 4, 5));
+                    assert!(aperture.circles.iter().all(|(d, _)| *d == 2 * pad.corner_radius_nm), "exact authored radius in nanometers");
+                    let vertices = &aperture.outline[..4];
+                    for (&vertex, (_, circle)) in vertices.iter().zip(&aperture.circles) {
+                        assert_eq!(vertex, *circle);
+                    }
+                    for ((&start, &end), strip) in aperture.outline.iter().zip(&aperture.outline[1..]).zip(&aperture.strips) {
+                        assert_eq!(*strip, (2 * pad.corner_radius_nm, start, end));
+                    }
+                    // Check the model-to-file frame independently of the emitter. The model
+                    // rounds each rotation and the final inner vertices, not the Gerber radius.
+                    for (x, y) in [(-300_000., -100_000.), (-300_000., 100_000.), (300_000., -100_000.), (300_000., 100_000.)] {
+                        let (x, y) = (x * cos - y * sin, x * sin + y * cos);
+                        assert!(vertices.iter().any(|p| (p.x_nm as f64 - x).abs() <= 2. && (p.y_nm as f64 - y).abs() <= 2.));
+                    }
+                }
+            }
+            for output in surface_files(!bottom) {
+                assert!(read_gerber(&fabrication.files, output).rounded_flashes.is_empty());
+            }
+        }
+    }
+}
+
+/// The maximum legal radius fills a point core as one disk, or a line core as a capsule.
+#[test]
+fn rounded_pad_macros_handle_point_and_line_cores() {
+    for width in [2, 4] {
+        let s = aperture_fixture(PadShape::RoundedRectangle, width, 2, 0, 0, false);
+        let outputs = view(&s).fabrication_outputs().unwrap();
+        let read = read_gerber(&outputs, TOP_COPPER);
+        assert!(read.regions.is_empty());
+        assert_eq!(read.rounded.len(), 1);
+        assert_eq!(read.rounded_flashes.len(), 2);
+        let aperture = &read.rounded[&read.rounded_flashes[0].1];
+        assert!(aperture.outline.is_empty());
+        if width == 2 {
+            assert_eq!(aperture.circles, [(2, Point { x_nm: 0, y_nm: 0 })]);
+            assert!(aperture.strips.is_empty());
+        } else {
+            let (start, end) = (Point { x_nm: -1, y_nm: 0 }, Point { x_nm: 1, y_nm: 0 });
+            assert_eq!(aperture.circles, [(2, start), (2, end)]);
+            assert_eq!(aperture.strips, [(2, start, end)]);
         }
     }
 }
@@ -607,6 +728,24 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
     }
 }
 
+/// Reject wrong macro exposure, nonzero rotation, or a flash using an undefined template.
+#[test]
+fn gerber_subset_reader_rejects_invalid_rounded_macro_parameters() {
+    let s = aperture_fixture(PadShape::RoundedRectangle, 800_000, 400_000, 0, 0, false);
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let (suffix, function, polarity) = TOP_COPPER;
+    let text = file(&outputs, suffix);
+    assert_eq!(read_gerber(&outputs, TOP_COPPER).rounded_flashes.len(), 2);
+    for (mutant, reason) in [
+        (text.replacen("1,1,0.200000,", "1,0,0.200000,", 1), "unsupported macro primitive"),
+        (text.replacen(",0*\n", ",90*\n", 1), "unsupported macro primitive"),
+        (text.replace("%ADD10RoundRect10*%", "%ADD10RoundRect99*%"), "undefined macro"),
+    ] {
+        assert_ne!(mutant, text);
+        assert_eq!(try_read_gerber(&mutant, function, polarity).unwrap_err(), reason);
+    }
+}
+
 /// Snapped boxes of each shape are equal within one placed definition, but each pad's
 /// local rotation independently decides whether it can flash R or O.
 #[test]
@@ -650,11 +789,35 @@ fn tiny_rounded_pad_can_emit_four_unchorded_corners() {
     let outputs = view(&s).fabrication_outputs().unwrap();
     let read = read_gerber(&outputs, TOP_COPPER);
     assert!(read.apertures.is_empty() && read.flashes.is_empty() && read.strokes.is_empty());
+    assert!(read.rounded.is_empty() && read.rounded_flashes.is_empty());
     assert_eq!(read.regions.len(), 2);
     for (polygon, x_nm) in read.regions.iter().zip([30_000_001, 32_000_001]) {
         let expected = [(-1, 0), (0, 1), (1, 0), (0, -1), (-1, 0)].map(|(dx, dy)| Point { x_nm: x_nm + dx, y_nm: 25_000_003 + dy });
         assert_eq!(polygon.as_slice(), expected.as_slice());
     }
+}
+
+/// Two rotations can snap a tiny inner box onto three edges without clamping its radius.
+/// Keep that pad's original closed region rather than writing a malformed quad primitive.
+#[test]
+fn tiny_rounded_pad_with_non_strict_core_retains_region() {
+    let s = aperture_fixture_at(
+        &[(PadShape::RoundedRectangle, 3, 3, 165); 2],
+        45,
+        false,
+        Point { x_nm: -1, y_nm: 1 },
+        Point { x_nm: 30_000_001, y_nm: -25_000_003 },
+        false,
+    );
+    let pads = view(&s).footprints().next().unwrap().pads;
+    let first = &pads[0];
+    let contour = Contour::pad(first.center, first.copper.unwrap(), first.shape, first.corner_radius_nm);
+    assert_eq!(contour.radius, 1.);
+    let at = Point { x_nm: first.center.x_nm, y_nm: -first.center.y_nm };
+    let read = read_gerber(&view(&s).fabrication_outputs().unwrap(), TOP_COPPER);
+    assert!(!read.rounded_flashes.iter().any(|(center, _)| *center == at));
+    assert_eq!(read.regions[0].len(), 29, "the positive fallback radius still produces four chorded corners");
+    assert_eq!(read.regions[0].first(), read.regions[0].last());
 }
 
 /// Tiny non-cardinal and twice-rounded collapsed lands stay on the existing fallback, even
@@ -994,7 +1157,7 @@ fn moved_reference_round_trips_with_bottom_tracks_and_vias() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
 }
 
-/// A routed two-layer board produces each layer file with the right content: pad regions and
+/// A routed two-layer board produces each layer file with the right content: pad flashes and
 /// tracks on their copper, vias on both layers, mask and paste openings for front SMD pads,
 /// the silkscreen, the outline, and one drill tool per hole size. Y is negated throughout.
 #[test]
@@ -1029,24 +1192,24 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     for output in outputs.iter().filter(|output| output.name.ends_with(".gbr")) {
         let text = &output.contents;
         assert!(text.contains("%FSLAX46Y46*%") && text.contains("%MOMM*%") && text.ends_with("M02*\n"), "{}", output.name);
-        assert!(text.lines().all(|line| line.ends_with('*') || line.ends_with("*%")), "{}: every Gerber line ends its command", output.name);
+        assert!(text.lines().all(|line| line.ends_with('*') || line.ends_with("*%") || line == "%"), "{}: Gerber command delimiters", output.name);
     }
 
     let pads: Vec<_> = view(&s).footprints().flat_map(|f| f.pads).collect();
     let top = file(&outputs, "-Top.gbr");
     assert!(top.contains("%TF.FileFunction,Copper,L1,Top*%"));
-    assert_eq!(top.matches("G36*").count(), pads.len(), "one region per front pad");
+    assert_eq!(read_gerber(&outputs, TOP_COPPER).rounded_flashes.len(), pads.len(), "one flash per front pad");
     assert!(top.contains("C,0.250000*%"), "the 0.25 mm track aperture");
     assert!(top.contains(&format!("X1000000Y{}D02*\nX3000000Y{}D01*", -y, -y)), "the front track, Y negated");
     assert!(top.contains(&format!("X7000000Y{}D03*", -y)), "the via is flashed on the top layer");
     let bottom = file(&outputs, "-Bottom.gbr");
     assert!(bottom.contains("%TF.FileFunction,Copper,L2,Bot*%"));
-    assert_eq!(bottom.matches("G36*").count(), 0, "SMD pads stay on the front");
+    assert!(read_gerber(&outputs, BOTTOM[0]).rounded_flashes.is_empty(), "SMD pads stay on the front");
     assert!(bottom.contains(&format!("X7000000Y{}D03*", -y)) && bottom.contains(&format!("X9000000Y{}D01*", -y)), "via and back track");
-    assert_eq!(file(&outputs, "-Mask_Top.gbr").matches("G36*").count(), pads.len());
+    assert_eq!(read_gerber(&outputs, TOP[1]).rounded_flashes.len(), pads.len());
     assert!(file(&outputs, "-Mask_Top.gbr").contains("%TF.FilePolarity,Negative*%"));
-    assert_eq!(file(&outputs, "-Paste_Top.gbr").matches("G36*").count(), pads.len());
-    assert_eq!(file(&outputs, "-Paste_Bottom.gbr").matches("G36*").count(), 0);
+    assert_eq!(read_gerber(&outputs, TOP[2]).rounded_flashes.len(), pads.len());
+    assert!(read_gerber(&outputs, BOTTOM_PASTE).rounded_flashes.is_empty());
     let profile = file(&outputs, "-Outline.gbr");
     assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
     assert_eq!(profile.matches("D01*").count(), 4, "a closed rectangle is four strokes");
@@ -1064,9 +1227,11 @@ fn outputs_and_their_archive_are_deterministic() {
     let mut s = routed_fixture();
     outline(&mut s);
     let first = view(&s).fabrication_outputs().unwrap();
-    assert_eq!(first, view(&s).fabrication_outputs().unwrap());
+    assert!(!read_gerber(&first, TOP_COPPER).rounded_flashes.is_empty(), "the archive fixture exercises macros");
+    let second = view(&s).fabrication_outputs().unwrap();
+    assert_eq!(first, second);
     let bytes = zip(&first).unwrap();
-    assert_eq!(bytes, zip(&first).unwrap());
+    assert_eq!(bytes, zip(&second).unwrap());
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut names: Vec<String> = archive.file_names().map(|name| name.unwrap().into_owned()).collect();
     names.sort();
