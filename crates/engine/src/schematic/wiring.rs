@@ -185,7 +185,7 @@ impl Wire {
 pub struct Connectivity {
     pub nets: Vec<Vec<Terminal>>,
     pub(crate) names: Vec<Vec<String>>,
-    pub(crate) display_names: Vec<String>,
+    pub(crate) display_names: Vec<Option<String>>,
     pub unconnected: Vec<Terminal>,
     junctions: Vec<Vec<u64>>,
     interfaces: Vec<Vec<WireEndpoint>>,
@@ -344,13 +344,13 @@ fn append_point(path: &mut Vec<super::Point>, point: super::Point) {
 }
 
 impl Connectivity {
-    /// Shared project-qualified display name; unresolved indices have no invented identity.
+    /// Shared project-qualified display text; a group without a name uses the ordinary status text.
     pub fn net_name(&self, index: usize) -> String {
-        self.borrowed_net_name(index).to_owned()
+        self.borrowed_net_name(index).unwrap_or(if index < self.nets.len() { "Unconnected" } else { "Unresolved net" }).to_owned()
     }
-    /// Borrow the same display evidence so bounded reports can count it before copying.
-    pub(crate) fn borrowed_net_name(&self, index: usize) -> &str {
-        self.display_names.get(index).map(String::as_str).unwrap_or(if index < self.nets.len() { "Unconnected" } else { "Unresolved net" })
+    /// Borrow actual authored or generated net names, without the fallback text for unnamed groups.
+    pub(crate) fn borrowed_net_name(&self, index: usize) -> Option<&str> {
+        self.display_names.get(index).and_then(Option::as_deref)
     }
     /// All authored names on this group, including aliases introduced by wired connections.
     pub fn net_names(&self, index: usize) -> &[String] {
@@ -405,7 +405,7 @@ impl Connectivity {
             }
             nets.push(pins);
             names.push(self.names[index].clone());
-            display_names.push(self.net_name(index));
+            display_names.push(self.borrowed_net_name(index).map(str::to_owned));
             junctions.push(points);
             interfaces.push(ports);
         }

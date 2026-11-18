@@ -277,7 +277,8 @@ fn pin_remap_matching_token_without_form_owner_is_refused() {
         assert_eq!(app.library_editors.inspect(), before);
         assert!(std::sync::Arc::ptr_eq(&item, &app.library_editors.documents[&id].session.snapshot()));
         assert_eq!(app.session.inspect(), project);
-        assert!(matches!(&app.dialog, Dialog::LibraryPinRemap(draft) if draft.token.is_none()));
+        // The command's owner-specific refusal establishes the mismatch; it must not close the form.
+        assert!(matches!(&app.dialog, Dialog::LibraryPinRemap(_)));
     }
 }
 

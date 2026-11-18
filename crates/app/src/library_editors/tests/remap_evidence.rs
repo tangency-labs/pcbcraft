@@ -91,18 +91,32 @@ fn pin_remap_live_published_wired_project_displays_pinned_number_evidence() {
     assert_eq!(engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap(), bytes);
 }
 
-/// A placed unconnected terminal has known pinned evidence; a draft without an explicit base
-/// has no such association. An authored net named Unconnected is a third, distinct state.
+/// Bare pins and unnamed one-pin stubs have no net evidence, even though a stub has a graph
+/// group. A real net named Unconnected and a missing publication association are distinct cases.
 #[test]
 fn pin_remap_display_separates_unconnected_and_unknown_association() {
-    for associated in [true, false] {
+    for (associated, stub) in [(true, false), (true, true), (false, false)] {
         let (mut app, id) = fixture(false, associated);
+        if stub {
+            let symbol = &app.session.project().unwrap().symbols()[0];
+            let pin = symbol.terminals()[0];
+            let at = symbol.pins()[0];
+            edit(&mut app, engine::DRAW_WIRE, json!({"from":pin.inspect(),"to":{"x_nm":at.x_nm,"y_nm":at.y_nm+12_700_000},"bends":[]}));
+            let graph = app.session.project().unwrap().electrical_connectivity();
+            let index = graph.net_index_for(pin).expect("stub must have a group");
+            assert_eq!(graph.nets[index], [pin]);
+            assert_eq!(graph.net_name(index), "Unconnected");
+        }
         let reply = live(&mut app, id, 0, "preview", json!([{"unit":"main","object":"1","number":"1"}])).unwrap();
         let report = &reply["library_editors"]["pin_remap"]["report"];
-        assert_eq!(report["instances"][0]["pins"][0]["current_nets"], json!([]));
+        for instance in report["instances"].as_array().unwrap() {
+            assert_eq!(instance["pins"][0]["current_nets"], json!([]));
+        }
         let rows = super::super::remap::report_rows(report, 0);
-        assert_eq!(rows[0].cells[3], if associated { "IN" } else { "Unknown" });
-        assert_eq!(rows[0].cells[4], if associated { "Unconnected" } else { "Unknown: no matching pinned revision" });
+        for row in rows {
+            assert_eq!(row.cells[3], if associated { "IN" } else { "Unknown" });
+            assert_eq!(row.cells[4], if associated { "Unconnected" } else { "Unknown: no matching pinned revision" });
+        }
     }
     let (mut app, id) = fixture(false, true);
     let at = app.session.project().unwrap().symbols()[0].pins()[0];

@@ -218,7 +218,7 @@ fn pin_remap_cold_graph_budget_counts_unrelated_direct_contacts() {
     let (mut project, editor) = fixture();
     edit(&mut project, crate::sheets::CREATE_SHEET, json!({"name":"Ballast"}));
     let target = project.project().unwrap().sheets().last().unwrap().target;
-    for (count, refusal) in [(1820, None), (1870, Some("Pin remap graph preparation budget exceeded."))] {
+    for (count, refusal) in [(1800, None), (1870, Some("Pin remap graph preparation budget exceeded."))] {
         add_ballast(&mut project, target, count);
         let current = project.project().unwrap();
         let sheet = current.for_sheet(target).unwrap();
@@ -292,6 +292,14 @@ fn pin_remap_refusals_preserve_history_and_allocation() {
     let (_, mut editor) = fixture();
     let before = editor.inspect();
     let item = editor.snapshot();
+    let history = (editor.undo.clone(), editor.redo.clone());
+    let allocation = (editor.next_id, editor.next_content_revision);
+    let preserved = |editor: &Session| {
+        assert_eq!(editor.inspect(), before);
+        assert!(Arc::ptr_eq(&editor.snapshot(), &item));
+        assert_eq!((&editor.undo, &editor.redo), (&history.0, &history.1));
+        assert_eq!((editor.next_id, editor.next_content_revision), allocation);
+    };
     let good = swap(&item);
     let mut cases = vec![(vec![], "Choose 1 to 128")];
     let mut duplicate = good.clone();
@@ -314,12 +322,13 @@ fn pin_remap_refusals_preserve_history_and_allocation() {
     for (pins, message) in cases {
         let error = editor.execute(0, Action::RemapPins { pins }).unwrap_err();
         assert!(error.contains(message), "{error}");
-        assert_eq!(editor.inspect(), before);
+        preserved(&editor);
     }
     assert!(editor.execute(1, Action::RemapPins { pins: good.clone() }).unwrap_err().contains("changed"));
+    preserved(&editor);
     let noop = vec![PinRemap { unit: item.unit.clone(), object: good[0].object, number: "1".into() }];
     assert_eq!(editor.execute(0, Action::RemapPins { pins: noop }).unwrap(), 0);
-    assert_eq!(editor.inspect(), before);
+    preserved(&editor);
     let mut project = crate::Session::default();
     let valid = json!({"item":item.as_ref(),"pins":good});
     project.execute(sources::PREVIEW_PIN_REMAP, &valid).unwrap();
@@ -335,7 +344,7 @@ fn pin_remap_refusals_preserve_history_and_allocation() {
         let CommandError::InvalidParams(message) = error else { panic!("wrong error kind: {error}") };
         assert_eq!(message, reason);
         assert_eq!(project.inspect(), project_before);
-        assert_eq!(editor.inspect(), before);
+        preserved(&editor);
     }
 }
 

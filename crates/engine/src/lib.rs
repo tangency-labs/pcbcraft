@@ -4172,8 +4172,8 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
-        let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" && !value.is_object() {
-            Err("Pin remap item must be an object.".into())
+        let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" {
+            value.is_object().then_some(()).ok_or_else(|| "Pin remap item must be an object.".into())
         } else if matches!(param.kind, ParamKind::PinRemaps) {
             authoring::remap::decode(value).map(|_| ())
         } else {

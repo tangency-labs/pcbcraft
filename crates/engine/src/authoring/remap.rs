@@ -206,7 +206,7 @@ pub fn preview(item: &Item, pins: &[PinRemap], source_revision: Option<u32>, pro
                     .iter()
                     .filter_map(|terminal| {
                         let graph = graph?;
-                        graph.net_index_for(*terminal).map(|index| graph.borrowed_net_name(index))
+                        graph.borrowed_net_name(graph.net_index_for(*terminal)?)
                     })
                     .collect();
                 let pads = associated

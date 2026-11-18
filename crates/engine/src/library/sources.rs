@@ -1014,9 +1014,6 @@ impl Session {
         match id {
             PREVIEW_PIN_REMAP => {
                 let fail = CommandError::InvalidParams;
-                if !params["item"].is_object() {
-                    return Err(fail("Pin remap item must be an object.".into()));
-                }
                 let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;
                 let pins = crate::authoring::remap::decode(&params["pins"]).map_err(fail)?;
                 let source_revision = params

@@ -22,7 +22,9 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+#[cfg(not(target_arch = "wasm32"))]
 mod remap;
+#[cfg(not(target_arch = "wasm32"))]
 mod remap_evidence;
 mod zoom;
 

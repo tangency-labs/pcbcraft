@@ -142,7 +142,8 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
         addresses.push(format!("{:x}", Sha256::digest(address)));
         primaries.push(name);
     }
-    graph.display_names = qualify(primaries, paths, addresses, &fallback);
+    graph.display_names =
+        qualify(primaries, paths, addresses, &fallback).into_iter().zip(fallback).map(|(name, fallback)| (!fallback).then_some(name)).collect();
 }
 
 /// Qualify every colliding primary, then disambiguate equal paths with bounded digest prefixes.

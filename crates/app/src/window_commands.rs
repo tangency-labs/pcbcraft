@@ -2076,12 +2076,11 @@ mod live {
                     } else {
                         missing.as_object_mut().unwrap().remove(field);
                     }
-                    let reason = if field == "object" {
-                        "`pins` Each pin remap row requires only unit, object and number."
-                    } else if field == "document" {
-                        "`app.library_pin_remap` needs `document`"
-                    } else {
-                        "`app.library_pin_remap` needs `expected_revision`"
+                    let reason = match field {
+                        "object" => "`pins` Each pin remap row requires only unit, object and number.",
+                        "document" => "`app.library_pin_remap` needs `document`",
+                        "token" => "A pin remap review token is required.",
+                        _ => "`app.library_pin_remap` needs `expected_revision`",
                     };
                     check(&missing, false, reason);
                 }

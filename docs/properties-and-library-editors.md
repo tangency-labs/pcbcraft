@@ -318,8 +318,10 @@ The embedded native authoring `item` and native part-definition reference retain
 their existing codecs; other editor commands and general library inspection IDs
 are unchanged. Convert an exactly retained inspection ID to the new string form,
 never a value already rounded by a numeric client. A well-spelled scalar can still
-name an unknown primitive/document or a stale revision/token; those requests are
-refused without editing either document. Unknown request/correspondence fields
+name an unknown primitive or document, or fail to address the captured review.
+Apply also requires the current library revision and project snapshot. Cancel can
+retire an old capture after either changes, provided the request still matches the
+captured document, revision, token and owning form. Unknown request/correspondence fields
 are refused. The structural array schema also forbids exact repeated rows.
 Distinct rows reusing `(unit, object)` or a destination number can still be
 structurally valid: both checked readers reject them through shared row validation.
