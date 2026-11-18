@@ -1,5 +1,9 @@
 //! Resumable read-only checker work shared by native workers and browser frame budgets.
 use super::*;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "release_board_checks.rs"]
+mod release_board_checks;
 use crate::board::track::{Copper, IslandBuilder, lands_from_footprints};
 
 pub use super::super::work::{Progress as CheckProgress, Source as CheckSource};
