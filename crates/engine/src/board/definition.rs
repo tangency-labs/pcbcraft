@@ -158,6 +158,63 @@ pub struct FootprintDefinition {
     /// Optional local displacement of the default reference from the automatic anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
+    /// Optional assembly orientation statement. Its presence selects format 2; absent, the
+    /// definition keeps its format 1 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "orientation_object")]
+    pub orientation: Option<Orientation>,
+}
+
+/// The format written by definitions without an orientation statement.
+pub const FORMAT_V1: &str = "pcbcraft-footprint/1";
+/// Format 1 plus a required `orientation` object.
+pub const FORMAT_V2: &str = "pcbcraft-footprint/2";
+
+/// How a package is meant to sit on the board for assembly. `polarized` says that turning the
+/// part by a half turn changes its function, `pin_1` names the pad an assembler aligns with the
+/// part's pin 1 mark, and `zero` states that the drawn rotation is the IPC-7351 zero component
+/// orientation (IPC-7351, section 16).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Orientation {
+    pub polarized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "super::reference::present")]
+    pub pin_1: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "zero_orientation")]
+    pub zero: Option<ZeroOrientation>,
+}
+
+/// Accept a present orientation only as a map. A derived struct alone also accepts positional
+/// arrays in JSON; the named-field footprint contract does not.
+fn orientation_object<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Orientation>, D::Error> {
+    struct Object;
+    impl<'de> serde::de::Visitor<'de> for Object {
+        type Value = Orientation;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an orientation object")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Orientation, M::Error> {
+            Orientation::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object).map(Some)
+}
+
+/// The zero-orientation conventions a definition can state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ZeroOrientation {
+    #[serde(rename = "ipc-7351")]
+    Ipc7351,
+}
+
+/// Read the supported convention as a string, not as an externally tagged enum object.
+fn zero_orientation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<ZeroOrientation>, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    match name.as_str() {
+        "ipc-7351" => Ok(Some(ZeroOrientation::Ipc7351)),
+        _ => Err(serde::de::Error::unknown_variant(&name, &["ipc-7351"])),
+    }
 }
 
 /// Validate portable identity segments before using them in a native relative filename.
@@ -264,10 +321,19 @@ impl FootprintDefinition {
         self.validate_mode(true)
     }
     /// Check shared constraints before accepting either an editable draft or a published package.
+    /// A format that does not match the orientation statement and a `pin_1` naming no pad are
+    /// refused with their own reasons; every other constraint shares one message.
     fn validate_mode(&self, draft: bool) -> Result<(), String> {
         let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
-        if self.format != "pcbcraft-footprint/1"
-            || !valid_id(&self.library)
+        let format = if self.orientation.is_some() { FORMAT_V2 } else { FORMAT_V1 };
+        if self.format != format {
+            let with = if self.orientation.is_some() { "with" } else { "without" };
+            return Err(format!("footprint format must be {format} for a definition {with} an orientation statement"));
+        }
+        if self.orientation.as_ref().and_then(|o| o.pin_1.as_deref()).is_some_and(|pin| !numbers.contains(pin)) {
+            return Err("orientation pin_1 names no pad of this footprint".into());
+        }
+        if !valid_id(&self.library)
             || !valid_id(&self.id)
             || self.revision == 0
             || !text(&self.name, 200)

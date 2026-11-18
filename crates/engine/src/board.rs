@@ -22,6 +22,7 @@ pub mod identity;
 mod library_migration;
 pub mod materials;
 pub mod movement;
+pub mod orientation;
 pub mod origin;
 pub mod outline;
 pub mod ratsnest;

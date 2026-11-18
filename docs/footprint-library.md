@@ -138,7 +138,9 @@ lines, rectangles, circles, arcs, polylines and stroke text as described in the
 [symbol format](symbol-library.md). Silkscreen paths are clipped against pad
 clearance by the board renderer. Absent artwork is omitted on save, preserving
 legacy definitions. These additions retain `pcbcraft-footprint/1`; old readers
-will reject unknown fields/shapes rather than silently dropping them.
+will reject unknown fields/shapes rather than silently dropping them. Later
+authored fields take a new format instead: `pcbcraft-footprint/2` is used only for
+definitions with an [assembly orientation](footprint-schema.md#assembly-orientation) statement.
 
 Placement supplies the built-in definition ID and an explicit `mapping` object
 from symbol terminal ID to pad-number string. Mapping validation, placement,

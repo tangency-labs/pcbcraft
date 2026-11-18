@@ -1385,6 +1385,20 @@ fn design_check_report_survives_suppressed_project_inspection() {
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 
+/// The read-only assembly orientation report also survives suppressed project inspection.
+#[test]
+fn assembly_check_report_survives_suppressed_project_inspection() {
+    let mut server = server();
+    let created = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::CHECK_ASSEMBLY,"params":{},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["revision"], created["revision"]);
+    assert_eq!(result["assembly_check"]["findings"], json!([]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
 /// Fabrication files survive inspect:false through the shared dispatcher without changing the
 /// project, revision or history, alongside clipboard preparation and DRC report results.
 #[test]

@@ -545,7 +545,12 @@ impl Item {
 
     /// Reconstruct geometry before choosing fork or published metadata. Intermediate copy labels
     /// cannot invalidate an otherwise editable published definition at its source-text limit.
+    /// Refuses a definition with an orientation statement, which the editor cannot keep yet.
     fn read_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
+        // The editor cannot carry an orientation statement yet; refuse rather than drop it.
+        if definition.orientation.is_some() {
+            return Err("This footprint states an assembly orientation, which the editor cannot keep yet.".into());
+        }
         let mut item = Self::new(Kind::Footprint)?;
         item.objects.clear();
         item.license = definition.license.clone();
@@ -678,6 +683,7 @@ impl Item {
                 silkscreen,
                 reference: self.reference_font.clone(),
                 reference_offset: self.reference_offset,
+                orientation: None,
             };
             if draft {
                 definition.validate_draft()?;

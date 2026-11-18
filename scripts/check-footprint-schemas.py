@@ -32,21 +32,34 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
     root = Path(__file__).resolve().parent.parent
     schemas = [
         json.loads((root / "docs/schemas" / name).read_text(encoding="utf-8"))
-        for name in ("footprint-v1.schema.json", f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
+        for name in (
+            "footprint-v1.schema.json",
+            "footprint-v2.schema.json",
+            f"footprint-placement-v{placement_version}.schema.json",
+            "library-common-v1.schema.json",
+        )
     ]
     for schema in schemas:
         Draft202012Validator.check_schema(schema)
     registry = Registry().with_resources(
         (schema["$id"], Resource.from_contents(schema)) for schema in schemas
     )
-    validators = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    v1, v2, placement_validator, _ = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    # Other or malformed format fields are rejected by the format-1 validator.
+    by_format = {"pcbcraft-footprint/1": v1, "pcbcraft-footprint/2": v2}
     bundled = sorted((root / "libraries/basic-components/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")
-    for validator, paths in zip(validators[:2], [bundled + definitions, placements], strict=True):
+    for placement, paths in [(False, bundled + definitions), (True, placements)]:
         for path in paths:
             try:
-                validator.validate(json.loads(path.read_text(encoding="utf-8")))
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if placement:
+                    placement_validator.validate(record)
+                else:
+                    fmt = record.get("format") if isinstance(record, dict) else None
+                    validator = by_format.get(fmt, v1) if isinstance(fmt, str) else v1
+                    validator.validate(record)
             except (OSError, ValueError, ValidationError) as error:
                 raise ValueError(f"{path}: {error}") from error
     print(

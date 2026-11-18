@@ -38,6 +38,7 @@ pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFI
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
+pub use board::orientation::CHECK_ASSEMBLY;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
@@ -2256,6 +2257,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: CHECK_ASSEMBLY,
+        title: "Check Assembly Orientation",
+        summary: "Warn about each polarized package on the board that shows no pin 1 or polarity mark and states no zero orientation. Edits nothing; execute returns the findings.",
+        params: &[BOARD],
+    },
+    Command {
         id: EXPORT_FABRICATION,
         title: "Generate Fabrication Outputs",
         summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
@@ -3013,6 +3020,7 @@ impl Session {
             | DELETE_DRAWING
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
+            | CHECK_ASSEMBLY
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
             | EXPORT_FABRICATION
@@ -3191,6 +3199,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_plan_query(params);
         }
+        if id == CHECK_ASSEMBLY {
+            self.validate_project_command(id, params)?;
+            return self.assembly_check(params);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
@@ -3306,6 +3318,7 @@ impl Session {
                 | DELETE_DRAWING
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
+                | CHECK_ASSEMBLY
                 | board::class_rules::ROUTE_RULES
                 | board::route::PLAN_ROUTE
                 | EXPORT_FABRICATION
@@ -3588,6 +3601,9 @@ impl Session {
             }
             board::route::PLAN_ROUTE => {
                 self.route_plan_query(params)?;
+            }
+            CHECK_ASSEMBLY => {
+                self.assembly_check(params)?;
             }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;

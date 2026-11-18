@@ -98,6 +98,42 @@ for (const item of cases) {
             with self.subTest(invalid=value):
                 self.assertFalse(validator.is_valid(value))
 
+    def test_orientation_statement_selects_format_2(self):
+        """Format 2 is format 1 plus a required, closed orientation object."""
+        schema = json.loads((ROOT / "docs/schemas/footprint-v2.schema.json").read_text())
+        validator = Draft202012Validator(schema)
+        value = copy.deepcopy(self.definition)
+        value["format"] = "pcbcraft-footprint/2"
+        value["orientation"] = {"polarized": True, "pin_1": "1", "zero": "ipc-7351"}
+        validator.validate(value)
+        self.assertFalse(self.validator.is_valid(value), "format 1 has no orientation")
+        for orientation in [
+            None, {}, [True, "1", "ipc-7351"], {"polarized": None},
+            {"polarized": True, "zero": "ipc-7350"}, {"polarized": True, "zero": {"ipc-7351": None}},
+            {"polarized": True, "pin_1": None}, {"polarized": True, "side": "top"},
+        ]:
+            with self.subTest(orientation=orientation):
+                value["orientation"] = orientation
+                self.assertFalse(validator.is_valid(value))
+        del value["orientation"]
+        self.assertFalse(validator.is_valid(value), "format 2 needs the statement")
+
+    def test_checker_selects_the_schema_by_format(self):
+        """A supplied format-2 definition passes, and the same object as format 1 fails."""
+        import tempfile
+        value = copy.deepcopy(self.definition)
+        value["format"] = "pcbcraft-footprint/2"
+        value["orientation"] = {"polarized": True}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "diode.json"
+            path.write_text(json.dumps(value))
+            result = subprocess.run([sys.executable, str(CHECKER), str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            value["format"] = "pcbcraft-footprint/1"
+            path.write_text(json.dumps(value))
+            result = subprocess.run([sys.executable, str(CHECKER), str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+
     def test_missing_dependency_has_a_setup_message(self):
         """A Python environment without site packages receives an installation hint."""
         result = subprocess.run([sys.executable, "-S", str(CHECKER)], capture_output=True, text=True)

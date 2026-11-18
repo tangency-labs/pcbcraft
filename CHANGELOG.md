@@ -2,6 +2,8 @@
 
 ## 0.1.0 (unreleased)
 
+- Check for polarized packages with no readable orientation using `pcb.check_assembly`. The read-only report warns once per package revision when symmetrical lands, silkscreen and fabrication artwork leave its orientation ambiguous and no zero orientation is declared. Definitions with an orientation statement use `pcbcraft-footprint/2`; existing definitions and assembly output profiles are unchanged.
+
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,

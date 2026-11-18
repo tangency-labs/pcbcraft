@@ -9,11 +9,14 @@ transactions.
 
 Board format 15 adds local reference position and print overrides. Earlier board
 formats retain their existing encodings when these fields are absent. Footprint
-library definitions continue to use their independently versioned format 1.
+library definitions use their own versioned format: format 2 is format 1 plus the
+[assembly orientation](#assembly-orientation) statement, and a definition without
+one keeps format 1 and its existing bytes.
 
 | Document | Format | Machine-readable schema |
 | --- | --- | --- |
 | Published footprint definition | `pcbcraft-footprint/1` | [Footprint schema](schemas/footprint-v1.schema.json) |
+| Published footprint definition with an orientation statement | `pcbcraft-footprint/2` | [Footprint schema, format 2](schemas/footprint-v2.schema.json) |
 | Physical placement inside a board | Enclosing `pcbcraft-board/15` | [Placement schema](schemas/footprint-placement-v15.schema.json) |
 
 The schemas use [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core).
@@ -25,7 +28,7 @@ application.
 
 With Python 3.10 or later and `jsonschema` 4.18 or later installed, run the schema
 check from the repository root. Version 4.18 introduced the registry API used for
-offline reference resolution. It checks both schemas and the bundled footprint
+offline reference resolution. It checks the schemas and the bundled footprint
 definitions.
 Additional arguments accept standalone native definitions, and `--placement`
 accepts one physical placement record.
@@ -70,7 +73,7 @@ also accept `null` for some optional Rust fields as a compatibility input.
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
-| `format` | Exact string `pcbcraft-footprint/1` | Native footprint field contract |
+| `format` | Exact string `pcbcraft-footprint/1`, or `pcbcraft-footprint/2` exactly when `orientation` is present | Native footprint field contract |
 | `library`, `id` | 1–64 lowercase ASCII letters, digits and internal hyphens | Stable library and item identity |
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
@@ -81,6 +84,7 @@ also accept `null` for some optional Rust fields as a compatibility input.
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
 | `reference` | Optional `pcbcraft-stroke-1` or `pcbcraft-technical-1` | Enable generated reference text using this font |
 | `reference_offset` | Optional nonzero local point | Displace the generated reference from its automatic anchor |
+| `orientation` | Optional object, format 2 only | Polarity, pin 1 pad and stated zero orientation for assembly |
 
 Source strings are nonempty, trimmed and free of control characters. Their UTF-8
 byte limits are 64 for `kind`, 2,048 for `reference` and 1,024 for `locator`.
@@ -267,6 +271,40 @@ profile; generic rows and other profiles are unchanged. A board explicitly adopt
 an immutable project-pinned content revision; pinning a newer revision does not
 change an existing adoption.
 
+## Assembly orientation
+
+IPC-7351 section 7.3.1 asks that a device's orientation and polarity be defined in
+the CAD data, and section 16 defines placement rotations from the library's zero
+component orientation. A format-2 definition may state both in `orientation`:
+
+| Field | Type and constraint | Meaning |
+| --- | --- | --- |
+| `polarized` | Required boolean | Turning the part by a half turn changes its function, as for a diode or a tantalum capacitor |
+| `pin_1` | Optional pad number of this definition | The pad an assembler aligns with the part's pin 1 or cathode mark |
+| `zero` | Optional, exactly `ipc-7351` | The drawn rotation is the IPC-7351 zero component orientation |
+
+The object is closed to unknown fields, `null` is refused for each field and for the
+object, and `pin_1` must name an existing pad. The editor does not keep the statement
+yet, so it declines to open or fork a format-2 definition instead of dropping it.
+Symbols and parts carry no orientation data.
+
+Whether a part shows its orientation on the board is derived from geometry, not
+saved. The copper shows it unless a quarter, half or three-quarter turn about the
+centroid of the pad centres lands every pad on an identical land (same centre, shape,
+size, corner radius, copper binding and drill) and moves at least one pad onto a
+differently numbered one. For each such turn the silkscreen or fabrication drawing
+must differ from itself turned the same way. The check uses fixed silkscreen paths
+and rectangles and artwork on both layers, not courtyards or generated reference
+text. It compares authored primitives, position, size, stroke and fill at integer
+nanometre precision; it does not compare rendered ink or verify that a mark names
+the correct pad. For example, the same line drawn as one segment on one side and
+two segments on the other can count as a mark. A cathode bar or pin 1 dot is a
+common way to break the symmetry.
+
+`pcb.check_assembly` reports a warning for each polarized package placed on a board
+that shows no mark and states no `zero`; see
+[assembly orientation check](mcp.md#assembly-orientation-check).
+
 ## Semantic validation
 
 JSON Schema checks object shapes, required fields, enumerations and numeric
@@ -279,6 +317,8 @@ other fields or project state.
 - Drawing extents after tessellation stay within definition bounds. Lines have
   distinct endpoints, rectangles have ordered corners, and polyline segments
   have distinct consecutive points. Text is nonblank and control-free.
+- The format is `pcbcraft-footprint/2` exactly when `orientation` is present, and
+  its `pin_1`, when given, names one of the definition's pads.
 - Metadata meets the UTF-8 byte limits and trimming rules. JSON Schema's string
   lengths count Unicode characters, so its bounds alone cannot establish this.
 - Placement IDs and component references resolve in the owning board/project.
@@ -304,6 +344,9 @@ version for placed overrides.
 
 The format-1 field set defined here is fixed. Future authored fields or changed
 meanings require a new footprint format and an explicit compatibility design.
+Format 2 is the first such step: it adds only `orientation`, and the writer uses it
+only for a definition that carries the statement. Readers of format 1 refuse format 2
+cleanly instead of dropping the statement.
 The board-local appearance fields above extend the first format-15 implementation
 before its release. Later changes to the released board contract require their
 own version and compatibility review.
