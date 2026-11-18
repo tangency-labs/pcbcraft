@@ -141,7 +141,8 @@ round trips and is visible in inspection and typed board views. Active footprint
 format 34, which can also carry material reports and compatible earlier extensions
 under their existing validation rules. Without active footprint locks, reports
 select format 25 and boards without reports use the format required by their
-remaining content. Canonical saves omit false.
+remaining content. Fresh canonical encoding omits false; Native Save can retain
+an unchanged board document verbatim.
 This is storage only: no footprint lock command, GUI toggle or edit protection yet.
 Clipboard and diagnostic single-file codecs explicitly refuse active footprint locks.
 

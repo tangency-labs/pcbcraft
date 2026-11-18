@@ -268,9 +268,10 @@ Copy and paste of board objects is in progress separately in #197 through #202.
 
 Placed footprints now retain an optional `locked` flag in native board format
 34. Inspection and typed board views report a boolean, defaulting to false for
-older files. Native saves omit false and preserve true. Without active footprint
-locks, the encoder uses format 25 if material reports remain, otherwise the
-format required by the remaining data. Reports are optional under format 34. This slice
+older files. Fresh canonical encoding omits false and preserves true; Native Save
+can reuse an unchanged board document verbatim, including explicit false.
+Without active footprint locks, the encoder uses format 25 if material reports
+remain, otherwise the format required by the remaining data. Reports are optional under format 34. This slice
 does **not** expose a lock/unlock command or GUI action, nor does the flag yet
 protect footprint movement, rotation, flipping, alignment or deletion. It is not
 a fixed-obstacle promise. Those shared-command and enforcement workflows remain

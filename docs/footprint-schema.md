@@ -8,8 +8,9 @@ must also perform the semantic checks below when accepting definitions and
 transactions.
 
 Board format 34 adds placement-local `locked` metadata: an optional boolean,
-default false and omitted when false. At least one true footprint lock requires
-format 34; it never changes the pinned library definition or mapping. This is
+default false and omitted by fresh canonical encoding when false. At least one
+true footprint lock requires format 34; it never changes the pinned library
+definition or mapping. This is
 [storage and inspection only](pcb-layout-workflow.md#footprint-lock-metadata-storage-only),
 not a lock command or edit-protection contract. The historical format-15
 placement schema below remains frozen and does not accept this newer field.

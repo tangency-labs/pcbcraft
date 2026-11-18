@@ -272,22 +272,23 @@ board zero and use the format required by the remaining authored data.
 ### Placed-footprint lock metadata
 
 Board format `pcbcraft-board/34` adds optional boolean `locked` on placed
-footprints and requires at least one `true` footprint lock. Missing means false;
-canonical saves omit false. Null, nonboolean values and duplicate keys are
-refused. Format 34 works with or without setup when the other records allow it.
-Compatible earlier extensions retain their validation rules: material reports,
-via assignments, extended stack fields, assembly profile adoptions, origin,
-rules, zones and track/via locks. Older readers reject format 34. The current
-reader rejects `true` under supported headers 1–25, but accepts an explicit
-`false` on an otherwise valid placement. That noncanonical spelling is omitted
-on save and may be rejected by older readers; the historical placement schemas
-are unchanged. Reserved formats 26–33 remain unsupported. When no active
-footprint locks remain, the encoder uses format 25 if reports remain, otherwise
-the format required by the remaining data.
+footprints and requires at least one `true` footprint lock. Missing means false.
+Repeated `locked` members, null and nonboolean `locked` values are refused.
+Format 34 works with or without setup when the other records allow it. For example,
+material reports, via assignments, stack fields, assembly profile adoptions,
+origin, rules, zones, silkscreen and copper retain their existing validation.
+Older readers reject format 34. The current reader rejects `true` under supported
+headers 1–25 but accepts an explicit `false` on an otherwise valid placement.
+Fresh canonical encoding omits false. Native Save can retain an unchanged board
+document verbatim, including explicit false, which older readers may reject.
+The historical placement schemas are unchanged; formats 26–33 remain unsupported.
+When no active footprint locks remain, the encoder uses format 25 if reports
+remain, otherwise the format required by the remaining data.
 
-Raw split-document and packed-archive codec round trips preserve placement IDs,
-pinned definition references, geometry and connectivity for current canonical
-input. Host Open and Save still apply the existing migrations described above.
+The codecs store the flag alongside the existing placement ID, pose and pinned
+definition reference. Geometry and connectivity use the same resolution paths
+as for unlocked placements. Host Open and Save still apply the existing
+migrations described above.
 
 This is storage and inspection only: no footprint lock command, GUI toggle or
 movement/deletion protection is provided yet. Diagnostic single-file encoding

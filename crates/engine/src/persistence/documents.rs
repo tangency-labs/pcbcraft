@@ -388,9 +388,9 @@ pub fn is_document_path(path: &str) -> bool {
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 21
 /// requires a validated placement origin and may carry rules and every earlier field.
-/// Board format 34 requires an authored footprint lock and accepts all earlier fields,
-/// including optional material reports, via intent, stack fields, assembly profiles, origin,
-/// zones and rules. Reserved board formats 26–33 are not supported.
+/// Board format 34 requires an authored footprint lock. Compatible optional records,
+/// such as material reports, via intent and silkscreen settings, keep their existing
+/// validation rules. Reserved board formats 26–33 are not supported.
 /// Missing footprint locks default to false. Board format 22 requires a nonempty assembly
 /// profile adoption list. Board format 23 requires an authored stack field and allows
 /// adoptions alongside the earlier board fields.

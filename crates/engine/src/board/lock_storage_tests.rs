@@ -55,7 +55,7 @@ fn marker_fixture() -> Session {
 }
 
 /// Split documents and packed bytes retain a legacy marker lock and a non-first physical lock,
-/// with and without setup. Unlocked neighbors and unrelated documents retain their canonical bytes.
+/// with and without setup. Compare the board as JSON and the unrelated documents as bytes.
 #[test]
 fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
     for (session, lock_index) in [(marker_fixture(), 0), (ratsnest::tests::fixture(), 1), (track::tests::routed_fixture(), 1)] {
@@ -332,6 +332,48 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     }
 }
 
+/// Authored silkscreen settings remain optional under format 34, but must be valid when present.
+#[test]
+fn locked_board_retains_valid_authored_silkscreen() {
+    let mut session = marker_fixture();
+    let style = json!({"text_height_nm":1_200_000,"stroke_width_nm":180_000,"pad_clearance_nm":400_000});
+    session.apply(crate::SET_SILKSCREEN, &json!({"settings":style,"expected_revision":session.revision()})).unwrap();
+    let original = session.snapshot().unwrap();
+    let saved = encode_documents(with_lock(&original, true)).unwrap();
+    let path = test_board_path(&saved);
+    let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/34");
+    assert_eq!(board["silkscreen"], style);
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    board["silkscreen"]["text_height_nm"] = json!(0);
+    assert_invalid_board_record(&saved, &board, "silkscreen requires positive text height up to 10 mm");
+    board["silkscreen"] = Value::Null;
+    assert_invalid_board_record(&saved, &board, &format!("{path}: invalid type: null"));
+}
+
+/// An otherwise valid locked via-only board still needs at least two copper layers.
+#[test]
+fn locked_via_only_board_requires_copper_setup() {
+    let mut session = track::tests::routed_fixture();
+    let target = session.project().unwrap().board_target().unwrap();
+    session
+        .apply(
+            track::ADD_VIA,
+            &json!({"board":target.board,"at":{"x_nm":0,"y_nm":40_000_000},"via_diameter_nm":600_000,
+        "via_drill_nm":300_000,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
+    let path = test_board_path(&saved);
+    let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/34");
+    assert!(board.get("tracks").is_none());
+    assert_eq!(board["vias"].as_array().unwrap().len(), 1);
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    assert!(board.as_object_mut().unwrap().remove("setup").is_some());
+    assert_invalid_board_record(&saved, &board, "vias need at least two copper layers in the board setup");
+}
+
 /// Replace just the board document and check the validator's own diagnostic.
 fn assert_invalid_board_record(good: &crate::persistence::Documents, board: &Value, reason: &str) {
     let mut trial = good.clone();
@@ -356,7 +398,8 @@ fn add_material_report(session: &mut Session) {
 
 /// Every combination of published report, profile, stack and via-intent fields remains optional
 /// in format 34. Report-only stays 25 and active locks use 34; clearing the stored flag in
-/// the test fixture restores the original bytes. Invalid profile, report and via records still fail.
+/// the test fixture restores the original bytes. The reader still rejects a bad profile pin,
+/// a report missing its source and a via assignment containing a nil net address.
 #[test]
 fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     use assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -454,7 +497,7 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
                         let mut invalid = expected;
                         assert!(invalid["vias"][0]["net_assignment"]["net"].is_string());
                         invalid["vias"][0]["net_assignment"]["net"] = json!(uuid::Uuid::nil());
-                        assert_invalid_board_record(&saved, &invalid, "a via needs a non-nil identity, a bounded position");
+                        assert_invalid_board_record(&saved, &invalid, &format!("{path}: Via net addresses require non-nil identities."));
                     }
                     let packed = encode_packed(loaded.clone()).unwrap();
                     assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
@@ -534,9 +577,19 @@ fn clipboard_commands_refuse_footprint_locks_without_a_state_change() {
     add_redo_control(&mut locked);
     let args = json!({"board":board,"items":items,"expected_revision":locked.revision()});
     for command in [COPY, CUT] {
-        assert_clipboard_refusal(&mut locked, command, &args);
+        assert_clipboard_refusal(&mut locked, command, &args, false);
     }
+    assert_clipboard_refusal(&mut locked, CUT, &args, true);
     assert_placement_locks(&original, &locked.snapshot().unwrap(), locked_id);
+
+    let mut direct_cut = Session::default();
+    direct_cut.open_snapshot(original.clone());
+    direct_cut.apply("project.rename", &json!({"name":"Unlocked clipboard control"})).unwrap();
+    add_redo_control(&mut direct_cut);
+    let revision = direct_cut.revision();
+    direct_cut.apply(CUT, &json!({"board":board,"items":items,"expected_revision":revision})).unwrap();
+    assert_eq!(direct_cut.revision(), revision + 1);
+    assert!(direct_cut.project().unwrap().board.footprints.is_empty());
 
     add_redo_control(&mut source);
     let paste = json!({"board":board,"text":cut_text,"reuse_components":true,"x_nm":0,"y_nm":10_000_000,"expected_revision":source.revision()});
@@ -545,7 +598,7 @@ fn clipboard_commands_refuse_footprint_locks_without_a_state_change() {
     envelope["footprints"][1]["locked"] = json!(true);
     let mut bad_paste = paste.clone();
     bad_paste["text"] = json!(serde_json::to_string(&envelope).unwrap());
-    assert_clipboard_refusal(&mut source, PASTE, &bad_paste);
+    assert_clipboard_refusal(&mut source, PASTE, &bad_paste, false);
     source.execute(PASTE, &paste).unwrap();
     assert_eq!(source.project().unwrap().board.footprints.len(), original.board.footprints.len());
 }
@@ -558,8 +611,9 @@ fn add_redo_control(session: &mut Session) {
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
-/// A footprint-specific command error must preserve the snapshot and both populated history stacks.
-fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value) {
+/// Check preservation of the snapshot and both populated history stacks on refusal, including
+/// direct Apply Cut, which skips Execute's clipboard preflight.
+fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value, apply_directly: bool) {
     let before = session.snapshot().unwrap();
     let bytes = encode_documents(before.clone()).unwrap();
     let revision = session.revision();
@@ -567,7 +621,7 @@ fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value) 
     let undo = session.undo.clone();
     let redo = session.redo.clone();
     assert!(undo.iter().any(Option::is_some) && redo.iter().any(Option::is_some), "{command} must exercise both history stacks");
-    let error = session.execute(command, args).unwrap_err();
+    let error = if apply_directly { session.apply(command, args).unwrap_err() } else { session.execute(command, args).unwrap_err() };
     assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{command}: {error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"), "{command}: {error}");
     let after = session.snapshot().unwrap();
