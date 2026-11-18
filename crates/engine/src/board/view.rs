@@ -274,9 +274,9 @@ impl<'a> BoardView<'a> {
         self.resolve_footprints(ids.iter().filter_map(move |id| self.placement(id)))
     }
 
-    /// Resolve placements lazily without assuming starter-definition geometry.
-    /// Accepted terminal membership is indexed once per traversal, rather than
-    /// scanning every net for every pad. The index borrows only this snapshot.
+    /// Resolve placements lazily without assuming starter-definition geometry. Each view
+    /// includes the placement's stored `locked` flag, not an edit-permission decision.
+    /// Accepted terminal membership is indexed once per traversal from this snapshot.
     pub fn footprints(self) -> impl Iterator<Item = FootprintView<'a>> {
         self.footprints_range(0, usize::MAX)
     }

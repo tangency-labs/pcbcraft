@@ -231,6 +231,7 @@ impl Footprint {
         Some(self.point(local))
     }
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
+    /// Always include the storage-only `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,

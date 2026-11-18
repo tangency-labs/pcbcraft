@@ -234,10 +234,11 @@ fields, unresolved pins and duplicate JSON keys fail before project adoption.
 Copper roles, base copper, copper thickness qualifiers and finished board
 thickness require at least `pcbcraft-board/23` when one of them is present.
 Explicit via assignments require board/24. Thermal conductivity, thermal expansion,
-dielectric strength and CTI reports require board/25, which accepts every earlier
-field optionally. Footprint locks require board/34, which also accepts those reports
-optionally. The highest applicable format takes precedence; older headers refuse
-these extensions. Without them a board keeps its earlier format and bytes.
+dielectric strength and CTI reports require at least board/25. Compatible earlier
+extensions can coexist with reports and keep their usual prerequisites. Footprint
+locks require board/34, which also accepts reports when present. The highest
+applicable format takes precedence; older headers refuse these extensions.
+Canonical boards without these extensions retain their earlier format and bytes.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance

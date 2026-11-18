@@ -2168,13 +2168,13 @@ impl DocumentsEncoder {
     }
 }
 
-/// Keep legacy bytes until authored content requires a newer format. Active footprint locks
-/// require 34 and accept every earlier field optionally, including material reports. Without
-/// footprint locks, material reports require 25; explicit via intent at least 24;
+/// Preserve canonical legacy encodings until authored content requires a newer format. Format 34
+/// requires a footprint lock and can carry compatible earlier extensions, including material reports.
+/// Without footprint locks, material reports require 25; explicit via intent at least 24;
 /// copper roles, base copper, copper thickness qualifiers or finished board thickness at least 23;
 /// assembly profile adoptions at least 22; a placement origin at least 21;
 /// zone outlines at least 20; validated board rules at least 19; and authored copper locks
-/// at least 18. Each format accepts earlier fields. Independent
+/// at least 18. Earlier extensions remain subject to their own prerequisites. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,

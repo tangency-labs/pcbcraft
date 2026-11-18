@@ -1,15 +1,33 @@
 //! Storage-only footprint lock coverage. Valid geometry is authored through production commands;
 //! private snapshot edits supply metadata until a separate lock command/enforcement slice exists.
 use super::*;
-use crate::persistence::{decode_documents, decode_packed, encode_documents, encode_packed, test_board_path};
+use crate::persistence::{decode_documents, decode_packed, diagnostic_snapshot, encode_documents, encode_packed, test_board_path};
 use crate::{Project, Session};
 use std::sync::Arc;
 
 /// Change only test-private metadata, never inventing a public mutation path or geometry.
-fn with_lock(project: &Arc<Project>, locked: bool) -> Arc<Project> {
+fn with_placement_lock(project: &Arc<Project>, id: u64, locked: bool) -> Arc<Project> {
     let mut result = project.as_ref().clone();
-    Arc::make_mut(&mut result.board).footprints[0].locked = locked;
+    let footprint = Arc::make_mut(&mut result.board).footprints.iter_mut().find(|footprint| footprint.id == id).unwrap();
+    footprint.locked = locked;
     Arc::new(result)
+}
+
+/// The composition fixtures exercise one placement and independently vary other authored records.
+fn with_lock(project: &Arc<Project>, locked: bool) -> Arc<Project> {
+    with_placement_lock(project, project.board.footprints[0].id, locked)
+}
+
+/// Check every original placement by ID, including false in inspection and the typed view.
+fn assert_placement_locks(original: &Project, reopened: &Project, locked_id: u64) {
+    assert_eq!(reopened.board.footprints.len(), original.board.footprints.len());
+    let view = reopened.board_view(reopened.board_target().unwrap()).unwrap();
+    for footprint in &original.board.footprints {
+        let saved = reopened.board.footprints.iter().find(|saved| saved.id == footprint.id).unwrap();
+        let expected = footprint.id == locked_id;
+        assert_eq!(saved.inspect(reopened)["locked"], expected, "placement {}", footprint.id);
+        assert_eq!(view.footprint(&format!("footprint-{}", footprint.id)).unwrap().locked, expected, "placement {}", footprint.id);
+    }
 }
 
 /// Construct the original two-pad marker through the same commands as other legacy-board tests.
@@ -28,23 +46,26 @@ fn marker_fixture() -> Session {
     session
 }
 
-/// The flag survives folder/archive reopen for legacy, unconfigured physical and configured boards.
-/// False is omitted, unrelated documents retain exact bytes, and unlocking restores the original bytes.
+/// Split documents and packed bytes retain a legacy marker lock and a non-first physical lock,
+/// with and without setup. Unlocked neighbors and unrelated documents retain their canonical bytes.
 #[test]
 fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
-    for session in [marker_fixture(), ratsnest::tests::fixture(), track::tests::routed_fixture()] {
+    for (session, lock_index) in [(marker_fixture(), 0), (ratsnest::tests::fixture(), 1), (track::tests::routed_fixture(), 1)] {
         let original = session.snapshot().unwrap();
         let documents = encode_documents(original.clone()).unwrap();
         let packed = encode_packed(original.clone()).unwrap();
         let path = test_board_path(&documents);
-        let old_board: Value = serde_json::from_slice(&documents[&path]).unwrap();
-        assert!(old_board["footprints"].as_array().unwrap().iter().all(|f| f.get("locked").is_none()));
-        assert!(!original.board.footprints[0].locked);
-        let locked = with_lock(&original, true);
+        let locked_id = original.board.footprints[lock_index].id;
+        assert!(original.board.footprints.iter().all(|footprint| !footprint.locked));
+        let mut expected: Value = serde_json::from_slice(&documents[&path]).unwrap();
+        let footprints = expected["footprints"].as_array_mut().unwrap();
+        assert!(footprints.iter().all(|footprint| footprint.get("locked").is_none()));
+        assert_eq!(footprints[0]["id"] == locked_id, lock_index == 0);
+        footprints.iter_mut().find(|footprint| footprint["id"] == locked_id).unwrap()["locked"] = json!(true);
+        expected["format"] = json!("pcbcraft-board/34");
+        let locked = with_placement_lock(&original, locked_id, true);
         let saved = encode_documents(locked.clone()).unwrap();
-        let board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(board["format"], "pcbcraft-board/34");
-        assert_eq!(board["footprints"][0]["locked"], true);
+        assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
         assert_eq!(saved.len(), documents.len());
         for (name, bytes) in &documents {
             if name != &path {
@@ -53,41 +74,54 @@ fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
         }
         let loaded = decode_documents(&saved).unwrap();
         assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
-        assert_eq!(loaded.board.footprints[0].inspect(&loaded)["locked"], true);
-        let view = loaded.board_view(loaded.board_target().unwrap()).unwrap();
-        assert!(view.footprints().next().unwrap().locked);
-        assert_eq!(loaded.board.footprints[0].id, original.board.footprints[0].id);
+        assert_placement_locks(&original, &loaded, locked_id);
         let archive = encode_packed(locked).unwrap();
         let reopened = decode_packed(&archive).unwrap().project;
-        assert!(reopened.board.footprints[0].locked);
+        assert_placement_locks(&original, &reopened, locked_id);
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
         assert_eq!(encode_packed(reopened).unwrap(), archive);
-        let unlocked = with_lock(&loaded, false);
+        let unlocked = with_placement_lock(&loaded, locked_id, false);
         assert_eq!(encode_documents(unlocked.clone()).unwrap(), documents);
         assert_eq!(encode_packed(unlocked).unwrap(), packed);
         assert_eq!(encode_documents(original).unwrap(), documents, "original snapshot stays immutable");
     }
 }
 
-/// Active footprint locks cannot be smuggled under any older header; an empty extension
-/// is refused too. These are downgrade attacks on the current reader, not an old-binary test.
+/// A non-first lock requires format 34 even without setup; omitted and false-only flags
+/// cannot satisfy that envelope. This exercises the current reader, not an older executable.
 #[test]
 fn footprint_locks_require_their_own_nonempty_format() {
-    let project = track::tests::routed_fixture().snapshot().unwrap();
-    let original = encode_documents(project.clone()).unwrap();
-    let path = test_board_path(&original);
-    let saved = encode_documents(with_lock(&project, true)).unwrap();
-    let text = String::from_utf8(saved[&path].clone()).unwrap();
-    for version in 1..=25 {
-        let mut bad = saved.clone();
-        bad.insert(path.clone(), text.replace("pcbcraft-board/34", &format!("pcbcraft-board/{version}")).into_bytes());
-        let error = decode_documents(&bad).unwrap_err();
-        assert!(error.contains("footprint locks require board format 34"), "{version}: {error}");
+    for session in [ratsnest::tests::fixture(), track::tests::routed_fixture()] {
+        let project = session.snapshot().unwrap();
+        let original = encode_documents(project.clone()).unwrap();
+        let path = test_board_path(&original);
+        let locked_id = project.board.footprints[1].id;
+        let mut saved = encode_documents(with_placement_lock(&project, locked_id, true)).unwrap();
+        let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+        assert_eq!(board["format"], "pcbcraft-board/34");
+        assert!(board["footprints"][0].get("locked").is_none());
+        assert_eq!(board["footprints"][1]["id"], locked_id);
+        assert_eq!(board["footprints"][1]["locked"], true);
+        for version in 1..=25 {
+            board["format"] = json!(format!("pcbcraft-board/{version}"));
+            saved.insert(path.clone(), serde_json::to_vec(&board).unwrap());
+            let error = decode_documents(&saved).unwrap_err();
+            assert!(error.contains("footprint locks require board format 34"), "{version}: {error}");
+        }
+        let mut board: Value = serde_json::from_slice(&original[&path]).unwrap();
+        let original_format = board["format"].clone();
+        board["format"] = json!("pcbcraft-board/34");
+        saved.insert(path.clone(), serde_json::to_vec(&board).unwrap());
+        assert!(decode_documents(&saved).unwrap_err().contains("requires an authored footprint lock"));
+        assert_eq!(board["footprints"][1]["id"], locked_id);
+        board["footprints"][1]["locked"] = json!(false);
+        saved.insert(path.clone(), serde_json::to_vec(&board).unwrap());
+        assert!(decode_documents(&saved).unwrap_err().contains("requires an authored footprint lock"));
+        // Explicit false is readable under the original header, but canonical saves omit it.
+        board["format"] = original_format;
+        saved.insert(path, serde_json::to_vec(&board).unwrap());
+        assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), original);
     }
-    let mut bad = original.clone();
-    let mut board: Value = serde_json::from_slice(&bad[&path]).unwrap();
-    board["format"] = json!("pcbcraft-board/34");
-    bad.insert(path.clone(), serde_json::to_vec(&board).unwrap());
-    assert!(decode_documents(&bad).unwrap_err().contains("requires an authored footprint lock"));
     let mut incomplete = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
     let marker_path = test_board_path(&incomplete);
     let mut marker: Value = serde_json::from_slice(&incomplete[&marker_path]).unwrap();
@@ -109,21 +143,17 @@ fn footprint_locks_require_their_own_nonempty_format() {
         let error = decode_documents(&incomplete).unwrap_err();
         assert!(error.contains("unsupported board format"), "{version}: {error}");
     }
-    // Explicit false is readable under an existing header, but canonical saves omit it.
-    board = serde_json::from_slice(&original[&path]).unwrap();
-    board["footprints"][0]["locked"] = json!(false);
-    bad.insert(path, serde_json::to_vec(&board).unwrap());
-    assert_eq!(encode_documents(decode_documents(&bad).unwrap()).unwrap(), original);
 }
 
 /// Null, nonbooleans and duplicate keys are codec errors, never defaults or last-key-wins metadata.
 #[test]
 fn malformed_lock_flags_are_refused_before_project_construction() {
     let project = track::tests::routed_fixture().snapshot().unwrap();
-    let saved = encode_documents(with_lock(&project, true)).unwrap();
+    let locked_id = project.board.footprints[1].id;
+    let saved = encode_documents(with_placement_lock(&project, locked_id, true)).unwrap();
     let path = test_board_path(&saved);
     let text = String::from_utf8(saved[&path].clone()).unwrap();
-    assert!(text.contains("\"locked\":true"));
+    assert_eq!(text.matches("\"locked\":true").count(), 1);
     for value in ["null", "1", "\"true\"", "[]", "{}"] {
         let mut bad = saved.clone();
         bad.insert(path.clone(), text.replacen("\"locked\":true", &format!("\"locked\":{value}"), 1).into_bytes());
@@ -297,38 +327,56 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     }
 }
 
-/// Clipboard has no footprint-lock extension yet: exporting/importing cannot silently lose intent.
+/// Clipboard refuses a non-first active lock in an otherwise valid mixed fragment.
+/// An omitted or explicit false flag does not change the canonical unlocked encoding.
 #[test]
 fn clipboard_refuses_active_footprint_locks_without_changing_unlocked_fragments() {
     use clipboard::{BoardFragment, BoardSelection};
     let original = ratsnest::tests::fixture().snapshot().unwrap();
-    let selection = BoardSelection { footprints: [format!("footprint-{}", original.board.footprints[0].id)].into(), ..Default::default() };
+    let locked_id = original.board.footprints[1].id;
+    let selection = BoardSelection {
+        footprints: original.board.footprints.iter().map(|footprint| format!("footprint-{}", footprint.id)).collect(),
+        ..Default::default()
+    };
     let fragment = BoardFragment::capture(&original, &selection, false).unwrap();
     let text = fragment.to_text().unwrap();
     assert_eq!(BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
-    let locked = with_lock(&original, true);
-    let error = BoardFragment::capture(&locked, &selection, false).unwrap_err();
-    assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
-    assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"));
+    let locked = with_placement_lock(&original, locked_id, true);
+    for cut in [false, true] {
+        BoardFragment::capture(&original, &selection, cut).unwrap();
+        let error = BoardFragment::capture(&locked, &selection, cut).unwrap_err();
+        assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
+        assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"));
+    }
     let mut envelope: Value = serde_json::from_str(&text).unwrap();
-    envelope["footprints"][0]["locked"] = json!(true);
+    assert!(envelope["footprints"][0].get("locked").is_none());
+    assert_eq!(envelope["footprints"][1]["id"], locked_id);
+    envelope["footprints"][1]["locked"] = json!(false);
+    assert_eq!(BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap().to_text().unwrap(), text);
+    envelope["footprints"][1]["locked"] = json!(true);
     let error = BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
     assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"));
-    assert_eq!(BoardFragment::capture(&original, &selection, false).unwrap().to_text().unwrap(), text);
+    envelope["footprints"][1]["locked"] = json!("true");
+    let error = BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
+    assert!(error.to_string().contains("Clipboard does not contain a supported PCBcraft board fragment"));
 }
 
-/// Diagnostic single-file paths explicitly refuse new lock metadata in either direction.
+/// A historical marker is encodable and readable until only its footprint lock flag changes.
 #[test]
 fn diagnostic_codec_refuses_footprint_locks() {
-    let original = marker_fixture().snapshot().unwrap();
-    let error = crate::persistence::encode(with_lock(&original, true)).unwrap_err();
-    assert!(error.contains("footprint locks") && error.contains("use split documents"));
-    let mut document: Value = serde_json::from_slice(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap();
-    // Malformed diagnostic input: the active lock must be rejected before placement ownership validation.
-    let mut footprint = serde_json::to_value(&original.board.footprints[0]).unwrap();
-    footprint["locked"] = json!(true);
-    document["board"] = json!({"footprints":[footprint]});
-    let error = crate::persistence::decode(&serde_json::to_vec(&document).unwrap()).unwrap_err();
+    use crate::persistence::{decode, encode};
+    let original = diagnostic_snapshot(marker_fixture().snapshot().unwrap());
+    let id = original.board.footprints[0].id;
+    let bytes = encode(original.clone()).unwrap();
+    let reopened = decode(&bytes).unwrap();
+    assert_eq!(reopened.board.footprints, original.board.footprints);
+    let error = encode(with_placement_lock(&original, id, true)).unwrap_err();
+    assert!(error.contains("footprint locks") && error.contains("use split documents"), "{error}");
+    let mut document: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(document["board"]["footprints"][0]["id"], id);
+    document["board"]["footprints"][0]["locked"] = json!(true);
+    let error = decode(&serde_json::to_vec(&document).unwrap()).unwrap_err();
     assert!(error.contains("footprint locks require split board format 34"), "{error}");
 }

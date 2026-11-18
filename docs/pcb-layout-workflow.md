@@ -272,9 +272,12 @@ needed by the remaining data. Reports are optional under format 34. This slice
 does **not** expose a lock/unlock command or GUI action, nor does the flag yet
 protect footprint movement, rotation, flipping, alignment or deletion. It is not
 a fixed-obstacle promise. Those shared-command and enforcement workflows remain
-under #81. Clipboard export/import and diagnostic single-file storage refuse
-active footprint locks explicitly; unlocked clipboard content is unchanged.
-See [native storage](native-project-storage.md#placed-footprint-lock-metadata).
+under #81. Clipboard Copy, Cut, Duplicate and Paste refuse active footprint
+locks; that is a clipboard restriction, not Delete protection. Diagnostic
+single-file storage also refuses the flag when true. Canonical clipboard
+fragments without active footprint locks keep their previous encoding. See
+[clipboard](clipboard.md#pcb-canvas) and
+[native storage](native-project-storage.md#placed-footprint-lock-metadata).
 
 ## Fixed tracks and vias
 
@@ -301,8 +304,9 @@ protected. Cut refuses a selection containing locked copper. Native folder and
 archive saves preserve copper locks; board format 18 (or a later extension
 required by other content) and board-kind clipboard format 3 (or format 4 with
 explicit via assignments) carry them. Older readers refuse these extensions.
-Unlocked boards/fragments keep their earlier encodings. Unlocking the last object
-returns to the format needed by the remaining authored data. Inspection exposes
+Canonical boards and fragments without copper locks use the formats required by
+their other content. Clearing the last copper lock leaves those requirements in
+force. Inspection exposes
 an explicit `locked` boolean for every track and via, and typed board snapshots
 carry it for later walkaround/shove consumers. No routing solver is added here.
 
@@ -314,12 +318,15 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 2. Board rules (implemented) | board/19 | Board-scoped rule records |
 | 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
-| 4. Zones | next after rules | Zone records; fills are not stored |
+| 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
+| Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) | At least one active footprint lock; formats 26–33 remain unsupported |
 
-Each format step follows the existing ladder: a superset of the previous format,
-empty collections refused, older readers rejecting the new format, and
-byte-identical round trips.
+These are selected layout formats, not a consecutive version list. Canonical
+saves use the highest supported format required by the authored data; compatible
+extensions keep their validation rules. Older readers refuse unsupported formats.
+Canonical no-op saves preserve encoding; accepted noncanonical input can be
+normalized, for example by omitting an explicit `locked: false`.
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](via-net-assignments.md) for automatic inheritance, physical

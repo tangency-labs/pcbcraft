@@ -137,9 +137,10 @@ encodings; undo/redo preserves both geometry and lock intent.
 
 Placed-footprint lock metadata survives native folder/archive reopen and is
 visible in inspection and typed board views. Active footprint locks require board
-format 34, with material reports and earlier board fields optional. Report-only
-boards retain format 25; unlocking the last footprint restores the format required
-by remaining content. False is omitted and unlocked board encoding is unchanged.
+format 34, which can also carry material reports and compatible earlier extensions
+under their existing validation rules. Report-only boards retain format 25;
+clearing the last footprint lock restores the format required by remaining content.
+Canonical saves omit false and preserve existing unlocked encodings.
 This is storage only: no footprint lock command, GUI toggle or edit protection yet.
 Clipboard and diagnostic single-file codecs explicitly refuse active footprint locks.
 

@@ -496,8 +496,8 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, occurrence IDs, sheet paper, net classes and part groups require split
-    /// documents or an archive; refuse loss.
+    /// drawings, rotation, active footprint locks, occurrence IDs, sheet paper, net classes and
+    /// part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
@@ -735,7 +735,8 @@ pub fn read_bytes(mut input: impl Read) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Read bounded project data and validate all identities and connections before adoption.
+/// Read bounded single-file project data and validate identities and connections before adoption.
+/// Active footprint locks are refused here; they require the native split-board format.
 pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     if bytes.len() > MAX_PROJECT_BYTES {
         return Err("project exceeds the native file size limit".to_owned());
