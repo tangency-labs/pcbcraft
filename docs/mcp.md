@@ -137,10 +137,41 @@ The live connection runs every project command in `list_commands`, such as
 `schematic.delete_wire` or `edit.undo`, in the window's own session, so the
 editor and the agent share one undo history and the status bar names each edit
 (for example **Delete Wire through MCP**). `project.new` waits until the open
-project's unsaved changes are saved or discarded in the editor, and every
-command waits while an inline text edit, dialog or file operation is open.
-`inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
-clients can identify the state holding command input.
+project's unsaved changes are saved or discarded in the editor. Commands normally
+wait while an inline text edit, dialog or file operation is open. Addressed
+`app.library_pin_remap` apply/cancel may resolve its own remap dialog; a new live
+preview and other gated document/presentation commands still refuse that dialog.
+Inspection remains available; separate `ui.*` automation uses its own input lifecycle.
+Other inline edits/file
+operations retain their refusal. `inspect_editor` reports `text_editing`,
+`dialog_open` and `file_operation` so clients can identify the state holding input.
+
+For pin remapping, normal live execution/`inspect_editor` exposes the captured
+token and report at `library_editors.pin_remap`; apply/cancel uses its string
+`document`, `expected_revision` and `token`. The token is runtime correlation,
+not an authentication secret. `inspect:false` on this window command returns only
+an acknowledgement/project revision, not the capture. Native preview counts the
+complete prospective inspection reply against the existing 16 MiB JSON limit
+before publishing a new capture/modal; oversize refusal preserves the previous
+capture. No report rows are silently truncated. This bounds encoded reply bytes,
+not peak heap. All report routes separately enforce the common 4 MiB report budget
+and conservative graph-input admission described in the [editor guide](properties-and-library-editors.md#review-pin-renumbering).
+A failed form refresh keeps its old token/map owned by the form, so its visible Cancel
+or dismissal can retire it. Refresh can adopt a changed project snapshot while the
+library revision is still current; if the library revision changed, cancel and reopen
+the form at the current library revision. A project-close decision that displaces the form retires
+its review even if closing is cancelled. Addressed apply/cancel cannot close another form;
+changing typed numbers
+withdraws the old capture. Unrelated later editor changes can affect inspection
+size, so this is a capture-time check, not permanent transport availability.
+Headless `library.preview_pin_remap` is a focused read-only query and preserves
+its report even with `inspect:false`; it does not host the live editor documents.
+Preparation is synchronous and can outlast a request deadline. After a lost/timed-out
+reply, inspect both library revision and capture state before retrying. A successful
+unchanged Apply consumes the token without advancing the library revision. If full
+inspection is too large, use visible Cancel or send an addressed Cancel with known
+routing fields and `inspect:false`. Disconnect does not roll back a captured review
+or an applied edit, and cannot guarantee delivery of a returned error.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its
@@ -156,6 +187,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
+| `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
 | `pcb.align_footprints` | Align two or more `footprints` by their physical bounds (`mode` `left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute three or more with equal gaps to nanometer precision (`distribute_x`, `distribute_y`), in one undo step; distribution keeps physical outermost footprints and the span fixed, refusing overlapping selections that cannot retain those anchors. Track ends follow moving pads, as for a transform |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |

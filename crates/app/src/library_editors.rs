@@ -6,6 +6,7 @@ mod export_tests;
 mod form;
 mod io;
 pub(super) mod publishing;
+pub(super) mod remap;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -33,6 +34,8 @@ pub(super) struct Editors {
     files: io::Files,
     pub(crate) publisher: publishing::Publisher,
     pub(crate) notice: Option<String>,
+    pin_remap: Option<remap::Review>,
+    next_remap: u64,
     pending_document: Option<u64>,
     open_target: Option<crate::ViewId>,
 }
@@ -223,7 +226,18 @@ impl Editors {
     /// Inspection identifies each document and its own revision, never the project revision.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        self.inspect_with_remap(self.inspect_remap())
+    }
+    /// Inspect only current remap authority, without first allocating unrelated editor fields.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn inspect_remap(&self) -> Value {
+        self.pin_remap.as_ref().map(remap::Review::inspect).unwrap_or(Value::Null)
+    }
+    /// Build current editor state with a supplied remap inspection. Prospective capture does not
+    /// clone a displaced report merely to overwrite it; all other fields share the normal emitter.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn inspect_with_remap(&self, pin_remap: Value) -> Value {
+        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
@@ -289,6 +303,9 @@ impl Editors {
             return Err("Library item has unsaved changes.".into());
         }
         self.documents.remove(&id);
+        if self.pin_remap.as_ref().is_some_and(|review| review.document == id) {
+            self.pin_remap = None;
+        }
         self.publisher.discard(id);
         if self.active == Some(id) {
             self.focus(self.documents.keys().next_back().copied())?;
@@ -358,16 +375,22 @@ impl Document {
         }
         Ok(())
     }
-    /// Validate a shared transaction and invalidate cached forms/tools only after success.
-    /// Selecting a unit clears primitive selection rather than treating its existing objects as inserts.
+    /// Validate a shared transaction and invalidate cached forms/tools after an effective edit.
+    /// Only an unchanged RemapPins transaction preserves UI state; legacy no-op actions still
+    /// invalidate their cached forms/tools. Selecting a unit clears primitive selection rather
+    /// than treating its existing objects as inserts.
     fn execute(&mut self, revision: u64, action: Action) -> Result<(), String> {
         if self.pending() {
             return Err("Apply or reset the property fields before editing the document.".into());
         }
         let selecting_unit = matches!(&action, Action::SelectUnit { .. } | Action::AddUnit { .. });
+        let remapping = matches!(&action, Action::RemapPins { .. });
         let old = self.session.snapshot();
         self.session.execute(revision, action)?;
         let next = self.session.snapshot();
+        if remapping && std::sync::Arc::ptr_eq(&old, &next) {
+            return Ok(());
+        }
         let inserted: std::collections::BTreeSet<_> = next.objects.keys().filter(|id| !old.objects.contains_key(id)).copied().collect();
         self.selection.retain(|id| next.objects.contains_key(id));
         if selecting_unit {
@@ -626,6 +649,7 @@ impl PcbApp {
             Save(bool),
             Publish,
             Copy,
+            Remap,
             Undo,
             Redo,
             Focus(u64),
@@ -669,6 +693,12 @@ impl PcbApp {
                     }
                 });
                 menu::library(ui, |ui| {
+                    if pcbcraft_chrome::MenuItem::new("Remap pins…")
+                        .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
+                        .show(ui)
+                    {
+                        intents.borrow_mut().push(Intent::Remap);
+                    }
                     if pcbcraft_chrome::MenuItem::new("Publish…").enabled(can_save && !IN_BROWSER).show(ui) {
                         intents.borrow_mut().push(Intent::Publish);
                     }
@@ -739,6 +769,7 @@ impl PcbApp {
                 Intent::Open => self.open_library_picker(&ctx),
                 Intent::Publish => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_publish(id)),
                 Intent::Copy => active.ok_or("No active library item.".into()).and_then(|id| self.copy_library_document(&ctx, id)),
+                Intent::Remap => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_pin_remap(id)),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
                 history @ (Intent::Undo | Intent::Redo) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
@@ -931,6 +962,7 @@ impl PcbApp {
             if let Some(id) = id {
                 self.message = self.library_editors.close(id, true).err();
             } else {
+                self.library_editors.pin_remap = None;
                 self.library_editors.parts.clear();
                 self.library_editors.documents.clear();
                 self.library_editors.publisher = Default::default();
@@ -991,7 +1023,18 @@ impl PcbApp {
             "app.library_edit" => {
                 let revision = params["expected_revision"].as_u64().ok_or("A library revision is required.")?;
                 let action = serde_json::from_value(params["action"].clone()).map_err(|e| e.to_string())?;
+                if matches!(&action, Action::RemapPins { .. }) {
+                    return Err("Use app.library_pin_remap to review current nets before applying a remap.".into());
+                }
                 self.library_editors.edit(document()?, revision, action)?;
+            }
+            "app.library_pin_remap" => {
+                let document = pcbcraft_engine::authoring::remap::Scalar::Runtime.parse(&params["document"])?;
+                self.library_pin_remap_command(document, params)?;
+                // Remap changes neither bindings nor pane presentation. Keep the exact inspection
+                // state used by its preflight; a generic rebind could change the success reply.
+                ctx.request_repaint();
+                return Ok(());
             }
             "app.library_focus" => {
                 if let Some(id) = params["document"].as_u64() {

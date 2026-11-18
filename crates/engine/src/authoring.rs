@@ -5,6 +5,7 @@ mod operations;
 pub mod publishing;
 #[cfg(test)]
 mod publishing_tests;
+pub mod remap;
 use crate::{
     board::definition as footprint,
     library,
@@ -303,6 +304,10 @@ pub enum Action {
     },
     ReplaceMany {
         primitives: BTreeMap<u64, Primitive>,
+    },
+    /// Renumber explicitly selected logical pins simultaneously, including shared unit appearances.
+    RemapPins {
+        pins: Vec<remap::PinRemap>,
     },
     Delete {
         objects: Vec<u64>,
@@ -872,6 +877,7 @@ impl Session {
                         }
                         next.objects.extend(primitives);
                     }
+                    Action::RemapPins { pins } => remap::apply(&mut next, &pins)?,
                     Action::Delete { objects } => {
                         if objects.is_empty() {
                             return Err("Choose at least one primitive.".into());

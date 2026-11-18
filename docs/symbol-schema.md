@@ -121,7 +121,10 @@ The symbol editor can add and select units through the shared authoring actions.
 It retains source unit order, inactive drawings and globally unique primitive IDs in
 `pcbcraft-library-item/2`; single-unit items keep format 1. Shared terminal
 name/type edits propagate to the other appearances. Native export emits format 4
-when several units exist. This does not add pin/gate swapping, alternative symbol
-definitions for a part, repeated circuit occurrences, high-pin-count geometry,
-or a new BOM/ERC subsystem. Existing single-unit files keep their original
+when several units exist. Explicit [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering)
+changes only the authored definition, including its shared terminal appearances;
+it adds no saved fields. It does not swap terminals/gates in placed instances or
+update their native package mappings. Alternative symbol definitions for a part,
+repeated circuit occurrences, high-pin-count geometry and a new BOM/ERC subsystem
+remain separate work. Existing single-unit files keep their original
 symbol formats and no-op serialization.

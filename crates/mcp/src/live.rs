@@ -17,7 +17,33 @@ pub const MAX_WAIT: Duration = Duration::from_secs(900);
 const MAX_TOKEN_FILE: u64 = 4096;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_REPLY_BYTES: usize = 16 << 20;
+/// Existing live JSON success-frame bound, including the result wrapper and excluding LF.
+/// Hosts may preflight the same transport contract before publishing transient review authority.
+pub const MAX_REPLY_BYTES: usize = 16 << 20;
+
+/// Check the complete success frame against the receiving client's existing byte limit.
+/// Serialization stops at the limit without retaining a second encoded copy. This bounds
+/// transport bytes, not the memory or work used to prepare the supplied inspection value.
+pub fn check_reply_size(result: &Value) -> Result<(), String> {
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        /// Count each encoded chunk, refusing before it crosses the remaining byte budget.
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.0 {
+                return Err(std::io::Error::other("live reply byte limit exceeded"));
+            }
+            self.0 -= bytes.len();
+            Ok(bytes.len())
+        }
+        /// Counting has no buffered output to flush.
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    // Request::answer wraps the result; craft_control::read_frame excludes the framing newline.
+    let mut budget = Budget(MAX_REPLY_BYTES - b"{\"result\":".len() - b"}".len());
+    serde_json::to_writer(&mut budget, result).map_err(|error| format!("Live editor reply exceeds the reply byte limit: {error}"))
+}
 
 /// MCP backend for an explicitly selected local desktop editor.
 pub struct Remote {
@@ -135,5 +161,37 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, St
             if params["inspect"].as_bool() == Some(false) { Ok(json!({"revision": editor.session().revision()})) } else { Ok(editor.inspect()) }
         }
         _ => Err(format!("Unknown live control method `{method}`")),
+    }
+}
+
+#[cfg(test)]
+mod reply_size_tests {
+    use super::*;
+
+    /// Match the actual frame reader's success-wrapper budget, accepting the last JSON byte
+    /// and refusing the next. UTF-8 characters and JSON escapes count as their encoded bytes.
+    #[test]
+    fn reply_budget_matches_the_complete_transport_frame() {
+        let overhead = serde_json::to_vec(&json!({"result":""})).unwrap().len();
+        for (extra, accepted) in [(0, true), (1, false)] {
+            let result = json!("x".repeat(MAX_REPLY_BYTES - overhead + extra));
+            let mut frame = serde_json::to_vec(&json!({"result":result})).unwrap();
+            assert_eq!(frame.len() <= MAX_REPLY_BYTES, accepted);
+            if accepted {
+                check_reply_size(&result).unwrap();
+            } else {
+                assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
+            }
+            frame.push(b'\n');
+            let parsed = craft_control::read_frame(&mut std::io::Cursor::new(frame), MAX_REPLY_BYTES).unwrap();
+            if accepted {
+                assert!(matches!(parsed, Some(craft_control::Frame::Message(_))));
+            } else {
+                assert!(matches!(parsed, Some(craft_control::Frame::Oversized)));
+            }
+        }
+        let result = json!("\"界\n".repeat(MAX_REPLY_BYTES / 4));
+        assert!(serde_json::to_vec(&json!({"result":result})).unwrap().len() > MAX_REPLY_BYTES);
+        assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
     }
 }

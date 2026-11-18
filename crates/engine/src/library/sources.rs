@@ -41,6 +41,8 @@ pub const PARSE_QUANTITY: &str = "library.parse_quantity";
 pub const PREPARE_PART_PUBLICATION: &str = "library.prepare_part_publication";
 /// Prepare drawing documents through the same durable host boundary.
 pub const PREPARE_PUBLICATION: &str = "library.prepare_publication";
+/// Validate an explicit draft pin remap and inspect current placed nets without changing a project.
+pub const PREVIEW_PIN_REMAP: &str = "library.preview_pin_remap";
 
 /// Accept missing legacy attribution only when every definition field otherwise matches.
 /// Complete source definitions still compare their full content, including provenance.
@@ -73,7 +75,22 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 8] = [
+pub(crate) const COMMANDS: [Command; 9] = [
+    Command {
+        id: PREVIEW_PIN_REMAP,
+        title: "Preview symbol pin remap",
+        summary: "Prepare an explicit simultaneous draft remap and report current placed nets and native part maps. No save, project edit or history step.",
+        params: &[
+            Param { name: "item", summary: "Captured native authoring envelope", required: true, kind: ParamKind::AuthoringItem },
+            Param { name: "pins", summary: "Explicit unit/object to new terminal correspondences", required: true, kind: ParamKind::PinRemaps },
+            Param {
+                name: "base_revision",
+                summary: "Canonical decimal published revision string; omit for an unassociated draft",
+                required: false,
+                kind: ParamKind::RemapBaseRevision,
+            },
+        ],
+    },
     Command {
         id: PREPARE_PUBLICATION,
         title: "Prepare library publication",
@@ -995,6 +1012,24 @@ impl Session {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
         match id {
+            PREVIEW_PIN_REMAP => {
+                let fail = CommandError::InvalidParams;
+                if !params["item"].is_object() {
+                    return Err(fail("Pin remap item must be an object.".into()));
+                }
+                let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;
+                let pins = crate::authoring::remap::decode(&params["pins"]).map_err(fail)?;
+                let source_revision = params
+                    .get("base_revision")
+                    .map(|value| {
+                        crate::authoring::remap::Scalar::BaseRevision
+                            .parse(value)
+                            .and_then(|revision| u32::try_from(revision).map_err(|error| error.to_string()))
+                    })
+                    .transpose()
+                    .map_err(fail)?;
+                crate::authoring::remap::preview(&item, &pins, source_revision, self.project()).map_err(fail)
+            }
             PREPARE_PART_PUBLICATION => {
                 let fail = CommandError::InvalidParams;
                 let record: crate::part_authoring::Record = serde_json::from_value(params["record"].clone()).map_err(|e| fail(e.to_string()))?;

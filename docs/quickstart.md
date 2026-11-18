@@ -712,6 +712,19 @@ For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
 
+For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
+pins, enter each other's numbers and choose **Preview current nets** before
+**Apply remap**. The table separates the draft's unchanged name from the pinned
+before-number name, current nets and native package pads; these are not predicted
+reconnections or proof of primitive lineage across prior draft renumbering.
+**Unconnected** is a known placed terminal without a net. Actual net names start
+with **Net:**, so a net named Unconnected reads **Net: Unconnected**. **Unknown**
+means missing association or evidence (for example, no open project or no matching
+placed copy), not a known no-net/no-package result. Only the library draft
+changes, in one Undo step. Cancel leaves both documents alone. To associate nets,
+edit the same published identity/revision used by the project; **Edit copy** does
+not infer that association. See [pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
+
 On desktop, **Parts Library → New → Library** creates a writable native folder.
 Create a symbol or footprint and publish it to that collection first, or choose an
 existing populated writable collection. Select a published item and choose **Edit**, then change its

@@ -177,6 +177,22 @@ do not yet provide comparison or connections.
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
+Symbol **Library → Remap pins…** and live `app.library_pin_remap` preview explicit
+pin renumbering with separate draft names and pinned-before-number names/nets/native
+package-pad evidence before an effective
+change becomes one revision-checked library undo step. An explicit unchanged map
+is a no-op. Headless `library.preview_pin_remap` prepares the same read-only report.
+The two remap commands use exact decimal strings for their routing identities and
+revisions; existing native records and other commands keep their codecs. Different/unassociated revisions are not guessed;
+placed copies, wires and native part maps stay unchanged. Preparation refuses
+more than 4096 affected rows before building a report. All routes charge borrowed
+report evidence against 4 MiB before copying rows and check modeled whole-project
+graph inputs and path text before preparation, including unrelated sheets. Native
+capture separately refuses an editor-inspection reply exceeding the existing live
+JSON byte limit. These budgets are not limits on total algorithmic operations,
+graph latency or peak heap. It does not support every
+combination of the larger saved project/terminal limits. See
+[reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

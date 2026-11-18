@@ -202,7 +202,12 @@ engine to read a path.
 | `library.remove_source` | `source`. Removes an external catalog source without changing pinned definitions; bundled sources are read-only. Use `app.library_source` in the live editor to also forget a personal registration. |
 
 Use `execute` with normal inspection enabled to receive these results;
-`inspect: false` intentionally returns only the unchanged project revision.
+`inspect: false` intentionally returns only the unchanged project revision for
+these source commands. The focused headless `library.preview_pin_remap` query is
+an exception: it preserves its candidate/current-evidence report with `inspect:false`.
+The live `app.library_pin_remap` window command instead follows normal editor
+inspection suppression; use inspection to obtain its captured token/report.
+See [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
 For an explicit-library `schematic.place_symbol`, pass `library`, `definition`,
 `definition_revision` and `definition_digest` from search, plus the usual sheet,
 coordinates and `expected_revision`. Placement checks both project revision and

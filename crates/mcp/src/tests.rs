@@ -5,6 +5,32 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
 
+/// Focused headless pin-remap queries retain the review payload even with inspect:false;
+/// preview does not need an open project and never creates history or saves the candidate.
+#[test]
+fn pin_remap_mcp_preserves_the_preview_without_general_inspection() {
+    let mut session = Session::default();
+    let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
+    let before = session.inspect();
+    let report = crate::backend::call_session(
+        &mut session,
+        "engine.execute",
+        &json!({
+            "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"inspect":false,
+            "params":{"item":item,"pins":[{"unit":"main","object":"1","number":"2"},{"unit":"main","object":"3","number":"1"}]}
+        }),
+    )
+    .unwrap();
+    assert_eq!(report["changes"][0]["before"], "1");
+    assert_eq!(report["changes"][0]["after"], "2");
+    assert_eq!(report["changes"][0]["object"], "1");
+    assert_eq!(report["source_revision"], Value::Null);
+    assert!(report["item"]["revision"].is_number());
+    assert_eq!(report["saved"], false);
+    assert_eq!(report["instances"], json!([]));
+    assert_eq!(session.inspect(), before);
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
@@ -559,8 +585,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
-/// Source discovery and placement use the same session catalog over real MCP tool dispatch,
-/// while source loading/removal leave the project's electrical revision and history alone.
+/// Discovery retains every native library command alongside pin-remap preview over MCP;
+/// source loading/removal leave the project's electrical revision and history alone.
 #[test]
 fn native_source_search_and_placement_share_the_mcp_session() {
     let mut s = server();
@@ -568,7 +594,28 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 8);
+    let mut command_ids = commands
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command["id"].as_str().unwrap())
+        .filter(|id| id.starts_with("library."))
+        .collect::<Vec<_>>();
+    command_ids.sort_unstable();
+    assert_eq!(
+        command_ids,
+        [
+            "library.list_sources",
+            "library.load_source",
+            "library.parse_quantity",
+            "library.prepare_part_publication",
+            "library.prepare_publication",
+            "library.preview_pin_remap",
+            "library.remove_source",
+            "library.resolve_part",
+            "library.search",
+        ]
+    );
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);

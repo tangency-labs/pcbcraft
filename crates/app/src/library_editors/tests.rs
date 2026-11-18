@@ -22,6 +22,8 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+mod remap;
+mod remap_evidence;
 mod zoom;
 
 /// Definition panes extend their own canvas palette through the exposed ribbon margins, down to

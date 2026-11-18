@@ -346,7 +346,11 @@ fn append_point(path: &mut Vec<super::Point>, point: super::Point) {
 impl Connectivity {
     /// Shared project-qualified display name; unresolved indices have no invented identity.
     pub fn net_name(&self, index: usize) -> String {
-        self.display_names.get(index).cloned().unwrap_or_else(|| if index < self.nets.len() { "Unconnected".into() } else { "Unresolved net".into() })
+        self.borrowed_net_name(index).to_owned()
+    }
+    /// Borrow the same display evidence so bounded reports can count it before copying.
+    pub(crate) fn borrowed_net_name(&self, index: usize) -> &str {
+        self.display_names.get(index).map(String::as_str).unwrap_or(if index < self.nets.len() { "Unconnected" } else { "Unresolved net" })
     }
     /// All authored names on this group, including aliases introduced by wired connections.
     pub fn net_names(&self, index: usize) -> &[String] {

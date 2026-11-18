@@ -142,6 +142,12 @@ impl Project {
         graph
     }
 
+    /// Borrow the authoritative whole-project graph for bounded read-only report preparation.
+    /// The cache remains attached to this immutable project; no second graph store is created.
+    pub(crate) fn borrowed_electrical_connectivity(&self) -> &Connectivity {
+        self.named_graph.get_or_init(|| self.build_named_graph())
+    }
+
     /// Build the full graph once per immutable snapshot. Cache pin positions and routes once
     /// per sheet rather than resolving each wire's geometry again for every label.
     fn build_named_graph(&self) -> Connectivity {
