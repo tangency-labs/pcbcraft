@@ -970,3 +970,79 @@ fn multiunit_symbol_editor_selects_and_adds_units_through_shared_actions() {
         assert!(h.state().session.project().is_none());
     }
 }
+
+/// Normalized Copy/Paste events reach the same internal clipboard operations as the raw-key
+/// path: canvas targeting still gates them, one event performs one operation and pending
+/// property fields still refuse paste.
+#[test]
+fn normalized_clipboard_events_drive_library_copy_and_paste() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        let mut app = PcbApp::default();
+        app.new_library_item(kind);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        let first = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+        let revision = h.state().library_editors.documents[&id].session.revision();
+        // Away from the canvas the events keep their targeting gate.
+        h.hover_at(egui::pos2(10.0, 10.0));
+        h.event(egui::Event::Copy);
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} events away from the canvas must not arm paste"
+        );
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.event(egui::Event::Copy);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} normalized Paste must arm the preview"
+        );
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), revision, "{kind:?} copy/paste must not change authored state");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        // Raw-key presses still work when an extra modifier bypasses native translation.
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::C);
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::V);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} raw-key path must still arm the preview"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+    }
+    // Pending property fields still refuse a normalized Paste.
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Symbol);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let id = h.state().library_editors.active.unwrap();
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    h.get_by_label("Length (mm)").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Length (mm)").type_text("9.9");
+    h.run();
+    assert!(h.state().library_editors.documents[&id].pending(), "field input must leave the draft pending");
+    // Reselecting the same pin releases the field without touching the draft or selection.
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    let area = h.get_by_label("Library canvas").rect();
+    h.hover_at(area.center());
+    h.run();
+    h.event(egui::Event::Paste(String::new()));
+    h.run();
+    let doc = &h.state().library_editors.documents[&id];
+    assert!(doc.pending(), "unapplied fields must survive focus changes");
+    assert!(matches!(doc.tool, canvas::Tool::Select));
+    assert!(doc.error.is_some(), "pending property fields must refuse a normalized Paste");
+}

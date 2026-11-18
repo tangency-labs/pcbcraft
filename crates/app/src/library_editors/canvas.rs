@@ -723,10 +723,14 @@ impl Document {
                 if command && ui.input(|i| i.key_pressed(egui::Key::A)) {
                     let _ = self.select_many(item.objects.keys().copied().collect());
                 }
-                if command && ui.input(|i| i.key_pressed(egui::Key::C)) {
+                // Command-only C/V arrive as normalized clipboard events on desktop; a raw
+                // key press only appears when another modifier bypasses that translation.
+                let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                let pasted = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Paste(_))));
+                if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
                     self.copy(ui.ctx());
                 }
-                if command && ui.input(|i| i.key_pressed(egui::Key::V)) {
+                if pasted || (command && ui.input(|i| i.key_pressed(egui::Key::V))) {
                     self.paste(ui.ctx());
                 }
                 if command && ui.input(|i| i.key_pressed(egui::Key::D)) {

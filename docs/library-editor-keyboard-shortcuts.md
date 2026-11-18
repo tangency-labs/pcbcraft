@@ -13,9 +13,12 @@ tool, Ctrl+A selected all objects, Ctrl+D armed a paste preview that R rotated,
 E opened the selected object's properties, M started a move, the pending-fields
 refusal message appeared, Delete removed the selected object, Ctrl+Z restored
 it, Ctrl+S opened the publish dialog, Ctrl+Q opened the unsaved-items prompt,
-and Ctrl+, opened Preferences in all three workspaces. The clipboard-chord gap
-described below was verified by exercising both the swallowed and the passing
-modifier combinations. macOS and Windows have not been tested; for command
+and Ctrl+, opened Preferences in all three workspaces. The raw-key clipboard
+path (Ctrl+Shift+C/V) was exercised live; the normalized `Event::Copy` /
+`Event::Paste` path that plain Ctrl+C/V produce is covered by
+`normalized_clipboard_events_drive_library_copy_and_paste`, which injects the
+same events `egui-winit` emits for a physical chord.
+macOS and Windows have not been tested; for command
 chords, macOS uses **⌘** where **Ctrl** is shown. The browser build differs in
 three rows — **Ctrl+S** uses the save/export path, and **Ctrl+Q** and
 **Ctrl+Shift+A** are desktop-only — and has not been separately verified.
@@ -75,28 +78,28 @@ area, not covered by a panel or floating layer.
 | **Enter** | Commits the in-progress polyline as a graphic object; does nothing under any other tool. |
 | **Ctrl+A** | Selects all objects in the definition. |
 | **Ctrl+D** | Duplicates the selection into a cancellable Paste preview. Refuses while property fields are pending. |
-| **Ctrl+C** | Dispatched, but unreachable on desktop — see the clipboard gap below. |
-| **Ctrl+V** | Dispatched, but unreachable on desktop — see the clipboard gap below. |
+| **Ctrl+C** | Copies the selection to the internal library clipboard via the normalized Copy event; the raw key is also accepted when another modifier bypasses native translation. |
+| **Ctrl+V** | Arms the cancellable paste preview via the normalized Paste event (same raw-key fallback); refuses while property fields are pending. |
 
 Tools with ribbon buttons but **no** key binding: Rectangle, Circle, Arc,
 Polyline, Mirror X and Array. Polyline is armed from the ribbon and committed
 with Enter.
 
-### The clipboard chord gap
+### Clipboard chords
 
-On desktop, **Ctrl+C** and **Ctrl+V** never reach the canvas handler.
-`egui-winit` translates command-only **C**/**V**/**X** presses into
+On desktop, `egui-winit` translates command-only **C**/**V**/**X** presses into
 `Event::Copy`, `Event::Paste` and `Event::Cut` and does not emit the
-corresponding `Event::Key`, while the canvas waits for the key press. The
-emitted Copy/Paste events have no consumer in the library editor, so the
-chords are dead.
+corresponding `Event::Key`. The canvas consumes the normalized **Copy** and
+**Paste** events, so plain **Ctrl+C**/**Ctrl+V** reach the internal clipboard
+operations; **Ctrl+X** has no library operation and its `Event::Cut` remains
+unhandled.
 
 Adding a second modifier escapes the translation: **Ctrl+Shift+C** and
-**Ctrl+Shift+V** do emit their `Key` events, and the canvas checks only
-`modifiers.command` — so those combinations actually run copy and paste. The
-Paste preview behaves the same as Ctrl+D's. Copy and paste are gated to a
-selection of the same document kind: pasting a symbol's objects into a
-footprint document reports "Paste into a definition of the same kind."
+**Ctrl+Shift+V** emit their `Key` events, and the canvas accepts those too —
+each press produces exactly one of the two event forms, so a chord runs copy
+or paste once. The Paste preview behaves the same as Ctrl+D's. Copy and paste
+are gated to a selection of the same document kind: pasting a symbol's objects
+into a footprint document reports "Paste into a definition of the same kind."
 
 ## Pending fields gate
 
@@ -124,7 +127,7 @@ so canvas keys do not fire while a field is focused.
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
 | Ctrl+A | `canvas` → `select_many(all)` | — (the Ctrl+A presses in `library_editors/tests.rs` are field-scoped select-all, not canvas) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | — |
-| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` — unreachable on desktop via the plain chord; reachable via Ctrl+Shift | — |
+| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Paste`, or the raw key when another modifier bypasses translation) | `normalized_clipboard_events_drive_library_copy_and_paste` |
 | Workspace boundary | `PcbApp::shortcuts` not invoked; `library_frame` key block | `home_has_no_editor_shortcuts_and_selected_copy_enters_the_workspace` |
 | Parts Library | `library_workspace.rs` — `COMMAND_COMMA` only | `library_workspaces_share_the_picker_with_schematic_and_pcb` |
 
