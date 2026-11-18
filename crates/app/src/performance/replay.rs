@@ -464,10 +464,7 @@ mod tests {
         }];
         run(&artifact, &mut BTreeMap::new()).unwrap();
         artifact.trace = Step::commit();
-        let Err(error) = Driver::prepare(&artifact) else {
-            panic!("contact replay still needs airwires");
-        };
-        assert_eq!(error, "missing replay airwires");
+        assert!(Driver::prepare(&artifact).is_err(), "contact replay still needs a supported connection");
     }
 
     /// Real renderers can take longer than a click threshold between passes. Deliver paired

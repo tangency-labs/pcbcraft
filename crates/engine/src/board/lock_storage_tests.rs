@@ -145,6 +145,54 @@ fn footprint_locks_require_their_own_nonempty_format() {
     }
 }
 
+/// Board formats 23 and 25 need their own content even when setup is valid. A report does
+/// not satisfy the lock gate, and format 34 still validates earlier extension records.
+#[test]
+fn configured_format_headers_require_their_own_content() {
+    let mut session = track::tests::routed_fixture();
+    let configured = encode_documents(session.snapshot().unwrap()).unwrap();
+    let path = test_board_path(&configured);
+    assert_eq!(encode_documents(decode_documents(&configured).unwrap()).unwrap(), configured);
+    let mut lower: Value = serde_json::from_slice(&configured[&path]).unwrap();
+    assert!(lower["setup"].is_object());
+    let mut trial = configured.clone();
+    for (version, reason) in [(23, "format 23 requires at least one of them"), (25, "format 25 requires at least one of them")] {
+        lower["format"] = json!(format!("pcbcraft-board/{version}"));
+        trial.insert(path.clone(), serde_json::to_vec(&lower).unwrap());
+        let error = decode_documents(&trial).unwrap_err();
+        assert!(error.contains(reason), "format {version}: {error}");
+    }
+
+    add_material_report(&mut session);
+    let project = session.snapshot().unwrap();
+    let locked_id = project.board.footprints[1].id;
+    let reported = encode_documents(project.clone()).unwrap();
+    let mut report: Value = serde_json::from_slice(&reported[&path]).unwrap();
+    assert_eq!(report["format"], "pcbcraft-board/25");
+    assert_eq!(encode_documents(decode_documents(&reported).unwrap()).unwrap(), reported);
+    assert_eq!(report["footprints"][1]["id"], locked_id);
+    report["footprints"][1]["locked"] = json!(true);
+    trial = reported;
+    trial.insert(path.clone(), serde_json::to_vec(&report).unwrap());
+    let error = decode_documents(&trial).unwrap_err();
+    assert!(error.contains("footprint locks require board format 34"), "{error}");
+
+    report["format"] = json!("pcbcraft-board/34");
+    let canonical = encode_documents(with_placement_lock(&project, locked_id, true)).unwrap();
+    report["footprints"][0]["locked"] = json!(false);
+    trial.insert(path.clone(), serde_json::to_vec(&report).unwrap());
+    assert_eq!(encode_documents(decode_documents(&trial).unwrap()).unwrap(), canonical);
+    report["assembly_profiles"] = json!([]);
+    trial.insert(path.clone(), serde_json::to_vec(&report).unwrap());
+    let error = decode_documents(&trial).unwrap_err();
+    assert!(error.contains("an empty assembly_profiles array is not allowed"), "{error}");
+    report.as_object_mut().unwrap().remove("assembly_profiles");
+    report["footprints"][1]["locked"] = json!(false);
+    trial.insert(path, serde_json::to_vec(&report).unwrap());
+    let error = decode_documents(&trial).unwrap_err();
+    assert!(error.contains("requires an authored footprint lock"), "{error}");
+}
+
 /// Null, nonbooleans and duplicate keys are codec errors, never defaults or last-key-wins metadata.
 #[test]
 fn malformed_lock_flags_are_refused_before_project_construction() {
@@ -357,10 +405,82 @@ fn clipboard_refuses_active_footprint_locks_without_changing_unlocked_fragments(
     let error = BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
     assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"));
-    envelope["footprints"][1]["locked"] = json!("true");
-    let error = BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
-    assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
-    assert!(error.to_string().contains("Clipboard does not contain a supported PCBcraft board fragment"));
+    for malformed in [json!("true"), Value::Null] {
+        envelope["footprints"][1]["locked"] = malformed;
+        let error = BoardFragment::from_text(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
+        assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{error}");
+        assert!(error.to_string().contains("Clipboard does not contain a supported PCBcraft board fragment"));
+    }
+}
+
+/// Compare rejected commands against unlocked controls through the public command path.
+/// Errors do not return cut text, consume a revision or change physical objects or history.
+#[test]
+fn clipboard_commands_refuse_footprint_locks_without_a_state_change() {
+    use clipboard::{BoardSelection, COPY, CUT, PASTE};
+    let original = track::tests::routed_fixture().snapshot().unwrap();
+    let board = original.board_target().unwrap().board;
+    let locked_id = original.board.footprints[1].id;
+    let items = BoardSelection {
+        footprints: original.board.footprints.iter().map(|footprint| format!("footprint-{}", footprint.id)).collect(),
+        ..Default::default()
+    };
+    let mut source = Session::default();
+    source.open_snapshot(original.clone());
+    let revision = source.revision();
+    let copy_args = json!({"board":board,"items":items,"expected_revision":revision});
+    let copied = source.execute(COPY, &copy_args).unwrap();
+    assert!(copied["clipboard"].is_string());
+    assert_eq!(source.revision(), revision);
+    let cut = source.execute(CUT, &copy_args).unwrap();
+    assert!(source.project().unwrap().board.footprints.is_empty());
+    let cut_text = cut["clipboard"].as_str().unwrap();
+
+    let mut locked = Session::default();
+    locked.open_snapshot(with_placement_lock(&original, locked_id, true));
+    let args = json!({"board":board,"items":items,"expected_revision":locked.revision()});
+    for command in [COPY, CUT] {
+        assert_clipboard_refusal(&mut locked, command, &args);
+    }
+    assert_placement_locks(&original, locked.project().unwrap(), locked_id);
+
+    let paste = json!({"board":board,"text":cut_text,"reuse_components":true,"x_nm":0,"y_nm":10_000_000,"expected_revision":source.revision()});
+    let mut envelope: Value = serde_json::from_str(cut_text).unwrap();
+    assert_eq!(envelope["footprints"][1]["id"], locked_id);
+    envelope["footprints"][1]["locked"] = json!(true);
+    let mut bad_paste = paste.clone();
+    bad_paste["text"] = json!(serde_json::to_string(&envelope).unwrap());
+    assert_clipboard_refusal(&mut source, PASTE, &bad_paste);
+    source.execute(PASTE, &paste).unwrap();
+    assert_eq!(source.project().unwrap().board.footprints.len(), original.board.footprints.len());
+}
+
+/// A footprint-specific command error cannot replace or edit the snapshot or its undo/redo entries.
+fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value) {
+    let before = session.snapshot().unwrap();
+    let bytes = encode_documents(before.clone()).unwrap();
+    let revision = session.revision();
+    let root = session.history_root_revision();
+    let undo = session.undo.clone();
+    let redo = session.redo.clone();
+    let error = session.execute(command, args).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{command}: {error}");
+    assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"), "{command}: {error}");
+    let after = session.snapshot().unwrap();
+    assert!(Arc::ptr_eq(&before, &after), "{command}");
+    assert_eq!(encode_documents(after).unwrap(), bytes, "{command}");
+    assert_eq!(session.revision(), revision, "{command}");
+    assert_eq!(session.history_root_revision(), root, "{command}");
+    for (previous, current) in [(&undo, &session.undo), (&redo, &session.redo)] {
+        assert_eq!(previous.len(), current.len(), "{command}");
+        for (before, after) in previous.iter().zip(current) {
+            match (before, after) {
+                (Some(before), Some(after)) => assert!(Arc::ptr_eq(before, after), "{command}"),
+                (None, None) => (),
+                _ => panic!("{command} changed a history entry"),
+            }
+        }
+    }
 }
 
 /// A historical marker is encodable and readable until only its footprint lock flag changes.
@@ -379,4 +499,7 @@ fn diagnostic_codec_refuses_footprint_locks() {
     document["board"]["footprints"][0]["locked"] = json!(true);
     let error = decode(&serde_json::to_vec(&document).unwrap()).unwrap_err();
     assert!(error.contains("footprint locks require split board format 34"), "{error}");
+    document["board"]["footprints"][0]["locked"] = Value::Null;
+    let error = decode(&serde_json::to_vec(&document).unwrap()).unwrap_err();
+    assert!(error.contains("invalid project JSON") && error.contains("bool"), "{error}");
 }

@@ -55,10 +55,12 @@ assignment and accepts optional assembly profile adoptions and extended stack
 fields. Earlier headers, including assembly-profile board/22 and stack board/23,
 reject via intent. No derived island membership or duplicate netlist is saved.
 Clearing the last assignment restores the format required by remaining authored
-data. Boards with [thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
-use board/25, or board/34 with footprint locks; both preserve optional explicit via
-intent. Automatic-only legacy projects retain their previous native encoding,
-and unchanged native Save/Open preserves bytes.
+data. Explicit via intent selects board/24 unless a higher format is required.
+[Thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
+select board/25; an active footprint lock selects board/34 with or without reports.
+Both higher formats preserve explicit via intent. The native codecs preserve
+current canonical bytes on a no-op round trip; accepted noncanonical input may
+be normalized, and opening an older project can require migration.
 
 **pcbcraft-clipboard/4** carries explicit targets. Copy, duplication and relocation
 within the same board preserve those addresses. Foreign destinations or foreign

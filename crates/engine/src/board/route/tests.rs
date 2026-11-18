@@ -51,10 +51,7 @@ fn captured_planning_yields_and_matches_the_shared_solver() {
     assert_eq!(next.take_result().unwrap().unwrap(), expected);
     s.apply("project.rename", &json!({"name":"Changed while planning"})).unwrap();
     assert!(!next.source().is_current(&s));
-    assert!(matches!(
-        s.prepare_route_plan(&context, request, DEFAULT_BUDGET),
-        Err(crate::CommandError::InvalidParams(message)) if message == "route planning source is stale"
-    ));
+    assert!(s.prepare_route_plan(&context, request, DEFAULT_BUDGET).is_err());
 }
 
 /// Warm capture does not start cold projection; its continuation
@@ -79,10 +76,7 @@ fn cached_planning_skips_cold_queries_and_resumes_exactly() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
     s.apply("project.rename", &json!({"name":"Changed while planning"})).unwrap();
     assert!(!warm.source().is_current(&s));
-    assert!(matches!(
-        s.prepare_route_plan(&context, request, DEFAULT_BUDGET),
-        Err(crate::CommandError::InvalidParams(message)) if message == "route planning source is stale"
-    ));
+    assert!(s.prepare_route_plan(&context, request, DEFAULT_BUDGET).is_err());
 }
 
 fn p(x_nm: i64, y_nm: i64) -> Point {

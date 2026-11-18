@@ -274,14 +274,15 @@ removing the origin restores the format required by the remaining data.
 Board format `pcbcraft-board/34` adds optional boolean `locked` on placed
 footprints and requires at least one `true` footprint lock. Missing means false;
 canonical saves omit false. Null, nonboolean values and duplicate keys are
-refused. The extension works with or without setup and retains all earlier
-physical fields, including optional material reports, via assignments, extended stack
-fields, assembly profile adoptions, origin, rules, zones and track/via locks. Older
-readers reject format 34; this reader rejects active footprint locks under headers
-1–25. Reserved formats 26–33 remain unsupported. Unlocking the last footprint selects
-format 25 if material reports remain, otherwise the format required by the remaining data. Unlocked
-boards keep their previous encoding; folder and archive reopen preserve IDs,
-pinned definitions, geometry and connectivity.
+refused. Format 34 works with or without setup and retains compatible earlier
+extensions under their existing validation rules, including material reports, via
+assignments, extended stack fields, assembly profile adoptions, origin, rules,
+zones and track/via locks. Older readers reject format 34; this reader rejects
+active footprint locks under headers 1–25. Reserved formats 26–33 remain
+unsupported. Clearing the last footprint lock selects format 25 if material
+reports remain, otherwise the format required by the remaining data. Canonical
+unlocked boards keep their previous encoding; folder and archive reopen preserve
+IDs, pinned definitions, geometry and connectivity.
 
 This is storage and inspection only: no footprint lock command, GUI toggle or
 movement/deletion protection is provided yet. Diagnostic single-file encoding
