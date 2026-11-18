@@ -50,10 +50,14 @@ def compare(before, after):
     lines = [f"CPU comparison: {before['environment']['revision']} → {after['environment']['revision']}",
              f"{after['target']}; {after['iterations']} samples per boundary; artifact {after['artifact_sha256']}",
              "", "| Boundary | Before p95 ms | After p95 ms | Change | After p99 ms | Max ms |", "| --- | ---: | ---: | ---: | ---: | ---: |"]
-    for name in sorted(new):
+    # The BGA subcase is rebuilt from each checkout, not read from the hashed artifact.
+    regenerated = {name for name in new if name.startswith("bga.")}
+    for name in sorted(new.keys() - regenerated):
         a, b = old[name]["p95_ms"], new[name]["p95_ms"]
         delta = f"{(b/a-1)*100:+.1f}%" if a else "n/a (zero baseline)"
         lines.append(f"| {name} | {a:.6f} | {b:.6f} | {delta} | {new[name]['p99_ms']:.6f} | {new[name]['max_ms']:.6f} |")
+    if regenerated:
+        lines += ["", "Excluded bga.* boundaries: each checkout regenerates a BGA-only project outside the hashed artifact."]
     over = [name for name, metric in new.items() if name.startswith("replay.") and name.endswith(".ui") and metric["p95_ms"] >= 4]
     lines += ["", "#237 budget assessment: CPU replay is a proxy, so this report cannot certify input-to-visible or native event-loop budgets."]
     lines.append("CPU frame p95 ≥ 4 ms: " + (", ".join(sorted(over)) if over else "none in these samples"))

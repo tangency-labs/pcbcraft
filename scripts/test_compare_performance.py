@@ -46,6 +46,17 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("CPU frame p95 ≥ 4 ms: replay.move.ui", result)
         self.assertIn("cannot certify", result)
 
+    def test_regenerated_bga_metrics_are_not_compared_as_artifact_metrics(self):
+        before = copy.deepcopy(self.report)
+        before["recipe"] = "bga-v1"
+        before["metrics"].append(dict(before["metrics"][0], id="bga.library_load"))
+        after = copy.deepcopy(before)
+        after["metrics"][1].update(samples_ms=[10, 20, 50], p50_ms=20, p95_ms=50, p99_ms=50, max_ms=50)
+        result = comparison.compare(before, after)
+        self.assertIn("Excluded bga.* boundaries", result)
+        self.assertNotIn("| bga.library_load |", result)
+        self.assertIn("| replay.move.ui |", result)
+
     def test_rejects_regenerated_artifacts_or_environment_changes(self):
         for key in ["artifact_sha256", "target", "iterations", "warmup_frames"]:
             with self.subTest(key=key):

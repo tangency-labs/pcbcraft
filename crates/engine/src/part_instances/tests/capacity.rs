@@ -2,6 +2,7 @@
 //! original native library and placed through the shared library, schematic and board commands.
 use super::*;
 use crate::{
+    Project,
     board::definition::{MAX_ARTWORK, MAX_PADS},
     board::update::INITIALIZE_BASELINE,
     library::MAX_TERMINALS,
@@ -83,7 +84,7 @@ fn load(session: &mut Session, symbol: Json, footprint: Json, part: Json) -> Jso
         ("library.json", r#"{"format":"pcbcraft-library/1","id":"grid","name":"Grid arrays","license":"MIT OR Apache-2.0"}"#.to_owned()),
         ("symbols/bga-1024.json", serde_json::to_string_pretty(&symbol).unwrap()),
         ("footprints/bga-1024.json", serde_json::to_string_pretty(&footprint).unwrap()),
-        ("parts/bga-1024.json", serde_json::to_string_pretty(&part).unwrap()),
+        ("parts/bga-1024.json", part.to_string()),
     ]
     .into_iter()
     .map(|(path, text)| (path.into(), text))
@@ -133,7 +134,10 @@ fn ball_grid_array_at_the_pad_and_terminal_limits_places_saves_and_reopens() {
     assert_eq!(encode_documents(reopened.clone()).unwrap(), documents);
     assert_eq!(reopened.board.footprints()[0].mapping.as_ref(), Some(&mapping));
     assert_eq!(reopened.symbols().iter().map(|symbol| symbol.pins().len()).sum::<usize>(), MAX_TERMINALS);
-    assert_eq!(encode_documents(decode_packed(&encode_packed(project.clone()).unwrap()).unwrap().project).unwrap(), documents);
+    let archive = encode_packed(project).unwrap();
+    let packed_reopened = decode_packed(&archive).unwrap().project;
+    assert_eq!(encode_documents(packed_reopened.clone()).unwrap(), documents);
+    assert_eq!(encode_packed(packed_reopened).unwrap(), archive);
     session.execute(sources::REMOVE, &json!({"source":"grid"})).unwrap();
     session.open_snapshot(reopened);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), documents);
@@ -153,6 +157,206 @@ fn ball_grid_array_at_the_pad_and_terminal_limits_places_saves_and_reopens() {
     assert!(problems.contains("holds at most 1024 identities"), "{problems}");
 }
 
+/// A legal native 1,024-pad terminal works both at default placement and when selected later.
+/// The same pinned choice supplies the physical footprint and survives an offline round trip.
+#[test]
+fn native_wide_terminal_can_be_selected_placed_and_reopened() {
+    let mut wide = part(1);
+    let pads = balls(MAX_PADS);
+    wide["packages"]["bga"]["mapping"] = json!({"A1": pads});
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    assert_eq!(load(&mut session, symbol(1), footprint(MAX_PADS, 0), wide), json!([]));
+    let resolved = session.execute(sources::RESOLVE_PART, &json!({"library":"grid","definition":"bga-1024","definition_revision":1})).unwrap();
+    apply(
+        &mut session,
+        PLACE_PART,
+        json!({"library":"grid","definition":"bga-1024","definition_revision":1,"definition_digest":resolved["digest"],"x_nm":0,"y_nm":0}),
+    );
+    let component = session.project().unwrap().components().next().unwrap().id();
+    let id = session.project().unwrap().symbols()[0].component;
+    assert_eq!(session.project().unwrap().board.assignments[&id].mapping["A1"].pads(), pads);
+    apply(&mut session, SET_PART, json!({"component":component,"package":null}));
+    assert!(!session.project().unwrap().board.assignments.contains_key(&id));
+    apply(&mut session, SET_PART, json!({"component":component,"package":"bga"}));
+    apply(&mut session, crate::PLACE_ASSIGNED_FOOTPRINT, json!({"component":component,"x_nm":0,"y_nm":0}));
+    apply(&mut session, INITIALIZE_BASELINE, json!({}));
+    let snapshot = session.snapshot().unwrap();
+    let board = &snapshot.board;
+    assert_eq!(board.footprints()[0].mapping.as_ref().unwrap()["A1"].pads(), pads);
+    let accepted = &board.baseline.as_ref().unwrap().components[&id];
+    assert_eq!(accepted.package.as_ref().unwrap().mapping["A1"].pads(), pads);
+    let documents = encode_documents(snapshot.clone()).unwrap();
+    let archive = encode_packed(snapshot).unwrap();
+    session.execute(sources::REMOVE, &json!({"source":"grid"})).unwrap();
+    let reopened = decode_documents(&documents).unwrap();
+    session.open_snapshot(reopened);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), documents);
+    assert_eq!(encode_packed(decode_packed(&archive).unwrap().project).unwrap(), archive);
+}
+
+/// Compact external input can fit the source bound even though its canonical pinned output does
+/// not. Project reopen accepts the latter; the external source entry point still refuses it.
+#[test]
+fn compact_multi_package_source_reopens_from_a_larger_pinned_document() {
+    let mut native = part(MAX_TERMINALS);
+    let package = native["packages"]["bga"].clone();
+    for variant in 1..48 {
+        native["packages"][format!("bga-{variant}")] = package.clone();
+    }
+    assert!(native.to_string().len() < sources::MAX_FILE_BYTES);
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    assert_eq!(load(&mut session, symbol(MAX_TERMINALS), footprint(MAX_PADS, 0), native), json!([]));
+    let resolved = session.execute(sources::RESOLVE_PART, &json!({"library":"grid","definition":"bga-1024","definition_revision":1})).unwrap();
+    apply(
+        &mut session,
+        PLACE_PART,
+        json!({"library":"grid","definition":"bga-1024","definition_revision":1,"definition_digest":resolved["digest"],
+            "package":"bga","x_nm":0,"y_nm":0}),
+    );
+    let snapshot = session.snapshot().unwrap();
+    let documents = encode_documents(snapshot.clone()).unwrap();
+    let pinned = std::str::from_utf8(&documents["library/parts/grid/bga-1024.r1.json"]).unwrap();
+    assert!(pinned.len() > sources::MAX_FILE_BYTES);
+    assert_eq!(crate::library::parts::PartDefinition::read(pinned).unwrap_err(), "Native library record exceeds 1 MiB.");
+    let external = session.execute(sources::LOAD, &json!({"source":"oversize","documents":{"parts/bga-1024.json":pinned}}));
+    assert!(
+        matches!(external, Err(crate::CommandError::InvalidParams(message)) if message == "`documents` must contain bounded native path-to-text entries")
+    );
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    let archive = encode_packed(snapshot).unwrap();
+    assert_eq!(encode_packed(decode_packed(&archive).unwrap().project).unwrap(), archive);
+}
+
+/// Seed only the aggregate-size test, sharing the pinned symbol and footprint across
+/// components. The final edits use live commands rather than filling history during setup.
+fn nearly_full_choice_document(board: bool) -> (Session, String, u64) {
+    use crate::persistence::{ENTRY_POINT, MAX_DOCUMENT_BYTES};
+    let long = |id: &Json| format!("{:0>8}", id.as_str().unwrap());
+    let mut sym = symbol(MAX_TERMINALS);
+    for terminal in sym["terminals"].as_array_mut().unwrap() {
+        terminal["id"] = json!(long(&terminal["id"]));
+    }
+    for unit in sym["units"].as_array_mut().unwrap() {
+        for pin in unit["pins"].as_array_mut().unwrap() {
+            pin["terminal"] = json!(long(&pin["terminal"]));
+        }
+    }
+    let mut physical = footprint(MAX_PADS, 0);
+    for pad in physical["pads"].as_array_mut().unwrap() {
+        pad["number"] = json!(long(&pad["number"]));
+    }
+    let mut native = part(MAX_TERMINALS);
+    native["packages"]["bga"]["mapping"] = Json::Object(
+        balls(MAX_PADS)
+            .into_iter()
+            .map(|id| {
+                let id = format!("{id:0>8}");
+                (id.clone(), json!([id]))
+            })
+            .collect(),
+    );
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":board})).unwrap();
+    assert_eq!(load(&mut session, sym, physical, native), json!([]));
+    let resolved = session.execute(sources::RESOLVE_PART, &json!({"library":"grid","definition":"bga-1024","definition_revision":1})).unwrap();
+    apply(
+        &mut session,
+        PLACE_PART,
+        json!({"library":"grid","definition":"bga-1024","definition_revision":1,
+        "definition_digest":resolved["digest"],"x_nm":0,"y_nm":0}),
+    );
+    let mut project = Project::clone(session.project().unwrap());
+    let mut component = project.components.values().next().unwrap().clone();
+    let placement = project.symbols()[0].clone();
+    let mut choice = project.package_assignments()[&component.ordinal].clone();
+    component.part = None;
+    // Component and placement IDs both have constant widths throughout this fixture. The two
+    // documents have the same record framing after the first assignment; measure that delta.
+    let first = 1000;
+    let count = 800;
+    let parts = Arc::make_mut(&mut project.components);
+    parts.clear();
+    let mut units = Vec::new();
+    for id in first..first + count {
+        parts.insert(id, crate::PartInstance { ordinal: id, reference_number: id as usize, reference: format!("U{id}"), ..component.clone() });
+        units.push(crate::SymbolPlacement { ordinal: id + count, component: id, ..placement.clone() });
+    }
+    Arc::make_mut(&mut project.sheets)[0].symbols = Arc::new(units);
+    project.numeric_id_high_water = Some(project.highest_id());
+    let path = project.board_document_path().unwrap_or_else(|| ENTRY_POINT.into());
+    let insert = |project: &mut Project, choice: &crate::board::assignment::Assignment, id| {
+        let choices =
+            if board { &mut Arc::make_mut(&mut project.board).assignments } else { &mut Arc::make_mut(&mut project.schematic_packages).assignments };
+        choices.insert(id, crate::board::assignment::Assignment { component: id, ..choice.clone() });
+    };
+    if board {
+        Arc::make_mut(&mut project.board).assignments.clear();
+    } else {
+        Arc::make_mut(&mut project.schematic_packages).assignments.clear();
+    }
+    choice.component = first;
+    insert(&mut project, &choice, first);
+    let one = encode_documents(Arc::new(project.clone())).unwrap()[&path].len();
+    insert(&mut project, &choice, first + 1);
+    let two = encode_documents(Arc::new(project.clone())).unwrap()[&path].len();
+    let stride = two - one;
+    let n = 2 + (MAX_DOCUMENT_BYTES - two) / stride;
+    assert!(n + 2 < count as usize);
+    for id in first + 2..first + n as u64 - 1 {
+        insert(&mut project, &choice, id);
+    }
+    session.open_snapshot(Arc::new(project));
+    (session, path, first + n as u64 - 1)
+}
+
+/// The first refused edit must leave the published Arc, revision, undo/redo, and saved bytes intact.
+fn refuse_choice_overflow(session: &mut Session, command: &str, mut params: Json, reason: &str) {
+    let before = session.snapshot().unwrap();
+    let bytes = encode_documents(before.clone()).unwrap();
+    let history = (session.undo.len(), session.redo.len());
+    let revision = session.revision();
+    params["expected_revision"] = json!(revision);
+    let error = session.apply(command, &params).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(msg) if msg.contains(reason)), "{error:?}");
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Without a baseline, the last fitting assignment saves, and the next assignment or unrouted
+/// placement is refused; schematic-only intent likewise cannot overflow the project document.
+#[test]
+fn large_maps_preflight_unrouted_board_and_schematic_choice_documents() {
+    use crate::board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
+    use crate::persistence::MAX_DOCUMENT_BYTES;
+    for board in [true, false] {
+        let (mut session, path, id) = nearly_full_choice_document(board);
+        let project = session.project().unwrap();
+        assert!(project.board.baseline.is_none() && project.board.tracks.is_empty() && project.board.vias.is_empty());
+        let before = session.snapshot().unwrap();
+        let mapping = &before.package_assignments()[&1000].mapping;
+        let mut params = json!({"component":format!("component-{id}"),"library":"grid","definition":"bga-1024",
+            "definition_revision":1,"mapping":mapping});
+        apply(&mut session, ASSIGN_FOOTPRINT, params.clone());
+        let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert!(saved[&path].len() <= MAX_DOCUMENT_BYTES && saved[&path].len() > MAX_DOCUMENT_BYTES - 24_000);
+        drop(saved);
+        params["component"] = json!(format!("component-{}", id + 1));
+        let reason = if board { "board document exceeds the 16 MiB limit" } else { "encoded document exceeds its size limit" };
+        refuse_choice_overflow(&mut session, ASSIGN_FOOTPRINT, params, reason);
+        if board {
+            refuse_choice_overflow(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":"component-1000","x_nm":0,"y_nm":0}), reason);
+            session.open_snapshot(before);
+            apply(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":"component-1000","x_nm":0,"y_nm":0}));
+            assert!(encode_documents(session.snapshot().unwrap()).is_ok());
+            refuse_choice_overflow(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":"component-1001","x_nm":40_000_000,"y_nm":0}), reason);
+        }
+    }
+}
+
 /// The published schemas and command parameters state the limits the engine enforces.
 #[test]
 fn published_schemas_state_the_pad_and_terminal_limits() {
@@ -164,12 +368,13 @@ fn published_schemas_state_the_pad_and_terminal_limits() {
         include_str!("../../../../../docs/schemas/symbol-v1.schema.json"),
         include_str!("../../../../../docs/schemas/symbol-v2.schema.json"),
         include_str!("../../../../../docs/schemas/symbol-v3.schema.json"),
-        include_str!("../../../../../docs/schemas/symbol-v4.schema.json"),
     ] {
-        assert_eq!(read(symbols)["properties"]["terminals"]["maxItems"], MAX_TERMINALS);
+        assert_eq!(read(symbols)["properties"]["terminals"]["maxItems"], 441);
     }
+    let multi_unit = read(include_str!("../../../../../docs/schemas/symbol-v4.schema.json"));
+    assert_eq!(multi_unit["properties"]["terminals"]["maxItems"], MAX_TERMINALS);
     let common = read(include_str!("../../../../../docs/schemas/library-common-v1.schema.json"));
-    assert_eq!(common["$defs"]["unit"]["properties"]["pins"]["maxItems"], MAX_TERMINALS);
+    assert_eq!(common["$defs"]["unit"]["properties"]["pins"]["maxItems"], 441);
     let parts = read(include_str!("../../../../../docs/schemas/part-v2.schema.json"));
     for package in [&common["$defs"]["package"]["properties"], &parts["$defs"]["package"]["properties"]] {
         assert_eq!(package["mapping"]["maxProperties"], MAX_TERMINALS);
@@ -211,8 +416,10 @@ fn command_pad_arrays_keep_the_released_per_terminal_limit() {
     let mut assignment = json!({"component":component,"library":"grid","definition":"bga-1024","definition_revision":1,
         "mapping":mapping,"expected_revision":session.revision()});
     session.apply(crate::board::assignment::ASSIGN_FOOTPRINT, &assignment).unwrap();
-    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let before = encode_documents(snapshot.clone()).unwrap();
     let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
     let excessive = json!({"A1":balls(129)});
     assert_eq!(crate::ParamKind::FootprintMapping.validate(&excessive), Err("must map each terminal to at most 128 pads"));
     assert!(crate::board::parse_mapping(&excessive).is_none());
@@ -227,6 +434,8 @@ fn command_pad_arrays_keep_the_released_per_terminal_limit() {
             "{error:?}"
         );
         assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+        assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     }
 }

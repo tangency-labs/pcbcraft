@@ -2231,8 +2231,8 @@ impl Write for BoardByteCounter {
     }
 }
 
-/// Check the native board document before adopting an edited copper-bearing board. Use the
-/// native writer's header, record framing, serialized fields and closing bytes.
+/// Check the native board document before adopting an edited board with copper or package
+/// maps. Use the native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
     board_header(&mut bytes, project)?;

@@ -142,9 +142,12 @@ will reject unknown fields/shapes rather than silently dropping them.
 
 Placement supplies the built-in definition ID and an explicit `mapping` object
 from symbol terminal ID to one pad-number string or a nonempty list of pad-number
-strings. The `pcb.assign_footprint` and `pcb.place_footprint` commands accept up to
-1,024 distinct terminal entries, retaining their limit of 128 pads in one terminal's
-array. Native part packages and saved mappings allow up to 1,024 pads per terminal,
+strings. The mapping parameter of `pcb.assign_footprint` and `pcb.place_footprint`
+allows up to 1,024 distinct terminal entries and at most 128 pads in one terminal's
+array. Direct `pcb.place_footprint` still resolves only built-in definitions. For a
+larger native footprint, select its native package or use `pcb.assign_footprint`,
+then call `pcb.place_assigned_footprint`. Native part packages and saved mappings
+allow up to 1,024 pads per terminal,
 within the footprint's total pad limit. Mapping validation, placement, board views
 and cross-probing preserve the complete identifier spelling, including alphanumeric
 names and numeric-looking names such as `01`. Complete maps support up to 1,024

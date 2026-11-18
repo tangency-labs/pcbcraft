@@ -158,7 +158,7 @@ The native parser and placement commands support:
   the starter NPN uses three SOT-23 pads.
 - **1 to 32 units in format 4**, including shared supply-terminal appearances.
   Each unit is placed once per part, and units on different sheets retain one
-  reference, Value and physical package. Formats 1–3 retain one unit. See the
+  reference, Value and physical package. Formats 1–3 retain one unit and therefore hold at most 441 terminals. See the
   [multi-unit contract](symbol-schema.md#multiple-schematic-units).
 - **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,
   each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so

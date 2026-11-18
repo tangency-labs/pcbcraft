@@ -1100,7 +1100,7 @@
             "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/pin"
           },
           "minItems": 1,
-          "maxItems": 1024
+          "maxItems": 441
         }
       }
     },
