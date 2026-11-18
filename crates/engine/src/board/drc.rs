@@ -3,13 +3,12 @@
 //! The check reads the board without editing it. It reports copper clearance between different
 //! nets, conflicting intended nets within a copper island, minimum track width, via annular ring,
 //! unrouted connections, the board outline (missing, copper outside it, copper too close to its
-//! edge) and overlapping footprint courtyards. Rule
+//! edge) and overlapping footprint courtyards, decided from their actual supported shapes. Rule
 //! values resolve saved board defaults and bounded request-local overrides through the shared resolver. Results are deterministic, so the same board and rules give the same report.
 //! This is not a manufacturing sign-off: arcs, zones, hole-to-hole spacing, silkscreen and
 //! solder mask checks are not implemented.
 use super::{
     clearance::{BoardGeometry, Object as Item},
-    definition::GraphicPurpose,
     geometry::Contour,
     setup::LayerPurpose,
     track::Land,
@@ -463,36 +462,15 @@ impl BoardView<'_> {
         }
     }
 
-    /// Report footprints on the same side whose courtyard bounds overlap. Courtyards are compared
-    /// by their axis-aligned bounds, so rotated or concave courtyards can be reported conservatively.
+    /// Report same-side footprints whose courtyard interiors overlap, through the checker shared
+    /// with the resumable job. Touching courtyards pass; unsupported geometry is compared by its
+    /// bounds and reported as conservative. Pairs follow placement order.
     fn check_courtyards(self, found: &mut Findings) {
-        let courtyards: Vec<(String, bool, [i64; 4])> = self
-            .footprints()
-            .filter_map(|footprint| {
-                let points: Vec<_> = footprint
-                    .graphics
-                    .iter()
-                    .filter(|graphic| graphic.purpose == GraphicPurpose::Courtyard)
-                    .flat_map(|graphic| graphic.points.iter().copied())
-                    .collect();
-                let first = points.first()?;
-                let bounds = points.iter().fold([first.x_nm, first.y_nm, first.x_nm, first.y_nm], |b, p| {
-                    [b[0].min(p.x_nm), b[1].min(p.y_nm), b[2].max(p.x_nm), b[3].max(p.y_nm)]
-                });
-                Some((footprint.id, footprint.bottom, bounds))
-            })
-            .collect();
-        for (i, (a, side_a, ba)) in courtyards.iter().enumerate() {
-            for (b, _, bb) in courtyards[i + 1..].iter().filter(|(_, side_b, _)| side_b == side_a) {
-                if ba[0] < bb[2] && bb[0] < ba[2] && ba[1] < bb[3] && bb[1] < ba[3] {
-                    let at = Point { x_nm: (ba[0].max(bb[0]) + ba[2].min(bb[2])) / 2, y_nm: (ba[1].max(bb[1]) + ba[3].min(bb[3])) / 2 };
-                    found.push(Violation {
-                        kind: Kind::CourtyardOverlap,
-                        message: "Footprint courtyards overlap".into(),
-                        at,
-                        items: vec![a.clone(), b.clone()],
-                        nets: Vec::new(),
-                    });
+        let courtyards: Vec<_> = self.footprints().filter_map(|footprint| courtyard::Courtyard::capture(&footprint)).collect();
+        for (i, a) in courtyards.iter().enumerate() {
+            for b in &courtyards[i + 1..] {
+                if let Some(violation) = a.overlap(b) {
+                    found.push(violation);
                 }
             }
         }
@@ -583,6 +561,8 @@ pub(crate) mod contour_tests;
 
 #[cfg(test)]
 pub(crate) mod short_tests;
+
+mod courtyard;
 
 mod job;
 pub use job::{CheckJob, CheckProgress, CheckSource};
