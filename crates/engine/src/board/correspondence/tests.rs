@@ -1,9 +1,10 @@
 use super::*;
 use crate::{
-    DELETE_SYMBOL, PLACE_SYMBOL, PLACE_UNIT,
+    DELETE_SYMBOL, PLACE_RESISTOR, PLACE_SYMBOL, PLACE_UNIT,
     board::{
         assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT},
         definition,
+        update::{APPLY_UPDATE, INITIALIZE_BASELINE, PREVIEW_UPDATE},
     },
     persistence::{decode_documents, decode_packed, encode_documents, encode_packed},
 };
@@ -157,6 +158,63 @@ fn pending_package_choices_do_not_replace_accepted_correspondence() {
     changed["3"] = json!("F");
     assign(&mut session, changed);
     assert_eq!(session.project().unwrap().resolve_counterparts(source), accepted);
+}
+
+/// A desired package added after baseline adoption requires review, not just placement.
+#[test]
+fn unplaced_counterparts_report_when_update_pcb_is_required() {
+    let mut session = fixture(true);
+    assign(&mut session, mapping());
+    apply(&mut session, INITIALIZE_BASELINE, json!({}));
+    let accepted = terminal(session.project().unwrap(), "3");
+    let result = session.resolve_counterparts(accepted, session.revision());
+    assert_eq!(result.status, Status::UnplacedPackage);
+    assert!(result.inspect().get("pending_update").is_none());
+
+    apply(&mut session, PLACE_RESISTOR, json!({"x_nm":10_000_000,"y_nm":0}));
+    let project = session.project().unwrap();
+    let sheet = project.sheets().next().unwrap().target;
+    let projection = project.for_sheet(sheet).unwrap();
+    let resistor = projection.symbols().last().unwrap();
+    let component = format!("component-{}", resistor.component);
+    let source = Source::Terminal(TerminalTarget { sheet, terminal: Terminal::parse(&json!({"symbol":resistor.id(),"terminal":"1"})).unwrap() });
+    let result = session.resolve_counterparts(source, session.revision());
+    assert_eq!(result.status, Status::Unassigned);
+    assert!(result.inspect().get("pending_update").is_none());
+
+    let definition = definition::basic_components("resistor-0402").unwrap();
+    apply(
+        &mut session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":component,"library":definition.library,"definition":definition.id,
+            "definition_revision":definition.revision,"mapping":{"1":"1","2":"2"}}),
+    );
+    let before = session.snapshot().unwrap();
+    let result = session.resolve_counterparts(source, session.revision());
+    assert_eq!(result.status, Status::UnplacedPackage);
+    assert_eq!(result.inspect()["pending_update"], true);
+    assert_eq!(result.terminals.len(), 1);
+    assert!(result.pads.is_empty());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    let revision = session.revision();
+    let placement = json!({"component":component,"x_nm":10_000_000,"y_nm":0,"expected_revision":revision});
+    assert!(matches!(
+        session.apply(PLACE_ASSIGNED_FOOTPRINT, &placement),
+        Err(crate::CommandError::Unavailable(reason)) if reason.contains("reviewed package update")
+    ));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+
+    let review = session.execute(PREVIEW_UPDATE, &json!({"expected_revision":revision})).unwrap();
+    apply(&mut session, APPLY_UPDATE, json!({"plan_token":review["board_update_preview"]["plan_token"]}));
+    let result = session.resolve_counterparts(source, session.revision());
+    assert_eq!(result.status, Status::UnplacedPackage);
+    assert!(result.inspect().get("pending_update").is_none());
+    assert!(result.pads.is_empty());
+    apply(&mut session, PLACE_ASSIGNED_FOOTPRINT, placement);
+    let result = session.resolve_counterparts(source, session.revision());
+    assert_eq!(result.status, Status::Resolved);
+    assert_eq!(result.pads.len(), 1);
+    assert!(result.inspect().get("pending_update").is_none());
 }
 
 /// Read-only queries preserve bytes, snapshot identity and history across edits and offline reopen.

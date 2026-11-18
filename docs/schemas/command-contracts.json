@@ -3,6 +3,7 @@
   "commands": {
     "edit.redo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "edit.undo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
+    "library.available_revisions": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "library.list_sources": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "library.load_source": {"params":{"additionalProperties":false,"properties":{"documents":{"additionalProperties":{"maxLength":1048576,"type":"string"},"maxProperties":8192,"type":"object"},"source":{"maxLength":64,"minLength":1,"type":"string"}},"required":["source","documents"],"type":"object"}},
     "library.parse_quantity": {"params":{"additionalProperties":false,"properties":{"quantity":{"enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"],"type":"string"},"value":{"maxLength":128,"type":"string"}},"required":["quantity","value"],"type":"object"}},
@@ -156,7 +157,10 @@
     "arrangement.delete": {"params":{"additionalProperties":false,"properties":{"arrangement":{"minimum":0,"type":"integer"}},"required":["arrangement"],"type":"object"},"scope":"window"},
     "arrangement.rename": {"params":{"additionalProperties":false,"properties":{"arrangement":{"minimum":0,"type":"integer"},"name":{"maxLength":80,"minLength":1,"type":"string"}},"required":["arrangement","name"],"type":"object"},"scope":"window"},
     "arrangement.select": {"params":{"additionalProperties":false,"properties":{"arrangement":{"minimum":0,"type":"integer"}},"required":["arrangement"],"type":"object"},"scope":"window"},
+    "file.abandon": {"params":{"additionalProperties":false,"properties":{"operation":{"maximum":9223372036854775807,"minimum":1,"multipleOf":1,"type":"integer"}},"required":["operation"],"type":"object"},"scope":"window"},
+    "file.open": {"params":{"additionalProperties":false,"properties":{"path":{"maxLength":4096,"minLength":1,"type":"string"}},"required":["path"],"type":"object"},"scope":"window"},
     "file.save": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"},"scope":"window"},
+    "file.save_as": {"params":{"additionalProperties":false,"properties":{"format":{"enum":["folder","archive"],"type":"string"},"path":{"maxLength":4096,"minLength":1,"type":"string"}},"required":["path","format"],"type":"object"},"scope":"window"},
     "ui.at": {"params":{"additionalProperties":false,"properties":{"handle":{"type":"string"},"window":{"type":"integer"}},"required":["window","handle"],"type":"object"},"scope":"window"},
     "ui.cancel": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"},"scope":"window"},
     "ui.click": {"params":{"additionalProperties":false,"properties":{"button":{"default":"left","enum":["left","right","middle"],"type":"string"},"layout":{"type":"integer"},"modifiers":{"additionalProperties":false,"properties":{"alt":{"type":"boolean"},"command":{"type":"boolean"},"ctrl":{"type":"boolean"},"shift":{"type":"boolean"}},"type":"object"},"target":{"oneOf":[{"additionalProperties":false,"properties":{"handle":{"type":"string"}},"required":["handle"],"type":"object"},{"additionalProperties":false,"properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"type":"object"}]},"window":{"type":"integer"}},"required":["target","window"],"type":"object"},"scope":"window"},

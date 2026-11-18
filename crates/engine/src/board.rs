@@ -20,6 +20,8 @@ pub mod fabrication;
 pub mod geometry;
 pub mod identity;
 mod library_migration;
+#[cfg(test)]
+mod lock_storage_tests;
 pub mod materials;
 pub mod movement;
 pub mod origin;
@@ -97,6 +99,9 @@ pub(crate) struct Footprint {
     /// and technical graphics use the back layers. Omitted for top-side placements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bottom: bool,
+    /// Board-local lock intent; omitted while false. Manipulation protection is a separate policy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) locked: bool,
     /// Additional reference displacement from the library default in footprint-local coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reference_offset: Option<Point>,
@@ -139,6 +144,7 @@ impl Footprint {
             y_nm: position.y_nm,
             rotation: 0,
             bottom: false,
+            locked: false,
             reference_offset: None,
             reference_text: None,
         }
@@ -225,10 +231,11 @@ impl Footprint {
         Some(self.point(local))
     }
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
+    /// Always include the storage-only `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,
-            "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},
+            "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},"locked":self.locked,
             "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
                 let point=self.pad_position(pad,&project.board)?;
                 let pin=self.component_pin(pad).map(|(_, pin)| pin);
