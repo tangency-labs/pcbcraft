@@ -75,10 +75,10 @@ editor input. Completed findings retain their source revision.
 Board setup stores an optional role and base copper for each copper layer, a
 tolerance and basis for its finished thickness, and the declared finished board
 thickness, through `pcb.set_board_setup`. Boards with these fields require at least
-board format 23; setup profiles use version 2. Older builds refuse these formats.
-Explicit via assignments require board format 24, material reports 25 and footprint
-locks 34; the highest
-requirement takes precedence, while other boards keep their encoding.
+board format 23 and setup profile version 2; material reports select setup profile
+version 3. Older builds refuse these formats. Explicit via assignments require
+board format 24, material reports 25 and footprint locks 34; the highest requirement
+takes precedence, while other boards keep their encoding.
 
 Materials take sourced thermal conductivity, thermal expansion, dielectric
 strength and CTI reports, each with its unit in the field name, its test

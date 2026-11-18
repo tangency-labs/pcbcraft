@@ -194,7 +194,7 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
 /// geometry, pins or stack fields. This report does not assert a material design limit.
 fn add_material_report(session: &mut Session) {
     let mut setup = serde_json::to_value(session.project().unwrap().board_setup().unwrap()).unwrap();
-    let material = json!({"id":Uuid::from_u128(9041),"revision":1,"name":"Lock storage report","family":"Synthetic",
+    let material = json!({"id":uuid::Uuid::from_u128(9041),"revision":1,"name":"Lock storage report","family":"Synthetic",
         "thermal_conductivity":[{"conductivity_mw_per_m_k":1000,"axis":"z","basis":"typical",
             "source":{"document":"Synthetic lock-storage regression","locator":"fixture"}}]});
     if setup.get("materials").is_none() {
