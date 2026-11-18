@@ -18,7 +18,7 @@ cargo build --locked -p pcbcraft -p pcbcraft-cli
 cargo run --locked -p pcbcraft
 ```
 
-GitHub access is required while the repository is private. The desktop app needs
+The repository is public, so the clone needs no GitHub sign-in. The desktop app needs
 a working graphical session; a headless shell can run the checks and MCP example
 described below. See [Contributing](../CONTRIBUTING.md) for the toolchain and
 browser build commands.
