@@ -7,6 +7,10 @@ guides and format references. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
 
+Footprint lock flags currently have a [storage-only contract](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
+There is no footprint lock toggle/command or move/delete protection to try yet;
+track/via locks remain the supported interactive locking workflow.
+
 ## Build and open an example
 
 With Git and Rust 1.95 or later installed, clone a checkout you can edit:
