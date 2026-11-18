@@ -2930,6 +2930,9 @@ impl Session {
         }
         if changed {
             self.update_plan = None;
+            if self.board_setup_preview().is_none() {
+                self.setup_preview = None;
+            }
             // The adopted metadata is saved data, so it is a new base rather than an edit.
             self.report_opened();
         }
@@ -3081,7 +3084,7 @@ impl Session {
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
             SET_BOARD_SETUP | PREVIEW_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
-            CANCEL_BOARD_SETUP_PREVIEW => self.setup_preview.is_some(),
+            CANCEL_BOARD_SETUP_PREVIEW => self.board_setup_preview().is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -4058,13 +4061,10 @@ impl Session {
         Ok(())
     }
 
-    /// Refuse changes to existing locked copper before publishing any state, then bound undo history. Preserve adopted allocation metadata across
-    /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
-    /// revisions advance past every live ID allocated by a compound wire edit.
-    /// Net allocation and reconciliation validate before any session/history state is changed.
-    /// Memberships of part instances the candidate no longer holds are dropped in the same step;
-    /// edits that keep the part-instance map itself skip that scan.
-    fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
+    /// Prepare an edit without publishing it. Locked copper, metadata, nets and zone ownership
+    /// are checked here so previews can run the same fallible preparation as a committed edit.
+    /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
+    fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
@@ -4136,6 +4136,13 @@ impl Session {
             project.reconcile_nets(self.project.as_deref())?;
         }
         board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        Ok((project, highest))
+    }
+
+    /// Prepare and publish an edit, retaining the allocation watermark and bounded undo history.
+    /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
+    fn change(&mut self, project: Project) -> Result<(), CommandError> {
+        let (project, highest) = self.prepare_change(project)?;
         let project = self.retain_allocation_watermark(Arc::new(project));
         self.update_plan = None;
         self.setup_preview = None;

@@ -16,8 +16,8 @@ pub const PREVIEW_BOARD_SETUP: &str = "pcb.preview_board_setup";
 /// Revoke the named session-local setup review without an authored edit.
 pub const CANCEL_BOARD_SETUP_PREVIEW: &str = "pcb.cancel_board_setup_preview";
 const MAX_REPORT_BYTES: usize = 8 * 1024 * 1024;
-// Reserve room for a complete changes list, its escaped refusal text and report metadata.
-const MAX_CHANGES_BYTES: usize = MAX_REPORT_BYTES / 4;
+// Bound the complete changes list independently of report metadata and refusal text.
+const MAX_CHANGES_BYTES: usize = 2 * 1024 * 1024;
 
 /// Changes to stable layer identities and physical copper positions.
 #[derive(Debug, Serialize)]
@@ -41,10 +41,11 @@ pub struct LayerPosition {
 pub struct AffectedObject {
     pub kind: &'static str,
     pub id: String,
+    /// Authored layer or ordered copper span before the proposed change.
     pub layers: Vec<Uuid>,
 }
 
-/// The real command's refusal, including the same complete affected-object list.
+/// The real command's short refusal; machine-readable changes live separately in the report.
 #[derive(Debug, Serialize)]
 pub struct SetupRefusal {
     pub kind: &'static str,
@@ -98,10 +99,11 @@ impl Session {
         let before = snapshot.board_setup().ok_or_else(|| CommandError::Unavailable("initialize board setup first".into()))?;
         let target = snapshot.resolve_board(params.get("board").and_then(Value::as_str))?;
         let changes = changes(&snapshot, before, &setup)?;
-        let refusal = match self.board_setup_candidate(params) {
-            Ok(_) => None,
-            Err(error) => Some(refusal(with_changes(error, &changes)?)),
-        };
+        let refusal = self
+            .board_setup_candidate(params)
+            .and_then(|candidate| candidate.map(|project| self.prepare_change(project)).transpose())
+            .err()
+            .map(refusal);
         let report = SetupPreview {
             plan_token: crate::fresh_id()?,
             revision: self.revision(),
@@ -142,22 +144,11 @@ impl Session {
     /// Cancel only the current named capability, so a late cancellation cannot revoke a newer review.
     pub(crate) fn cancel_board_setup_preview(&mut self, params: &Value) -> Result<(), CommandError> {
         let token = token(params)?;
-        if !self.setup_preview.as_ref().is_some_and(|p| p.report.plan_token == token) {
+        if !self.board_setup_preview().is_some_and(|report| report.plan_token == token) {
             return Err(CommandError::Unavailable("unknown or replaced board setup preview".into()));
         }
         self.setup_preview = None;
         Ok(())
-    }
-
-    /// Attach an in-budget review list to a failed Apply while preserving its error category.
-    /// Review enumeration or serialization budget failures replace the original refusal with Unavailable.
-    pub(crate) fn board_setup_refusal(&self, params: &Value, error: CommandError) -> CommandError {
-        let Some(before) = self.project().and_then(Project::board_setup) else { return error };
-        let Ok(setup) = serde_json::from_value::<BoardSetup>(params["setup"].clone()) else { return error };
-        let Some(project) = self.project() else { return error };
-        match changes(project, before, &setup).and_then(|changes| with_changes(error, &changes)) {
-            Ok(error) | Err(error) => error,
-        }
     }
 }
 
@@ -192,23 +183,7 @@ fn refusal(error: CommandError) -> SetupRefusal {
     SetupRefusal { kind, message: error.to_string() }
 }
 
-/// Keep the reason prefix readable while including the identical structured list in a real refusal.
-fn with_changes(error: CommandError, changes: &SetupChanges) -> Result<CommandError, CommandError> {
-    serde_json::to_writer(ReportSize::new(MAX_CHANGES_BYTES), changes).map_err(report_budget)?;
-    let changes = serde_json::to_string(changes).map_err(report_budget)?;
-    let reason = error.to_string();
-    if reason.len().checked_add(changes.len()).and_then(|n| n.checked_add(32)).is_none_or(|n| n > MAX_REPORT_BYTES) {
-        return Err(report_budget("refusal text"));
-    }
-    let text = format!("{reason}; affected setup objects: {changes}");
-    Ok(match error {
-        CommandError::InvalidParams(_) => CommandError::InvalidParams(text),
-        CommandError::Unavailable(_) => CommandError::Unavailable(text),
-        CommandError::Unknown(_) => CommandError::Unknown(text),
-    })
-}
-
-/// Budget failures are shared by Preview and refused Apply and do not revoke existing authority.
+/// A budget failure in Preview does not revoke existing authority or affect ordinary Apply.
 fn report_budget(error: impl std::fmt::Display) -> CommandError {
     CommandError::Unavailable(format!("complete board setup review exceeds its byte budget: {error}"))
 }

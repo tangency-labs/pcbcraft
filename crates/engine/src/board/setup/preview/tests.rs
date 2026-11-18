@@ -100,6 +100,55 @@ fn populated_consent_and_spanning_objects_share_apply_validation() {
     assert_eq!(s.project().unwrap().board_setup(), old.board_setup());
 }
 
+/// Expanding a stack reports the existing ordered span, not the two new inner copper IDs.
+#[test]
+fn expanding_stack_reports_previous_via_and_pad_spans() {
+    let mut s = session();
+    let two = reduced(&s);
+    edit(&mut s, SET_BOARD_SETUP, json!({"setup":two}));
+    edit(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+    let symbol = s.inspect()["project"]["schematic"]["symbols"][0]["id"].clone();
+    edit(&mut s, PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"header-1x02-254","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":0}));
+    edit(&mut s, crate::ADD_VIA, json!({"at":{"x_nm":10000000,"y_nm":0},"via_diameter_nm":600000,"via_drill_nm":300000}));
+    let before = s.project().unwrap().board_setup().unwrap();
+    let old_span: Vec<_> = before.copper_stack().map(|layer| layer.layer).collect();
+    let expanded = before.with_copper_count(4).unwrap();
+    let new_inner: Vec<_> = expanded.copper_stack().skip(1).take(2).map(|layer| layer.layer).collect();
+    let report = preview(&mut s, json!(expanded), true);
+    assert_eq!(report["can_apply"], true);
+    let added = report["changes"]["added_layers"].as_array().unwrap();
+    assert_eq!(added.len(), 2);
+    assert!(new_inner.iter().all(|id| added.iter().any(|layer| layer["id"] == json!(id))));
+    let objects = report["changes"]["affected_objects"].as_array().unwrap();
+    assert_eq!(objects.iter().filter(|object| object["kind"] == "pad").count(), 2);
+    assert_eq!(objects.iter().filter(|object| object["kind"] == "via").count(), 1);
+    assert!(objects.iter().all(|object| object["layers"] == json!(old_span)));
+}
+
+/// A save replacing the current snapshot revokes both uses of the token at the same revision.
+#[test]
+fn save_metadata_adoption_revokes_setup_review_at_same_revision() {
+    let mut s = session();
+    let candidate = reduced(&s);
+    let report = preview(&mut s, candidate.clone(), false);
+    let plan_token = &report["plan_token"];
+    let revision = s.revision();
+    let original = s.snapshot().unwrap();
+    let saved = Arc::new(Project { name: "Saved".to_owned(), ..Project::clone(&original) });
+    assert!(s.available(CANCEL_BOARD_SETUP_PREVIEW));
+    assert!(s.adopt_saved_metadata(&original, &saved));
+    assert_eq!(s.revision(), revision);
+    assert!(Arc::ptr_eq(&saved, &s.snapshot().unwrap()));
+    assert!(s.setup_preview.is_none());
+    assert!(s.board_setup_preview().is_none());
+    assert!(!s.available(CANCEL_BOARD_SETUP_PREVIEW));
+    unavailable(s.apply(CANCEL_BOARD_SETUP_PREVIEW, &json!({"plan_token":plan_token})), "unknown or replaced");
+    unavailable(
+        s.apply(SET_BOARD_SETUP, &json!({"setup":candidate,"plan_token":plan_token,"expected_revision":revision})),
+        "unknown, stale or replaced",
+    );
+}
+
 /// A malformed optional style is an input error, never a replacement preview capability.
 #[test]
 fn invalid_silkscreen_candidates_preserve_current_authority() {
@@ -134,7 +183,7 @@ fn invalid_silkscreen_candidates_preserve_current_authority() {
 
 /// Dense native through-hole definitions exercise pad count times copper span, not only tracks.
 #[test]
-fn over_budget_pad_reports_refuse_preview_and_apply_without_replacing_authority() {
+fn over_budget_pad_reports_refuse_preview_without_affecting_apply() {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     edit(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":64}));
@@ -176,8 +225,12 @@ fn over_budget_pad_reports_refuse_preview_and_apply_without_replacing_authority(
     let preview_error = s.apply(PREVIEW_BOARD_SETUP, &params).unwrap_err();
     let apply_error = s.apply(SET_BOARD_SETUP, &params).unwrap_err();
     assert!(matches!(preview_error, CommandError::Unavailable(_)));
-    assert_eq!(preview_error.to_string(), apply_error.to_string());
     assert!(preview_error.to_string().contains("complete board setup review exceeds its byte budget"));
+    assert!(matches!(apply_error, CommandError::Unavailable(_)));
+    assert_eq!(
+        apply_error.to_string(),
+        "populated layer changes require resolve_existing_footprints=true and compatible retained surface identities and layer roles"
+    );
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     assert_eq!(s.board_setup_preview().unwrap().plan_token.to_string(), old["plan_token"].as_str().unwrap());
 }
@@ -288,9 +341,15 @@ fn maximum_track_layer_review_is_complete_and_bounded() {
     }
     let candidate = reduced(&s);
     let snapshot = s.snapshot().unwrap();
-    let report = preview(&mut s, candidate, false);
+    let report = preview(&mut s, candidate.clone(), false);
     assert_eq!(report["changes"]["affected_objects"].as_array().unwrap().len(), crate::board::track::MAX_TRACKS);
-    assert!(serde_json::to_vec(&report).unwrap().len() < MAX_REPORT_BYTES);
+    assert!(serde_json::to_vec(&report["changes"]).unwrap().len() <= MAX_CHANGES_BYTES);
+    assert!(serde_json::to_vec(&report).unwrap().len() <= MAX_REPORT_BYTES);
+    let error = s.apply(SET_BOARD_SETUP, &json!({"setup":candidate,"expected_revision":s.revision()})).unwrap_err();
+    assert!(matches!(error, CommandError::InvalidParams(_)));
+    let reason = "tracks must stay on a copper layer of the board setup";
+    assert_eq!(error.to_string(), reason);
+    assert_eq!(report["refusal"], json!({"kind":"invalid_params","message":reason}));
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
 }
 
