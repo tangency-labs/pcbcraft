@@ -238,6 +238,31 @@ fn closing_during_a_save_decides_when_it_finishes() {
     }
 }
 
+/// A close held by a stalled file job can stop waiting for an open, returning to the Save
+/// question, or close without waiting for any job; a save can't be stopped while it may write.
+#[test]
+fn closing_can_stop_waiting_for_a_stalled_file_job() {
+    for (operation, button) in [("open", "Stop waiting"), ("open", "Close without waiting"), ("save", "Close without waiting")] {
+        let mut h = unsaved_project();
+        let revision = h.state().session().revision();
+        let _late = h.state_mut().files.stall(operation, Some("/stalled/board"), revision);
+        assert!(!request_close(&mut h));
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_eq!(h.query_by_label("Stop waiting").is_some(), operation == "open");
+        if button == "Stop waiting" {
+            press(&mut h, button);
+            assert!(!h.state().files.busy());
+            assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::Close)), "the project is still unsaved");
+            assert!(click_closes(&mut h, "Don't Save"));
+        } else {
+            assert!(click_closes(&mut h, button));
+            assert!(h.state().files.busy(), "the job is left to end with the process");
+            assert!(h.state().waiting.is_none());
+            assert!(matches!(h.state().dialog, Dialog::None), "no close decision remains");
+        }
+    }
+}
+
 /// Quit, Ctrl+Q and the integrated title bar's close control all ask the window to close, so
 /// they reach the same question.
 #[test]
