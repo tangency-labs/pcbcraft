@@ -1,7 +1,9 @@
 //! Storage-only footprint lock coverage. Valid geometry is authored through production commands;
 //! private snapshot edits supply metadata until a separate lock command/enforcement slice exists.
 use super::*;
-use crate::persistence::{decode_documents, decode_packed, diagnostic_snapshot, encode_documents, encode_packed, test_board_path};
+use crate::persistence::{
+    decode_documents, decode_packed, diagnostic_snapshot, encode_documents, encode_packed, encode_packed_documents, test_board_path,
+};
 use crate::{Project, Session};
 use std::sync::Arc;
 
@@ -18,15 +20,21 @@ fn with_lock(project: &Arc<Project>, locked: bool) -> Arc<Project> {
     with_placement_lock(project, project.board.footprints[0].id, locked)
 }
 
-/// Check every original placement by ID, including false in inspection and the typed view.
-fn assert_placement_locks(original: &Project, reopened: &Project, locked_id: u64) {
-    assert_eq!(reopened.board.footprints.len(), original.board.footprints.len());
+/// Check every original placement by ID in public session inspection and the typed view.
+fn assert_placement_locks(original: &Project, reopened: &Arc<Project>, locked_id: u64) {
+    let mut session = Session::default();
+    session.open_snapshot(reopened.clone());
+    let inspection = session.inspect();
+    let inspected = inspection["project"]["board"]["footprints"].as_array().unwrap();
+    assert_eq!(inspected.len(), original.board.footprints.len());
     let view = reopened.board_view(reopened.board_target().unwrap()).unwrap();
+    assert_eq!(view.footprints().count(), original.board.footprints.len());
     for footprint in &original.board.footprints {
-        let saved = reopened.board.footprints.iter().find(|saved| saved.id == footprint.id).unwrap();
+        let id = format!("footprint-{}", footprint.id);
+        let saved = inspected.iter().find(|entry| entry["id"].as_str() == Some(id.as_str())).unwrap();
         let expected = footprint.id == locked_id;
-        assert_eq!(saved.inspect(reopened)["locked"], expected, "placement {}", footprint.id);
-        assert_eq!(view.footprint(&format!("footprint-{}", footprint.id)).unwrap().locked, expected, "placement {}", footprint.id);
+        assert_eq!(saved["locked"], expected, "{id}");
+        assert_eq!(view.footprint(&id).unwrap().locked, expected, "{id}");
     }
 }
 
@@ -125,6 +133,12 @@ fn footprint_locks_require_their_own_nonempty_format() {
     let mut incomplete = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
     let marker_path = test_board_path(&incomplete);
     let mut marker: Value = serde_json::from_slice(&incomplete[&marker_path]).unwrap();
+    assert_eq!(marker["format"], "pcbcraft-board/1");
+    let mut noncanonical = incomplete.clone();
+    marker["footprints"][0]["locked"] = json!(false);
+    noncanonical.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
+    assert_eq!(encode_documents(decode_documents(&noncanonical).unwrap()).unwrap(), incomplete);
+    marker["footprints"][0].as_object_mut().unwrap().remove("locked");
     for (version, reason) in [
         (22, "Format 22 requires at least one profile"),
         (23, "unsupported board format or incompatible setup"),
@@ -193,7 +207,7 @@ fn configured_format_headers_require_their_own_content() {
     assert!(error.contains("requires an authored footprint lock"), "{error}");
 }
 
-/// Null, nonbooleans and duplicate keys are codec errors, never defaults or last-key-wins metadata.
+/// Null, nonbooleans and duplicates fail split decoding; a valid archive manifest does not mask a null flag.
 #[test]
 fn malformed_lock_flags_are_refused_before_project_construction() {
     let project = track::tests::routed_fixture().snapshot().unwrap();
@@ -209,12 +223,19 @@ fn malformed_lock_flags_are_refused_before_project_construction() {
         assert!(error.contains("bool"), "{value}: {error}");
     }
     let mut bad = saved.clone();
-    bad.insert(path, text.replacen("\"locked\":true", "\"locked\":true,\"locked\":false", 1).into_bytes());
+    bad.insert(path.clone(), text.replacen("\"locked\":true", "\"locked\":true,\"locked\":false", 1).into_bytes());
     assert!(decode_documents(&bad).unwrap_err().contains("duplicate field `locked`"));
+
+    let archive = encode_packed_documents(saved.clone()).unwrap();
+    assert_eq!(decode_packed(&archive).unwrap().documents, saved);
+    bad.insert(path.clone(), text.replacen("\"locked\":true", "\"locked\":null", 1).into_bytes());
+    let archive = encode_packed_documents(bad).unwrap();
+    let error = decode_packed(&archive).err().expect("the packed board's null lock must be refused");
+    assert!(error.contains(path.as_str()) && error.contains("invalid type: null") && error.contains("bool"), "{error}");
 }
 
-/// Format 34 retains optional origin, rules, zones, copper and copper locks, with or without
-/// material reports, and unlocking restores the remaining records without data loss.
+/// Format 34 retains earlier physical records with or without reports, but still rejects
+/// an invalid origin, malformed zones or copper on a layer outside the board setup.
 #[test]
 fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     for reports in [false, true] {
@@ -265,7 +286,28 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
         assert_eq!(encode_documents(with_lock(&loaded, false)).unwrap(), before);
         let packed = encode_packed(loaded).unwrap();
         assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+        if !reports {
+            let mut invalid = expected.clone();
+            invalid["placement_origin"]["id"] = json!(uuid::Uuid::nil());
+            assert_invalid_board_record(&saved, &invalid, "Unsupported placement origin format or invalid origin identity");
+            invalid = expected.clone();
+            invalid["zones"] = json!([]);
+            assert_invalid_board_record(&saved, &invalid, "and a nonempty array; format 20 requires zones");
+            invalid["zones"] = Value::Null;
+            assert_invalid_board_record(&saved, &invalid, "invalid type: null, expected a sequence");
+            invalid = expected.clone();
+            invalid["tracks"][0]["layer"] = json!(uuid::Uuid::from_u128(9042));
+            assert_invalid_board_record(&saved, &invalid, "tracks must stay on a copper layer of the board setup");
+        }
     }
+}
+
+/// Replace just the board document and check the validator's own diagnostic.
+fn assert_invalid_board_record(good: &crate::persistence::Documents, board: &Value, reason: &str) {
+    let mut trial = good.clone();
+    trial.insert(test_board_path(good), serde_json::to_vec(board).unwrap());
+    let error = decode_documents(&trial).unwrap_err();
+    assert!(error.contains(reason), "expected {reason}: {error}");
 }
 
 /// Add an unused synthetic report through the production setup command, without changing
@@ -283,8 +325,8 @@ fn add_material_report(session: &mut Session) {
 }
 
 /// Every combination of published report, profile, stack and via-intent fields remains optional
-/// in format 34. Report-only stays 25, lock-only and both use 34, and unlocking restores exact
-/// folder/archive bytes at the format required by the remaining authored content.
+/// in format 34. Report-only stays 25 and active locks use 34; clearing the stored flag in
+/// the test fixture restores the original split and packed bytes. A missing pin still fails.
 #[test]
 fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     use assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -364,6 +406,11 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
                     }
                     let loaded = decode_documents(&saved).unwrap();
                     assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
+                    if profiles && !reports && !stack && !via_intent {
+                        let mut invalid = expected;
+                        invalid["assembly_profiles"][0]["revision"] = json!(2);
+                        assert_invalid_board_record(&saved, &invalid, "reference pinned content revisions");
+                    }
                     let packed = encode_packed(loaded.clone()).unwrap();
                     assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
                     let unlocked = with_lock(&loaded, false);
@@ -375,7 +422,7 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     }
 }
 
-/// Clipboard refuses a non-first active lock in an otherwise valid mixed fragment.
+/// Clipboard refuses an otherwise valid multi-footprint fragment with one non-first active lock.
 /// An omitted or explicit false flag does not change the canonical unlocked encoding.
 #[test]
 fn clipboard_refuses_active_footprint_locks_without_changing_unlocked_fragments() {
@@ -438,12 +485,15 @@ fn clipboard_commands_refuse_footprint_locks_without_a_state_change() {
 
     let mut locked = Session::default();
     locked.open_snapshot(with_placement_lock(&original, locked_id, true));
+    locked.apply("project.rename", &json!({"name":"Locked clipboard control"})).unwrap();
+    add_redo_control(&mut locked);
     let args = json!({"board":board,"items":items,"expected_revision":locked.revision()});
     for command in [COPY, CUT] {
         assert_clipboard_refusal(&mut locked, command, &args);
     }
-    assert_placement_locks(&original, locked.project().unwrap(), locked_id);
+    assert_placement_locks(&original, &locked.snapshot().unwrap(), locked_id);
 
+    add_redo_control(&mut source);
     let paste = json!({"board":board,"text":cut_text,"reuse_components":true,"x_nm":0,"y_nm":10_000_000,"expected_revision":source.revision()});
     let mut envelope: Value = serde_json::from_str(cut_text).unwrap();
     assert_eq!(envelope["footprints"][1]["id"], locked_id);
@@ -455,7 +505,15 @@ fn clipboard_commands_refuse_footprint_locks_without_a_state_change() {
     assert_eq!(source.project().unwrap().board.footprints.len(), original.board.footprints.len());
 }
 
-/// A footprint-specific command error cannot replace or edit the snapshot or its undo/redo entries.
+/// Create a real Redo entry without changing the active snapshot or its existing Undo entry.
+fn add_redo_control(session: &mut Session) {
+    let before = session.snapshot().unwrap();
+    session.apply("project.rename", &json!({"name":"Clipboard redo control"})).unwrap();
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// A footprint-specific command error must preserve the snapshot and both populated history stacks.
 fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value) {
     let before = session.snapshot().unwrap();
     let bytes = encode_documents(before.clone()).unwrap();
@@ -463,6 +521,7 @@ fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value) 
     let root = session.history_root_revision();
     let undo = session.undo.clone();
     let redo = session.redo.clone();
+    assert!(undo.iter().any(Option::is_some) && redo.iter().any(Option::is_some), "{command} must exercise both history stacks");
     let error = session.execute(command, args).unwrap_err();
     assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{command}: {error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"), "{command}: {error}");

@@ -97,9 +97,9 @@ takes precedence, while other boards keep their encoding.
 Materials take sourced thermal conductivity, thermal expansion, dielectric
 strength and CTI reports, each with its unit in the field name, its test
 conditions and a required source; a CTI given with a material group must lie in
-that group's IEC 60664-1 band. Boards that use them require at least board format 25 and
-setup profiles use version 3, which older builds refuse; other boards keep their
-encoding.
+that group's IEC 60664-1 band. Reports require board format 25 or 34 and setup
+profile version 3. A board without reports still uses format 34 if a placed
+footprint has an active lock.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.
@@ -132,15 +132,16 @@ size and deletion changes, including indirect changes from footprint transforms
 and segment dragging. Mixed edits fail atomically. Clipboard copies retain locks;
 Cut refuses protected copper. Locks persist with board format 18 or a later
 supported format, and board-kind clipboard format 3 (4 with explicit via intent),
-which older builds refuse. Unlocked files keep their earlier
-encodings; undo/redo preserves both geometry and lock intent.
+which older builds refuse. Without active copper locks, the remaining authored
+fields determine the board format. Undo/redo preserves geometry and copper lock
+intent.
 
-Placed-footprint lock metadata survives native folder/archive reopen and is
-visible in inspection and typed board views. Active footprint locks require board
+Placed-footprint lock metadata survives native split-document and packed-archive
+round trips and is visible in inspection and typed board views. Active footprint locks require board
 format 34, which can also carry material reports and compatible earlier extensions
-under their existing validation rules. Report-only boards retain format 25;
-clearing the last footprint lock restores the format required by remaining content.
-Canonical saves omit false and preserve existing unlocked encodings.
+under their existing validation rules. Without active footprint locks, reports
+select format 25 and boards without reports use the format required by their
+remaining content. Canonical saves omit false.
 This is storage only: no footprint lock command, GUI toggle or edit protection yet.
 Clipboard and diagnostic single-file codecs explicitly refuse active footprint locks.
 
