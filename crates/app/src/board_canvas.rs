@@ -109,6 +109,8 @@ pub(super) struct Interaction {
     pub(super) zone_edit: Option<crate::board_drawing::Command>,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
+    pub(super) inspection: Option<(pcbcraft_engine::board::Pad, egui::Modifiers)>,
+    pub(super) extend_inspection: bool,
     pub(super) items: Option<pcbcraft_engine::board::clipboard::BoardSelection>,
     pub(super) edit: Option<Draft>,
     pub(super) reference_edit: Option<ReferenceDrag>,
@@ -144,6 +146,7 @@ pub(super) fn show(
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
     label: &str,
+    inspection: &[pcbcraft_engine::board::correspondence::Source],
     markers: &[(Point, bool)],
     unit: pcbcraft_chrome::units::Unit,
 ) -> Interaction {
@@ -194,13 +197,19 @@ pub(super) fn show(
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
-    let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
+    let pad_hover = response
+        .hover_pos()
+        .filter(|_| filters.pads)
+        .and_then(|pointer| crate::inspection_selection::pad_at(project, &footprints, camera, rect, pointer, &state.hidden_layers));
+    let drag_start =
+        pad_hover.is_none() && response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
     let reference_press = response.contains_pointer()
         && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary))
         && !modifiers.shift
         && !modifiers.ctrl
         && !modifiers.command;
-    let reference_enabled = enabled
+    let reference_enabled = pad_hover.is_none()
+        && enabled
         && !lost_focus
         && filters.footprints
         && state.draft.is_none()
@@ -332,7 +341,11 @@ pub(super) fn show(
         filters.graphics,
     );
     let enabled = enabled && !edge.consumed && !route.consumed && !zone.consumed;
+    let inspection_pick = (enabled && idle && response.clicked_by(PointerButton::Primary)).then_some(pad_hover).flatten();
+    let enabled = enabled && inspection_pick.is_none();
     let mut out = Interaction {
+        inspection: inspection_pick.map(|pad| (pad, modifiers)),
+        extend_inspection: extend_selection,
         error: source.zip(route.error),
         drawing_edit: edge.command,
         zone_edit: zone.command,
@@ -551,6 +564,7 @@ pub(super) fn show(
             }
         }
     }
+    let inspected_pads = crate::inspection_selection::pad_centers(project, &footprints, inspection);
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -643,6 +657,7 @@ pub(super) fn show(
             state.box_drag = None;
         }
     }
+    crate::inspection_selection::paint_pads(&p, camera, rect, &inspected_pads);
     if route.consumed {
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
     }
@@ -799,7 +814,7 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
 
 /// Whether a pad has visible copper; unconfigured bindings remain visible, while legacy markers
 /// follow the board's overall copper visibility just as they do in normal footprint rendering.
-fn pad_visible(pad: &PadView, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
+pub(super) fn pad_visible(pad: &PadView, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
     match &pad.copper_layers {
         Some(CopperLayers::Resolved { layers, .. }) => layers.iter().any(|layer| !hidden.contains(&layer.to_string())),
         Some(CopperLayers::Unconfigured { .. }) => true,

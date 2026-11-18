@@ -211,33 +211,7 @@ pub(super) struct Land {
 impl Land {
     /// Derive the copper contour from resolved corners and pad shape in board nanometers.
     pub(super) fn contour(&self) -> PadContour {
-        if self.shape == PadShape::Rectangle {
-            return PadContour { core: self.corners, radius: 0. };
-        }
-        let c = &self.corners;
-        let (ux, uy) = ((c[1].x_nm - c[0].x_nm) as f64, (c[1].y_nm - c[0].y_nm) as f64);
-        let (vx, vy) = ((c[3].x_nm - c[0].x_nm) as f64, (c[3].y_nm - c[0].y_nm) as f64);
-        let (w, h) = (ux.hypot(uy), vx.hypot(vy));
-        let radius = match self.shape {
-            PadShape::Rectangle => 0.,
-            PadShape::RoundedRectangle => (self.corner_radius_nm as f64).min(w.min(h) / 2.),
-            PadShape::Circle | PadShape::Oval => w.min(h).round() / 2.,
-        };
-        let (x, y) = if self.shape == PadShape::RoundedRectangle {
-            ((c[0].x_nm as f64 + c[2].x_nm as f64) / 2., (c[0].y_nm as f64 + c[2].y_nm as f64) / 2.)
-        } else {
-            (self.center.x_nm as f64, self.center.y_nm as f64)
-        };
-        let (iw, ih) = match self.shape {
-            PadShape::Circle => (0., 0.),
-            PadShape::Oval => ((w.round() / 2. - radius).max(0.), (h.round() / 2. - radius).max(0.)),
-            _ => ((w / 2. - radius).max(0.), (h / 2. - radius).max(0.)),
-        };
-        let core = [(-iw, -ih), (iw, -ih), (iw, ih), (-iw, ih)].map(|(a, b)| Point {
-            x_nm: (x + a * ux / w.max(1.) + b * vx / h.max(1.)).round() as i64,
-            y_nm: (y + a * uy / w.max(1.) + b * vy / h.max(1.)).round() as i64,
-        });
-        PadContour { core, radius }
+        PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm)
     }
 }
 

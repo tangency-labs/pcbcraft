@@ -613,13 +613,15 @@ impl PcbApp {
                         self.preferences.grid_opacity(true),
                         self.preferences.board_grid_style,
                         &label,
+                        &view.inspection,
                         &markers,
                         self.preferences.units,
                     )
                 })
             })
             .inner;
-        if (pick.clipboard.is_some()
+        if (pick.inspection.is_some()
+            || pick.clipboard.is_some()
             || pick.error.is_some()
             || pick.items.is_some()
             || pick.selection.is_some()
@@ -638,14 +640,22 @@ impl PcbApp {
             {
                 self.message = Some(error);
             }
+            if let Some((pad, modifiers)) = pick.inspection {
+                self.inspect_pad(pad, modifiers);
+            }
             if let Some(action) = pick.clipboard {
                 self.board_clipboard_action(ui.ctx(), action);
             }
+            let previous_inspection =
+                (pick.extend_inspection && (pick.items.is_some() || pick.selection.is_some())).then(|| self.views.active.inspection.clone());
             if let Some(items) = pick.items {
                 self.select_board_items(items);
             }
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(inspection) = previous_inspection {
+                self.views.active.inspection = inspection;
             }
             if let Some(footprint) = pick.reference_pick {
                 self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);

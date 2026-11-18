@@ -98,7 +98,7 @@ fn checkbox_filters_click_box_and_hover_shortcuts_without_changing_the_document(
     assert!(h.state().views.active.schematic.selected_leg.is_none());
     assert!(h.state().views.active.schematic.selection.is_empty());
     click(&mut h, "Reset");
-    assert_eq!(h.state().views.active.filters, Filters::default());
+    assert_eq!(h.state().views.active.filters, Filters { pins: true, ..Filters::default() });
     click(&mut h, "All items");
     assert!(
         !h.state().views.active.filters.symbols
@@ -107,9 +107,9 @@ fn checkbox_filters_click_box_and_hover_shortcuts_without_changing_the_document(
             && !h.state().views.active.filters.sheets
     );
     click(&mut h, "All items");
-    assert_eq!(h.state().views.active.filters, Filters::default());
+    assert_eq!(h.state().views.active.filters, Filters { pins: true, ..Filters::default() });
     assert_eq!(document(&h), before);
-    assert!(h.get_by_label("Select pins").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Select pins").accesskit_node().is_disabled());
 }
 
 /// Disabling a category invalidates an existing move and clears its destructive edit selection.
@@ -253,7 +253,7 @@ fn board_filters_prevent_footprint_selection_and_keep_graphics_independent() {
     h.run();
     assert!(h.state().views.active.board.selection.is_empty() && h.state().views.active.board.draft.is_none());
     assert!(h.state().views.active.filters.graphics);
-    assert!(h.get_by_label("Select pads").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Select pads").accesskit_node().is_disabled());
     let ctx = h.ctx.clone();
     let id = h.state().views.active.id().0;
     let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().id;
@@ -292,7 +292,7 @@ fn compact_filter_rows_remain_reachable_and_do_not_overlap_properties() {
     h.get_by_label("Reset").scroll_to_me();
     h.run();
     click(&mut h, "Reset");
-    assert_eq!(h.state().views.active.filters, Filters::default());
+    assert_eq!(h.state().views.active.filters, Filters { pins: true, ..Filters::default() });
     assert_eq!(document(&h), before);
 }
 

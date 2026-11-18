@@ -165,6 +165,8 @@ mod live {
         Point,
         /// Symbol, wire and optional named-net anchor ID lists, as the project's group commands take.
         Selection,
+        /// Qualified terminal/pad addresses, distinct from editable owner selections.
+        Inspection,
         /// A list of distinct footprint IDs.
         Footprints,
         /// Persistent document/object UUID, resolved against the addressed view before acting.
@@ -205,6 +207,9 @@ mod live {
                 Self::Integer { min, max, step } => json!({"type": "integer", "minimum": min, "maximum": max, "multipleOf": step}),
                 Self::Point => {
                     json!({"type": "object", "properties": {"x_nm": coordinate, "y_nm": coordinate}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
+                }
+                Self::Inspection => {
+                    json!({"type":"array","maxItems":crate::inspection_selection::MAX_TARGETS,"uniqueItems":true,"items":pcbcraft_engine::board::correspondence::Source::schema()})
                 }
                 Self::Selection => {
                     let mut labels = ids.clone();
@@ -250,6 +255,7 @@ mod live {
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
+                Self::Inspection => crate::inspection_selection::parse(value).is_ok(),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
             };
@@ -278,6 +284,7 @@ mod live {
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
                 Self::Point => "must be a point with whole-nanometre x_nm and y_nm within the schematic bounds".to_owned(),
+                Self::Inspection => "must be a bounded list of distinct qualified terminal or pad addresses".into(),
                 Self::Selection => "must contain unique symbol, wire and optional named-net anchor ID lists".to_owned(),
                 Self::Footprints => "must be a list of distinct footprint IDs".to_owned(),
             })
@@ -883,6 +890,8 @@ mod live {
             params: &[
                 VIEW,
                 setting("symbols", "Select schematic symbols", Kind::Bool),
+                setting("pins", "Inspect individual schematic pins", Kind::Bool),
+                setting("pads", "Inspect individual PCB pads", Kind::Bool),
                 setting("wires", "Select schematic wires", Kind::Bool),
                 setting("sheets", "Select hierarchical sheet symbols", Kind::Bool),
                 setting("labels", "Select hierarchical labels", Kind::Bool),
@@ -893,6 +902,28 @@ mod live {
                 setting("graphics", "Select board graphics", Kind::Bool),
                 setting("collapsed", "Collapse the filter card", Kind::Bool),
                 setting("open", "Show the filter card", Kind::Bool),
+            ],
+        },
+        WindowCommand {
+            id: "view.select_inspection",
+            title: "Inspect Pins or Pads",
+            summary: "Select qualified pins or pads for view-only inspection; no owner editing authority or counterpart selection is granted.",
+            params: &[
+                VIEW,
+                Param { name: "targets", summary: "Qualified addresses from project inspection", required: true, kind: Kind::Inspection },
+                Param {
+                    name: "expected_revision",
+                    summary: "Current editor project revision",
+                    required: true,
+                    kind: Kind::Integer { min: 0, max: i64::MAX, step: 1 },
+                },
+                Param {
+                    name: "history_root_revision",
+                    summary: "Current editor project opening",
+                    required: true,
+                    kind: Kind::Integer { min: 0, max: i64::MAX, step: 1 },
+                },
+                setting("mode", "Replace, add or toggle targets", Kind::Choice(&["replace", "add", "toggle"])),
             ],
         },
         WindowCommand {
@@ -1251,6 +1282,8 @@ mod live {
                     "panel_positions": crate::workspace_panels::inspect(&view.panels),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
+                    "inspection_selection": crate::inspection_selection::inspect(&view.inspection),
+                    "history_root_revision": app.session.history_root_revision(),
                     "selection": view.schematic.selection,
                     "selected_segment": view.schematic.selected_leg.as_ref().map(|leg| json!({"wire": leg.wire, "from": leg.route.get(leg.leg), "to": leg.route.get(leg.leg + 1)})),
                     "tool": view.schematic.tool.as_ref().map(tool_name),
@@ -1578,8 +1611,21 @@ mod live {
                         params["active"].as_bool() == Some(true),
                         params["visible"].as_bool(),
                     );
+                    self.views.sync(&self.session);
                 }
                 ("view.set_panel_position", Some((view, _)), _) => self.set_panel_position(view, params)?,
+                ("view.select_inspection", Some((view, _)), _) => {
+                    if params["expected_revision"].as_u64() != Some(self.session.revision())
+                        || params["history_root_revision"].as_u64() != Some(self.session.history_root_revision())
+                    {
+                        return Err("Inspection selection requires the current project revision and opening".into());
+                    }
+                    self.select_inspection(
+                        view,
+                        crate::inspection_selection::parse(&params["targets"])?,
+                        params["mode"].as_str().unwrap_or("replace"),
+                    )?;
+                }
                 ("view.set_selection_filters", Some((view, _)), _) => self.set_selection_filters(view, params)?,
                 ("view.set_grid", Some((view, _)), _) => self.set_view_grid(view, params["spacing_nm"].as_i64().unwrap_or_default()),
                 ("view.select" | "view.select_footprints", Some((view, _)), _)

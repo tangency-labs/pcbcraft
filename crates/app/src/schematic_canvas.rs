@@ -129,6 +129,8 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    InspectPin(pcbcraft_engine::schematic::Terminal, egui::Modifiers),
+    SelectWithInspection(Selection),
     BeginNoConnect,
     NoConnect(pcbcraft_engine::no_connect::Attachment, bool),
     InvalidNoConnect,
@@ -311,6 +313,7 @@ pub(crate) fn show(
     whole_wire_drag: bool,
     selected_sheet: Option<u64>,
     highlighted: &Selection,
+    inspection: &[pcbcraft_engine::board::correspondence::Source],
     filters: crate::selection_filters::Filters,
     input_enabled: bool,
     navigation_enabled: bool,
@@ -498,6 +501,7 @@ pub(crate) fn show(
     }
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
+    crate::inspection_selection::paint_pins(&painter, camera, rect, project, inspection);
     overlap_index.paint(ui, response.id, project, camera, rect);
     crate::no_connect::paint(ui, &painter, project, camera, rect, selected, highlighted);
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
@@ -554,6 +558,14 @@ pub(crate) fn show(
     let drag_pointer = ui
         .input(|i| i.pointer.hover_pos())
         .map(|pointer| ui.ctx().layer_transform_from_global(response.layer_id).map_or(pointer, |from_global| from_global * pointer));
+    if tool.is_none()
+        && filters.pins
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+        && crate::no_connect::pin_at(project, camera, rect, origin, selected).is_some()
+    {
+        return None;
+    }
     if input_enabled
         && let Some(drag) = response.dnd_hover_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
@@ -588,6 +600,17 @@ pub(crate) fn show(
     }
     if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_sheet, filters) {
         return click;
+    }
+    // Inspection cannot turn a press on a pin into a drag of its owning definition.
+    if input_enabled
+        && tool.is_none()
+        && filters.pins
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && ui
+            .input(|input| input.pointer.press_origin())
+            .is_some_and(|pointer| crate::no_connect::pin_at(project, camera, rect, pointer, selected).is_some())
+    {
+        return None;
     }
     // Handle active rectangles before context menus: a secondary drag consumes its release.
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
@@ -959,6 +982,7 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && !ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command)
         && let Some(pointer) = response.hover_pos()
+        && !(filters.pins && crate::no_connect::pin_at(project, camera, rect, pointer, selected).is_some())
         && !(filters.no_connects && crate::no_connect::marker_at(project, camera, rect, pointer).is_some())
         && (!filters.symbols || fields::at(ui, project, camera, rect, pointer).is_none())
         && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
@@ -1004,6 +1028,15 @@ pub(crate) fn show(
             return grab_symbol(project, camera, rect, pointer, true, selected);
         }
     }
+    if tool.is_none()
+        && filters.pins
+        && response.clicked_by(egui::PointerButton::Primary)
+        && let Some(pointer) = response.interact_pointer_pos()
+        && !(filters.no_connects && crate::no_connect::marker_at(project, camera, rect, pointer).is_some())
+        && let Some(pin) = crate::no_connect::pin_at(project, camera, rect, pointer, selected)
+    {
+        return Some(Click::InspectPin(pin, ui.input(|input| input.modifiers)));
+    }
     // Field editing and body properties precede click-to-wire for enabled symbols.
     // Explicit placement/wiring tools retain their own double click.
     if tool.is_none()
@@ -1021,28 +1054,27 @@ pub(crate) fn show(
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
+        let choose = |items| {
+            if ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command) {
+                Click::SelectWithInspection(items)
+            } else {
+                Click::SelectItems(items)
+            }
+        };
         if let Some(target) = filters.no_connects.then(|| crate::no_connect::marker_at(project, camera, rect, pointer)).flatten() {
             let modifiers = ui.input(|i| i.modifiers);
-            return Some(Click::SelectItems(selected.combine(
-                &Selection::one_no_connect(target),
-                modifiers.shift,
-                modifiers.ctrl || modifiers.command,
-            )));
+            return Some(choose(selected.combine(&Selection::one_no_connect(target), modifiers.shift, modifiers.ctrl || modifiers.command)));
         }
         if filters.symbols
             && let Some(field) = fields::at(ui, project, camera, rect, pointer)
         {
             let modifiers = ui.input(|i| i.modifiers);
-            return Some(Click::SelectItems(selected.combine(
-                &Selection::one_symbol(field.symbol),
-                modifiers.shift,
-                modifiers.ctrl || modifiers.command,
-            )));
+            return Some(choose(selected.combine(&Selection::one_symbol(field.symbol), modifiers.shift, modifiers.ctrl || modifiers.command)));
         }
         let hit = selection::at(ui, project, camera, rect, pointer, filters);
         let modifiers = ui.input(|i| i.modifiers);
         if !hit.no_connects.is_empty() {
-            return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
+            return Some(choose(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
         }
         if !modifiers.shift
             && !modifiers.ctrl
@@ -1063,7 +1095,7 @@ pub(crate) fn show(
         {
             return Some(Click::SelectLeg(leg));
         }
-        return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
+        return Some(choose(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
     }
     match tool? {
         Tool::PlaceSymbol { definition, unit, value, turns, .. } => placement_preview(
