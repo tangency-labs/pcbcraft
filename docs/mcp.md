@@ -183,7 +183,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api"]}`.
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,
@@ -277,6 +277,69 @@ instead. The cross-revision check sees only recorded contracts, so a changed
 meaning still needs review, and it cannot tell whether a raise was the right
 decision; a review must still read
 every change to `command-contracts.json`.
+
+## Error codes
+
+A tool call that fails after its arguments were accepted is still a result with
+`isError: true` whose first text part is the message, as before. (Argument
+faults caught by the MCP tool validator, such as a missing `command`, remain a
+JSON-RPC `invalid params` error without a PCBCraft code.) A second text part, also given as the result's
+`structuredContent`, reads
+`{"error": {"code": "stale_revision", "message": "...", "details": {"current_revision": 12}}}`.
+Branch on `code`, never on the message: messages may be reworded, codes are
+not. `details` is an object, empty unless the table says otherwise; its keys are
+only ever added. The live editor endpoint answers a failed request with
+`{"error": message, "code": ..., "details": {...}}`; a reply without a code, from
+an older editor, reads as `unavailable`. A well-formed code from a newer editor
+that this list does not have yet is passed through unchanged; treat a code you
+do not know like `unavailable`. Missing or non-object details in a live reply
+read as an empty object. The table describes failures produced by this build;
+a malformed reply from another editor may omit the facts it describes.
+
+| Code | Meaning |
+| --- | --- |
+| `unknown_command` | No command has the requested id. |
+| `invalid_params` | The parameters are a non-null scalar or array, name a parameter the command does not describe, leave out a required one, have the wrong type or range, or fail the command's own checks. |
+| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
+| `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
+| `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
+| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
+| `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
+| `denied` | The person declined the request in the editor's assistant. |
+| `cancelled` | The request was stopped, timed out or lost its connection before it finished; nothing changed. |
+| `busy` | The editor is already running a request of the same kind, such as a design check, or has reached a worker or request capacity limit; retry later. |
+| `no_reply` | No usable reply came back from the editor, so the command may have run; inspect before retrying an edit. |
+| `connection_failed` | Connecting or sending the request failed. A failed send may still have delivered a complete request; inspect before retrying an edit. |
+| `invalid_request` | The request to the live editor is malformed: an unknown method or a missing command id. |
+
+Project commands that take `expected_revision` check it first, so a stale edit
+reports `stale_revision` whatever else is wrong with its parameters; a malformed
+revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
+query keeps its existing `stale` plan outcome for otherwise valid requests. The
+part and library document revisions that some window commands take are reported
+as `unavailable` when stale, for now.
+At direct command and live control dispatch, catalog validation treats omitted
+or null parameters as an empty map; required keys still apply. Other non-object
+parameter values reaching that validation are `invalid_params`. At the outer
+MCP `execute` boundary, omit `arguments.params` to use the same empty-map
+behavior; a supplied `arguments.params: null` is a JSON-RPC `invalid params`
+error. Deferred work can be cancelled or refused by capacity or live host policy
+before engine validation. Once admitted, deferred copper checks stale revision,
+then catalog parameters, then board identity like headless execution.
+After live host policy permits a window request, its catalog reports
+`unknown_command` for an unknown id and `invalid_params` for unknown keys,
+missing required keys or invalid value types. A host-policy refusal remains
+`unavailable`, before that classification. UI commands use their separate
+input lifecycle: their catalog checks ids, parameter names and required keys;
+other handler refusals, including UI value checks, are `unavailable` for now.
+The list is locked in
+[`docs/schemas/error-codes-v1.json`](schemas/error-codes-v1.json): codes are
+only appended, never renamed, removed or reused; the engine tests fail when the
+lock and the code disagree. A code that is no longer produced stays listed. A failure may move to a more
+specific code in a later version: some lookups and limits still report
+`invalid_params`, and some state checks `unavailable`, so treat those two as
+the general cases they are. The capability
+`error_codes` says a build reports them.
 
 ## Headless MCP
 

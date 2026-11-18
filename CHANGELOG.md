@@ -29,6 +29,17 @@ Placing a via at the current fixed route head now validates that exact location,
 even when an earlier, longer route preview remains visible, so invalid vias are
 rejected before changing layers.
 
+Failed MCP calls and live editor replies now carry a stable error code, such
+as `stale_revision`, `not_found` or `cap_exceeded`, with machine-readable
+details, so an agent can act on a failure without parsing its message. The
+codes are published in [error codes](docs/mcp.md#error-codes) and are never
+renamed or reused. Messages are unchanged, except that `ui.` commands now
+refuse unknown keys, missing required keys and non-null scalar or array
+parameter lists with the same wording as window commands. Omitted or null
+parameters retain their empty-map behavior. A stale `expected_revision` now
+precedes other edit parameter problems. Read-only route planning keeps its
+`stale` plan outcome.
+
 Preferences → Appearance → **Panel style** switches the workspace shell
 between **Floating** cards and a **Compact** layout, following SolidCraft. In
 Compact the ribbon, workspace tile, Browser, Net Inspector, docked panels and

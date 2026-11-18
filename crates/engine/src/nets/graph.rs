@@ -168,7 +168,7 @@ impl Graph {
             if self.endpoints.iter().any(|((id, _), current)| *id == sheet.id() && current == &anchor) {
                 return Ok(anchor);
             }
-            return Err(CommandError::InvalidParams("Unknown or foreign typed net anchor in the addressed sheet.".into()));
+            return Err(CommandError::NotFound("Unknown or foreign typed net anchor in the addressed sheet.".into()));
         }
         let endpoint = WireEndpoint::parse(value)
             .filter(|end| !matches!(end, WireEndpoint::Junction(_)))
@@ -176,7 +176,7 @@ impl Graph {
         self.endpoints
             .get(&(sheet.id(), endpoint))
             .cloned()
-            .ok_or_else(|| CommandError::InvalidParams("Unknown or foreign net anchor in the addressed sheet.".into()))
+            .ok_or_else(|| CommandError::NotFound("Unknown or foreign net anchor in the addressed sheet.".into()))
     }
 
     /// Find the current network for a typed anchor without inferring one from names or geometry.

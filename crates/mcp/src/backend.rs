@@ -1,7 +1,9 @@
 //! Dispatch MCP tools to a headless session or an open desktop editor.
 
-use pcbcraft_engine::{Project, Session, board::Pad, catalog, schematic::Terminal};
+use pcbcraft_engine::{Project, Session, board::Pad, catalog, error_codes::ErrorCode, schematic::Terminal};
 use serde_json::{Value, json};
+
+use crate::Failure;
 
 /// Command namespaces that act on an open editor window instead of the project document.
 /// Only a live editor can run them. Presentation commands retain document history; `file.save`
@@ -15,18 +17,30 @@ pub fn is_window_command(id: &str) -> bool {
 }
 
 /// The refusal a session without a window gives for a window command or editor inspection.
-pub(crate) fn needs_live_editor(what: &str) -> String {
-    format!(
-        "{what} acts on an open PCBCraft editor window, and this MCP session has none. \
+pub(crate) fn needs_live_editor(what: &str) -> Failure {
+    Failure::new(
+        ErrorCode::NeedsLiveEditor,
+        format!(
+            "{what} acts on an open PCBCraft editor window, and this MCP session has none. \
 In the desktop app choose Help → Connect AI assistants…, then connect with `pcbcraft-cli mcp --connect PORT`."
+        ),
     )
+}
+
+/// The `command` of an `engine.execute` request.
+pub(crate) fn command_id(params: &Value) -> Result<&str, Failure> {
+    params["command"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing `command`"))
 }
 
 /// Something that answers `engine.commands`, `engine.execute`, `project.inspect`,
 /// `project.cross_probe`, `project.resolve_counterparts` and `editor.inspect`.
 pub trait Backend {
-    /// Run an engine or project operation and return its result or a tool error.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
+    /// Run an engine or project operation and return its result or a coded tool error.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure>;
+    /// Whether discovery describes an editor, rather than a headless project session.
+    fn has_live_editor(&self) -> bool {
+        false
+    }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
 }
@@ -48,7 +62,7 @@ impl Headless {
 
 impl Backend for Headless {
     /// Apply the requested command and return either inspection or the resulting revision.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
         call_session(&mut self.session, method, &params)
     }
 
@@ -62,11 +76,11 @@ impl Backend for Headless {
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
 /// because a bare session has no window to act on. Clipboard/export queries retain their
 /// requested data even when project inspection is suppressed.
-pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, String> {
+pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
     match method {
         "engine.commands" => Ok(json!(catalog().iter().map(|c| c.to_json()).collect::<Vec<_>>())),
         "engine.execute" => {
-            let id = params["command"].as_str().ok_or("missing `command`")?;
+            let id = command_id(params)?;
             if is_window_command(id) {
                 return Err(needs_live_editor(&format!("`{id}`")));
             }
@@ -98,52 +112,56 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                 )
             {
-                session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())
+                session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(Failure::from)
             } else {
-                session.execute(id, &params["params"]).map_err(|e| e.to_string())
+                session.execute(id, &params["params"]).map_err(Failure::from)
             }
         }
         "project.inspect" => Ok(session.inspect()),
         "project.cross_probe" => cross_probe(session, params),
         "project.resolve_counterparts" => {
-            let source = pcbcraft_engine::board::correspondence::Source::parse(&params["source"])?;
-            let revision = params["expected_revision"].as_u64().ok_or("expected_revision must be an unsigned integer")?;
+            let source = pcbcraft_engine::board::correspondence::Source::parse(&params["source"])
+                .map_err(|message| Failure::new(ErrorCode::InvalidParams, message))?;
+            let revision = params["expected_revision"]
+                .as_u64()
+                .ok_or_else(|| Failure::new(ErrorCode::InvalidParams, "expected_revision must be an unsigned integer"))?;
             let mut result = session.resolve_counterparts(source, revision).inspect();
             result["revision"] = json!(session.revision());
             result["opening"] = json!(session.history_root_revision());
             Ok(result)
         }
         "editor.inspect" => Err(needs_live_editor("Editor inspection")),
-        _ => Err(format!("unknown method `{method}`")),
+        _ => Err(Failure::new(ErrorCode::InvalidRequest, format!("unknown method `{method}`"))),
     }
 }
 
 /// Resolve a pin or pad against the open project's indexes. Missing mappings return null.
-fn cross_probe(session: &Session, params: &Value) -> Result<Value, String> {
-    let project = session.project().ok_or("no project is open")?;
+fn cross_probe(session: &Session, params: &Value) -> Result<Value, Failure> {
+    let invalid = |message: &str| Failure::new(ErrorCode::InvalidParams, message);
+    let project = session.project().ok_or_else(|| Failure::new(ErrorCode::Unavailable, "no project is open"))?;
     match (params.get("terminal"), params.get("pad")) {
         (Some(terminal), None) => {
-            let terminal = Terminal::parse(terminal).ok_or("invalid schematic terminal")?;
+            let terminal = Terminal::parse(terminal).ok_or_else(|| invalid("invalid schematic terminal"))?;
             Ok(json!({"pad": project.pad_for_terminal(terminal).map(Pad::inspect)}))
         }
         (None, Some(pad)) => {
             let object = pad
                 .as_object()
                 .filter(|object| object.keys().all(|key| ["board", "footprint", "pad"].contains(&key.as_str())))
-                .ok_or("invalid board pad")?;
+                .ok_or_else(|| invalid("invalid board pad"))?;
             let board = match object.get("board") {
                 None => project.resolve_board(None),
-                Some(id) => project.resolve_board(Some(id.as_str().ok_or("invalid board ID")?)),
+                Some(id) => project.resolve_board(Some(id.as_str().ok_or_else(|| invalid("invalid board ID"))?)),
             }
-            .map_err(|error| error.to_string())?;
+            .map_err(Failure::from)?;
             let pad = Pad::parse(
-                object.get("footprint").and_then(Value::as_str).ok_or("invalid footprint")?,
-                object.get("pad").and_then(Value::as_str).ok_or("invalid pad")?,
+                object.get("footprint").and_then(Value::as_str).ok_or_else(|| invalid("invalid footprint"))?,
+                object.get("pad").and_then(Value::as_str).ok_or_else(|| invalid("invalid pad"))?,
             )
-            .ok_or("invalid board pad")?
+            .ok_or_else(|| invalid("invalid board pad"))?
             .on_board(board.board);
             Ok(json!({"terminal": project.terminal_for_pad(pad).map(Terminal::inspect)}))
         }
-        _ => Err("provide either a terminal or a pad".to_owned()),
+        _ => Err(invalid("provide either a terminal or a pad")),
     }
 }

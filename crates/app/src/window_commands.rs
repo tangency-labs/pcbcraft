@@ -7,7 +7,7 @@ use egui::Context;
 
 use crate::PcbApp;
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) use live::{inspect_editor, window_catalog};
+pub(super) use live::{check_command, inspect_editor, window_catalog};
 
 /// A contextual panel that a window shows or hides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1076,6 +1076,17 @@ mod live {
         CATALOG.iter().map(|command| command.to_json()).collect()
     }
 
+    /// Refuse an unknown window command or parameters its description rules out, with the
+    /// codes engine commands use, before any handler runs.
+    pub(crate) fn check_command(id: &str, params: &Value) -> Result<(), pcbcraft_mcp::Failure> {
+        use pcbcraft_engine::error_codes::ErrorCode;
+        let command = CATALOG
+            .iter()
+            .find(|command| command.id == id)
+            .ok_or_else(|| pcbcraft_mcp::Failure::new(ErrorCode::UnknownCommand, format!("unknown command `{id}`")))?;
+        command.check(params).map_err(|message| pcbcraft_mcp::Failure::new(ErrorCode::InvalidParams, message))
+    }
+
     /// Show a theme the way window commands name it.
     fn theme_name(theme: ThemeChoice) -> &'static str {
         match theme {
@@ -1837,6 +1848,89 @@ mod live {
                     "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
                     changes.join("\n")
                 ),
+            }
+        }
+
+        /// With host policy permitting dispatch, window and UI catalogs refuse unknown keys
+        /// and array parameter lists with `invalid_params`, and unknown ids with
+        /// `unknown_command`, before handlers run.
+        #[test]
+        fn live_window_and_ui_refusals_carry_published_codes() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let revision = app.session.revision();
+            let mut ids: Vec<String> = CATALOG.iter().map(|command| command.id.to_owned()).collect();
+            ids.extend(crate::ui_automation::catalog().iter().map(|command| command["id"].as_str().unwrap().to_owned()));
+            let mut code = |command: &str, params: Value| {
+                let request = json!({"method": "engine.execute", "params": {"command": command, "params": params}});
+                let failure =
+                    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request).expect_err(command);
+                (failure.code().to_owned(), failure.message().to_owned())
+            };
+            for id in &ids {
+                let unknown = code(id, json!({"no_such_parameter": 1}));
+                assert_eq!(unknown, ("invalid_params".into(), format!("`{id}` has no parameter `no_such_parameter`")), "{id}");
+                let non_object = code(id, json!([1]));
+                assert_eq!(non_object, ("invalid_params".into(), format!("`{id}` takes an object of parameters")), "{id}");
+            }
+            for id in ["view.no_such_command", "ui.no_such_command"] {
+                assert_eq!(code(id, json!({})), ("unknown_command".into(), format!("unknown command `{id}`")));
+            }
+            assert_eq!(app.session.revision(), revision);
+        }
+
+        /// Omitted and null parameters keep the empty-map convention; required keys still apply.
+        #[test]
+        fn live_null_parameters_keep_the_empty_map_convention() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let before = app.session.inspect();
+            for given in [None, Some(Value::Null), Some(json!({}))] {
+                for id in ["ui.inspect", "ui.cancel", "app.set_preferences", "view.center", "ui.handles"] {
+                    let mut request = json!({"method":"engine.execute","params":{"command":id}});
+                    if let Some(params) = &given {
+                        request["params"]["params"] = params.clone();
+                    }
+                    let result = pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request);
+                    if matches!(id, "view.center" | "ui.handles") {
+                        let error = result.unwrap_err();
+                        assert_eq!(error.code(), "invalid_params");
+                        assert!(error.message().starts_with(&format!("`{id}` needs `")), "{error}");
+                    } else {
+                        result.unwrap();
+                    }
+                    assert_eq!(app.session.inspect(), before);
+                }
+            }
+        }
+
+        /// Window policy can refuse before catalog classification; UI keeps its separate lifecycle.
+        #[test]
+        fn live_window_policy_precedes_catalog_classification() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let before = app.session.inspect();
+            for (id, params, code, reason) in [
+                ("view.no_such_command", json!({}), "unknown_command", "unknown command"),
+                ("view.center", json!([1]), "invalid_params", "takes an object of parameters"),
+            ] {
+                let request = json!({"method":"engine.execute","params":{"command":id,"params":params}});
+                app.dialog = crate::Dialog::About;
+                let blocked =
+                    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request).unwrap_err();
+                assert_eq!(blocked.code(), "unavailable");
+                assert!(blocked.message().contains("Finish the current dialog or file operation"), "{blocked}");
+                let ui = json!({"method":"engine.execute","params":{"command":"ui.inspect","params":null}});
+                pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &ui).unwrap();
+                app.dialog = crate::Dialog::None;
+                let permitted =
+                    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request).unwrap_err();
+                assert_eq!(permitted.code(), code);
+                assert!(permitted.message().contains(reason), "{permitted}");
+                assert_eq!(app.session.inspect(), before);
             }
         }
 
