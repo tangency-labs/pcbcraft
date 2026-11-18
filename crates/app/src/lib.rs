@@ -115,6 +115,7 @@ const ASSISTANT_SETTINGS_KEY: &str = "pcbcraft.assistant.settings";
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+const SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::A);
 const COMMAND_O: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const COMMAND_S: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
@@ -2013,7 +2014,7 @@ impl PcbApp {
                     self.views.active.board.drawing.delete_requested = true;
                 }
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) && !board_clipboard::busy(&self.views.active.board) {
+            if pressed(&SELECT_ALL) && !board_clipboard::busy(&self.views.active.board) {
                 self.select_all_board();
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
@@ -2058,6 +2059,9 @@ impl PcbApp {
                 self.cycle_grid(true);
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
+            if self.views.active.workspace == Workspace::Schematic && self.views.active.schematic.tool.is_none() && pressed(&SELECT_ALL) {
+                self.select_all_schematic();
+            }
             if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Backspace)) {
                 self.leave_sheet();
                 return;
@@ -2684,6 +2688,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     }
     list.push(("Edit", "Undo", key(&COMMAND_Z)));
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
+    list.push(("Edit", "Select all", key(&SELECT_ALL)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Place hierarchical sheet", key(&ADD_SHEET)));
     list.push(("Schematic", "Place local label", key(&ADD_NET_LABEL)));

@@ -67,6 +67,105 @@ fn document(h: &Harness<'_, PcbApp>) -> DocumentState {
     }
 }
 
+/// Select All includes every supported category, obeys view filters and leaves saved bytes,
+/// revision, dirty state and both directions of document history untouched.
+#[test]
+fn select_all_shortcut_selects_mixed_schematic_items_through_filters() {
+    for modifiers in [Modifiers::COMMAND, Modifiers { ctrl: true, command: true, ..Modifiers::NONE }] {
+        let mut h = fixture();
+        let part = h.state().session.project().unwrap().symbols()[0].component_id();
+        let revision = h.state().session.revision();
+        h.state_mut().run("schematic.set_no_connect", &json!({"target":{"part":part,"terminal":"1"},"marked":true,"expected_revision":revision}));
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .run("schematic.place_net_label", &json!({"name":"SENSE","style":"local","x_nm":0,"y_nm":10*GRID_NM,"expected_revision":revision}));
+        h.run();
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        let before = document(&h);
+        h.key_press_modifiers(modifiers, Key::A);
+        h.run();
+        let selection = &h.state().views.active.schematic.selection;
+        assert_eq!((selection.symbols.len(), selection.wires.len(), selection.net_labels.len(), selection.no_connects.len()), (1, 1, 1, 1));
+        assert!(!h.state().parts.open);
+        let view = h.state().views.active.id();
+        h.state_mut().set_selection_filters(view, &json!({"symbols":false,"labels":false,"no_connects":false})).unwrap();
+        h.key_press_modifiers(modifiers, Key::A);
+        h.run();
+        let selection = &h.state().views.active.schematic.selection;
+        assert_eq!((selection.symbols.len(), selection.wires.len(), selection.net_labels.len(), selection.no_connects.len()), (0, 1, 0, 0));
+        assert_eq!(document(&h), before);
+    }
+}
+
+/// Text fields, dialogs and active canvas gestures keep their input; Select All must not
+/// replace a partial selection or publish the property draft while those owners are active.
+#[test]
+fn select_all_shortcut_respects_text_dialog_and_drawing_ownership() {
+    let mut h = fixture();
+    let symbol = h.state().session.project().unwrap().symbols()[0].id();
+    h.state_mut().select(Selection::one_symbol(symbol));
+    h.state_mut().properties_open = true;
+    h.run();
+    let selection = h.state().views.active.schematic.selection.clone();
+    let before = document(&h);
+    click(&mut h, "Value");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_label("Value").type_text("22k");
+    h.run();
+    assert_eq!(h.get_by_label("Value").value().as_deref(), Some("22k"));
+    assert_eq!(h.state().views.active.schematic.selection, selection);
+    assert_eq!(document(&h), before);
+    click(&mut h, "Reset changes");
+    click(&mut h, "Preferences");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run();
+    assert_eq!(h.state().views.active.schematic.selection, selection);
+    click(&mut h, "OK");
+    h.key_press(Key::W);
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run();
+    assert_eq!(h.state().views.active.schematic.selection, selection);
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+    assert_eq!(document(&h), before);
+}
+
+/// The menu advertises the platform shortcut without clipping, and both activation paths
+/// produce the same selection in normal/compact dark/light layouts.
+#[test]
+fn select_all_menu_and_shortcut_match_in_both_themes_and_widths() {
+    for (width, dark) in [(1400., true), (1400., false), (760., true), (760., false)] {
+        let mut h = fixture();
+        h.set_size(egui::vec2(width, 900.));
+        h.state_mut().preferences.theme = if dark { ThemeChoice::Dark } else { ThemeChoice::Light };
+        h.run();
+        let before = document(&h);
+        let at = h.get_by_label("Schematic canvas").rect().left_top() + egui::vec2(40., 40.);
+        h.hover_at(at);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+            h.run();
+        }
+        let row = h.get_by_label("Select all").rect();
+        assert!(h.ctx.content_rect().contains_rect(row));
+        assert!(row.width() < 300.);
+        let key = h.ctx.format_shortcut(&SELECT_ALL);
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text == key)));
+        click(&mut h, "Select all");
+        let selected = h.state().views.active.schematic.selection.clone();
+        assert_eq!((selected.symbols.len(), selected.wires.len()), (1, 1));
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.active.schematic.selection.is_empty());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run();
+        assert_eq!(h.state().views.active.schematic.selection, selected);
+        assert_eq!(document(&h), before);
+    }
+}
+
 /// A full canvas box selects only enabled categories; disabled symbols cannot be moved by hover M.
 #[test]
 fn checkbox_filters_click_box_and_hover_shortcuts_without_changing_the_document() {

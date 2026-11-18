@@ -53,6 +53,7 @@ here.
 | Ctrl+Q | Quit | Desktop only; asks about unsaved changes |
 | Ctrl+Z | Undo | When the undo history has an entry |
 | Ctrl+Y | Redo | When the redo history has an entry |
+| Ctrl+A | Select all | Idle focused canvas; selects supported items on the current sheet and respects Selection filters |
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste | Canvas owns input; uses the OS clipboard, so fields keep normal editing |
 | Ctrl+Shift+V | Paste with options | Reference, named-net and original-position choices |
 | Ctrl+D | Duplicate | Duplicates the selection without replacing the clipboard |
@@ -60,7 +61,7 @@ here.
 | Ctrl+U | Switch units | Toggles mil and mm; presentation only, no undo step |
 | Esc | Back from Home | On the Home screen only; see cancellation order above |
 
-Ctrl+C/X/V and Ctrl+D are inactive on the Home screen, while a dialog or popup
+Ctrl+A, Ctrl+C/X/V and Ctrl+D are inactive on the Home screen, while a dialog or popup
 is open, while the parts panel is modal, and while a definition editor or text
 field owns input.
 
