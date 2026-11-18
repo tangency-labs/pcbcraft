@@ -141,11 +141,14 @@ project's unsaved changes are saved or discarded in the editor, and every
 command waits while an inline text edit, dialog or file operation is open.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
 clients can identify the state holding command input. Its `file` object gives
-the open project's `location` (`path` and `format`, or null while Untitled), the
+the open project's saved `location` (`path` and `format`), the
 running `operation` (`id`, `kind` and known `destination`) and the `last`
 result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`, `path`,
 `error`). Jobs run one at a time; a `last.id` beyond the one a client started
-means a later job replaced its result.
+means a later job replaced its result. `location` is null until the project has been
+opened from or saved to a location, whatever its name: a renamed project that was
+never saved has none, while a saved `Untitled.pc` has one. Use `file.save` when
+`location` is present and `file.save_as` when it is null.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its

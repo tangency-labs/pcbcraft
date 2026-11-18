@@ -1040,7 +1040,7 @@ mod live {
         WindowCommand {
             id: "file.save",
             title: "Save",
-            summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. Use file.save_as for an Untitled project.",
+            summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. Use file.save_as while inspect_editor's file.location is null.",
             params: &[],
         },
         WindowCommand {
