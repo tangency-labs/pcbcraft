@@ -2,6 +2,11 @@ use super::*;
 use crate::{CONNECT_PINS, CommandError, PLACE_SYMBOL, library::sources, persistence};
 use std::sync::Arc;
 
+/// Exercise the offline report path unless a test explicitly drives catalog authority.
+fn preview(item: &Item, pins: &[PinRemap], revision: Option<u32>, project: Option<&Project>) -> Result<Value, String> {
+    super::preview(item, pins, revision, project, None)
+}
+
 /// Drive project edits through catalog validation and runtime revision authority.
 fn edit(project: &mut crate::Session, command: &str, mut params: Value) {
     params["expected_revision"] = json!(project.revision());
@@ -236,28 +241,34 @@ fn pin_remap_cold_graph_budget_counts_unrelated_direct_contacts() {
     }
 }
 
-/// Exercise resolved intervals, not just a raw wire count or the arithmetic helper. Diagonal
-/// intervals expand to 130 physical segments per wire despite storing only 64 bends each.
+/// Add unrelated diagonal routes expanding to 130 physical segments per wire after resolution.
+fn graph_route_fixture(project: &Project, target: crate::SheetTarget, count: i64) -> Project {
+    use crate::schematic::{Point, Wire, WireEndpoint};
+    let mut snapshot = graph_marker_fixture(project, target, Point { x_nm: 0, y_nm: 0 });
+    let sheet = Arc::make_mut(&mut snapshot.sheets).last_mut().unwrap();
+    assert_eq!(sheet.sheet_id, target.id());
+    for index in 0..count {
+        let point = |step: i64| Point { x_nm: (step + 1) * 1_270_000, y_nm: (step + 100 * index + 1) * 1_270_000 };
+        let start = 21_000 + index as u64 * 3;
+        Arc::make_mut(&mut sheet.junctions).extend([(start, point(0)), (start + 1, point(65))]);
+        Arc::make_mut(&mut sheet.wires).push(Wire {
+            ordinal: start + 2,
+            endpoints: [WireEndpoint::Junction(start), WireEndpoint::Junction(start + 1)],
+            bends: Some((1..=64).map(point).collect()),
+        });
+    }
+    snapshot
+}
+
+/// Exercise resolved intervals, not just a raw wire count or the arithmetic helper.
 #[test]
 fn pin_remap_cold_graph_budget_counts_unrelated_resolved_routes() {
-    use crate::schematic::{Point, Wire, WireEndpoint};
     let (mut project, editor) = fixture();
     edit(&mut project, crate::sheets::CREATE_SHEET, json!({"name":"Routes"}));
     let target = project.project().unwrap().sheets().last().unwrap().target;
     let original = project.snapshot().unwrap();
     for (count, refusal) in [(28, None), (30, Some("Pin remap graph preparation budget exceeded."))] {
-        let mut snapshot = graph_marker_fixture(&original, target, Point { x_nm: 0, y_nm: 0 });
-        let sheet = Arc::make_mut(&mut snapshot.sheets).last_mut().unwrap();
-        for index in 0..count {
-            let point = |step: i64| Point { x_nm: (step + 1) * 1_270_000, y_nm: (step + 100 * index + 1) * 1_270_000 };
-            let start = 21_000 + index as u64 * 3;
-            Arc::make_mut(&mut sheet.junctions).extend([(start, point(0)), (start + 1, point(65))]);
-            Arc::make_mut(&mut sheet.wires).push(Wire {
-                ordinal: start + 2,
-                endpoints: [WireEndpoint::Junction(start), WireEndpoint::Junction(start + 1)],
-                bends: Some((1..=64).map(point).collect()),
-            });
-        }
+        let snapshot = graph_route_fixture(&original, target, count);
         let sheet = snapshot.for_sheet(target).unwrap();
         assert!(sheet.wires().iter().all(|wire| sheet.wire_path(wire).len() == 131));
         check_graph_command(&mut project, &editor.snapshot(), snapshot, refusal);
@@ -484,6 +495,13 @@ fn pin_remap_distinguishes_missing_unplaced_and_cross_sheet_terminals() {
     let part = project.project().unwrap().symbols()[0].component_id();
     edit(&mut project, crate::sheets::CREATE_SHEET, json!({"name":"Remote"}));
     let target = project.project().unwrap().sheets().nth(1).unwrap().target;
+    let dense = graph_route_fixture(project.project().unwrap(), target, 30);
+    let report = preview(item, &pins, Some(item.revision), Some(&dense)).unwrap();
+    assert_eq!(report["instances"][0]["pins"][0]["status"], "unplaced_terminal");
+    assert!(dense.named_graph.get().is_none());
+    let placed_pin = [PinRemap { unit: "main".into(), object: *item.other_units["main"].keys().next().unwrap(), number: "9".into() }];
+    assert_eq!(preview(item, &placed_pin, Some(item.revision), Some(&dense)).unwrap_err(), "Pin remap graph preparation budget exceeded.");
+    assert!(dense.named_graph.get().is_none());
     edit(&mut project, crate::PLACE_UNIT, json!({"sheet":target.id(),"component":part,"unit":"aux","x_nm":0,"y_nm":0}));
     let at = project.project().unwrap().for_sheet(target).unwrap().symbols()[0].pins()[0];
     edit(&mut project, crate::net_labels::ADD, json!({"sheet":target.id(),"name":"REMOTE","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm}));
@@ -718,6 +736,46 @@ fn pin_remap_native_part_maps_remain_current_and_offline() {
     editor.execute(0, Action::RemapPins { pins: swap(&editor.snapshot()) }).unwrap();
     assert_eq!(persistence::encode_documents(project.snapshot().unwrap()).unwrap(), bytes);
     assert!(Arc::ptr_eq(&before, &project.snapshot().unwrap()));
+}
+
+/// A replacement source cannot lend its published address to older placed content.
+#[test]
+fn pin_remap_refuses_conflicting_published_base_without_comparing_the_draft() {
+    let (mut project, mut editor) = fixture();
+    let base = editor.snapshot();
+    editor.execute(0, Action::RemapPins { pins: swap(&base) }).unwrap();
+    let draft = editor.snapshot();
+    let request = json!({"item":draft.as_ref(),"pins":swap(&draft),"base_revision":base.revision.to_string()});
+    let preview = |project: &mut crate::Session| project.execute(sources::PREVIEW_PIN_REMAP, &request).unwrap();
+    let before = preview(&mut project);
+    assert_eq!(before["instances"][0]["pins"][0]["status"], "current");
+    project.execute(sources::REMOVE, &json!({"source":"remap-demo"})).unwrap();
+    assert_eq!(preview(&mut project), before, "offline pinned evidence remains available");
+    let mut replacement = base.export_native().unwrap();
+    replacement["name"] = json!("Different symbol at the same address");
+    let manifest = super::super::publishing::new_library(&base.library, "Remap demo", &base.license).unwrap();
+    project
+        .execute(
+            sources::LOAD,
+            &json!({"source":"replacement","documents":{
+                "library.json":manifest, "symbols/replacement.json":replacement.to_string()
+            }}),
+        )
+        .unwrap();
+    assert!(project.libraries().symbol(&base.library, &base.id, base.revision).is_some());
+    let report = preview(&mut project);
+    let instances = report["instances"].as_array().unwrap();
+    assert_eq!(instances.len(), 2);
+    for instance in instances {
+        let pins = instance["pins"].as_array().unwrap();
+        assert_eq!(pins.len(), 2);
+        for pin in pins {
+            assert_eq!(pin["status"], "conflicting_definition");
+            assert_eq!(pin["current_name"], Value::Null);
+            assert_eq!(pin["current_pads"], Value::Null);
+            assert_eq!(pin["current_nets"], json!([]));
+        }
+    }
 }
 
 /// A revision mismatch has an explicit status and no fabricated net match.

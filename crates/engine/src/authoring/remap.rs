@@ -172,7 +172,13 @@ struct Evidence<'a> {
 /// Only an explicitly supplied published revision associates the draft with placed copies. Other
 /// pinned revisions and missing terminals are reported, never inferred from geometry or labels.
 /// Native part/package mappings are current read-only evidence, not a proposed replacement map.
-pub fn preview(item: &Item, pins: &[PinRemap], source_revision: Option<u32>, project: Option<&Project>) -> Result<Value, String> {
+pub fn preview(
+    item: &Item,
+    pins: &[PinRemap],
+    source_revision: Option<u32>,
+    project: Option<&Project>,
+    catalog: Option<&crate::library::sources::Catalog>,
+) -> Result<Value, String> {
     let parts = project
         .map_or(0, |project| project.components().filter(|part| part.definition.library == item.library && part.definition.id == item.id).count());
     check_budget(parts, pins.len())?;
@@ -186,22 +192,29 @@ pub fn preview(item: &Item, pins: &[PinRemap], source_revision: Option<u32>, pro
     bytes.charge(&report, false)?;
     let mut instances = Vec::new();
     if let Some(project) = project {
-        let matching: Vec<_> = project.components().filter(|part| part.definition.library == item.library && part.definition.id == item.id).collect();
-        let graph = if matching.iter().any(|part| source_revision == Some(part.definition.revision())) {
-            budget::check_graph(project)?;
-            Some(project.borrowed_electrical_connectivity())
-        } else {
-            None
-        };
-        for part in matching {
+        use crate::library::sources::{Key, Kind as SourceKind, matches_pinned};
+        // The catalog is independent of the authored draft. A missing offline source is not a
+        // known conflict; a quarantined base or known unequal revision body is.
+        let key = source_revision.map(|revision| Key { library: item.library.clone(), kind: SourceKind::Symbol, id: item.id.clone(), revision });
+        let source = catalog.zip(key.as_ref());
+        let conflicted = source.is_some_and(|(catalog, key)| catalog.conflicting(key));
+        let base = source.and_then(|(catalog, key)| catalog.symbol(&key.library, &key.id, key.revision));
+        let mut graph = None;
+        for part in project.components().filter(|part| part.definition.library == item.library && part.definition.id == item.id) {
             let mut instance = json!({"part_instance":part.id(),"reference":part.reference(),"pinned_revision":part.definition.revision().to_string(),
                 "part":part.part.as_ref().map(|selection| json!({"definition":selection.resolved.definition.reference(),"package":selection.package})),"pins":[]});
             bytes.charge(&instance, !instances.is_empty())?;
-            let associated = source_revision == Some(part.definition.revision());
+            let same_revision = source_revision == Some(part.definition.revision());
+            let conflict = same_revision && (conflicted || base.as_ref().is_some_and(|base| !matches_pinned(&part.definition, base)));
+            let associated = same_revision && !conflict;
             let mut rows = Vec::new();
             for change in &changes {
                 let current = associated.then(|| part.definition.pins().iter().find(|pin| pin.number == change.before)).flatten();
                 let terminals: Vec<_> = current.into_iter().flat_map(|_| project.component_terminals(part.ordinal, &change.before)).collect();
+                if !terminals.is_empty() && graph.is_none() {
+                    budget::check_graph(project)?;
+                    graph = Some(project.borrowed_electrical_connectivity());
+                }
                 let nets: BTreeSet<_> = terminals
                     .iter()
                     .filter_map(|terminal| {
@@ -219,7 +232,9 @@ pub fn preview(item: &Item, pins: &[PinRemap], source_revision: Option<u32>, pro
                     current_pads: pads,
                     current_name: current.and_then(|pin| pin.name.as_deref()),
                     current_nets: nets,
-                    status: if !associated {
+                    status: if conflict {
+                        "conflicting_definition"
+                    } else if !same_revision {
                         "different_revision"
                     } else if current.is_none() {
                         "missing_terminal"

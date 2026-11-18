@@ -1025,7 +1025,7 @@ impl Session {
                     })
                     .transpose()
                     .map_err(fail)?;
-                crate::authoring::remap::preview(&item, &pins, source_revision, self.project()).map_err(fail)
+                crate::authoring::remap::preview(&item, &pins, source_revision, self.project(), Some(self.libraries())).map_err(fail)
             }
             PREPARE_PART_PUBLICATION => {
                 let fail = CommandError::InvalidParams;

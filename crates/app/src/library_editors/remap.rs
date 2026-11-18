@@ -98,6 +98,7 @@ pub(super) fn report_rows(report: &Value, page: usize) -> Vec<pcbcraft_chrome::l
                         Some("unplaced_terminal") => "Unit not placed",
                         Some("missing_terminal") => "Unknown: pinned terminal absent",
                         Some("different_revision") => "Unknown: no matching pinned revision",
+                        Some("conflicting_definition") => "Unknown: conflicting published definition",
                         _ => "Unknown: no associated placed copy",
                     }
                     .into()
@@ -121,7 +122,7 @@ pub(super) fn report_rows(report: &Value, page: usize) -> Vec<pcbcraft_chrome::l
                     pinned_name.into(),
                     nets,
                     list("current_pads").unwrap_or_else(|| {
-                        if matches!(pin["status"].as_str(), Some("different_revision" | "missing_terminal")) {
+                        if matches!(pin["status"].as_str(), Some("different_revision" | "missing_terminal" | "conflicting_definition")) {
                             "Unknown".into()
                         } else if matches!(pin["status"].as_str(), Some("current" | "unplaced_terminal")) {
                             "No selected package".into()
@@ -285,7 +286,13 @@ impl PcbApp {
             return Err("Library document changed or has pending fields; inspect before reviewing.".into());
         }
         let project = self.session.snapshot();
-        let report = remap::preview(&doc.session.snapshot(), &pins, doc.session.published().map(|address| address.revision), project.as_deref())?;
+        let report = remap::preview(
+            &doc.session.snapshot(),
+            &pins,
+            doc.session.published().map(|address| address.revision),
+            project.as_deref(),
+            Some(self.session.libraries()),
+        )?;
         let token = self.library_editors.next_remap.checked_add(1).ok_or("Pin remap review ID limit reached.")?;
         let review = Review { token, document, revision, project, project_revision: self.session.revision(), pins, report };
         #[cfg(not(target_arch = "wasm32"))]
