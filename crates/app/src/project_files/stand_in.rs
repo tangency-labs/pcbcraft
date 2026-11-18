@@ -12,7 +12,8 @@ impl ProjectFiles {
 
     /// Leave a job running that only the test ends, as a worker stalled on an unresponsive disk
     /// would. The returned closure delivers a late result, the project opened from the given path
-    /// or else a failure, and reports whether anyone received it.
+    /// or else a failure. It reports whether anyone received it, and false when the given project
+    /// doesn't load.
     pub(crate) fn stall(
         &mut self,
         operation: &'static str,
@@ -21,7 +22,12 @@ impl ProjectFiles {
     ) -> impl FnOnce(Option<&std::path::Path>) -> bool + use<> {
         let (send, receiver) = mpsc::channel();
         self.job = Some(Job { receiver, revision, operation, destination: destination.map(str::to_owned) });
-        move |opened| send.send(opened.map_or(Err("late result".to_owned()), |path| native::load(path).map(Outcome::Opened))).is_ok()
+        move |opened| {
+            let late = opened.map_or(Err("late result".to_owned()), |path| native::load(path).map(Outcome::Opened));
+            // A supplied project that fails to load must fail the test, not pass as a late failure.
+            let loaded = opened.is_none() || late.is_ok();
+            send.send(late).is_ok() && loaded
+        }
     }
 
     /// Send later saves to a stand-in the test finishes, instead of a worker with a native picker.
