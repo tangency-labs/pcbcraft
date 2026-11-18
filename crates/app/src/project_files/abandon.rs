@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use super::{Job, Outcome, ProjectFiles, inspection::Finished};
 
 /// Abandoned opens whose workers may still be running. Each holds a thread blocked in the
-/// file system; past this many, a live client's abandon is refused until one of them ends.
+/// file system; past this many, abandoning is refused until one of them ends.
 const MAX_STALLED: usize = 4;
 
 /// The workers of abandoned opens, kept only to count those still running.
@@ -24,9 +24,9 @@ impl ProjectFiles {
     /// unchanged. Inspection reports the job `abandoned`. Refused for saves.
     ///
     /// A live client passes the `file.operation.id` it observed, so a job that replaced it is
-    /// never abandoned by mistake, and is refused once [`MAX_STALLED`] abandoned workers still
-    /// run. The person closing PCBCraft passes `None`: no ID race exists there, and the limit
-    /// must not keep them from quitting.
+    /// never abandoned by mistake; the person in the Close Project wait passes `None`. Refused
+    /// once [`MAX_STALLED`] abandoned workers still run; that wait also offers Close without
+    /// waiting, so the limit never keeps anyone from quitting.
     pub(crate) fn abandon(&mut self, expected: Option<u64>) -> Result<String, String> {
         match &self.job {
             None => return Err("No file operation is running.".into()),
@@ -41,7 +41,7 @@ impl ProjectFiles {
             Some(_) => {}
         }
         self.release_stalled();
-        if expected.is_some() && self.stalled.len() >= MAX_STALLED {
+        if self.stalled.len() >= MAX_STALLED {
             return Err("Too many earlier opens are still stalled. Wait for one to end, or restart PCBCraft.".into());
         }
         let Job { receiver, operation, destination, .. } = self.job.take().ok_or("No file operation is running.")?;

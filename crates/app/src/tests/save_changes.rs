@@ -238,17 +238,18 @@ fn closing_during_a_save_decides_when_it_finishes() {
     }
 }
 
-/// A close held by a stalled file job can stop waiting. A stalled open is dropped and the close
-/// goes on; a stalled save offers to close without waiting, since it may still be writing.
+/// A close held by a stalled file job can stop waiting for an open, returning to the Save
+/// question, or close without waiting for any job; a save can't be stopped while it may write.
 #[test]
 fn closing_can_stop_waiting_for_a_stalled_file_job() {
-    for (operation, button) in [("open", "Stop waiting"), ("save", "Close without waiting")] {
+    for (operation, button) in [("open", "Stop waiting"), ("open", "Close without waiting"), ("save", "Close without waiting")] {
         let mut h = unsaved_project();
         let revision = h.state().session().revision();
         let _late = h.state_mut().files.stall(operation, Some("/stalled/board"), revision);
         assert!(!request_close(&mut h));
         assert!(matches!(h.state().dialog, Dialog::None));
-        if operation == "open" {
+        assert_eq!(h.query_by_label("Stop waiting").is_some(), operation == "open");
+        if button == "Stop waiting" {
             press(&mut h, button);
             assert!(!h.state().files.busy());
             assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::Close)), "the project is still unsaved");

@@ -1076,7 +1076,7 @@ mod live {
         WindowCommand {
             id: "file.abandon",
             title: "Stop waiting",
-            summary: "Stop waiting for a running open, such as one stalled on an unresponsive disk, so other commands can run. Its late result is discarded and the current project is unchanged; file.last reports it abandoned. Saves are refused, since they may still be writing: the person can close PCBCraft without waiting in the editor.",
+            summary: "Stop waiting for a running open, such as one stalled on an unresponsive disk, so other commands can run. Its late result is discarded and the current project is unchanged; file.last reports it abandoned. Saves are refused, since they may still be writing; the person can close PCBCraft without waiting in the editor.",
             params: &[Param {
                 name: "operation",
                 summary: "The file.operation.id inspect_editor reported for the stalled open; a different running job is left alone",

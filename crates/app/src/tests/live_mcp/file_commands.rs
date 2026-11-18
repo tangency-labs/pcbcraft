@@ -166,8 +166,8 @@ fn stopping_a_stalled_open_releases_the_editor() {
     assert!(h.state().files.busy());
 }
 
-/// A live client's abandoned opens whose workers keep running are bounded, and one that ends
-/// frees its place. Closing in the editor is never held by the limit.
+/// Abandoned opens whose workers keep running are bounded, from a live client or the Close
+/// Project wait alike, and one that ends frees its place.
 #[test]
 fn abandoned_open_workers_are_bounded() {
     let mut app = PcbApp::default();
@@ -181,5 +181,5 @@ fn abandoned_open_workers_are_bounded() {
     assert!(late.pop().unwrap()(), "one stalled worker ends");
     app.files.abandon(Some(5)).unwrap();
     let _sixth = app.files.stall("open", Some("/stalled"), 0);
-    app.files.abandon(None).expect("closing ignores the limit");
+    assert!(app.files.abandon(None).unwrap_err().contains("Too many"), "the Close Project wait obeys the limit too");
 }
