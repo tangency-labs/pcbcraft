@@ -122,7 +122,7 @@ fn pin_remap_headless_shape_and_semantic_refusals_are_distinct() {
     for count in [1, 128] {
         large["pins"] = (1..=count).map(|id| json!({"unit":"main","object":id.to_string(),"number":format!("n{id}")})).collect();
         // This checks the production parameter reader; the two-pin native item cannot resolve 128 rows.
-        let accepted = crate::check_params(&command, &large).is_ok();
+        let accepted = crate::check_params(command, &large).is_ok();
         assert!(accepted, "{large}");
         eprintln!("pin_remap_schema_case {}", json!({"schema":command.to_json()["params"],"value":large,"reader_accepts":accepted}));
     }
