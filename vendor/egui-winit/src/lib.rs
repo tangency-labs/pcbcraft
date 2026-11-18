@@ -252,11 +252,11 @@ impl State {
     pub fn translate_keyboard_input_for_testing(
         &mut self,
         physical_key: winit::keyboard::PhysicalKey,
-        logical_key: winit::keyboard::Key,
+        logical_key: &winit::keyboard::Key,
         text: Option<&str>,
         state: winit::event::ElementState,
     ) {
-        self.translate_keyboard_input(&physical_key, &logical_key, text, state == winit::event::ElementState::Pressed);
+        self.translate_keyboard_input(&physical_key, logical_key, text, state == winit::event::ElementState::Pressed);
     }
 
     /// Testing seam: sets the modifier state normally updated by
@@ -2401,7 +2401,7 @@ mod clipboard_translation_tests {
     const COMMAND: Modifiers = Modifiers { ctrl: true, command: true, alt: false, shift: false, mac_cmd: false };
 
     fn press_v(state: &mut State) {
-        state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyV), WinitKey::Character("v".into()), None, ElementState::Pressed);
+        state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyV), &WinitKey::Character("v".into()), None, ElementState::Pressed);
     }
 
     /// Ordinary Ctrl/Cmd+V with an empty (or unsupported) OS clipboard still
@@ -2439,14 +2439,16 @@ mod clipboard_translation_tests {
     fn shifted_paste_chord_stays_a_key_event() {
         let mut state = state_with(None, None, Modifiers { shift: true, ..COMMAND });
         press_v(&mut state);
-        assert!(state.egui_input().events.iter().all(|e| matches!(e, egui::Event::Key { key: Key::V, .. })));
+        let events = &state.egui_input().events;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.shift && modifiers.command));
     }
 
     /// The copy chord keeps emitting `Event::Copy` regardless of clipboard state.
     #[test]
     fn copy_chord_emits_copy() {
         let mut state = state_with(None, None, COMMAND);
-        state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyC), WinitKey::Character("c".into()), None, ElementState::Pressed);
+        state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyC), &WinitKey::Character("c".into()), None, ElementState::Pressed);
         assert!(matches!(state.egui_input().events[0], egui::Event::Copy));
     }
 }

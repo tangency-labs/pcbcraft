@@ -41,7 +41,9 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
   **N**/**Shift+N** are dead here. Opening another library document uses the
   Library tab instead.
 - Losing window focus resets the canvas tool to Select; switching the active
-  document does the same to the document losing focus.
+  document does the same to the document losing focus. A paste chord only arms
+  while the window is focused, and a later Escape inside the same input batch
+  cancels it (events resolve in order).
 - While the Assistant owns input, the editing chords (Ctrl+S, Ctrl+Z, Ctrl+Y,
   Ctrl+Q) are withheld; Ctrl+, still opens Preferences.
 
@@ -134,7 +136,7 @@ so canvas keys do not fire while a field is focused.
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
 | Ctrl+A | `canvas` → `select_many(all)` | — (the Ctrl+A presses in `library_editors/tests.rs` are field-scoped select-all, not canvas) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | — |
-| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Paste`/`Event::PasteImage`, or the raw key when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates + pending refusal), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |
+| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Paste`/`Event::PasteImage`, or the raw key when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates, same-frame Escape ordering + pending refusal), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |
 | Workspace boundary | `PcbApp::shortcuts` not invoked; `library_frame` key block | `home_has_no_editor_shortcuts_and_selected_copy_enters_the_workspace` |
 | Parts Library | `library_workspace.rs` — `COMMAND_COMMA` only | `library_workspaces_share_the_picker_with_schematic_and_pcb` |
 

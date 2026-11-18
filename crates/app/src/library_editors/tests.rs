@@ -1018,6 +1018,30 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
             matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
             "{kind:?} raw-key path must still arm the preview"
         );
+        // Same-frame input resolves in event order: an Escape after a paste
+        // cancels it, while a paste after the frame's Escape still arms.
+        h.event(egui::Event::Paste(String::new()));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} Escape later in the frame must cancel the paste"
+        );
+        h.key_press(egui::Key::Escape);
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} a paste after the frame's Escape must still arm"
+        );
+        // The raw shifted chord follows the same ordering.
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::V);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} raw-key paste before a same-frame Escape must cancel"
+        );
         h.key_press(egui::Key::Escape);
         h.run();
     }
@@ -1071,7 +1095,7 @@ fn native_paste_translation_reaches_the_internal_library_paste() {
         let mut state = egui_winit::State::new(egui::Context::default(), egui::ViewportId::ROOT, &NoDisplay, None, None, None);
         state.set_modifiers_for_testing(egui::Modifiers { ctrl: true, command: true, ..Default::default() });
         state.set_test_clipboard(text, image);
-        state.translate_keyboard_input_for_testing(PhysicalKey::Code(code), WinitKey::Character(ch.into()), None, ElementState::Pressed);
+        state.translate_keyboard_input_for_testing(PhysicalKey::Code(code), &WinitKey::Character(ch.into()), None, ElementState::Pressed);
         state.egui_input().events.clone()
     }
 
@@ -1189,11 +1213,11 @@ fn native_paste_chord_only_arms_the_focused_library_view() {
     let mut state = egui_winit::State::new(egui::Context::default(), egui::ViewportId::ROOT, &NoDisplay, None, None, None);
     state.set_modifiers_for_testing(egui::Modifiers { ctrl: true, command: true, ..Default::default() });
     state.set_test_clipboard(None, None);
-    state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyC), WinitKey::Character("c".into()), None, ElementState::Pressed);
+    state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyC), &WinitKey::Character("c".into()), None, ElementState::Pressed);
     for event in state.egui_input().events.clone() {
         h.event(event);
     }
-    state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyV), WinitKey::Character("v".into()), None, ElementState::Pressed);
+    state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyV), &WinitKey::Character("v".into()), None, ElementState::Pressed);
     for event in state.egui_input().events.clone() {
         h.event(event);
     }
