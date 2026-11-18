@@ -293,7 +293,11 @@ fn pin_remap_deferred_save_prompt_retires_review() {
     assert!(h.state().files.dirty(&h.state().session));
     assert_eq!(h.state().session.inspect(), state);
     assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
-    assert_eq!(h.state().library_editors.inspect(), editors);
+    let editors_after_cancel = h.state().library_editors.inspect();
+    assert!(editors_after_cancel["pin_remap"].is_null());
+    // The first app frame may adopt the library pane; compare the authored session, not the pane.
+    assert_eq!(editors_after_cancel["documents"][0]["document"], id);
+    assert_eq!(editors_after_cancel["documents"][0]["state"], editors["documents"][0]["state"]);
 }
 
 /// The supplied-review preflight and real live reply agree even with unsynchronized pane state.
