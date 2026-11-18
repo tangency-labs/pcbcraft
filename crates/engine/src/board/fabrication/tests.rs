@@ -207,6 +207,82 @@ fn outputs_and_their_archive_are_deterministic() {
     }
 }
 
+/// The manifest covers every archived member's exact bytes, and binds the unchanged ZIP.
+/// Neither record includes a wall clock or the manifest itself as an archive member.
+#[test]
+fn manifest_hashes_match_every_member_of_the_existing_archive() {
+    let mut session = routed_fixture();
+    outline(&mut session);
+    let outputs = session.export_fabrication(&json!({})).unwrap();
+    let capture = session.export_fabrication_archive(&json!({})).unwrap();
+    assert_eq!(capture.bytes(), zip(&outputs).unwrap());
+    let name = archive_name(&session.project().unwrap().name);
+    let manifest = capture.manifest(&name);
+    assert_eq!(manifest.generator_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(manifest.archive.name, name);
+    assert_eq!(manifest.archive.size_bytes, capture.bytes().len() as u64);
+    assert_eq!(manifest.archive.sha256, format!("{:x}", Sha256::digest(capture.bytes())));
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
+    assert_eq!(manifest.files.len(), archive.len());
+    assert!(!manifest.files.is_empty());
+    for (index, record) in manifest.files.iter().enumerate() {
+        let mut entry = archive.by_index(index).unwrap();
+        assert_eq!(entry.name().unwrap(), record.name);
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        assert_eq!(record.size_bytes, bytes.len() as u64, "{}", record.name);
+        assert_eq!(record.sha256, format!("{:x}", Sha256::digest(&bytes)), "{}", record.name);
+        assert_eq!(bytes, outputs[index].contents.as_bytes());
+    }
+    let json = capture.manifest_json(&name).unwrap();
+    assert_eq!(json.last(), Some(&b'\n'));
+    assert_eq!(serde_json::from_slice::<Value>(&json).unwrap(), serde_json::to_value(manifest).unwrap());
+    assert_eq!(json, session.export_fabrication_archive(&json!({})).unwrap().manifest_json(&name).unwrap());
+}
+
+/// Byte sizes and digests include multibyte UTF-8 and preserve LF versus CRLF without normalization.
+#[test]
+fn manifest_counts_bytes_not_characters_or_lines() {
+    let outputs = [Output { name: "text.txt".into(), contents: "é\r\nλ\n".into() }];
+    let capture = Archive::new(&outputs).unwrap();
+    let record = &capture.manifest("text.zip").files[0];
+    assert_eq!(record.size_bytes, 7);
+    assert_eq!(record.sha256, format!("{:x}", Sha256::digest(b"\xc3\xa9\r\n\xce\xbb\n")));
+    assert_ne!(record.sha256, format!("{:x}", Sha256::digest("é\nλ\n".as_bytes())));
+}
+
+/// The command, GUI capture helper and compatibility output API describe the same bytes,
+/// without changing native documents, revision or either history stack. Adding the tested route
+/// changes the output bytes and their digest, while leaving the earlier capture unchanged.
+#[test]
+fn manifest_is_read_only_and_stays_bound_to_its_capture() {
+    use crate::persistence::encode_documents;
+    let mut session = routed_fixture();
+    outline(&mut session);
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let capture = session.export_fabrication_archive(&json!({})).unwrap();
+    let name = archive_name(&session.project().unwrap().name);
+    let manifest = capture.manifest(&name);
+    let result = session.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+    assert_eq!(result["fabrication"]["manifest"], serde_json::to_value(&manifest).unwrap());
+    assert_eq!(result["revision"], revision);
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    let [front, _] = copper_layers(&session)[..] else { panic!("two copper layers") };
+    route(&mut session, front, &[Point { x_nm: 1_000_000, y_nm: 20_000_000 }, Point { x_nm: 3_000_000, y_nm: 20_000_000 }]).unwrap();
+    let changed = session.export_fabrication_archive(&json!({})).unwrap();
+    assert_ne!(manifest.archive.sha256, changed.manifest(&name).archive.sha256);
+    assert_ne!(manifest.files, changed.manifest(&name).files);
+    assert_eq!(capture.manifest(&name), manifest);
+    let renamed = capture.manifest("chosen.zip");
+    assert_eq!(renamed.archive.name, "chosen.zip");
+    assert_eq!(renamed.archive.sha256, manifest.archive.sha256);
+    assert_eq!(renamed.files, manifest.files);
+}
+
 /// The command edits nothing and returns every file through execute.
 #[test]
 fn export_command_returns_files_without_editing() {

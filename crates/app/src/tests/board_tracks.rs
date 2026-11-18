@@ -1174,9 +1174,9 @@ fn mixed_via_sizes_are_read_only_in_properties() {
     assert!(h.query_by_label("Selected via pad").is_some() && h.query_by_label("Mixed").is_none());
 }
 
-/// Design › Outputs explains a missing outline, then saves one deterministic archive of Gerber
-/// and drill files without editing the project. A subsequent cancelled export clears the old
-/// success notice without replacing it with another message.
+/// Outputs explains a missing outline, then captures the unchanged Gerber/drill ZIP and its
+/// sidecar through the engine without editing. Cancellation and failure never show success;
+/// browser requests are distinguished from a confirmed native save.
 #[test]
 fn outputs_export_one_archive_of_fabrication_files() {
     let mut h = routable();
@@ -1196,11 +1196,13 @@ fn outputs_export_one_archive_of_fabrication_files() {
     click(&mut h, "Generate fabrication outputs");
     assert_eq!(h.state().message, None);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "exporting edits nothing");
-    let (name, bytes) = h.state().fabrication_exports.captured.clone().expect("an archive was handed to the save worker");
+    let (name, archive) = h.state().fabrication_exports.captured.clone().expect("an archive was handed to the save worker");
     assert!(name.ends_with("-fabrication.zip"), "{name}");
     let outputs = h.state().session.export_fabrication(&json!({})).unwrap();
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
-    assert_eq!(bytes, pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
+    assert_eq!(archive.bytes(), pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
+    let report = h.state_mut().session.execute(pcbcraft_engine::board::fabrication::EXPORT_FABRICATION, &json!({})).unwrap();
+    assert_eq!(serde_json::to_value(archive.manifest(&name)).unwrap(), report["fabrication"]["manifest"]);
     assert!(h.state().fabrication_exports.busy());
     h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
     h.run();
@@ -1217,6 +1219,19 @@ fn outputs_export_one_archive_of_fabrication_files() {
     assert!(h.state().file_notice.is_none() && h.state().message.is_none(), "cancellation is quiet");
     assert!(h.query_by_label("Saved fabrication outputs").is_none());
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelling edits nothing");
+    click(&mut h, "Manufacture");
+    click(&mut h, "Generate fabrication outputs");
+    h.state_mut().fabrication_exports.complete_captured(Err("ZIP published, but its manifest failed".into())).unwrap();
+    h.run();
+    assert!(h.state().message.as_deref().unwrap().contains("manifest failed"));
+    assert!(h.state().file_notice.is_none());
+    assert!(h.query_by_label("Saved fabrication outputs").is_none());
+    click(&mut h, "Manufacture");
+    click(&mut h, "Generate fabrication outputs");
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::DownloadsRequested)).unwrap();
+    h.run();
+    assert!(h.state().file_notice.as_deref().unwrap().contains("check that your browser saved both"));
+    assert!(h.query_by_label("Saved fabrication outputs").is_none());
 }
 
 /// Right-click cancels a copper move without editing, and the ribbon's Move starts one when only
