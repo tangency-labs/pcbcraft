@@ -161,6 +161,8 @@ fn held_ctrl_keeps_wire_controls_available() {
     assert!(h.state().views.active.schematic.wire_draft.corners.is_empty());
     assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: Some(_), .. })));
     key_ctrl(&mut h, egui::Key::Escape);
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+    key_ctrl(&mut h, egui::Key::Escape);
     assert!(h.state().views.active.schematic.tool.is_none());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

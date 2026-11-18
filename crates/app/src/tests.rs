@@ -2307,7 +2307,14 @@ fn stale_or_cancelled_free_wire_drafts_never_commit() {
         let before = harness.state().session().inspect();
         harness.key_press(Key::Enter);
         harness.run();
-        assert!(harness.state().views.active.schematic.tool.is_none());
+        if stale {
+            assert!(harness.state().views.active.schematic.tool.is_none());
+        } else {
+            assert!(matches!(harness.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+            harness.key_press(Key::Escape);
+            harness.run();
+            assert!(harness.state().views.active.schematic.tool.is_none());
+        }
         assert_eq!(harness.state().session().inspect(), before);
         assert_eq!(harness.state().session().project().unwrap().junctions().count(), 0);
     }
