@@ -169,6 +169,8 @@ mod live {
         Footprints,
         /// Persistent document/object UUID, resolved against the addressed view before acting.
         Object,
+        /// An absolute file system path of at most 4096 bytes.
+        Path,
     }
 
     impl Kind {
@@ -197,6 +199,7 @@ mod live {
                     json!({"type": "integer", "minimum": 0})
                 }
                 Self::Object => json!({"type":"string","format":"uuid"}),
+                Self::Path => json!({"type":"string","minLength":1,"maxLength":4096}),
                 Self::Query => json!({"type":"string","maxLength":512}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
@@ -250,6 +253,7 @@ mod live {
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
+                Self::Path => value.as_str().is_some_and(|path| path.len() <= 4096 && std::path::Path::new(path).is_absolute()),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
             };
@@ -270,6 +274,7 @@ mod live {
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
+                Self::Path => "must be an absolute path".to_owned(),
                 Self::Query => "must be library search text of at most 512 bytes".into(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
@@ -1035,8 +1040,38 @@ mod live {
         WindowCommand {
             id: "file.save",
             title: "Save",
-            summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. An Untitled project must first be saved in the editor.",
+            summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. Use file.save_as for an Untitled project.",
             params: &[],
+        },
+        WindowCommand {
+            id: "file.save_as",
+            title: "Save As",
+            summary: "Save the project to a new folder or .pc archive, as File › Save As does without the picker. The destination must not exist yet; an Untitled project takes its name. inspect_editor's file.operation and file.last report progress and the result.",
+            params: &[
+                Param {
+                    name: "path",
+                    summary: "Absolute path of the new project folder or archive; an archive without .pc gets it",
+                    required: true,
+                    kind: Kind::Path,
+                },
+                Param {
+                    name: "format",
+                    summary: "A project folder or a portable .pc archive",
+                    required: true,
+                    kind: Kind::Choice(&["folder", "archive"]),
+                },
+            ],
+        },
+        WindowCommand {
+            id: "file.open",
+            title: "Open",
+            summary: "Open a project folder, its entry point or a .pc archive in place of the current project, as File › Open does without the picker. Refused while the current project has unsaved changes. inspect_editor's file.operation and file.last report progress and the result.",
+            params: &[Param {
+                name: "path",
+                summary: "Absolute path of the project folder, entry point or archive",
+                required: true,
+                kind: Kind::Path,
+            }],
         },
     ];
 
@@ -1278,6 +1313,7 @@ mod live {
             "revision": app.session.revision(),
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
+            "file": app.files.inspect(&app.session),
             "dialog_open": !matches!(app.dialog, Dialog::None),
             "text_editing": app.views.editing_text(),
             "home": app.home,
@@ -1747,6 +1783,29 @@ mod live {
                     if let Some(message) = self.message.clone() {
                         return Err(message);
                     }
+                }
+                ("file.save_as", _, _) => {
+                    if self.session.project().is_none() {
+                        return Err("No project is open.".to_owned());
+                    }
+                    let format = if params["format"] == "archive" { crate::SaveFormat::Archive } else { crate::SaveFormat::Folder };
+                    let path = std::path::PathBuf::from(params["path"].as_str().unwrap_or_default());
+                    self.files.save_to(&self.session, format, path, ctx)?;
+                    self.message = None;
+                    self.file_notice = None;
+                }
+                ("file.open", _, _) => {
+                    // The GUI asks Save / Don't Save here; a live client saves first instead.
+                    if self.files.dirty(&self.session) {
+                        return Err(
+                            "The open project has unsaved changes. Save them first, or discard them in the editor, before opening another project."
+                                .to_owned(),
+                        );
+                    }
+                    let path = std::path::PathBuf::from(params["path"].as_str().unwrap_or_default());
+                    self.files.open_path(path, self.session.revision(), ctx)?;
+                    self.message = None;
+                    self.file_notice = None;
                 }
                 _ => return Err(format!("`{id}` can't run now")),
             }

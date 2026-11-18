@@ -41,6 +41,11 @@ impl Target {
         if self.needs_manifest { "Project opened · Save will upgrade the project package".to_owned() } else { "Project opened".to_owned() }
     }
 
+    /// `archive` for a packed `.pc` file, `folder` for a project folder, as `file.save_as` names them.
+    pub(super) fn format(&self) -> &'static str {
+        if self.encoding == Encoding::Zip { "archive" } else { "folder" }
+    }
+
     /// Tell the editor whether this save added the archive's first manifest.
     pub(super) fn added_manifest(&self) -> bool {
         self.added_manifest

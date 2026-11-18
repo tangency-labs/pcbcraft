@@ -874,9 +874,20 @@ mod tests {
             assert_eq!(run(Mode::Edits, command), Verdict::Run, "{command}");
             assert_eq!(run(Mode::Ask, command), Verdict::Ask, "{command}");
         }
-        for command in
-            ["file.save", "project.new", "window.close", "arrangement.delete", "ui.click", "ui.key", "ui.text", "ui.drag", "ui.move", "ui.scroll"]
-        {
+        for command in [
+            "file.save",
+            "file.save_as",
+            "file.open",
+            "project.new",
+            "window.close",
+            "arrangement.delete",
+            "ui.click",
+            "ui.key",
+            "ui.text",
+            "ui.drag",
+            "ui.move",
+            "ui.scroll",
+        ] {
             assert_eq!(run(Mode::Edits, command), Verdict::Ask, "{command}");
             assert_eq!(run(Mode::All, command), Verdict::Run, "{command}");
         }
