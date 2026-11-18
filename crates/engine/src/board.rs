@@ -27,6 +27,7 @@ pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+pub mod output_recipe;
 mod pair_index;
 pub mod ratsnest;
 pub mod reference;
