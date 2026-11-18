@@ -65,6 +65,7 @@ fn raw_member<'a>(text: &'a str, key: &str) -> Result<&'a str, String> {
     object.get(key).map(|value| value.get()).ok_or_else(|| format!("Missing raw `{key}` member."))
 }
 
+/// Validate the exact remap item bytes with the native authoring decoder.
 fn validate_raw_remap_item(mut text: &str) -> Result<(), String> {
     for key in ["params", "arguments", "params", "item"] {
         text = raw_member(text, key)?;
