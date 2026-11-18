@@ -169,7 +169,7 @@ mod live {
         Footprints,
         /// Persistent document/object UUID, resolved against the addressed view before acting.
         Object,
-        /// An absolute file system path of at most 4096 bytes.
+        /// An absolute file system path of at most 4096 characters, the unit schema `maxLength` uses.
         Path,
     }
 
@@ -253,7 +253,7 @@ mod live {
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
-                Self::Path => value.as_str().is_some_and(|path| path.len() <= 4096 && std::path::Path::new(path).is_absolute()),
+                Self::Path => value.as_str().is_some_and(|path| path.chars().count() <= 4096 && std::path::Path::new(path).is_absolute()),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
             };
@@ -274,7 +274,7 @@ mod live {
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
-                Self::Path => "must be an absolute path".to_owned(),
+                Self::Path => "must be an absolute path of at most 4096 characters".to_owned(),
                 Self::Query => "must be library search text of at most 512 bytes".into(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
