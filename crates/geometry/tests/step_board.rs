@@ -25,7 +25,7 @@ fn main() {
     }
 }
 
-/// Nothing to run without a kernel.
+/// Nothing to run on `wasm32`, which cannot start the child process.
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 
