@@ -1,0 +1,287 @@
+{
+  "artifact_sha256": "2bcba0154913f8e396b975f470040edc649342e4ed40bbe77af107c5ae2f0efa",
+  "budget": 4096,
+  "correctness": "identical plans on every iteration; first-iteration plans with at least two points committed through pcb.add_tracks with no exhaustive clearance or short decision about the new copper",
+  "debug_assertions": true,
+  "environment": {
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+    "hardware": "AMD Ryzen 9 7950X 16-Core Processor",
+    "notes": "Three-sample correctness/service-cost check; no tail-latency or shipping-release claim. Final source includes resumable interactive routing; background load uncontrolled.",
+    "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "power": "Power/governor and background load uncontrolled",
+    "profile": "dev debug=2 incremental=0",
+    "revision": "33b4470 + interactive walkaround local diff b8a48a382843075b325d99ef6f2d665df3dc8f7e5eaa59036e00e3368cff3c55",
+    "runtime": "native CPU replay"
+  },
+  "iterations": 3,
+  "metrics": [
+    {
+      "id": "walkaround.plan.airwire.0",
+      "max_ms": 0.07812799999999953,
+      "p50_ms": 0.07491099999992912,
+      "p95_ms": 0.07812799999999953,
+      "p99_ms": 0.07812799999999953,
+      "samples_ms": [
+        0.07812799999999953,
+        0.07491099999992912,
+        0.0682289999999739
+      ]
+    },
+    {
+      "id": "walkaround.plan.airwire.1",
+      "max_ms": 0.060334000000001,
+      "p50_ms": 0.059373000000050524,
+      "p95_ms": 0.060334000000001,
+      "p99_ms": 0.060334000000001,
+      "samples_ms": [
+        0.060334000000001,
+        0.059373000000050524,
+        0.05689800000004652
+      ]
+    },
+    {
+      "id": "walkaround.plan.airwire.2",
+      "max_ms": 0.035247000000026674,
+      "p50_ms": 0.032060999999998785,
+      "p95_ms": 0.035247000000026674,
+      "p99_ms": 0.035247000000026674,
+      "samples_ms": [
+        0.032060999999998785,
+        0.031219000000191954,
+        0.035247000000026674
+      ]
+    },
+    {
+      "id": "walkaround.plan.airwire.3",
+      "max_ms": 0.05242900000000006,
+      "p50_ms": 0.05219799999986208,
+      "p95_ms": 0.05242900000000006,
+      "p99_ms": 0.05242900000000006,
+      "samples_ms": [
+        0.05242900000000006,
+        0.05190800000013951,
+        0.05219799999986208
+      ]
+    },
+    {
+      "id": "walkaround.plan.airwire.4",
+      "max_ms": 0.028213000000000932,
+      "p50_ms": 0.02815299999997478,
+      "p95_ms": 0.028213000000000932,
+      "p99_ms": 0.028213000000000932,
+      "samples_ms": [
+        0.028213000000000932,
+        0.02815299999997478,
+        0.028042999999797757
+      ]
+    },
+    {
+      "id": "walkaround.plan.airwire.5",
+      "max_ms": 0.05472299999973984,
+      "p50_ms": 0.049974000000002405,
+      "p95_ms": 0.05472299999973984,
+      "p99_ms": 0.05472299999973984,
+      "samples_ms": [
+        0.049974000000002405,
+        0.05472299999973984,
+        0.04934299999990799
+      ]
+    },
+    {
+      "id": "walkaround.plan.all",
+      "max_ms": 4.221936999999997,
+      "p50_ms": 4.160000999999966,
+      "p95_ms": 4.221936999999997,
+      "p99_ms": 4.221936999999997,
+      "samples_ms": [
+        4.221936999999997,
+        4.160000999999966,
+        4.140774000000192
+      ]
+    },
+    {
+      "id": "walkaround.plan.channel",
+      "max_ms": 0.514600999999999,
+      "p50_ms": 0.5000840000000153,
+      "p95_ms": 0.514600999999999,
+      "p99_ms": 0.514600999999999,
+      "samples_ms": [
+        0.514600999999999,
+        0.5000840000000153,
+        0.49683799999979783
+      ]
+    },
+    {
+      "id": "walkaround.plan.crowded",
+      "max_ms": 3.371882999999997,
+      "p50_ms": 3.35092399999985,
+      "p95_ms": 3.371882999999997,
+      "p99_ms": 3.371882999999997,
+      "samples_ms": [
+        3.371882999999997,
+        3.35092399999985,
+        3.3454929999998058
+      ]
+    },
+    {
+      "id": "walkaround.prepare",
+      "max_ms": 21.27182199999993,
+      "p50_ms": 17.051147,
+      "p95_ms": 21.27182199999993,
+      "p99_ms": 21.27182199999993,
+      "samples_ms": [
+        17.051147,
+        21.27182199999993,
+        16.97415200000023
+      ]
+    }
+  ],
+  "outcomes": [
+    {
+      "case": "airwire.0",
+      "head": {
+        "x_nm": -1270000,
+        "y_nm": 0
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 2,
+      "probes": 3,
+      "target": {
+        "x_nm": -1270000,
+        "y_nm": 2540000
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "airwire.1",
+      "head": {
+        "x_nm": -1270000,
+        "y_nm": 2540000
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 3,
+      "probes": 5,
+      "target": {
+        "x_nm": 2015000,
+        "y_nm": 0
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "airwire.2",
+      "head": {
+        "x_nm": 2015000,
+        "y_nm": 0
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 2,
+      "probes": 3,
+      "target": {
+        "x_nm": 2015000,
+        "y_nm": 2540000
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "airwire.3",
+      "head": {
+        "x_nm": 2015000,
+        "y_nm": 2540000
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 2,
+      "probes": 3,
+      "target": {
+        "x_nm": 4555000,
+        "y_nm": 0
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "airwire.4",
+      "head": {
+        "x_nm": 4555000,
+        "y_nm": 0
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 2,
+      "probes": 3,
+      "target": {
+        "x_nm": 4555000,
+        "y_nm": 2540000
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "airwire.5",
+      "head": {
+        "x_nm": 4555000,
+        "y_nm": 2540000
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 2,
+      "probes": 3,
+      "target": {
+        "x_nm": 7095000,
+        "y_nm": 0
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "channel",
+      "head": {
+        "x_nm": 99000000,
+        "y_nm": 60750000
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 6,
+      "probes": 40,
+      "target": {
+        "x_nm": 141000000,
+        "y_nm": 60750000
+      },
+      "width_nm": 250000
+    },
+    {
+      "case": "crowded",
+      "head": {
+        "x_nm": 98000000,
+        "y_nm": 30000000
+      },
+      "outcome": {
+        "kind": "reached"
+      },
+      "points": 6,
+      "probes": 122,
+      "target": {
+        "x_nm": 130000000,
+        "y_nm": 45000000
+      },
+      "width_nm": 250000
+    }
+  ],
+  "project_sha256": "2718dac6d3a30c2397525e212902e6f37eca922ef3783681a1d3caea16f5fb8a",
+  "recipe": "channels-v1",
+  "schema": "pcbcraft-walkaround-performance/1",
+  "target": "native-walkaround-cpu",
+  "unmeasured": [
+    "editor preview and commit latency",
+    "physical input-to-visible latency",
+    "compositor presentation",
+    "browser runtime"
+  ]
+}

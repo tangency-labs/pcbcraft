@@ -153,4 +153,5 @@ listed beside it.
 - Key reuse across workspaces is intentional: **X** routes a track in the board
   editor but mirrors a symbol in the schematic, and **Ctrl+A** selects all in
   the board editor while the schematic offers Select All as a tool action
-  instead.
+  instead. The [board keyboard shortcuts](board-keyboard-shortcuts.md) page
+  inventories that workspace's bindings.

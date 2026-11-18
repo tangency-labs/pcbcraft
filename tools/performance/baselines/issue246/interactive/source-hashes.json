@@ -1,0 +1,29 @@
+{
+  "base": "33b4470255c6872b8418f65f1da7bca4d7b4c17e",
+  "files": {
+    "crates/app/src/board_tracks/planning.rs": "ad831500e780b3398fbdbf139c8545d04e5612aff71d13478e25715551dd3196",
+    "crates/engine/src/board/clearance/preparation.rs": "81fa62194a7eb2599a436c7b105c330e477a840642a421d47316097ca61b9bf6",
+    "crates/engine/src/board/route/preparation.rs": "2c20c75b9df85df8c6220c13473a4318e1ba9c68740e992cbe6ffd2916863656",
+    "crates/engine/src/board/route/search.rs": "118c0235dcb3c2e9205092324926cdf4ae60f8bf57fb07cd06989bf46720c047",
+    "ATTRIBUTION.md": "c2c9322b820ac2107b12fc8f70d05c04b16186dcf457562109aecb7100edfa2d",
+    "CHANGELOG.md": "86d895e5a8885aed4c4e0d88b394a4cfc4cfd876268c3ef66cf9ba2195b5534f",
+    "README.md": "59e4441018d776503f4fdd6e0f0cc40e469a487e04e9638d4e9d2b3baae2345b",
+    "crates/app/examples/board_perf.rs": "6e2d34acc2b5b64f81fb2892e90fa1706f7d4c939c522faf6083a73d46e1de22",
+    "crates/app/examples/board_perf_web.rs": "3c1bd383e034fcd01aa2ac94a3c88b01bfa502d280dd812774cd08745fe59e98",
+    "crates/app/src/board_drc/jobs.rs": "515aa854778a05f243ae75515c077fa503cfc4b615ef9525b8fd3a20d89862cf",
+    "crates/app/src/board_tracks.rs": "ca5f9144124aae7d15e60ede1f7110915ad19e75bcb56795fdc202807a54672d",
+    "crates/app/src/board_tracks/preparation.rs": "f30f8a612efb3263ee08aff948c5930cfee7323224e4a0f0f8fcbd03d06c5b54",
+    "crates/app/src/performance/rendered.rs": "6a5733b7d0955ad7aa0285c0d0a11710e1fc46f8f1be7399966242709cc3606c",
+    "crates/app/src/performance/replay.rs": "043052dfa202c6e9552e24fab99c8bf69f1333cfbe9746c990c0248e1b1c67ff",
+    "crates/app/src/performance/walkaround.rs": "e552810f9ed1e8adc4163294d58a4a0ee35a0f0069e0af4da5f7ef403c31eb29",
+    "crates/app/src/tests/board_tracks.rs": "363f33e21d92395cdc97d88356c4056a80a37e5c73d4132f852b08f47faf5e69",
+    "crates/engine/src/board/clearance.rs": "a5cf19c987958f2e7b4f7cb5fceca9305ac6ba389d4cdc442624b6fffea8b0c8",
+    "crates/engine/src/board/route.rs": "062b46cff296f3dd5437e5462e503c55f4b84e80fe2e35d3f535fd8970bd06eb",
+    "crates/engine/src/board/route/tests.rs": "ffe8e68ead80c4e98d37c5006615680f34ea4db438dcf261f945fd33f097eb69",
+    "crates/engine/src/board/route/walkaround.rs": "28a13a8ea92cbccc0e9c8c9af9307d7b508a27f95f331e4d897f7253de9d4c32",
+    "docs/capabilities.md": "a19c41155978d3a438b1ba3f403004d93180c118062ad71ea221146fee130b0d",
+    "docs/editor-guide.md": "6a571e9efc81acb21574aa5b91a0520c0f62b0e3b3c1607ca2ccbe802f5af75b",
+    "docs/pcb-layout-workflow.md": "d7c3da435296b6ba968017b01b77e56594004df5907a945df8be8b5a36aadc13",
+    "docs/route-planning.md": "1e7166615a3a0ca3e1019b08a045b0b9c722185d11a50f94f4886a63facf2ad5"
+  }
+}

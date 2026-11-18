@@ -15,7 +15,13 @@ on one copper layer that go round existing pads, tracks and vias, locked or not,
 keeping the effective track width, net-class clearances and board-edge clearance.
 A route that cannot get through stops at its last legal point and names what
 blocked it. Planning never edits the board; the points go to `pcb.add_tracks` as
-one undo step. The route tool does not use the planner yet.
+one undo step. The route tool now uses the same planner with bounded search,
+magnetic target hysteresis and full-path validation before fixing a clicked
+vertex or placing a through via (#246).
+
+Placing a via at the current fixed route head now validates that exact location,
+even when an earlier, longer route preview remains visible, so invalid vias are
+rejected before changing layers.
 
 Preferences → Appearance → **Panel style** switches the workspace shell
 between **Floating** cards and a **Compact** layout, following SolidCraft. In

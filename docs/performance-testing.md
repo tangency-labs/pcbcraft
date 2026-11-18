@@ -556,3 +556,22 @@ the existing command's contact/lock checks passed, with clearance enforcement
 and walkaround/shove still owned by their subsequent issues. ERC jobs remain
 with the ERC feature. These checks do not qualify Wayland endurance/presentation
 latency.
+
+`board_perf pointer_latency ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT` exercises
+continuous pointer updates in native production frames and snapshot workers,
+paced at 60 Hz. It inspects whether the actual preview copper reaches each new
+target in its input frame, then confirms that cancellation preserves authored
+bytes. This native-only diagnostic accepts 1–20 repetitions and retains UI service
+samples; it does not measure GPU/compositor presentation. Its saved
+[before/after evidence](../tools/performance/baselines/issue246/responsiveness/README.md)
+records the frame-handoff regression and the additional bounded work on the UI
+thread separately.
+
+`board_perf commit_fixture ARTIFACT OUTPUT` derives the versioned
+`route-contact-commit-history-v1` trace while preserving the saved project's bytes
+and hash. Run it through `board_perf_window` or the browser rendered page. The
+first saved airwire with conductive pads at both ends supplies the contacts;
+legacy center-only markers are excluded without consulting solver outcomes.
+The trace waits for a fully validated preview, clicks a different final target,
+and records input-to-publication UI and GPU-readback intervals. Full DRC,
+one-step Undo/Redo, and exact native reopen run outside the commit interval.

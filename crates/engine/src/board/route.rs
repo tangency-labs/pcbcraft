@@ -16,9 +16,12 @@ use uuid::Uuid;
 
 mod hull;
 mod posture;
+mod preparation;
+mod search;
 #[cfg(test)]
 mod tests;
 mod walkaround;
+pub use preparation::{PlanningContext, PlanningJob};
 
 pub use posture::Posture;
 
@@ -37,6 +40,9 @@ pub struct Request {
     pub head: Point,
     pub target: Point,
     pub layer: Uuid,
+    /// Original gesture contact and copper layer when `head` has advanced to a fixed vertex.
+    /// None derives membership from `head`; contact unions never replace this starting intent.
+    pub origin: Option<(Point, Uuid)>,
     pub width_nm: i64,
     pub posture: Posture,
     /// Start with the elbow's other leg first.
@@ -78,7 +84,16 @@ pub struct Plan {
 /// other copper, including copper of unknown membership, is an obstacle at its pair clearance.
 /// The result is a pure function of the query, request and budget unless `cancel` returns true.
 pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, cancel: &dyn Fn() -> bool) -> Result<Plan, CommandError> {
-    if !crate::wire::valid_point(&request.head) || !crate::wire::valid_point(&request.target) {
+    validate(query, request, budget)?;
+    search::complete(query, request, budget, cancel)
+}
+
+/// Reject malformed requests before any search work or asynchronous capture.
+fn validate(query: &ClearanceQuery, request: &Request, budget: usize) -> Result<(), CommandError> {
+    if !crate::wire::valid_point(&request.head)
+        || !crate::wire::valid_point(&request.target)
+        || request.origin.is_some_and(|(point, _)| !crate::wire::valid_point(&point))
+    {
         return Err(CommandError::InvalidParams("Route points must be bounded board coordinates.".into()));
     }
     if request.previous.len() > super::track::MAX_PATH_POINTS || request.previous.iter().any(|point| !crate::wire::valid_point(point)) {
@@ -91,14 +106,7 @@ pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, canc
     if !(1..=MAX_BUDGET).contains(&budget) {
         return Err(CommandError::InvalidParams(format!("A route budget must be from 1 to {MAX_BUDGET} probes.")));
     }
-    let mut walker = walkaround::Walker::new(query, request, budget, cancel)?;
-    let head = vec![request.head];
-    match walker.run(request) {
-        Ok(plan) => Ok(plan),
-        Err(walkaround::Stop::Exhausted) => Ok(Plan { points: head, outcome: Outcome::Incomplete, blocker: None, probes: walker.probes() }),
-        Err(walkaround::Stop::Canceled) => Ok(Plan { points: head, outcome: Outcome::Canceled, blocker: None, probes: walker.probes() }),
-        Err(walkaround::Stop::Failed(error)) => Err(error),
-    }
+    Ok(())
 }
 
 impl Session {
@@ -130,7 +138,7 @@ impl Session {
         let flipped = params.get("flipped").and_then(Value::as_bool).unwrap_or(false);
         let previous: Vec<Point> = params.get("previous").map(|_| field(params, "previous")).transpose()?.unwrap_or_default();
         let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or(DEFAULT_BUDGET);
-        let request = Request { head, target: goal, layer, width_nm, posture, flipped, previous };
+        let request = Request { head, target: goal, layer, origin: None, width_nm, posture, flipped, previous };
         let stale = params.get("expected_revision").is_some_and(|revision| revision.as_u64() != Some(self.revision()));
         let plan = if stale {
             Plan { points: Vec::new(), outcome: Outcome::Stale, blocker: None, probes: 0 }

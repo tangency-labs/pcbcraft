@@ -32,7 +32,7 @@ save the schematic and board together with shared undo/redo.
   labels and power/ground symbols, and organize flat or hierarchical sheets.
 - **PCB layout:** assign pinned footprints, review package and connection changes
   before applying them, draw a Board Outline, move/rotate/flip footprints, and
-  place, move and resize tracks and through vias. Layer controls, net highlighting
+  place, move and resize tracks and through vias, and route around fixed copper. Layer controls, net highlighting
   and schematic/PCB component highlights help navigate the board; see the
   [layout guide](docs/pcb-layout-workflow.md).
 - **Checks:** review DRC findings for shorts, copper clearance,
@@ -53,7 +53,7 @@ save the schematic and board together with shared undo/redo.
 - **AI tools:** use the desktop Assistant with an installed agent or model
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
-Full ERC, broader DRC coverage, walkaround/push-and-shove routing, copper-zone fill
+Full ERC, broader DRC coverage, advanced routing, copper-zone fill
 and 3D/STEP workflows remain in development. Footprint slots, non-plated drills
 and independent footprint mask/paste controls are not yet supported. The current
 checks and exporters do not establish manufacturing readiness.
