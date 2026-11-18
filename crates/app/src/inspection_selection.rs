@@ -110,32 +110,24 @@ pub(super) fn paint_pins(
     }
 }
 
-/// Capture exact selected pad positions from the already resolved paint geometry.
-/// This avoids projecting the board again after the footprint painter consumes its previews.
-pub(super) fn pad_centers(
-    board: BoardView<'_>,
-    footprints: &[pcbcraft_engine::board::view::FootprintView<'_>],
+/// Group inspected lands by exact footprint/pad identity for the existing copper painter.
+/// Other boards never affect this board's presentation, and no owner becomes selected.
+pub(super) fn pad_numbers(
+    board: pcbcraft_engine::board::view::BoardTarget,
     targets: &[Source],
-) -> Vec<pcbcraft_engine::schematic::Point> {
-    targets
-        .iter()
-        .filter_map(|source| {
-            let Source::Pad(target) = source else { return None };
-            if target.board != board.target {
-                return None;
-            }
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let mut selected = std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for source in targets {
+        if let Source::Pad(target) = source
+            && target.board == board
+        {
             let address = target.pad.inspect();
-            let footprint = footprints.iter().find(|footprint| Some(footprint.id.as_str()) == address["footprint"].as_str())?;
-            Some(footprint.pads.iter().find(|pad| Some(pad.number.as_str()) == address["pad"].as_str())?.center)
-        })
-        .collect()
-}
-
-/// Paint only the selected lands over the finished copper, without owner outlines.
-pub(super) fn paint_pads(painter: &Painter, camera: &crate::canvas_camera::Camera, rect: Rect, centers: &[pcbcraft_engine::schematic::Point]) {
-    for at in centers {
-        ring(painter, camera.screen(*at, rect));
+            if let (Some(footprint), Some(pad)) = (address["footprint"].as_str(), address["pad"].as_str()) {
+                selected.entry(footprint.to_owned()).or_default().insert(pad.to_owned());
+            }
+        }
     }
+    selected
 }
 
 /// Original electronics inspection geometry reuses the shared selection ink.

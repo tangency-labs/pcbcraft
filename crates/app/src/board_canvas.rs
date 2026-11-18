@@ -564,7 +564,7 @@ pub(super) fn show(
             }
         }
     }
-    let inspected_pads = crate::inspection_selection::pad_centers(project, &footprints, inspection);
+    let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -590,10 +590,15 @@ pub(super) fn show(
         if (pads.is_empty() && graphics.is_empty()) || !(rect.intersects(bounds) || label_visible) {
             continue;
         }
-        if let Some(focus) = focus {
+        let inspected = inspected_pads.get(&footprint.id);
+        if inspected.is_some() || focus.is_some() {
             for pad in &mut pads {
-                let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
-                pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                if inspected.is_some_and(|numbers| numbers.contains(&pad.number)) {
+                    pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(true)));
+                } else if let Some(focus) = focus {
+                    let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
+                    pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                }
             }
         }
         if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
@@ -657,7 +662,6 @@ pub(super) fn show(
             state.box_drag = None;
         }
     }
-    crate::inspection_selection::paint_pads(&p, camera, rect, &inspected_pads);
     if route.consumed {
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
     }

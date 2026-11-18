@@ -11,8 +11,9 @@ cannot be picked; legacy center markers use their displayed pick radius.
 
 A plain click replaces selection, Shift adds, and Ctrl/Command toggles. The
 Browser exposes Pins and Pads branches under their owners when the relevant
-filter is enabled. Selected endpoints receive a canvas ring and a read-only
-Properties label. Inspection alone does not select an owner for moving, rotating,
+filter is enabled. Selected pins receive an endpoint ring; selected pads highlight
+their actual copper shape. Both show a read-only Properties label. Inspection
+alone does not select an owner for moving, rotating,
 flipping, editing or deleting; drawing tools remain available. A modifier pick
 can coexist with an explicitly selected owner, whose normal edit authority is
 unchanged. Ordinary selection replacement or Escape clears inspection.

@@ -368,3 +368,37 @@ fn browser_pads_share_the_canvas_handler() {
     assert!(h.state().views.active.board.selection.is_empty());
     assert_eq!(document(&h), before);
 }
+
+/// Inspecting a land highlights its filled copper alone, preserving its number and owner's
+/// normal selection state. Removing inspection restores the layer ink without a circle badge.
+#[test]
+fn inspected_pad_highlights_its_copper_instead_of_drawing_a_ring() {
+    let mut h = super::board_tracks::routable();
+    let id = h.state().views.active.id();
+    h.state_mut().set_selection_filters(id, &json!({"pads":true})).unwrap();
+    h.run();
+    let board = h.state().session.project().unwrap().boards().next().unwrap();
+    let footprint = board.footprints().next().unwrap();
+    let pad = footprint.pads[0].clone();
+    let target = Source::Pad(PadTarget {
+        board: board.target,
+        pad: pcbcraft_engine::board::Pad::parse(&footprint.id, &pad.number).unwrap().on_board(board.target.board),
+    });
+    let at = h.state().views.active.camera.screen(pad.center, h.get_by_label("PCB canvas").rect());
+    let base = pcbcraft_chrome::Tokens::get().board_front;
+    let highlight = pcbcraft_chrome::board::copper_emphasis(base, Some(true));
+    let fills = |h: &Harness<'_, PcbApp>, color| {
+        h.output().shapes.iter().filter(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.closed && path.fill==color && egui::Rect::from_points(&path.points).contains(at))).count()
+    };
+    assert_eq!(fills(&h, highlight), 0);
+    assert_eq!(fills(&h, base), 1);
+    h.state_mut().select_inspection(id, vec![target], "replace").unwrap();
+    h.run();
+    assert_eq!(fills(&h, highlight), 1);
+    assert_eq!(fills(&h, base), 0);
+    assert!(h.state().views.active.board.selection.is_empty());
+    assert!(!h.output().shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Circle(circle) if circle.center.distance(at)<0.01 && circle.radius==7. && circle.stroke.color==pcbcraft_chrome::Tokens::get().accent)));
+    h.state_mut().select_inspection(id, vec![], "replace").unwrap();
+    h.run();
+    assert_eq!(fills(&h, base), 1);
+}

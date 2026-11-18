@@ -1776,6 +1776,7 @@ The #397 runtime view selection and qualified live command are original PCBcraft
 work. Browser rows/disclosures, filter checkboxes and Properties labels reuse
 the existing chrome adapters and pinned Craft toolkit. The toolkit has no
 electronics endpoint inspection primitive, so the host draws original endpoint
-rings using the shared accent ink. Pad hit testing reuses the exact copper
+rings using the shared accent ink. Pad inspection reuses the existing copper
+emphasis and physical shape painter. Pad hit testing reuses the exact copper
 contours already used by connectivity; no external implementation, artwork,
 dependency or native format was introduced.
