@@ -46,6 +46,46 @@ Portable manufacturer/process profiles are a separate planned resource; see
 [project settings and fabrication profiles](pcb-representation.md#project-settings-and-fabrication-profiles)
 for their import, pinning and update contract.
 
+## Review a setup edit
+
+`pcb.preview_board_setup` takes the same `setup`, optional `silkscreen` and
+`resolve_existing_footprints` values as Apply, with `expected_revision` and an
+optional explicit `board` UUID. It returns `board_setup_preview`: removed and
+added layer identities, surviving copper layers' changed one-based positions,
+and affected tracks, through vias, zone outlines, drawings and footprint pads
+by ID and kind. Pads use a footprint ID and pad number. Each affected object's
+`layers` lists the original layer or original copper span in stack order. When
+an all-copper pad or through via expands to new layers, those layers appear in
+`added_layers`, not in its original span. Zone outlines are intent, not filled
+copper. The report states whether populated-board consent is required and gives
+the category and short message of any refusal found by the same candidate
+validation and edit preparation as Apply. To obtain structured affected-object
+details, call Preview; Apply returns only the refusal itself. No object is
+deleted or reassigned by a review.
+
+The returned `plan_token` is a disposable session-local capability. Pass it to
+`pcb.set_board_setup` with the identical candidate, consent and silkscreen
+settings to apply that review; changing consent requires another preview.
+A later preview replaces it; `pcb.cancel_board_setup_preview` revokes only the
+named current token. An edit, Undo, Redo or reopening invalidates it, as does
+adopting a saved snapshot even if the revision does not change. Another session
+cannot use it, even on the same saved project. Successful Apply consumes it,
+including a no-op; a refused Apply does not. The recovery journal records the
+resulting document changes, not the spent token. Omitting the token retains
+ordinary revision-checked Apply behavior.
+
+Preview and cancellation change neither the project snapshot, saved bytes,
+revision nor Undo/Redo. One bounded review (at most 8 MiB serialized) is retained
+outside history. Native callers read the same typed report through
+`Session::board_setup_preview`. Complete changes lists have a 2 MiB encoded budget,
+charged before retaining each object's copper span. Preview fails instead of
+truncating an oversized list, leaving any current token and authored state
+untouched. This reporting budget does not change Apply's error category or
+message. Live and headless MCP return the same change list. The Board setup form does not yet display this detailed review. No saved
+format or external integration ownership changes: clients, including future
+simulation/parametric adapters, inspect stable board/layer IDs and submit
+reviewed candidates through the shared command path rather than rewriting files.
+
 ## Material identity and reports
 
 `setup.materials` contains up to 64 embedded definitions, addressed by UUID `id`

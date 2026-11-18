@@ -110,7 +110,8 @@ impl Preparation {
         })
     }
     /// Poll captured work, canceling changed source/layer/size/view authority before publication.
-    /// A complete typed candidate is returned only for the current commit generation.
+    /// A complete typed candidate is returned only for the current commit generation;
+    /// engine refusals become display text only after the captured source is checked.
     fn poll(
         &mut self,
         session: &Session,
@@ -135,14 +136,15 @@ impl Preparation {
                 self.stale += 1;
                 self.cancel();
             } else {
-                match completion.report {
+                let retryable = completion.retryable();
+                match completion.report.and_then(|edit| edit.transpose().map_err(|error| error.to_string())) {
                     Ok(Some(edit)) => self.ready = Some(Ready { key: wanted.key.clone(), edit }),
                     Ok(None) => {}
                     Err(error) => {
                         let commit = wanted.commit;
                         self.ready = None;
                         self.failed = true;
-                        self.retryable_failure = completion.retryable;
+                        self.retryable_failure = retryable;
                         self.notice = Some(error.clone());
                         if commit {
                             self.wanted = None;

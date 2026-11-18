@@ -389,7 +389,7 @@ mod tests {
                 &mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx },
                 &json!({"method":"engine.execute","params":{"command":"app.library_source","params":{"view":view,"action":"refresh","source":"deletable"}}}),
             );
-            assert!(result.unwrap_err().contains("library folder operation"));
+            assert!(result.unwrap_err().message().contains("library folder operation"));
             let before = h.state().library_editors.inspect();
             h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
             h.run();

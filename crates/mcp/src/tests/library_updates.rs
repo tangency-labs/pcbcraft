@@ -1,7 +1,7 @@
 //! Available-revision discovery is one shared, non-editing engine query.
 use super::{body, call, server};
 use crate::{
-    Backend, Headless,
+    Backend, Failure, Headless,
     live::{Editor, call_editor},
 };
 use pcbcraft_engine::{
@@ -10,6 +10,7 @@ use pcbcraft_engine::{
         Item, Kind,
         publishing::{new_library, prepare},
     },
+    error_codes::ErrorCode,
     library::sources::{AVAILABLE_REVISIONS, LOAD, symbol_digest},
 };
 use serde_json::{Value, json};
@@ -77,7 +78,7 @@ fn available_revisions_has_identical_live_and_headless_results() {
     assert_eq!(editor.session.inspect(), before);
     assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
     editor.blocked = true;
-    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap_err().contains("dialog"));
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap_err().message().contains("dialog"));
     assert_eq!(editor.session.inspect(), before);
 }
 
@@ -104,7 +105,7 @@ impl Editor for OpenEditor {
         json!({})
     }
     /// Window-only operations remain outside this query.
-    fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), String> {
-        Err("not a window command".into())
+    fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), Failure> {
+        Err(Failure::new(ErrorCode::Unavailable, "not a window command"))
     }
 }

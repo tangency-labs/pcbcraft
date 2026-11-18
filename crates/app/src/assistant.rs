@@ -1269,7 +1269,7 @@ mod chat_tests {
         }
     }
 
-    /// Run `command` from another thread as the agent's bridge would, while the window runs; when
+    /// Run `command` through the bridge while the window runs, retaining typed failures; when
     /// `answer` is given, press it once the approval card shows.
     fn call(
         harness: &mut Harness<'_, PcbApp>,
@@ -1277,7 +1277,7 @@ mod chat_tests {
         command: &str,
         params: Value,
         answer: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, pcbcraft_mcp::Failure> {
         thread::scope(|scope| {
             let request = json!({"command": command, "params": params, "inspect": false});
             let worker = scope.spawn(move || {
@@ -1300,7 +1300,7 @@ mod chat_tests {
             assert!(worker.is_finished(), "the chat endpoint did not answer {command}");
             // Draw what the answer changed, such as the edit's note.
             harness.run_steps(2);
-            worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
+            worker.join().unwrap_or_else(|_| Err("worker panicked".into()))
         })
     }
 
@@ -1372,10 +1372,11 @@ mod chat_tests {
                 }
                 thread::sleep(Duration::from_millis(2));
             }
-            worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
+            worker.join().unwrap_or_else(|_| Err("worker panicked".into()))
         });
         let error = result.err().ok_or("the unanswered save ran")?;
-        assert!(error.contains("`file.save` was not run"), "{error}");
+        assert!(error.message().contains("`file.save` was not run"), "{error}");
+        assert_eq!(error.code(), "cancelled");
         assert!(harness.state().assistant.chat.approvals.is_empty());
         harness.get_by_label("`file.save` waited 4 minutes without an answer and was declined.");
         assert_eq!(harness.state().files.dirty(&harness.state().session), unsaved);
@@ -1390,14 +1391,17 @@ mod chat_tests {
         let revision = harness.state().session.revision();
         let delete = json!({"wire": "wire-4", "expected_revision": revision});
         let idle = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, delete.clone(), None).unwrap_err();
-        assert!(idle.contains("did not run"), "no reply was asked for: {idle}");
+        assert_eq!(idle.code(), "cancelled");
+        assert!(idle.message().contains("did not run"), "no reply was asked for: {idle}");
 
         open_turn(&mut harness);
         harness.state_mut().assistant.chat.stop();
         let stopped = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, delete.clone(), None).unwrap_err();
-        assert!(stopped.contains("`schematic.delete_wire` did not run"), "{stopped}");
+        assert_eq!(stopped.code(), "cancelled");
+        assert!(stopped.message().contains("`schematic.delete_wire` did not run"), "{stopped}");
         let inspected = call(&mut harness, &endpoint, "view.fit", json!({"view": 0}), None).unwrap_err();
-        assert!(inspected.contains("did not run"), "window commands are refused too: {inspected}");
+        assert_eq!(inspected.code(), "cancelled");
+        assert!(inspected.message().contains("did not run"), "window commands are refused too: {inspected}");
 
         push(&script, Event::TurnEnded { reason: "cancelled".to_owned() });
         harness.run_steps(2);
@@ -1405,7 +1409,8 @@ mod chat_tests {
         assert!(harness.state().assistant.chat.turn_open());
         harness.state_mut().assistant.new_chat();
         let reset = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, delete, None).unwrap_err();
-        assert!(reset.contains("did not run"), "{reset}");
+        assert_eq!(reset.code(), "cancelled");
+        assert!(reset.message().contains("did not run"), "{reset}");
         assert_eq!(harness.state().session.revision(), revision);
         Ok(())
     }
@@ -1436,10 +1441,11 @@ mod chat_tests {
                 harness.run_steps(1);
                 thread::sleep(Duration::from_millis(2));
             }
-            worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
+            worker.join().unwrap_or_else(|_| Err("worker panicked".into()))
         });
         let error = result.err().ok_or("the stopped reply's edit ran in the next one")?;
-        assert!(error.contains("did not run"), "{error}");
+        assert!(error.message().contains("did not run"), "{error}");
+        assert_eq!(error.code(), "cancelled");
         assert_eq!(harness.state().session.revision(), revision);
         Ok(())
     }
@@ -1519,10 +1525,10 @@ mod chat_tests {
         Ok(())
     }
 
-    /// Under Edits a project edit runs at once and shares undo; saving waits and a denial reaches
-    /// the agent. Under Ask a view command waits for Allow, and Always allow is remembered.
+    /// Under Edits a project edit shares undo; denying a save reports denied without an edit.
+    /// Under Ask a view command waits for Allow, and Always allow is remembered.
     #[test]
-    fn the_gate_holds_tool_calls_for_the_person() -> Result<(), Box<dyn std::error::Error>> {
+    fn the_gate_reports_denied_and_remembers_allowed_tool_calls() -> Result<(), Box<dyn std::error::Error>> {
         let (mut harness, _script, endpoint) = harness_with_agent()?;
         open_turn(&mut harness);
         let revision = harness.state().session.revision();
@@ -1532,8 +1538,11 @@ mod chat_tests {
         click(&mut harness, "Undo");
         assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(1));
 
+        let before_denial = harness.state().session.inspect();
         let denied = call(&mut harness, &endpoint, "file.save", json!({}), Some("Deny")).unwrap_err();
-        assert!(denied.contains("denied `file.save`"), "{denied}");
+        assert_eq!(denied.code(), "denied");
+        assert!(denied.message().contains("denied `file.save`"), "{denied}");
+        assert_eq!(harness.state().session.inspect(), before_denial);
         assert!(harness.state().assistant.chat.approvals.is_empty());
 
         harness.state_mut().assistant.settings.agents.ai_permissions = craft_agents::agents::Mode::Ask;
@@ -1543,7 +1552,10 @@ mod chat_tests {
         assert!(harness.state().assistant.always_allowed("view.fit"));
         call(&mut harness, &endpoint, "view.fit", fit, None)?;
         let inspected = call(&mut harness, &endpoint, "edit.undo", Value::Null, Some("Allow"));
-        assert!(inspected.is_ok() || inspected.is_err_and(|error| error.contains("nothing to undo")));
+        if let Err(error) = inspected {
+            assert_eq!(error.code(), "unavailable");
+            assert!(error.message().contains("nothing to undo"), "{error}");
+        }
         Ok(())
     }
 

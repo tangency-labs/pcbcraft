@@ -220,7 +220,7 @@ impl Planning {
             && completion.source.is_current(session)
         {
             let key = wanted.key.clone();
-            self.retryable = completion.retryable;
+            self.retryable = completion.retryable();
             self.accept(key, completion.report);
         }
         self.inline_source = self.context.as_ref().filter(|context| context.source().is_current(session)).and(source);
