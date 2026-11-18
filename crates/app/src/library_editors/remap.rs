@@ -45,6 +45,12 @@ struct Row {
     name: String,
 }
 impl Draft {
+    /// Tests can distinguish an unreviewed form from one that captured a token without exposing it.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn has_captured_review(&self) -> bool {
+        self.token.is_some()
+    }
+
     /// Include each logical terminal once even when multiple units display it.
     fn new(document: u64, revision: u64, item: &Item) -> Self {
         let mut seen = std::collections::BTreeSet::new();

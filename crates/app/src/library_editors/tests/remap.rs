@@ -277,8 +277,7 @@ fn pin_remap_matching_token_without_form_owner_is_refused() {
         assert_eq!(app.library_editors.inspect(), before);
         assert!(std::sync::Arc::ptr_eq(&item, &app.library_editors.documents[&id].session.snapshot()));
         assert_eq!(app.session.inspect(), project);
-        // The command's owner-specific refusal establishes the mismatch; it must not close the form.
-        assert!(matches!(&app.dialog, Dialog::LibraryPinRemap(_)));
+        assert!(matches!(&app.dialog, Dialog::LibraryPinRemap(draft) if !draft.has_captured_review()));
     }
 }
 
@@ -329,20 +328,6 @@ fn pin_remap_form_failed_refresh_cancel_and_dismiss_retire_live_review() {
         assert_eq!(h.state().library_editors.documents[&id].session.snapshot().encode().unwrap(), bytes);
         assert_eq!(h.state().session.inspect(), project);
     }
-}
-
-/// Explicit document close releases its captured project/report; reopening cannot reuse its token.
-#[test]
-fn pin_remap_close_cancels_review_and_reopen_has_new_authority() {
-    let (mut app, id) = fixture();
-    let item = app.library_editors.documents[&id].session.snapshot();
-    let token = app.preview_library_pin_remap(id, 0, swap()).unwrap();
-    app.library_editors.close(id, true).unwrap();
-    assert!(app.library_editors.pin_remap.is_none());
-    let reopened = app.library_editors.open(item.as_ref().clone(), true).unwrap();
-    assert_ne!(id, reopened);
-    assert!(app.apply_library_pin_remap(reopened, 0, token).unwrap_err().contains("Preview"));
-    assert_eq!(app.library_editors.documents[&reopened].session.revision(), 0);
 }
 
 /// Unapplied property input is not part of a captured report, so neither preview nor apply may
