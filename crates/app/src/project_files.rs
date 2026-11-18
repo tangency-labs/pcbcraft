@@ -21,6 +21,7 @@ pub(super) enum SaveFormat {
     Archive,
 }
 
+mod abandon;
 #[cfg(any(target_arch = "wasm32", test))]
 mod download;
 mod inspection;

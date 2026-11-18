@@ -112,6 +112,20 @@ impl PcbApp {
         }
     }
 
+    /// Stop waiting for a stalled file job with a known path (see `ProjectFiles::abandon`).
+    /// An action that waited for its save to succeed asks again, since the project is still
+    /// unsaved; others go on as [`Self::finish_waiting`] decides once no job runs.
+    pub(crate) fn stop_waiting_for_file(&mut self) -> Result<(), String> {
+        let notice = self.files.abandon()?;
+        self.waiting = self.waiting.take().map(|waiting| match waiting {
+            Waiting::ForSave(then) => Waiting::ToDecide(then),
+            other => other,
+        });
+        self.file_notice = None;
+        self.message = Some(notice);
+        Ok(())
+    }
+
     /// Do what the question held back. Closing marks the window as allowed to close and asks again.
     fn carry_on(&mut self, then: Then, ctx: &egui::Context) {
         match then {

@@ -435,12 +435,17 @@ impl PcbApp {
             )
             && matches!(self.dialog, Dialog::None)
         {
-            let mut cancel = false;
+            let (mut cancel, mut stop) = (false, false);
+            let abandonable = self.files.abandonable();
             let dismissed = pcbcraft_chrome::shell::dialog(ctx, "close_wait", "Close Project", |ui| {
                 ui.label("Waiting for the current file operation before closing.");
+                // A save or open stalled on an unresponsive disk would otherwise hold the close forever.
+                stop = abandonable && pcbcraft_chrome::controls::button(ui, "Stop waiting").clicked();
                 cancel = pcbcraft_chrome::controls::button(ui, "Cancel close").clicked();
             });
-            if cancel || dismissed {
+            if stop && let Err(error) = self.stop_waiting_for_file() {
+                self.message = Some(error);
+            } else if cancel || dismissed {
                 // Keep the worker and its immutable snapshot; only withdraw the quit request.
                 self.waiting = None;
                 self.file_notice = None;

@@ -5,6 +5,14 @@ use std::sync::mpsc;
 use super::{Job, Outcome, ProjectFiles, StandIn, StandInSave, native};
 
 impl ProjectFiles {
+    /// Leave a job running that only the test ends, as a worker stalled on an unresponsive disk
+    /// would. The returned closure delivers a late failure and reports whether anyone received it.
+    pub(crate) fn stall(&mut self, operation: &'static str, destination: Option<&str>, revision: u64) -> impl FnOnce() -> bool + use<> {
+        let (send, receiver) = mpsc::channel();
+        self.job = Some(Job { receiver, revision, operation, destination: destination.map(str::to_owned) });
+        move || send.send(Err("late result".to_owned())).is_ok()
+    }
+
     /// Send later saves to a stand-in the test finishes, instead of a worker with a native picker.
     pub(crate) fn use_stand_in(&mut self) {
         self.stand_in = Some(StandIn::default());

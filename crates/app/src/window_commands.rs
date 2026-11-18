@@ -1073,6 +1073,12 @@ mod live {
                 kind: Kind::Path,
             }],
         },
+        WindowCommand {
+            id: "file.abandon",
+            title: "Stop waiting",
+            summary: "Stop waiting for a running open or save that has a path, such as one stalled on an unresponsive disk, so other commands can run. A late open is discarded; a save may still finish on disk, but the project stays unsaved. file.last reports it abandoned. Refused while the file picker is open.",
+            params: &[],
+        },
     ];
 
     /// Every window command, described for live discovery.
@@ -1794,6 +1800,7 @@ mod live {
                     self.message = None;
                     self.file_notice = None;
                 }
+                ("file.abandon", _, _) => self.stop_waiting_for_file()?,
                 ("file.open", _, _) => {
                     // The GUI asks Save / Don't Save here; a live client saves first instead.
                     if self.files.dirty(&self.session) {

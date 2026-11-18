@@ -238,6 +238,22 @@ fn closing_during_a_save_decides_when_it_finishes() {
     }
 }
 
+/// A close held by a save stalled on an unresponsive disk can stop waiting. The project is
+/// still unsaved, so the question follows, and Don't Save closes; the late result is dropped.
+#[test]
+fn closing_can_stop_waiting_for_a_stalled_save() {
+    let mut h = unsaved_project();
+    let revision = h.state().session().revision();
+    let late = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
+    assert!(!request_close(&mut h));
+    assert!(matches!(h.state().dialog, Dialog::None));
+    press(&mut h, "Stop waiting");
+    assert!(!h.state().files.busy());
+    assert!(!late(), "nobody adopts the late result");
+    assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::Close)), "the project is still unsaved");
+    assert!(click_closes(&mut h, "Don't Save"));
+}
+
 /// Quit, Ctrl+Q and the integrated title bar's close control all ask the window to close, so
 /// they reach the same question.
 #[test]
