@@ -1859,6 +1859,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[5],
     library::sources::COMMANDS[6],
     library::sources::COMMANDS[7],
+    library::sources::COMMANDS[8],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2968,6 +2969,7 @@ impl Session {
             | parameters::RESOLVE
             | "project.rename"
             | netlist::EXPORT_NETLIST
+            | library::sources::AVAILABLE_REVISIONS
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
