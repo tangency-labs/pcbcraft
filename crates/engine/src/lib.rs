@@ -169,6 +169,7 @@ enum ParamKind {
     ArcTracks,
     TeardropEdits,
     AlignMode,
+    FootprintPitch,
     BoardSide,
     RuleLength,
     BoardRules,
@@ -299,6 +300,7 @@ impl ParamKind {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
             }
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
+            Self::FootprintPitch => json!({"type":"integer","minimum":1,"maximum":board::transform::MAX_FOOTPRINT_PITCH_NM}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
@@ -688,6 +690,8 @@ impl ParamKind {
             Self::TrackEnds => Err("must list tracks with a UUID and bounded start and end points"),
             Self::AlignMode if value.as_str().and_then(AlignMode::parse).is_some() => Ok(()),
             Self::AlignMode => Err("must be an alignment mode"),
+            Self::FootprintPitch if value.as_i64().is_some_and(|n| (1..=board::transform::MAX_FOOTPRINT_PITCH_NM).contains(&n)) => Ok(()),
+            Self::FootprintPitch => Err("requires pitch_nm to be a positive whole number of nanometers within the maximum placement span"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
@@ -2242,12 +2246,18 @@ const CATALOG: &[Command] = &[
     Command {
         id: ALIGN_FOOTPRINTS,
         title: "Align Footprints",
-        summary: "Align two or more footprints by their bounds (left, right, top, bottom, center_x, center_y) or distribute three or more with equal gaps to nanometer precision (distribute_x, distribute_y), in one undo step. Distribution keeps the physical outermost footprints and span fixed; overlapping selections that cannot retain those anchors are refused. Track ends follow moving pads. Edits that join two nets are refused. Top is the smallest Y.",
+        summary: "Align footprints by bounds, distribute by equal gaps with fixed outer bounds, or set an exact origin-to-origin pitch along X or Y. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
             Param { required: true, name: "footprints", summary: "Unique placed footprint IDs from board inspection", kind: ParamKind::FootprintIds },
             Param { required: true, name: "mode", summary: "How to align or distribute them", kind: ParamKind::AlignMode },
+            Param {
+                required: false,
+                name: "pitch_nm",
+                summary: "Positive origin spacing for distribute_x or distribute_y (two or more footprints), starting at the smallest axis coordinate. Ties follow footprint request order. Omit for equal gaps by bounds (three or more).",
+                kind: ParamKind::FootprintPitch,
+            },
         ],
     },
     Command {

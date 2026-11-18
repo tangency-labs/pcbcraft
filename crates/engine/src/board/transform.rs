@@ -1,11 +1,16 @@
 //! Atomic board placement edits shared by the GUI and MCP.
-use super::Footprint;
-use crate::{CommandError, Project, Session, schematic::Point};
+use super::{Board, Footprint};
+use crate::{
+    CommandError, Project, Session,
+    schematic::{MAX_CENTER_NM, Point},
+};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Align or evenly distribute the addressed footprints by their bounds, in one undo step.
+/// Align or distribute the addressed footprints by their bounds or at a set pitch, in one undo step.
 pub const ALIGN_FOOTPRINTS: &str = "pcb.align_footprints";
+/// Largest distance between two valid placement origins along one axis.
+pub(crate) const MAX_FOOTPRINT_PITCH_NM: i64 = 2 * MAX_CENTER_NM;
 /// The alignment modes, as MCP clients name them.
 pub const ALIGN_MODES: [&str; 8] = {
     let mut names = [""; 8];
@@ -176,6 +181,33 @@ fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Result<Vec<(i64, i64)>, Com
     })
 }
 
+/// Plan origin-to-origin distribution on one axis, keeping the smallest coordinate fixed.
+/// Request order breaks ties. Results are returned in request order for the shared move path.
+/// Stop before proposing a destination outside the valid placement range.
+fn pitch_distribution(board: &Board, ids: &[u64], mode: AlignMode, pitch_nm: i64) -> Result<Vec<(i64, i64)>, CommandError> {
+    let horizontal = mode == AlignMode::DistributeX;
+    let mut origins = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let footprint = board.placement(*id).ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
+            Ok((if horizontal { footprint.x_nm } else { footprint.y_nm }, i))
+        })
+        .collect::<Result<Vec<_>, CommandError>>()?;
+    origins.sort_unstable();
+    let mut target = origins.first().map_or(0, |&(origin, _)| origin);
+    let mut deltas = vec![(0, 0); ids.len()];
+    for (origin, i) in origins {
+        if target > MAX_CENTER_NM {
+            return Err(CommandError::InvalidParams("the pitch would move a footprint outside the coordinate range".into()));
+        }
+        let delta = target - origin;
+        deltas[i] = if horizontal { (delta, 0) } else { (0, delta) };
+        target += pitch_nm;
+    }
+    Ok(deltas)
+}
+
 impl Session {
     /// Move only a placed footprint's reference. A zero offset restores the library default.
     pub(crate) fn set_footprint_reference_offset(&mut self, params: &Value) -> Result<(), CommandError> {
@@ -240,10 +272,10 @@ impl Session {
         Ok(())
     }
 
-    /// Align (two or more) or distribute (three or more) the addressed footprints by their
-    /// resolved bounds, carrying track ends on pads that move. A locked placement, invalid input,
-    /// a result outside the coordinate range or a new short leaves the board unchanged. Distribution also
-    /// preserves its outer anchors and span. An alignment that moves nothing creates no edit.
+    /// Align by bounds, distribute by bounds with fixed outer anchors, or distribute origins
+    /// along one axis at a positive `pitch_nm` (two or more footprints). Track ends on moved
+    /// pads follow them. A selected locked placement, invalid input, an out-of-range result or
+    /// a new short leaves the board unchanged. An accepted request that moves nothing creates no edit.
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -255,21 +287,30 @@ impl Session {
             .map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
             .collect::<Option<_>>()
             .ok_or_else(|| CommandError::InvalidParams("footprints must be footprint IDs".into()))?;
-        let needed = mode.minimum();
+        let pitch_nm = params["pitch_nm"].as_i64();
+        if pitch_nm.is_some() && !mode.distributes() {
+            return Err(CommandError::InvalidParams("pitch_nm requires distribute_x or distribute_y".into()));
+        }
+        let needed = if pitch_nm.is_some() { 2 } else { mode.minimum() };
         if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
             return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
         }
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
         require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
-        let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
-        let mut found: std::collections::BTreeMap<String, [i64; 4]> = view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
-        let boxes = ids
-            .iter()
-            .map(|id| found.remove(&format!("footprint-{id}")))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
-        let deltas = alignment(mode, &boxes)?;
+        let deltas = if let Some(pitch_nm) = pitch_nm {
+            pitch_distribution(&project.board, &ids, mode, pitch_nm)?
+        } else {
+            let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
+            let mut found: std::collections::BTreeMap<String, [i64; 4]> =
+                view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
+            let boxes = ids
+                .iter()
+                .map(|id| found.remove(&format!("footprint-{id}")))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
+            alignment(mode, &boxes)?
+        };
         if deltas.iter().all(|delta| *delta == (0, 0)) {
             return Ok(());
         }

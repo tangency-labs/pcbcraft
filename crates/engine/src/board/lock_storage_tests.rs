@@ -773,6 +773,7 @@ fn locked_placements_refuse_direct_edits_atomically() {
         (SET_FOOTPRINT_TRANSFORM, json!({"board":board,"footprint":ids[0],"x_nm":0,"y_nm":0,"rotation":0,"side":"back"})),
         (ALIGN_FOOTPRINTS, json!({"board":board,"footprints":ids,"mode":"left"})),
         (ALIGN_FOOTPRINTS, json!({"board":board,"footprints":ids,"mode":"distribute_x"})),
+        (ALIGN_FOOTPRINTS, json!({"board":board,"footprints":ids,"mode":"distribute_x","pitch_nm":5_080_000})),
         (DELETE_FOOTPRINTS, json!({"board":board,"footprints":ids})),
         (DELETE, json!({"board":board,"items":items})),
     ];

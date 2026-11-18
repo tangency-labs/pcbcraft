@@ -56,6 +56,25 @@ it. A `pcb.check_design` request can override the fixed defaults for that run. S
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
 
+## Set-pitch distribution
+
+In MCP, call `pcb.align_footprints` with `distribute_x` or `distribute_y`,
+`pitch_nm` (a positive integer number of nanometers), and at least two distinct
+placed footprint IDs. For example, use `pitch_nm: 5080000` for a 5.08 mm pitch.
+Pitch is measured between footprint origins, not pad centers or physical bounds.
+The smallest X (left) or Y (top) origin stays fixed, and the other origins are
+spaced in increasing coordinate order. Request order breaks ties. The other
+coordinate, rotation and board side do not change. The original span may grow or
+shrink. A locked footprint anywhere in the selection refuses the whole request
+and is named, even if it would be the fixed anchor. An out-of-range destination,
+a new short or a move that would change locked copper also refuses the request.
+A successful move and its attached track changes are one undo step; repeating
+an accepted pitch that already matches creates no history.
+
+Omit `pitch_nm` for the existing equal-gap distribution: it requires at least
+three footprints, uses physical bounds and preserves the outer footprints and
+span. The Modify menu continues to use equal gaps.
+
 ## Gaps, in recommended order
 
 Each slice below can land on its own. The order puts first what unblocks the
