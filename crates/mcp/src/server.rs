@@ -76,6 +76,7 @@ fn duplicate_primitive_ids(text: &str) -> bool {
     impl<'de> Visitor<'de> for DuplicateKeys {
         type Value = bool;
 
+        /// Describe the JSON shape accepted by the duplicate-key check.
         fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
             out.write_str("a primitive map")
         }
@@ -173,6 +174,7 @@ impl Server {
         self.handle_message(msg, duplicate_remap_ids)
     }
 
+    /// Handle an already-decoded message, which has no raw wire keys to inspect.
     pub fn handle(&mut self, msg: Value) -> Option<Value> {
         self.handle_message(msg, false)
     }
@@ -201,6 +203,7 @@ impl Server {
         })
     }
 
+    /// Dispatch a request; a duplicate remap ID fails inside the checked tool call.
     fn request(&mut self, method: &str, params: &Value, duplicate_remap_ids: bool) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {

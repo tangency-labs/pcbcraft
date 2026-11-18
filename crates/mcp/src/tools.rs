@@ -124,6 +124,7 @@ fn listing(commands: &Value, all: &[Value]) -> Value {
 }
 
 /// A failed command is a tool result the agent can read, not a protocol error.
+/// Return a failed MCP tool result without turning it into a JSON-RPC protocol error.
 pub(crate) fn failure(message: &str) -> Value {
     json!({"isError": true, "content": [{"type": "text", "text": message}]})
 }
