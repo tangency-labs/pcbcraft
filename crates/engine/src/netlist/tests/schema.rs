@@ -88,11 +88,11 @@ impl<'a> Instance<'a> {
     fn check_encoding(&self, at: &str) -> Result<(), String> {
         for (key, child) in self.object.iter().flatten() {
             let at = format!("{at}.{key}");
-            Self::read(child, &at)?.check_encoding(&at)?;
+            Instance::read(child, &at)?.check_encoding(&at)?;
         }
         for (index, child) in self.array.iter().flatten().enumerate() {
             let at = format!("{at}[{index}]");
-            Self::read(child, &at)?.check_encoding(&at)?;
+            Instance::read(child, &at)?.check_encoding(&at)?;
         }
         Ok(())
     }
