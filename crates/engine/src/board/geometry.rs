@@ -94,6 +94,14 @@ impl Contour {
         area != 0 && inside(p, &self.core)
     }
 
+    /// Signed distance from a point to the boundary, positive inside. Inside an area core,
+    /// the expansion adds to the nearest core edge distance; outside the core it subtracts
+    /// the distance back to the core. This also supports point and segment cores.
+    pub(super) fn boundary_margin_nm(&self, point: Point) -> f64 {
+        let distance = self.edges().map(|(a, b)| point_distance(point, a, b)).fold(f64::INFINITY, f64::min);
+        if self.contains_core(point) { self.radius + distance } else { self.radius - distance }
+    }
+
     /// Test a round-ended segment against the pad, with a zero-length segment for an endpoint or via.
     pub(crate) fn overlaps_segment(&self, start: Point, end: Point, radius: f64) -> bool {
         self.touches(&Self::capsule(start, end, radius))

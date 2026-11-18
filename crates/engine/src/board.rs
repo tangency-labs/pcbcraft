@@ -36,6 +36,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod slot;
 pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
