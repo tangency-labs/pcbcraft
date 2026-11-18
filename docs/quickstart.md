@@ -660,6 +660,21 @@ unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
 retrying. The live editor runs the same project commands as a headless session.
 
+To check existing part pins against native libraries already loaded in the session,
+call `execute` with:
+
+```json
+{"command":"library.available_revisions","params":{},"inspect":false}
+```
+
+Read `outdated_instances` for stable instance IDs and `instances` for exact pinned
+and latest addresses, source status and diagnostics. This is read-only: it does
+not refresh a library, change geometry or adopt a revision. Missing sources are
+unknown, and available does not imply compatible. Native parts compare the owning
+part rather than separately updating its drawing dependencies. See
+[query available revisions](native-library-sources.md#query-available-revisions)
+for the result contract; dedicated update review and adoption remain future work.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
