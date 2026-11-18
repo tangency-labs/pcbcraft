@@ -147,6 +147,10 @@ pub struct Definition {
     pub name: String,
     #[serde(deserialize_with = "unique_rules")]
     pub rules: Rules,
+    /// Prototype payload, independent of dimensions consumed by routing and checking.
+    #[cfg(test)]
+    #[serde(skip)]
+    pub(crate) authored_intent: crate::nets::intent::IntentV1,
 }
 
 /// Reject repeated dimensional keys before JSON decoding can silently replace authored intent.

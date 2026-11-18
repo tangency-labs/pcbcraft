@@ -3324,6 +3324,14 @@ impl Session {
             }
             return Ok(result);
         }
+        // The prototype must remain undiscoverable and unavailable in shipping builds until
+        // native Save/Open support it. Tests still exercise the existing transaction path.
+        #[cfg(test)]
+        match id {
+            nets::intent::INSPECT => return self.inspect_electrical_intent(params),
+            nets::intent::SET => return self.apply(id, params).map(|revision| json!({"revision":revision})),
+            _ => {}
+        }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
             return Ok(sheets::page::list_templates());
@@ -3454,6 +3462,11 @@ impl Session {
         if id == board::arc::SET_ARCS {
             self.set_arc_tracks(params)?;
             return Ok(self.revision());
+        }
+        #[cfg(test)]
+        if id == nets::intent::SET {
+            self.set_electrical_intent(params)?;
+            return Ok(self.revision);
         }
         // A read-only query that needs no project: accepted like `execute`, changing nothing.
         if id == sheets::page::LIST_TEMPLATES {
