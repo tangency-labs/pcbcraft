@@ -26,6 +26,13 @@ guides, format references, design plans and verification records.
 
 ## Implementation notes
 
+Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
+Apply command: layer removals/renumbering, affected objects and consent/refusal
+are returned with a disposable session-local token. Preview does not dirty the
+project or add history. See [setup review](board-materials.md#review-a-setup-edit).
+The detailed review is available to native command clients and live/headless MCP;
+the Board setup form does not yet present it.
+
 [Intentional no-connect markers](no-connect-markers.md) attach to logical part
 terminals and open wire ends through Q, Capture and context actions. They follow
 placed units and endpoints, support ordinary click/marquee selection and

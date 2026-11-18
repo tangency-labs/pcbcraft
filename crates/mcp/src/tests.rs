@@ -594,6 +594,66 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), placed);
 }
 
+/// Setup reviews return the same data through the native live adapter and headless MCP,
+/// including when inspection is suppressed, while capabilities stay session-local.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn board_setup_preview_is_shared_by_live_and_headless_mcp() {
+    use crate::{
+        Backend,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, PREVIEW_BOARD_SETUP, SET_BOARD_SETUP};
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        /// Expose the editor-owned session without a second document path.
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        /// This test host has no modal interaction.
+        fn refusal(&self, _: &str) -> Option<String> {
+            None
+        }
+        /// No presentation commands are needed for a setup review.
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        /// Project inspection is provided by the shared session.
+        fn inspect(&self) -> Value {
+            json!({})
+        }
+        /// The host rejects unrelated window commands.
+        fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), String> {
+            Err("not a window command".into())
+        }
+    }
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":s.revision()})).unwrap();
+    let snapshot = s.snapshot().unwrap();
+    let candidate = snapshot.board_setup().unwrap().with_copper_count(2).unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot);
+    let mut editor = OpenEditor(live);
+    let before = editor.0.inspect();
+    let revision = editor.0.revision();
+    let params = json!({"command":PREVIEW_BOARD_SETUP,"params":{"setup":candidate,"expected_revision":revision},"inspect":false});
+    let a = headless.call("engine.execute", params.clone()).unwrap()["board_setup_preview"].clone();
+    let b = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap()["board_setup_preview"].clone();
+    assert_eq!(a["changes"], b["changes"]);
+    assert_eq!(a["can_apply"], true);
+    assert_ne!(a["plan_token"], b["plan_token"]);
+    assert_eq!(editor.0.inspect(), before);
+    let foreign = json!({"method":"engine.execute","params":{"command":SET_BOARD_SETUP,"params":{"setup":candidate,"plan_token":a["plan_token"],"expected_revision":revision}}});
+    let error = call_editor(&mut editor, &foreign).unwrap_err();
+    assert!(error.contains("unknown, stale or replaced board setup preview"), "{error}");
+    let own = json!({"method":"engine.execute","params":{"command":SET_BOARD_SETUP,"params":{"setup":candidate,"plan_token":b["plan_token"],"expected_revision":revision}}});
+    let applied = call_editor(&mut editor, &own).unwrap();
+    assert_eq!(applied["revision"], revision + 1);
+    assert_eq!(applied["project"]["board"]["setup"]["stackup"]["strata"].as_array().unwrap().len(), 3);
+}
+
 /// Headless clients discover the strict setup schema and edit the same revisioned model.
 #[test]
 fn board_setup_commands_are_discoverable_and_atomic() {

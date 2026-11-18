@@ -868,6 +868,7 @@ pub const DELETE_FOOTPRINTS: &str = "pcb.delete_footprints";
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
+pub use board::setup::preview::{CANCEL_BOARD_SETUP_PREVIEW, PREVIEW_BOARD_SETUP};
 /// Set board-local physical silkscreen text height, stroke width and pad clearance.
 pub const SET_SILKSCREEN: &str = "pcb.set_silkscreen";
 const BOARD: Param = Param {
@@ -1824,8 +1825,37 @@ const CATALOG: &[Command] = &[
                 summary: "Board print settings to apply atomically with setup",
                 kind: ParamKind::SilkscreenSettings,
             },
+            Param {
+                required: false,
+                name: "plan_token",
+                summary: "Current session's setup preview token; candidate and consent must match",
+                kind: ParamKind::Text,
+            },
             EXPECTED_REVISION,
         ],
+    },
+    Command {
+        id: PREVIEW_BOARD_SETUP,
+        title: "Preview Board Setup",
+        summary: "Review affected layers and objects, consent and Apply refusal without changing the project or history.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "setup", summary: "Complete candidate setup to review", kind: ParamKind::BoardSetup },
+            Param {
+                required: false,
+                name: "resolve_existing_footprints",
+                summary: "Explicitly consent to compatible front/all-copper span changes",
+                kind: ParamKind::ResolveExistingFootprints,
+            },
+            Param { required: false, name: "silkscreen", summary: "Board print settings reviewed with setup", kind: ParamKind::SilkscreenSettings },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: CANCEL_BOARD_SETUP_PREVIEW,
+        title: "Cancel Board Setup Preview",
+        summary: "Revoke only the named setup preview without changing the project or history.",
+        params: &[BOARD, Param { required: true, name: "plan_token", summary: "Current session's setup preview token", kind: ParamKind::Text }],
     },
     Command {
         id: SET_SILKSCREEN,
@@ -2770,6 +2800,8 @@ pub struct Session {
     history_root_revision: u64,
     /// One runtime-only review capability; never serialized or counted as an authored edit.
     update_plan: Option<board::update::CachedPlan>,
+    /// One runtime-only setup review, never retained by authored history snapshots.
+    setup_preview: Option<board::setup::preview::CachedPreview>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
     /// Told about each new history root and committed edit; never part of the project.
@@ -2789,6 +2821,7 @@ impl Default for Session {
             revision: 0,
             history_root_revision: 0,
             update_plan: None,
+            setup_preview: None,
             defer_net_reconciliation: false,
             observer: None,
         }
@@ -2826,6 +2859,7 @@ impl Session {
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
+        self.setup_preview = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -2897,6 +2931,9 @@ impl Session {
         }
         if changed {
             self.update_plan = None;
+            if self.board_setup_preview().is_none() {
+                self.setup_preview = None;
+            }
             // The adopted metadata is saved data, so it is a new base rather than an edit.
             self.report_opened();
         }
@@ -3048,7 +3085,8 @@ impl Session {
             | board::clipboard::DELETE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
-            SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
+            SET_BOARD_SETUP | PREVIEW_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
+            CANCEL_BOARD_SETUP_PREVIEW => self.board_setup_preview().is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -3212,6 +3250,9 @@ impl Session {
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
         }
+        if id == PREVIEW_BOARD_SETUP {
+            return Ok(json!({"revision":self.revision,"board_setup_preview":self.board_setup_preview()}));
+        }
         if id == CHECK_DESIGN {
             return Ok(json!({"revision":self.revision,"design_check":self.check_design(params)?}));
         }
@@ -3295,6 +3336,8 @@ impl Session {
                 | DELETE_FOOTPRINTS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
+                | PREVIEW_BOARD_SETUP
+                | CANCEL_BOARD_SETUP_PREVIEW
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
                 | PREVIEW_ASSEMBLY_PROFILE
@@ -3324,7 +3367,16 @@ impl Session {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
         let handler_checks_state = self.project.is_some()
-            && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | SET_SILKSCREEN | sheets::CREATE_SHEET | sheets::DELETE_SHEET);
+            && matches!(
+                id,
+                INITIALIZE_BOARD_SETUP
+                    | SET_BOARD_SETUP
+                    | PREVIEW_BOARD_SETUP
+                    | CANCEL_BOARD_SETUP_PREVIEW
+                    | SET_SILKSCREEN
+                    | sheets::CREATE_SHEET
+                    | sheets::DELETE_SHEET
+            );
         if !handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 sheets::CREATE_SHEET
@@ -3395,7 +3447,9 @@ impl Session {
                 | MOVE_ITEMS
                 | DELETE_ITEMS
                 | INITIALIZE_BOARD_SETUP
-                | SET_BOARD_SETUP => "no project is open".to_owned(),
+                | SET_BOARD_SETUP
+                | PREVIEW_BOARD_SETUP
+                | CANCEL_BOARD_SETUP_PREVIEW => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -3575,6 +3629,8 @@ impl Session {
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
+            PREVIEW_BOARD_SETUP => self.preview_board_setup(params)?,
+            CANCEL_BOARD_SETUP_PREVIEW => self.cancel_board_setup_preview(params)?,
             SET_RULES => self.set_rules(params)?,
             SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
             SET_ASSEMBLY_PROFILE => self.set_assembly_profile(params)?,
@@ -4007,13 +4063,10 @@ impl Session {
         Ok(())
     }
 
-    /// Refuse changes to existing locked copper before publishing any state, then bound undo history. Preserve adopted allocation metadata across
-    /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
-    /// revisions advance past every live ID allocated by a compound wire edit.
-    /// Net allocation and reconciliation validate before any session/history state is changed.
-    /// Memberships of part instances the candidate no longer holds are dropped in the same step;
-    /// edits that keep the part-instance map itself skip that scan.
-    fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
+    /// Prepare an edit without publishing it. Locked copper, metadata, nets and zone ownership
+    /// are checked here so previews can run the same fallible preparation as a committed edit.
+    /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
+    fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
@@ -4085,8 +4138,16 @@ impl Session {
             project.reconcile_nets(self.project.as_deref())?;
         }
         board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        Ok((project, highest))
+    }
+
+    /// Prepare and publish an edit, retaining the allocation watermark and bounded undo history.
+    /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
+    fn change(&mut self, project: Project) -> Result<(), CommandError> {
+        let (project, highest) = self.prepare_change(project)?;
         let project = self.retain_allocation_watermark(Arc::new(project));
         self.update_plan = None;
+        self.setup_preview = None;
         self.undo.push(self.project.replace(project));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
@@ -4102,6 +4163,7 @@ impl Session {
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         if let Some(state) = from.pop() {
             self.update_plan = None;
+            self.setup_preview = None;
             to.push(std::mem::replace(&mut self.project, state));
             self.revision += 1;
         }
