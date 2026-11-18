@@ -131,10 +131,252 @@ fn inspection_command_validates_authority_and_expires_on_revision() {
     h.state_mut().run("edit.redo", &json!({}));
     h.run();
     assert!(h.state().views.active.inspection.is_empty());
+    h.state_mut().select_inspection(id, vec![source], "replace").unwrap();
+    assert_eq!(h.state().views.active.inspection, vec![source]);
     let saved = h.state().session.snapshot().unwrap();
     h.state_mut().session.open_snapshot(saved);
     h.run();
     assert!(h.state().views.active.inspection.is_empty());
+}
+
+/// Return a real land's qualified identity and current screen point without selecting its owner.
+fn first_pad(h: &Harness<'_, PcbApp>) -> (Source, egui::Pos2) {
+    let board = h.state().session.project().unwrap().boards().next().unwrap();
+    let footprint = board.footprints().next().unwrap();
+    let pad = &footprint.pads[0];
+    (
+        Source::Pad(PadTarget {
+            board: board.target,
+            pad: pcbcraft_engine::board::Pad::parse(&footprint.id, &pad.number).unwrap().on_board(board.target.board),
+        }),
+        h.state().views.active.camera.screen(pad.center, h.get_by_label("PCB canvas").rect()),
+    )
+}
+
+/// A quick drag is classified by where it was pressed, even when its first motion leaves copper.
+/// Body drags still move the footprint and undo exactly with Pads enabled.
+#[test]
+fn pad_inspection_drag_origin_cannot_move_the_owner() {
+    for pad_origin in [true, false] {
+        let mut h = super::board_tracks::routable();
+        let id = h.state().views.active.id();
+        h.state_mut().set_selection_filters(id, &json!({"pads":true})).unwrap();
+        h.run();
+        let at = if pad_origin {
+            first_pad(&h).1
+        } else {
+            let board = h.state().session.project().unwrap().boards().next().unwrap();
+            h.state().views.active.camera.screen(board.footprints().next().unwrap().position, h.get_by_label("PCB canvas").rect())
+        };
+        let before = document(&h);
+        h.hover_at(at);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        let to = at + egui::vec2(60., 35.);
+        h.event(egui::Event::PointerMoved(to));
+        h.run();
+        assert_eq!(h.state().views.active.board.draft.is_some(), !pad_origin);
+        assert!(h.state().views.active.board.reference_drag.is_none());
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run();
+        if !pad_origin {
+            assert_eq!(h.state().session.revision(), before.revision + 1);
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+            assert_eq!(document(&h).bytes, before.bytes);
+        } else {
+            assert_eq!(document(&h), before);
+        }
+    }
+}
+
+/// An already captured reference retains its authority over a pad, but focus/revision loss
+/// still cancels it. A successful placement edits only the reference and remains undoable.
+#[test]
+fn pad_inspection_does_not_cancel_an_active_reference_move() {
+    enum Finish {
+        Place,
+        Focus,
+        Revision,
+    }
+    for finish in [Finish::Place, Finish::Focus, Finish::Revision] {
+        let mut h = super::board_tracks::routable();
+        let id = h.state().views.active.id();
+        h.state_mut().set_selection_filters(id, &json!({"pads":true})).unwrap();
+        h.run();
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        let footprint = board.footprints().next().unwrap();
+        let origin = footprint.position;
+        let pads = footprint.pads.clone();
+        let reference = footprint.graphics.iter().find(|g| g.reference).unwrap().points[0];
+        let from = h.state().views.active.camera.screen(reference, h.get_by_label("PCB canvas").rect());
+        let to = first_pad(&h).1;
+        let before = document(&h);
+        h.hover_at(from);
+        h.run();
+        h.key_press(Key::M);
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_some());
+        h.hover_at(to);
+        h.run();
+        assert!(h.state().views.active.board.reference_drag.is_some());
+        assert_eq!(document(&h), before);
+        match finish {
+            Finish::Place => {
+                click_at(&mut h, to, Modifiers::NONE);
+                assert_eq!(h.state().session.revision(), before.revision + 1);
+                let board = h.state().session.project().unwrap().boards().next().unwrap();
+                let footprint = board.footprints().next().unwrap();
+                assert_eq!(footprint.position, origin);
+                assert_eq!(footprint.pads, pads);
+                h.state_mut().run("edit.undo", &json!({}));
+                h.run();
+                assert_eq!(document(&h).bytes, before.bytes);
+            }
+            Finish::Focus => {
+                h.event(egui::Event::WindowFocused(false));
+                h.run();
+                assert_eq!(document(&h), before);
+            }
+            Finish::Revision => {
+                h.state_mut().run("project.rename", &json!({"name":"Reference source changed"}));
+                h.run();
+            }
+        }
+        assert!(h.state().views.active.board.reference_drag.is_none());
+    }
+}
+
+/// Pad picking wins over overlapping idle copper, while disabling Pads restores track picking.
+#[test]
+fn pad_inspection_takes_priority_over_tracks_without_footprint_filter() {
+    let mut h = super::board_tracks::routable();
+    let pad = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().pads[0].center;
+    let revision = h.state().session.revision();
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":layer,"width_nm":250_000,"points":[pad,{"x_nm":pad.x_nm,"y_nm":pad.y_nm-2_540_000}],"expected_revision":revision}),
+    );
+    assert_eq!(h.state().message, None);
+    h.run();
+    let id = h.state().views.active.id();
+    h.state_mut().set_selection_filters(id, &json!({"pads":true,"footprints":false})).unwrap();
+    h.run();
+    let (target, at) = first_pad(&h);
+    let before = document(&h);
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    let to = at + egui::vec2(60., 35.);
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert_eq!(document(&h), before, "a pad-origin drag must not move the underlying track");
+    click_at(&mut h, at, Modifiers::NONE);
+    assert_eq!(h.state().views.active.inspection, vec![target]);
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    h.state_mut().set_selection_filters(id, &json!({"pads":false})).unwrap();
+    h.run();
+    click_at(&mut h, at, Modifiers::NONE);
+    assert_eq!(h.state().views.active.board.tracks.selected.len(), 1);
+    assert_eq!(document(&h), before);
+}
+
+/// Explicitly armed wire tools retain Backspace after inspection; idle shortcuts still cannot
+/// edit an inspected pin's owner (covered by the modifier/authority test above).
+#[test]
+fn pin_inspection_preserves_wire_backspace() {
+    let mut h = harness();
+    resistor_at_origin(&mut h);
+    let id = h.state().views.active.id();
+    h.state_mut().set_selection_filters(id, &json!({"pins":true})).unwrap();
+    h.run();
+    let (target, _) = pin(&h, 0);
+    h.state_mut().select_inspection(id, vec![target], "replace").unwrap();
+    let before = document(&h);
+    h.hover_at(canvas_center(&h) + egui::vec2(-101.6, -101.6));
+    h.run();
+    h.key_press(Key::W);
+    h.run();
+    // Accept either W policy: this branch starts at the pointer; #415 arms an idle tool.
+    if matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })) {
+        click_canvas_offset(&mut h, egui::vec2(-101.6, -101.6));
+    }
+    click_canvas_offset(&mut h, egui::vec2(0., -50.8));
+    assert_eq!(h.state().views.active.inspection, vec![target]);
+    h.key_press(Key::Backspace);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: Some(_), .. })));
+    h.key_press(Key::Backspace);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+    assert_eq!(document(&h), before);
+}
+
+/// Additive inspection cannot revoke explicit drawing/zone deletion authority or delete pads.
+#[test]
+fn pad_inspection_preserves_explicit_drawing_and_zone_delete() {
+    for zone in [false, true] {
+        let mut h = super::board_tracks::routable();
+        let revision = h.state().session.revision();
+        let layer = if zone {
+            h.state().views.active.board.active_layer.clone().unwrap()
+        } else {
+            h.state()
+                .session
+                .project()
+                .unwrap()
+                .boards()
+                .next()
+                .unwrap()
+                .layers()
+                .into_iter()
+                .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+                .unwrap()
+                .id
+                .to_string()
+        };
+        let net = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["id"].clone();
+        let mut params = json!({"layer":layer,"points":[{"x_nm":-5_080_000,"y_nm":5_080_000},{"x_nm":5_080_000,"y_nm":5_080_000},{"x_nm":5_080_000,"y_nm":10_160_000}],"expected_revision":revision});
+        if zone {
+            params["net"] = net;
+        } else {
+            params["closed"] = json!(true);
+        }
+        h.state_mut().run(if zone { pcbcraft_engine::board::zones::ADD_ZONE } else { pcbcraft_engine::ADD_DRAWING }, &params);
+        assert_eq!(h.state().message, None);
+        h.run();
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        let selected = if zone { board.zones()[0].id } else { board.drawings()[0].id };
+        let mut items = pcbcraft_engine::board::clipboard::BoardSelection::default();
+        if zone {
+            items.zones.insert(selected);
+        } else {
+            items.drawings.insert(selected);
+        }
+        let id = h.state().views.active.id();
+        h.state_mut().set_selection_filters(id, &json!({"pads":true})).unwrap();
+        h.run();
+        h.state_mut().select_board_items(items);
+        let (target, _) = first_pad(&h);
+        h.state_mut().select_inspection(id, vec![target], "add").unwrap();
+        h.run();
+        let before = document(&h);
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.revision(), before.revision + 1);
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        assert!(board.drawings().is_empty());
+        assert!(board.zones().is_empty());
+        assert_eq!(board.footprints().count(), 2);
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(document(&h).bytes, before.bytes);
+    }
 }
 
 /// Pads select their exact qualified address, respect physical visibility and clear with filters.

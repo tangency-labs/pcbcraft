@@ -131,6 +131,10 @@ pub(super) struct Interaction {
 /// layer changes display priority for spanning lands without rebinding any geometry.
 /// Selection filters suppress picking and transform shortcuts, without hiding rendered geometry.
 /// Net highlighting shares derived connectivity keyed to the view's board/revision authority.
+/// Pad presses cannot start footprint/track drags; captured reference moves retain their
+/// ordinary source, enabled-input and focus checks while crossing pad copper.
+/// Idle pad presses take priority over owner/track picks, while captured reference moves retain
+/// their input until completion, cancellation or loss of their original source authority.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -197,18 +201,20 @@ pub(super) fn show(
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
-    let pad_hover = response
-        .hover_pos()
-        .filter(|_| filters.pads)
-        .and_then(|pointer| crate::inspection_selection::pad_at(project, &footprints, camera, rect, pointer, &state.hidden_layers));
-    let drag_start =
-        pad_hover.is_none() && response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
+    let pad_at = |pointer| {
+        filters.pads.then(|| crate::inspection_selection::pad_at(project, &footprints, camera, rect, pointer, &state.hidden_layers)).flatten()
+    };
+    let pad_hover = response.hover_pos().and_then(pad_at);
+    // Classify the press before its first motion can leave the land and acquire owner authority.
+    let primary_drag = response.drag_started_by(PointerButton::Primary);
+    let pad_drag = primary_drag && ui.input(|i| i.pointer.press_origin()).and_then(pad_at).is_some();
+    let drag_start = !pad_drag && primary_drag && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
     let reference_press = response.contains_pointer()
         && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary))
         && !modifiers.shift
         && !modifiers.ctrl
         && !modifiers.command;
-    let reference_enabled = pad_hover.is_none()
+    let reference_enabled = (state.reference_drag.is_some() || pad_hover.is_none())
         && enabled
         && !lost_focus
         && filters.footprints
@@ -301,7 +307,7 @@ pub(super) fn show(
             && state.zones.source().is_none()
             && state.drawing.tool.is_none()
             && state.drawing.source().is_none(),
-        hovered.is_some(),
+        hovered.is_some() || pad_hover.is_some() || pad_drag,
         crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
     );
     state.zones.zone = true;

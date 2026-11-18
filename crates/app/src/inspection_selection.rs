@@ -39,7 +39,7 @@ pub(super) fn pad(board: BoardView<'_>, target: Pad) -> Option<PadView> {
     let address = target.inspect();
     let footprint = address["footprint"].as_str()?;
     let number = address["pad"].as_str()?;
-    board.footprints().find(|item| item.id == footprint)?.pads.into_iter().find(|pad| pad.number == number)
+    board.footprint(footprint)?.pads.into_iter().find(|pad| pad.number == number)
 }
 
 /// Filters, physical layer visibility and qualified ownership all apply to local inspection.
@@ -180,8 +180,15 @@ impl PcbApp {
         let view = &self.views.active;
         let only = !view.inspection.is_empty()
             && match view.workspace {
-                Workspace::Schematic => view.schematic.selection.is_empty(),
-                Workspace::Board => view.board.selection.is_empty() && view.board.tracks.selected.is_empty(),
+                Workspace::Schematic => view.schematic.tool.is_none() && view.schematic.selection.is_empty(),
+                Workspace::Board => {
+                    !crate::board_clipboard::busy(&view.board)
+                        && view.board.selection.is_empty()
+                        && view.board.reference.selected.is_none()
+                        && view.board.tracks.selected.is_empty()
+                        && view.board.drawing.selection().is_empty()
+                        && view.board.zones.selection().is_empty()
+                }
             };
         if only {
             ctx.input_mut(|input| {
