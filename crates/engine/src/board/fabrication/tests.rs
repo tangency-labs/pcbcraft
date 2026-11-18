@@ -257,6 +257,7 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
     Err("missing end record")
 }
 
+/// Parse an unsigned D-code of at least 10 with no sign or leading zeroes.
 fn read_aperture_code(value: &str) -> Option<usize> {
     let code = value.parse::<usize>().ok()?;
     (code >= 10 && code.to_string() == value).then_some(code)
@@ -269,6 +270,8 @@ const BOTTOM_PASTE: GerberFile = ("-Paste_Bottom.gbr", "Paste,Bot", "Positive");
 const TOP: [GerberFile; 3] = [TOP_COPPER, ("-Mask_Top.gbr", "Soldermask,Top", "Negative"), ("-Paste_Top.gbr", "Paste,Top", "Positive")];
 const BOTTOM: [GerberFile; 3] = [("-Bottom.gbr", "Copper,L2,Bot", "Positive"), ("-Mask_Bottom.gbr", "Soldermask,Bot", "Negative"), BOTTOM_PASTE];
 
+/// Return the two-layer fixture's copper, mask and paste expectations in that order
+/// for the given side. Bottom copper is L2.
 fn surface_files(bottom: bool) -> [GerberFile; 3] {
     if bottom { BOTTOM } else { TOP }
 }
@@ -360,7 +363,7 @@ fn standard_pad_apertures_read_back_on_copper_mask_and_paste() {
                     for ((center, aperture), pad) in read.flashes.iter().zip(&pads) {
                         assert_eq!(*center, Point { x_nm: pad.center.x_nm, y_nm: -pad.center.y_nm });
                         assert_eq!(aperture.kind, kind);
-                        let expected_size = if (pad_rotation / 90 + rotation / 90) % 2 == 0 { (width, height) } else { (height, width) };
+                        let expected_size = if (pad_rotation / 90 + rotation / 90).is_multiple_of(2) { (width, height) } else { (height, width) };
                         assert_eq!((aperture.width, aperture.height), expected_size, "final axis order, including two quarter turns and mirror");
                         let corners = pad.copper.unwrap();
                         let (min_x, max_x) = (corners.iter().map(|p| p.x_nm).min().unwrap(), corners.iter().map(|p| p.x_nm).max().unwrap());

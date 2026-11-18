@@ -325,9 +325,13 @@ impl BoardView<'_> {
             .footprints()
             .flat_map(|footprint| {
                 let definition = self.placement(&footprint.id).and_then(|placed| self.project().board.definition_for(placed));
-                let cardinal_pads: BTreeSet<_> =
-                    definition.into_iter().flat_map(|d| &d.pads).filter(|pad| pad.rotation % 90 == 0).map(|pad| pad.number.as_str()).collect();
-                let placed_cardinal = footprint.rotation % 90 == 0;
+                let cardinal_pads: BTreeSet<_> = definition
+                    .into_iter()
+                    .flat_map(|d| &d.pads)
+                    .filter(|pad| pad.rotation.is_multiple_of(90))
+                    .map(|pad| pad.number.as_str())
+                    .collect();
+                let placed_cardinal = footprint.rotation.is_multiple_of(90);
                 footprint.pads.into_iter().filter_map(move |pad| {
                     pad.copper?;
                     let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
