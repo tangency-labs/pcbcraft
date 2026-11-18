@@ -60,11 +60,12 @@ fields. Circular copper records select board/26 while retaining those assignment
 and optional fields. Earlier headers, including assembly-profile board/22 and stack board/23,
 reject via intent. No derived island membership or duplicate netlist is saved.
 Clearing the last assignment restores the format required by remaining authored
-data. Boards with [thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
-use at least board/25, which also preserves optional explicit via intent; circular
-copper records require board/26 with or without those reports.
-Automatic-only legacy projects retain their previous native encoding,
-and unchanged native Save/Open preserves bytes.
+data. Explicit via intent selects board/24 unless a higher format is required.
+[Thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
+require at least board/25, circular copper records at least board/26, and an active
+footprint lock at least board/34. The higher formats preserve explicit via intent.
+The native codecs preserve current canonical bytes on a no-op round trip; accepted
+noncanonical input may be normalized, and opening an older project can require migration.
 
 **pcbcraft-clipboard/4** carries explicit targets. Copy, duplication and relocation
 within the same board preserve those addresses. Foreign destinations or foreign

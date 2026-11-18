@@ -76,12 +76,12 @@ clearance. Explicit stored null is not an alternate encoding.
 [Board/20](native-project-storage.md#zone-outline-records) is a superset of board/19
 with an optional board-rules object and a required nonempty `zones` array. A board
 that also has a placement origin requires at least board/21; assembly profile
-adoptions require board/22, extended stack fields board/23, explicit via
-assignments board/24, and thermal or insulation material reports board/25.
-[Circular copper records](circular-copper-records.md) select board/26, retaining
-zones, origin, rules, adoptions, setup, material reports and via intent.
-The highest required format is selected. Each zone is one JSON line in UUID order
-and contains only authored intent. A board
+adoptions require at least board/22, extended stack fields board/23, explicit via
+assignments board/24, thermal or insulation material reports board/25,
+[circular copper records](circular-copper-records.md) board/26 and footprint locks
+board/34. The encoder chooses the required format, preserving the zone outlines
+alongside the origin, rules, adoptions, setup, material reports and via intent.
+Each zone is one JSON line in UUID order and contains only authored intent. A board
 without zones keeps the format its other content requires; no fill or preview is
 saved. Existing folder/archive codecs, recovery and Undo/Redo use those records.
 

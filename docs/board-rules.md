@@ -66,18 +66,22 @@ existing session revision. They do not claim to implement background checking.
 
 An authored board-default record has `format: "pcbcraft-rules/1"`, an independent
 UUID `id`, and the typed `values` object. It lives in `board.json` under board
-format 19 or later: zone outlines require at least 20, a placement origin 21,
-assembly profile adoptions 22, extended stack fields 23, explicit via intent 24,
-thermal/insulation material reports 25, and circular copper arcs 26.
-The highest required format retains the rule record.
-Each accepts the earlier physical fields including locks. Format 19
-requires a valid rule record, and older board headers reject it. Null, missing
-or contradictory stored records fail before adoption. Removing the record
+format 19 or later. Zone outlines require at least 20, a placement origin 21,
+assembly profile adoptions 22, and copper roles, base copper, copper thickness
+qualifiers or finished board thickness 23. The [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields)
+select a higher format when remaining data requires it, including explicit via
+assignments (24), thermal/insulation material reports (25), circular copper arcs
+(26) and footprint locks (34). Each accepts the earlier physical fields,
+including track/via locks. Format 19 requires a valid rule record, older board
+headers reject it, and higher compatible formats permit omission. An explicitly
+null or invalid rule record is refused before adoption. Removing the record
 returns to the format required by the board's remaining data.
 
-A board without authored rules retains its existing byte encoding. Folder and
-`.pc` archive saves preserve rule IDs and exact values; undo/redo restores the
-same intent. The legacy diagnostic single-document encoder refuses to discard
+An unchanged canonical board without authored rules round-trips byte-for-byte
+through the codec. Clearing authored rules rewrites the board document and can
+lower its format to the one required by the remaining data. Folder and `.pc`
+archive saves preserve authored rule IDs and exact values; undo/redo restores
+the same intent. The legacy diagnostic single-document encoder refuses to discard
 rules. This slice does not change the project, board-folder or archive layout.
 
 The [net-class catalog and explicit-set resolver](net-classes.md) are available

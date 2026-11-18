@@ -23,7 +23,7 @@ fn app() -> PcbApp {
 /// Deliver a worker result through production polling, then evaluate the waiting close request.
 fn finish(app: &mut PcbApp, result: Result<Outcome, String>) {
     let (send, receiver) = mpsc::channel();
-    app.files.job = Some(Job { receiver, revision: app.session.revision() });
+    app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
     send.send(result).unwrap();
     app.files.poll(&mut app.session, &egui::Context::default());
     app.finish_waiting(&egui::Context::default());
@@ -71,7 +71,7 @@ fn close_waits_for_current_save_and_keeps_failed_or_cancelled_saves_open() {
     }
     let mut app = app();
     let (send, receiver) = mpsc::channel();
-    app.files.job = Some(Job { receiver, revision: app.session.revision() });
+    app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
     app.waiting = Some(Waiting::ForSave(Then::Close));
     drop(send);
     assert!(matches!(app.files.poll(&mut app.session, &egui::Context::default()), Some(crate::project_files::Update::Error(_))));
@@ -89,7 +89,7 @@ fn close_during_a_file_job_waits_and_reopen_rebinds_both_views() {
     let root = dir.path().join("project");
     let result = save_new(app.session.snapshot().unwrap(), None, SaveFormat::Folder, root.clone()).unwrap();
     let (send, receiver) = mpsc::channel();
-    app.files.job = Some(Job { receiver, revision: app.session.revision() });
+    app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
     let ctx = egui::Context::default();
     request_close(&mut app, &ctx);
     app.finish_waiting(&ctx);
@@ -124,7 +124,7 @@ fn waiting_for_a_file_job_allows_canceling_close_without_abandoning_the_job() {
     let mut app = app();
     let before = app.session.snapshot().unwrap();
     let (send, receiver) = mpsc::channel();
-    app.files.job = Some(Job { receiver, revision: app.session.revision() });
+    app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
     app.waiting = Some(Waiting::ToDecide(Then::Close));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
     h.run();
@@ -149,7 +149,7 @@ fn repeated_close_preserves_the_pending_save_decision() {
     for waiting in [Waiting::ForSave(Then::Close), Waiting::Discarding(Then::Close)] {
         let mut app = app();
         let (send, receiver) = mpsc::channel();
-        app.files.job = Some(Job { receiver, revision: app.session.revision() });
+        app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
         app.waiting = Some(waiting.clone());
         let ctx = egui::Context::default();
         request_close(&mut app, &ctx);

@@ -7,6 +7,15 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
+In board formats 34 and 35, the placed footprint owns `locked`, an optional
+boolean that defaults to false and is omitted by fresh canonical encoding when
+false. An active footprint lock requires format 34, or 35 when arcs are also
+present; the flag does not change
+the pinned library definition or mapping. This is
+[storage and inspection only](pcb-layout-workflow.md#footprint-lock-metadata-storage-only),
+not a lock command or edit-protection contract. The historical format-15
+placement schema below remains frozen and does not accept this newer field.
+
 Board format 15 adds local reference position and print overrides. Earlier board
 formats retain their existing encodings when these fields are absent. Footprint
 library definitions continue to use their independently versioned format 1.
@@ -27,8 +36,11 @@ With Python 3.10 or later and `jsonschema` 4.18 or later installed, run the sche
 check from the repository root. Version 4.18 introduced the registry API used for
 offline reference resolution. It checks both schemas and the bundled footprint
 definitions.
-Additional arguments accept standalone native definitions, and `--placement`
-accepts one physical placement record.
+Additional arguments accept standalone native definitions. By default,
+`--placement` checks one historical format-15 physical placement record. Use
+`--placement-version 17` for the historical format-17 mapping described in the
+[part schema guide](part-schema.md). Use the native board reader to validate
+formats 34 and 35.
 
 ```sh
 python3 scripts/check-footprint-schemas.py
@@ -188,8 +200,8 @@ its physical mode and does not restore an editor-only label.
 
 ## Physical placement fields
 
-The placement schema validates one physical `footprints` array entry inside a
-board document. It includes the exact pinned identity, numeric object and
+The historical format-15 placement schema validates one physical `footprints`
+array entry inside a board document. It includes the exact pinned identity, numeric object and
 component IDs, explicit terminal-to-pad map, board-space origin and optional
 `rotation`, `bottom`, `reference_offset` and `reference_text`. A zero rotation and front-side
 placement are omitted on canonical save. Origin coordinates currently range
@@ -282,9 +294,9 @@ other fields or project state.
 - Metadata meets the UTF-8 byte limits and trimming rules. JSON Schema's string
   lengths count Unicode characters, so its bounds alone cannot establish this.
 - Placement IDs and component references resolve in the owning board/project.
-  The pinned library/item/revision exists, and its mapping is complete and
-  bijective under the current codec. PR #221's terminal-to-multiple-pads mapping
-  needs a later format and command change.
+  The pinned library/item/revision exists. The historical format-15 mapping is
+  complete and bijective. Format 17 adds support for mapping a terminal to
+  multiple pads; see the [part schema guide](part-schema.md).
 - The board format agrees with the fields present. Retained legacy forms and
   no-op save bytes retain their existing compatibility behavior.
 

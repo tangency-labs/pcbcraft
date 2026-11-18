@@ -61,9 +61,11 @@ inspection remains independent of physical geometry.
 Saving, reopening, undo/redo and `pcb.set_arc_tracks` remain available. Native
 folder/archive saves preserve exact records. The diagnostic single-document
 writer refuses arcs. Clearing the last arc restores the format required by the
-remaining board data. Format 26 retains the released profile-adoption (22),
+remaining board data. Arc-bearing boards use format 26 unless they also have
+an active footprint lock, in which case they use format 35. Both formats retain
+the released profile-adoption (22),
 extended-stack (23), explicit via-intent (24), thermal/insulation material-report
-(25) and earlier board fields; it does not change those released fields. Boards without arcs keep the format and bytes
+(25) and earlier board fields without changing those records. Boards without arcs keep the format and bytes
 required by their remaining authored data.
 
 Connectivity, DRC, conservative query bounds, hit testing, snapping, bounded

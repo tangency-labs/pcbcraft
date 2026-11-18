@@ -93,7 +93,7 @@
     "src/session.rs": "47eb6274fd23bf90ff7e391cb38869e4df1683f3c40050d24e5c934e862ae006",
     "src/split/tests.rs": "383862e16120e275f45a0884c47c70dc367d4a4bd97fa7bfbf212a84d0f1495e",
     "src/split.rs": "e53427eebaeeddc66c54e11c6be9dad3dbaca48811b1fe7bbabd55e6da19f2f4",
-    "src/step_assembly.rs": "cad4bd0db0b528a09c5feeb485271fc4151b512268df09db4a4ed24bc6f761f5",
+    "src/step_assembly.rs": "4d9ce1b04a9a39f781dda708084ec70d5573695b9c3abb0a0def8adf90328d3f",
     "src/stitch.rs": "47ed929677a64b047abc58be285fe76984399eca420e386f5e8e328950506073",
     "src/surface.rs": "28da8b9a43a3bba5ada8be9820365d4d49d6316e29ad00f974cd2eb5c4aac128",
     "src/surface_cvs.rs": "14d7a90716adb4df98e1b99e4f15f292d8f86be8e891a5905b6f98903a28e5b3",

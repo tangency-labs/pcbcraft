@@ -223,23 +223,26 @@ when it applies other edits but does not edit them yet.
 
 ## Persistence and limits
 
-Material-aware fields use `pcbcraft-board/3`. A project using only the original
-layer catalog, labels and thicknesses retains version 2 byte-for-byte on a no-op
-round trip. Opening version 2 does not infer materials, reports or construction.
-Version 3 embeds all selected definitions in `board.json`; it needs no source
-library to reopen. Each material revision and each dielectric gap has a stable
+The original layer catalog, labels and thicknesses use `pcbcraft-board/2`;
+material-aware setup needs at least `pcbcraft-board/3`. These formats apply when
+no other authored data needs a later format. A canonical version-2 document
+round-trips byte-for-byte through the codec and does not acquire inferred materials,
+reports or construction. Version 3 and compatible later formats embed all selected
+definitions in `board.json`, with no source library needed. Each material revision
+and each dielectric gap has a stable
 record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
-thickness need at least `pcbcraft-board/23` when one of them is present. Explicit
-via intent requires at least format 24; thermal conductivity, thermal expansion,
-dielectric strength and CTI reports require at least `pcbcraft-board/25`.
-[Circular copper records](circular-copper-records.md) select format 26 while
-retaining those reports and earlier fields. Format 25 requires at least one such
-report; older headers refuse them. Removing reports selects the format required
-by the remaining authored data. Boards without these features keep their earlier
-format and bytes.
+thickness require at least `pcbcraft-board/23` when one of them is present.
+Explicit via assignments require at least board/24. Thermal conductivity,
+thermal expansion, dielectric strength and CTI reports require at least board/25;
+format 25 requires at least one such report. [Circular copper records](circular-copper-records.md)
+require at least board/26, and footprint locks require at least board/34.
+Compatible earlier extensions can coexist and keep their usual prerequisites.
+Removing reports selects the format required by the remaining authored data.
+Older headers refuse unsupported extensions, and canonical boards without them
+retain their earlier format and bytes.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance
