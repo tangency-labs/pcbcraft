@@ -1,5 +1,8 @@
 use std::io::Cursor;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod library_updates;
+
 use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, PLACE_SYMBOL, Session};
 use serde_json::{Value, json};
 
@@ -9,26 +12,29 @@ use crate::{Headless, Server, tool_definitions};
 /// preview does not need an open project and never creates history or saves the candidate.
 #[test]
 fn pin_remap_mcp_preserves_the_preview_without_general_inspection() {
-    let mut session = Session::default();
+    let mut server = Server::new(Box::new(Headless::default()));
     let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
-    let before = session.inspect();
-    let report = crate::backend::call_session(
-        &mut session,
-        "engine.execute",
-        &json!({
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let result = call(
+        &mut server,
+        "execute",
+        json!({
             "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"inspect":false,
             "params":{"item":item,"pins":[{"unit":"main","object":"1","number":"2"},{"unit":"main","object":"3","number":"1"}]}
         }),
-    )
-    .unwrap();
+    );
+    assert_ne!(result["isError"], true, "{result}");
+    let report = body(&result);
     assert_eq!(report["changes"][0]["before"], "1");
     assert_eq!(report["changes"][0]["after"], "2");
     assert_eq!(report["changes"][0]["object"], "1");
     assert_eq!(report["source_revision"], Value::Null);
     assert!(report["item"]["revision"].is_number());
+    assert_eq!(report["item"]["objects"]["1"]["number"], "2");
+    assert_eq!(report["item"]["objects"]["3"]["number"], "1");
     assert_eq!(report["saved"], false);
     assert_eq!(report["instances"], json!([]));
-    assert_eq!(session.inspect(), before);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 
 /// Raw remap items must preserve duplicate-key validation for single requests and batches.
@@ -677,6 +683,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     assert_eq!(
         command_ids,
         [
+            "library.available_revisions",
             "library.list_sources",
             "library.load_source",
             "library.parse_quantity",

@@ -134,6 +134,50 @@ Personal source IDs and machine paths are not copied into project documents.
 Previously saved symbols without attribution retain their original encoding.
 Opening a project never searches or refreshes a library to replace its geometry.
 
+## Query available revisions
+
+`library.available_revisions` takes no parameters and requires an open project.
+It compares existing part instances with native revisions already loaded in the
+session, without refreshing sources or accessing the network. It works through
+the shared engine command, including live and headless MCP with `inspect: false`;
+there is no dedicated update-list GUI in this command.
+
+The result contains `project` (UUID), runtime `revision`, `catalog_generation`,
+`board` (UUID or null), `instances` and `outdated_instances`. Each instance row
+has its stable `part_instance` ID, display `reference`, and `items`. Native part
+instances compare their owning generic part, not independently advancing its
+symbol, category or package dependencies. Plain symbol instances compare their
+symbol and any standalone footprint choice, including before a board exists.
+Accepted board-history geometry is not an independent instance update root.
+
+Each item reports `pinned` and `latest` addresses (`library`, `kind`, `id`,
+`revision`), `status`, `latest_digest` and `diagnostic`. `latest` is the highest
+loaded revision of that exact identity and kind, or null. `latest_digest` is the
+native record's content digest, not a part dependency-closure placement digest.
+It is null if no candidate exists or the candidate conflicts or cannot resolve.
+A diagnostic explains a conflicting or unresolved candidate or conflicting pin;
+otherwise it is null. When both the pin and the candidate fail, the pin conflict
+is reported first, followed by the candidate error. Rows retain exact pins;
+instances and their IDs occur once, with items in address order.
+`outdated_instances` contains only instances with at least one `Update available` item.
+
+Statuses are `Matches source`, `Update available`, `Source unavailable`,
+`Project-only`, `Conflict` and `Unresolved`. An absent or unavailable source does
+not mean current. An older-only source is not an update; a missing exact source
+pin can still have a newer loaded candidate. Deliberate project variants remain
+`Project-only`. Same-address content conflicts take precedence over availability.
+For a candidate part, this includes symbol, category or footprint content that
+differs from a project pin at the same immutable address, even when the part
+otherwise resolves.
+A conflicting or unresolved highest revision is reported without falling back to
+an older candidate; generic-part candidates must resolve their exact dependencies.
+An unresolvable latest part is `Unresolved` even when it equals or is older than
+the project pin, unless an immutable-address conflict takes precedence.
+A valid newer revision means available, **not compatible or adopted**. Geometry,
+pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
+Reviewed differences, compatibility decisions and revision-checked adoption remain
+separate work.
+
 ## Edit and publish native items
 
 On desktop, **New → Library** creates a native library in an unused folder and

@@ -258,6 +258,44 @@ fn pin_remap_last_host_close_cancel_retires_authority() {
     }
 }
 
+/// A deferred save prompt drops the displaced capture; cancelling still keeps unsaved work open.
+#[test]
+fn pin_remap_deferred_save_prompt_retires_review() {
+    use crate::unsaved::{Then, Waiting};
+
+    let (mut app, id) = fixture(false, true);
+    assert!(app.files.dirty(&app.session));
+    let project = app.session.snapshot().unwrap();
+    let state = app.session.inspect();
+    let editors = app.library_editors.inspect();
+    let reviewed =
+        live(&mut app, id, 0, "preview", json!([{"unit":"main","object":"1","number":"2"},{"unit":"main","object":"3","number":"1"}])).unwrap();
+    assert!(matches!(app.dialog, Dialog::LibraryPinRemap(_)));
+    assert!(reviewed["library_editors"]["pin_remap"]["token"].is_string());
+    assert!(!app.files.busy());
+    // Model the first frame after a deferred close's file job has finished.
+    app.waiting = Some(Waiting::ToDecide(Then::Close));
+    app.finish_waiting(&Context::default());
+    assert!(app.waiting.is_none());
+    assert!(matches!(app.dialog, Dialog::SaveChanges(Then::Close)));
+    let inspected = crate::window_commands::inspect_editor(&app);
+    assert_eq!(inspected["dialog_open"], true);
+    assert_eq!(inspected["unsaved"], true);
+    assert!(inspected["library_editors"]["pin_remap"].is_null());
+    assert_eq!(inspected["library_editors"], editors);
+    assert!(app.library_editors.pin_remap.is_none());
+
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    crate::tests::click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(!h.state().close_allowed);
+    assert!(h.state().files.dirty(&h.state().session));
+    assert_eq!(h.state().session.inspect(), state);
+    assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().library_editors.inspect(), editors);
+}
+
 /// The supplied-review preflight and real live reply agree even with unsynchronized pane state.
 /// Check the actual frame reader at the last accepted byte and first refused byte; no socket run.
 #[test]

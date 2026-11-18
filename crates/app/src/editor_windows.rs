@@ -435,12 +435,33 @@ impl PcbApp {
             )
             && matches!(self.dialog, Dialog::None)
         {
-            let mut cancel = false;
+            let (mut cancel, mut stop, mut close) = (false, false, false);
+            let open = self.files.abandonable();
+            let warning = if !open {
+                Some(
+                    "Closing now loses edits the save hasn't written. On disk the project keeps its earlier version or the new one; a first save may leave nothing.",
+                )
+            } else if self.files.dirty(&self.session) {
+                Some("Closing now loses the project's unsaved changes.")
+            } else {
+                None
+            };
+            // A save or open stalled on an unresponsive disk would otherwise hold the close forever.
             let dismissed = pcbcraft_chrome::shell::dialog(ctx, "close_wait", "Close Project", |ui| {
                 ui.label("Waiting for the current file operation before closing.");
+                if let Some(warning) = warning {
+                    ui.label(warning);
+                }
+                // Stopping an open returns to the editor and its Save question, so it obeys the stalled-worker limit.
+                stop = open && pcbcraft_chrome::controls::button(ui, "Stop waiting").clicked();
+                close = pcbcraft_chrome::controls::button(ui, "Close without waiting").clicked();
                 cancel = pcbcraft_chrome::controls::button(ui, "Cancel close").clicked();
             });
-            if cancel || dismissed {
+            if close {
+                self.close_without_waiting(ctx);
+            } else if stop && let Err(error) = self.stop_waiting_for_file(None) {
+                self.message = Some(error);
+            } else if cancel || dismissed {
                 // Keep the worker and its immutable snapshot; only withdraw the quit request.
                 self.waiting = None;
                 self.file_notice = None;

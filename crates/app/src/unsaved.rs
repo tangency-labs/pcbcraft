@@ -96,6 +96,7 @@ impl PcbApp {
     /// unsaved. A close that was waiting to decide asks now when there is. After a Save answer,
     /// unsaved work left behind (a cancelled or failed save, or edits made while it ran) keeps the
     /// project open; the save's own status explains why. After Don't Save, carry on regardless.
+    /// If the delayed prompt displaces a remap form, retire its captured review.
     pub(crate) fn finish_waiting(&mut self, ctx: &egui::Context) {
         if self.files.busy() {
             return;
@@ -112,8 +113,28 @@ impl PcbApp {
         if !self.files.dirty(&self.session) {
             self.carry_on(then, ctx);
         } else if ask {
+            self.dismiss_library_pin_remap();
             self.dialog = Dialog::SaveChanges(then);
         }
+    }
+
+    /// Stop waiting for a stalled open (see `ProjectFiles::abandon`): a live client names the
+    /// job it observed, the person closing names none. A held action goes on as
+    /// [`Self::finish_waiting`] decides once no job runs.
+    pub(crate) fn stop_waiting_for_file(&mut self, expected: Option<u64>) -> Result<(), String> {
+        self.message = Some(self.files.abandon(expected)?);
+        self.file_notice = None;
+        Ok(())
+    }
+
+    /// Close at once while a save still runs, as the person chose in the Close Project wait. The
+    /// process ends with the worker: an archive is replaced atomically and a folder save's journal
+    /// completes or rolls back on the next open, so the project on disk is the earlier or the
+    /// new version (nothing, for a first save). Unsaved edits are lost, which the wait dialog says.
+    pub(crate) fn close_without_waiting(&mut self, ctx: &egui::Context) {
+        self.waiting = None;
+        self.file_notice = None;
+        self.carry_on(Then::Close, ctx);
     }
 
     /// Do what the question held back. Closing marks the window as allowed to close and asks again.

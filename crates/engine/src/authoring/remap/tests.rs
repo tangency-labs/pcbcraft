@@ -164,6 +164,7 @@ fn add_ballast(project: &mut crate::Session, sheet: crate::SheetTarget, target: 
             .execute(crate::clipboard::COPY, &json!({"sheet":sheet.id(),"expected_revision":project.revision(),"items":{"symbols":ids,"wires":[]}}))
             .unwrap();
         edit(project, crate::clipboard::PASTE, json!({"sheet":sheet.id(),"text":clipboard["clipboard"],"x_nm":0,"y_nm":0}));
+        assert_eq!(project.project().unwrap().for_sheet(sheet).unwrap().symbols().len(), count + ids.len());
     }
 }
 

@@ -467,7 +467,10 @@ impl Editor for LiveEditor<'_> {
         #[cfg(target_arch = "wasm32")]
         let item_delete_review = false;
         let pin_remap_review = command == "app.library_pin_remap" && matches!(app.dialog, Dialog::LibraryPinRemap(_));
-        if (!matches!(app.dialog, Dialog::None) && !item_delete_review && !pin_remap_review) || app.files.busy() || app.project_action_pending() {
+        // file.abandon is how a client releases the editor from a stalled file job.
+        if command != "file.abandon"
+            && ((!matches!(app.dialog, Dialog::None) && !item_delete_review && !pin_remap_review) || app.files.busy() || app.project_action_pending())
+        {
             return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
         }
         if app.parts.is_modal() && !matches!(command, "window.set_catalog_mode" | "window.set_panel") {
