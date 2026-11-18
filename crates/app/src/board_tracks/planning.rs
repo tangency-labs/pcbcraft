@@ -491,7 +491,8 @@ mod tests {
         assert!(p.current_path().is_none(), "display fallback cannot authorize validation");
         assert_eq!(p.preview(&draft, sizes.0), visible, "a failed search must not erase legal geometry");
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, Some(Action::Vertex { finish: true }));
-        assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().is_err());
+        let error = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().unwrap_err();
+        assert_eq!(error, "Route search incomplete");
         assert!(s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().tracks().is_empty());
         p.cancel();
         assert_eq!(p.preview(&draft, sizes.0), draft.points);

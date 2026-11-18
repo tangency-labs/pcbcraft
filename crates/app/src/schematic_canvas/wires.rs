@@ -22,13 +22,11 @@ pub(crate) struct Draft {
     target_cache: RefCell<targets::Cache>,
     pub(crate) horizontal_first: bool,
     pub(crate) finish_requested: bool,
-    /// W begins at the pointer this frame; toolbar activation still waits for a click.
-    pub(crate) start_requested: bool,
 }
 
 impl Default for Draft {
     fn default() -> Self {
-        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false, start_requested: false }
+        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false }
     }
 }
 
@@ -451,6 +449,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
 }
 
 /// Pick a connection or free point; Ctrl bypasses the placement grid. Enter/double-click finishes.
+/// An unanchored tool waits for a click; Enter only finishes a draft that already has a start.
 /// The crosshair tracks the raw pointer while a marker shows the snapped point a click would use.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pick(
@@ -484,7 +483,7 @@ pub(super) fn pick(
         }
     }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
-    target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))
+    target.filter(|_| clicked || (start.is_some() && finish)).map(|target| (target, finish))
 }
 
 /// Highlight unambiguous endpoints and preview the full route. Read Ctrl each frame so

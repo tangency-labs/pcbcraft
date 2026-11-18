@@ -1608,7 +1608,6 @@ impl PcbApp {
             })
             .inner;
         self.views.active.schematic.wire_draft.finish_requested = false;
-        self.views.active.schematic.wire_draft.start_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
             if matches!(self.dialog, Dialog::Hierarchy(_) | Dialog::Sheet(_)) {
@@ -2103,11 +2102,11 @@ impl PcbApp {
                 ..Modifiers::NONE
             };
             if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Escape)) {
-                // Escape cancels the tool first, then clears the selection.
-                if self.views.active.schematic.tool.take().is_some() {
-                    self.message = None;
-                } else {
-                    self.select(Selection::default());
+                // Cancel an anchored wire before leaving drawing mode; other tools exit at once.
+                match self.views.active.schematic.tool.take() {
+                    Some(Tool::Wire { start: Some(_), .. }) => self.begin_wire(),
+                    Some(_) => self.message = None,
+                    None => self.select(Selection::default()),
                 }
             }
             if let Some(Tool::Wire { start, .. }) = &mut self.views.active.schematic.tool {
@@ -2169,7 +2168,6 @@ impl PcbApp {
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
-                self.views.active.schematic.wire_draft.start_requested = true;
             }
         }
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {

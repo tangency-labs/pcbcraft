@@ -13,6 +13,61 @@ fn click_at(h: &mut Harness<'_, PcbApp>, pos: Pos2) {
     }
 }
 
+/// W arms drawing at any hover target; only the first click anchors a draft. Escape
+/// discards that draft while retaining Wire mode, then exits without publishing an edit.
+#[test]
+fn wire_shortcut_waits_for_a_click_and_escape_cancels_in_two_stages() {
+    for hover in ["space", "pin", "wire"] {
+        let mut h = harness();
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(
+                PLACE_SYMBOL,
+                &json!({"definition":"resistor","x_nm":grid(-12,10).x_nm,
+                    "y_nm":grid(-12,10).y_nm,"expected_revision":revision}),
+            )
+            .unwrap();
+        h.state_mut().browser.open = false;
+        h.run();
+        let point = match hover {
+            "pin" => h.state().session.project().unwrap().symbols()[0].pins()[1],
+            "wire" => grid(0, 0),
+            _ => grid(-20, -12),
+        };
+        let before = h.state().session.inspect();
+        h.hover_at(screen(&h, point));
+        h.run();
+        h.key_press(egui::Key::W);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })), "W anchored at {hover}");
+        let chosen = grid(-14, -10);
+        h.hover_at(screen(&h, chosen));
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        assert_eq!(h.state().session.inspect(), before);
+        let chosen_screen = screen(&h, chosen);
+        click_at(&mut h, chosen_screen);
+        assert!(matches!(h.state().views.active.schematic.tool,
+            Some(Tool::Wire { start: Some(Anchor::Free(at)), .. }) if at == chosen));
+        let corner_screen = screen(&h, grid(-8, -6));
+        click_at(&mut h, corner_screen);
+        assert!(!h.state().views.active.schematic.wire_draft.corners.is_empty());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        assert!(h.state().views.active.schematic.wire_draft.corners.is_empty());
+        assert_eq!(h.state().session.inspect(), before);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().views.active.schematic.tool.is_none());
+        assert_eq!(h.state().session.inspect(), before);
+    }
+}
+
 /// A terminal or wire node is reachable beyond the former eight-point radius. Hover shows
 /// the magnetic wiring cursor, and clicking starts an exact-identity draft without W.
 /// Starting/cancelling the draft leaves history untouched; finishing is one undoable edit.
@@ -134,11 +189,11 @@ fn direct_node_starts_belong_to_the_clicked_split_pane() {
     }
 }
 
-/// Occupied pins and junctions remain selectable with an ordinary click. W explicitly starts
-/// a branch at the hovered identity without another click, and its green cursor uses wire ink.
+/// Occupied pins and junctions remain selectable with an ordinary click. W arms a branch,
+/// the next click chooses its electrical identity, and its green cursor uses wire ink.
 /// Completing and undoing the branch preserves the original connection.
 #[test]
-fn connected_nodes_require_explicit_w_and_start_at_the_pointer() {
+fn connected_nodes_require_wire_mode_then_a_click_to_start() {
     for pin in [false, true] {
         let mut h = harness();
         let endpoint = if pin {
@@ -163,6 +218,8 @@ fn connected_nodes_require_explicit_w_and_start_at_the_pointer() {
         assert!(h.state().views.active.schematic.tool.is_none());
         h.key_press(egui::Key::W);
         h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        click_at(&mut h, pointer);
         assert!(matches!(h.state().views.active.schematic.tool,
             Some(Tool::Wire{start:Some(Anchor::Existing(end)),..}) if end==endpoint));
         let center = screen(&h, point);
@@ -185,10 +242,10 @@ fn connected_nodes_require_explicit_w_and_start_at_the_pointer() {
     }
 }
 
-/// W starts immediately at a hovered grid point; toolbar activation still waits for its first
-/// canvas click. Neither activation creates document data or an undo step.
+/// W and toolbar activation both wait for their first canvas click. Neither activation
+/// creates document data or an undo step.
 #[test]
-fn w_starts_on_the_hovered_grid_and_toolbar_waits_for_a_click() {
+fn w_and_toolbar_both_wait_for_a_click() {
     let mut h = harness();
     h.state_mut().browser.open = false;
     h.run();
@@ -197,7 +254,7 @@ fn w_starts_on_the_hovered_grid_and_toolbar_waits_for_a_click() {
     h.run();
     h.key_press(egui::Key::W);
     h.run();
-    assert!(matches!(h.state().views.active.schematic.tool,Some(Tool::Wire{start:Some(Anchor::Free(point)),..})if point==grid(-4,12)));
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
     h.key_press(egui::Key::Escape);
     h.run();
     crate::tests::click(&mut h, "Draw wire (W)");
