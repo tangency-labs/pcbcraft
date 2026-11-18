@@ -496,10 +496,10 @@ fn dragged_ends(view: BoardView<'_>, track: Uuid, offset: (i64, i64)) -> Vec<(Uu
 }
 
 /// Every track and via sharing a copper island with any of `seeds`.
-fn connected(view: BoardView<'_>, seeds: &BTreeSet<Uuid>) -> BTreeSet<Uuid> {
-    let copper = view.copper();
+fn connected(view: BoardView<'_>, seeds: &BTreeSet<Uuid>) -> Result<BTreeSet<Uuid>, String> {
+    let copper = view.copper()?;
     let islands: BTreeSet<_> = seeds.iter().filter_map(|id| copper.tracks.get(id).or_else(|| copper.vias.get(id))).copied().collect();
-    copper.tracks.iter().chain(&copper.vias).filter(|(_, island)| islands.contains(island)).map(|(id, _)| *id).collect()
+    Ok(copper.tracks.iter().chain(&copper.vias).filter(|(_, island)| islands.contains(island)).map(|(id, _)| *id).collect())
 }
 
 /// Whether the board has the two copper layers a through via needs.
@@ -967,7 +967,13 @@ pub(super) fn interact(
             .and_then(|pointer| copper_at(pointer, camera, rect, view, hidden, kinds))
             .map_or_else(|| state.selected.clone(), |id| BTreeSet::from([id]));
         if !seeds.is_empty() {
-            state.selected = connected(view, &seeds);
+            match connected(view, &seeds) {
+                Ok(selected) => state.selected = selected,
+                Err(error) => {
+                    out.error = Some(error);
+                    return out;
+                }
+            }
             state.selected.retain(selectable);
             out.consumed = true;
             return out;

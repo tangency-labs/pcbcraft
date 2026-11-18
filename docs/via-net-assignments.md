@@ -47,16 +47,23 @@ Board inspection includes `net_assignment` when authored, `assignment_mode`,
 `net_state`, resolved `net` and `connected_to_pad`. The latter describes physical
 pad contact; an assignment alone never makes it true. A conflicting island has
 no single resolved display net, while DRC retains its complete conflicting intent.
+On a board with circular copper records, geometry is unsupported: authored
+assignment and registry state remain inspectable, but `net` and `connected_to_pad`
+are null with a `geometry_error`. Neither a false disconnection nor a partial
+straight-only membership is reported.
 
 **pcbcraft-board/24** stores optional `net_assignment` objects on vias, containing
 `project`, `scope` and `net`. The address is omitted in Automatic mode; explicit
 null and nil identities are rejected. This version requires at least one
 assignment and accepts optional assembly profile adoptions and extended stack
-fields. Earlier headers, including assembly-profile board/22 and stack board/23,
+fields. Circular copper records select board/26 while retaining those assignments
+and optional fields. Earlier headers, including assembly-profile board/22 and stack board/23,
 reject via intent. No derived island membership or duplicate netlist is saved.
 Clearing the last assignment restores the format required by remaining authored
 data. Boards with [thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
-use board/25, which also preserves optional explicit via intent. Automatic-only legacy projects retain their previous native encoding,
+use at least board/25, which also preserves optional explicit via intent; circular
+copper records require board/26 with or without those reports.
+Automatic-only legacy projects retain their previous native encoding,
 and unchanged native Save/Open preserves bytes.
 
 **pcbcraft-clipboard/4** carries explicit targets. Copy, duplication and relocation

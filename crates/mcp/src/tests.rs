@@ -1,3 +1,5 @@
+mod arcs;
+
 use std::io::Cursor;
 
 use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, PLACE_SYMBOL, Session};

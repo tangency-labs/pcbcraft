@@ -58,7 +58,7 @@ supported versions and deferred work before extending a format or consumer.
 | Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
-| Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Walkaround route planning](route-planning.md) |
+| Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Walkaround route planning](route-planning.md) |
 | Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
 | Shared interface toolkit | [Craft UI migration and current pin](shared-ui-migration.md) |
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |

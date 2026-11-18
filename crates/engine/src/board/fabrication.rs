@@ -235,14 +235,17 @@ fn unique_file_names(files: &mut [Output], copper_count: usize) {
 impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order. See [`Self::fabrication`].
     pub fn fabrication_outputs(self) -> Result<Vec<Output>, String> {
+        self.require_linear_copper()?;
         self.fabrication().map(|fabrication| fabrication.files)
     }
 
     /// Build every fabrication file for this board, in a fixed order, measured from the board's
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
+    /// Circular copper is refused before generating any straight-only output.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     pub fn fabrication(self) -> Result<Fabrication, String> {
+        self.require_linear_copper()?;
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();
         // Copper layers in physical stack order, top first.

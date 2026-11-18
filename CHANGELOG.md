@@ -82,21 +82,23 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
-- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; board format 22 records adoptions unless other authored content requires a later envelope. Generic rows and other profiles are unchanged. No placement file is written yet.
-- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin require at least board format 21; profiles, stack fields, via intent or material reports select their later format, and clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
-- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin, profile adoptions, stack fields, via intent or material reports select their later format.
+- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; board adoptions require at least format 22, with extended stack fields, explicit via intent, material reports or circular copper arcs selecting their later formats. Generic rows and other profiles are unchanged. No placement file is written yet.
+- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon use the resolved placement-origin frame, Y up; Excellon coordinates are rounded to 0.001 mm, and the export result names the origin used. Boards with an origin require at least board format 21; profile adoptions, extended stack fields, explicit via intent, material reports or circular copper arcs select their later formats. Arc-bearing boards use format 26 and do not yet support fabrication output. Clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
+- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; zones, placement origins, profile adoptions, extended stack fields, explicit via intent, material reports or circular copper arcs select their later formats without dropping rules. Boards without rules keep the format required by their other content.
 
 Board setup stores an optional role and base copper for each copper layer, a
 tolerance and basis for its finished thickness, and the declared finished board
 thickness, through `pcb.set_board_setup`. Boards using these fields need at least
-board format 23 and setup profile version 2; material reports select their later
-format. Older builds refuse these formats; other boards keep their encoding.
+board format 23 and setup profile version 2; explicit via intent, material reports
+or circular copper arcs select their later board formats. Reports select setup
+profile version 3. Older builds refuse these formats; other boards keep their encoding.
 
 Materials take sourced thermal conductivity, thermal expansion, dielectric
 strength and CTI reports, each with its unit in the field name, its test
 conditions and a required source; a CTI given with a material group must lie in
-that group's IEC 60664-1 band. Boards that use them save as board format 25 and
-setup profiles as version 3, which older builds refuse; other boards keep their
+that group's IEC 60664-1 band. Boards that use them need at least board format 25
+and setup profile version 3; circular copper records select board format 26 while
+retaining the reports. Older builds refuse these formats; other boards keep their
 encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber

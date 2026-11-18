@@ -26,8 +26,10 @@ fn invalid(message: impl ToString) -> CommandError {
 }
 impl MovePlan {
     /// Capture existing IDs on the explicit board and refuse empty, foreign or locked targets.
+    /// Circular copper is refused before preparing a partial move.
     pub fn new(source: Arc<Project>, target: BoardTarget, items: BoardSelection) -> Result<Self, CommandError> {
         let view = source.board_view(target).ok_or_else(|| invalid("Unknown board move target."))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         if items.is_empty()
             || view.footprint_ids().filter(|id| items.footprints.contains(id)).count() != items.footprints.len()
             || view.drawings().iter().filter(|d| items.drawings.contains(&d.id)).count() != items.drawings.len()

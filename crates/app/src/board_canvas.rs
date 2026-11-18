@@ -154,6 +154,11 @@ pub(super) fn show(
     markers: &[(Point, bool)],
     unit: pcbcraft_chrome::units::Unit,
 ) -> Interaction {
+    if let Err(error) = project.require_linear_copper() {
+        ui.label(error);
+        ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        return Interaction::default();
+    }
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
@@ -516,7 +521,15 @@ pub(super) fn show(
         || requested
         || state.highlight_net.is_some()
         || state.tracks.route_contact().is_some())
-    .then(|| state.copper_connectivity(project, source));
+    .then(|| state.copper_connectivity(project, source))
+    .transpose();
+    let connectivity = match connectivity {
+        Ok(value) => value,
+        Err(error) => {
+            out.error = source.map(|source| (source, error));
+            return out;
+        }
+    };
     if requested && let Some(connectivity) = &connectivity {
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
@@ -530,7 +543,13 @@ pub(super) fn show(
     // Tracks on its pads are painted where the move carries them.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
-    let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
+    let carried = match shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).transpose() {
+        Ok(value) => value.unwrap_or_default(),
+        Err(error) => {
+            out.error = source.map(|source| (source, error));
+            return out;
+        }
+    };
     let mut track_labels = crate::board_tracks::paint(
         ui,
         rect,
@@ -758,7 +777,7 @@ fn place_group(
         let components: BTreeSet<_> = placement.components.iter().map(String::as_str).collect();
         let ids: BTreeSet<_> = board.footprints().filter(|f| components.contains(f.component.as_str())).map(|f| f.id).collect();
         if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
-            && let Some(ratsnest) = board.ratsnest()
+            && let Ok(ratsnest) = board.ratsnest()
         {
             for line in ratsnest.lines.iter().filter(|line| ids.contains(&line.from.footprint) || ids.contains(&line.to.footprint)) {
                 let point = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {

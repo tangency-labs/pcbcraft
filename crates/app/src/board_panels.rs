@@ -89,6 +89,13 @@ impl PcbApp {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
         let net_presentation = state.copper_connectivity(target, input);
+        let net_presentation = match net_presentation {
+            Ok(value) => value,
+            Err(error) => {
+                ui.label(error);
+                return ([Rect::NOTHING; 3], Rect::NOTHING);
+            }
+        };
         let names_pending = net_presentation.names_pending;
         let unit = self.preferences.units;
         let revision = self.session.revision();

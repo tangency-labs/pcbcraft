@@ -335,8 +335,12 @@ fn circuit_selection(project: &Project, components: &BTreeSet<u64>) -> Selection
 impl BoardFragment {
     /// Capture selected physical objects plus their exact placed packages and closed logical
     /// component scope. Circuit fragments retain source sheet identities; no flattening is implicit.
-    /// Selections containing zones are refused in full until their clipboard format is supported.
+    /// Selections containing zones and boards containing circular copper are refused in full
+    /// until their clipboard formats and geometry are supported.
     pub fn capture(project: &Project, selection: &BoardSelection, cut: bool) -> Result<Self, CommandError> {
+        if !project.board.arcs.is_empty() {
+            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
+        }
         if !selection.zones.is_empty() {
             return Err(invalid("Zone clipboard copying is not supported yet. Deselect zones before copying or cutting."));
         }
@@ -686,6 +690,9 @@ impl BoardFragment {
         check_copper: bool,
     ) -> Result<(Project, BoardSelection), CommandError> {
         let target = destination.resolve_board(None)?;
+        if !destination.board.arcs.is_empty() {
+            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
+        }
         let mapping = self.layer_mapping(destination, &options.layers)?;
         let mut next = destination.clone();
         let mut components = BTreeMap::new();

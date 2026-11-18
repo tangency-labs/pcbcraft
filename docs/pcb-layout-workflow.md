@@ -108,11 +108,12 @@ previous checks and unfinished route authority without resizing existing copper.
 
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
 Authored defaults have a stable rule UUID and use board format 19 or later
-(20 with zone outlines, 21 with a placement origin, 22 with assembly profile
-adoptions, 23 with copper or board thickness fields, 24 with explicit via intent,
-25 with thermal or insulation material reports); removing the record restores built-in resolution and the format required
-by the remaining
-board data. A board without rules retains its current bytes. Request-local DRC
+(at least 20 with zone outlines, 21 with a placement origin, 22 with assembly
+profile adoptions, 23 with extended stack fields, 24 with explicit via intent,
+25 with thermal or insulation material reports, or 26 with circular copper arcs).
+The highest required format retains the rules; removing the record restores
+built-in resolution and the format required by the remaining board data.
+A board without rules retains its current bytes. Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
 
 [Class definitions and dimensional resolution](net-classes.md),
@@ -148,7 +149,12 @@ up only when DRC runs.
   physically separate. DRC reports those violations, and the router still
   refuses shorts.
 
-**Model and commands.** No format change. The engine exposes one clearance query
+[Exact circular copper records](circular-copper-records.md) are a storage-only
+extension. Boards containing arcs refuse these geometry operations rather than
+substituting straight chords; curved routing and consumers remain separate work.
+
+**Model and commands.** The clearance-query slice itself makes no format change.
+The engine exposes one clearance query
 for DRC, the router and later zone fill. The
 [snapshot query](copper-clearance-query.md) now shares the supported contours,
 separates conservative candidates from final predicates and retains source

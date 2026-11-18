@@ -232,11 +232,14 @@ record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
-thickness need at least `pcbcraft-board/23` when one of them is present. Thermal
-conductivity, thermal expansion, dielectric strength and CTI reports use
-`pcbcraft-board/25`, chosen only when one of them is present; it may also carry
-every format 23 field. Older headers refuse these reports, and a board without
-them keeps its earlier format and bytes.
+thickness need at least `pcbcraft-board/23` when one of them is present. Explicit
+via intent requires at least format 24; thermal conductivity, thermal expansion,
+dielectric strength and CTI reports require at least `pcbcraft-board/25`.
+[Circular copper records](circular-copper-records.md) select format 26 while
+retaining those reports and earlier fields. Format 25 requires at least one such
+report; older headers refuse them. Removing reports selects the format required
+by the remaining authored data. Boards without these features keep their earlier
+format and bytes.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance

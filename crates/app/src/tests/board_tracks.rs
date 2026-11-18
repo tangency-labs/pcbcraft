@@ -176,6 +176,26 @@ fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
     h
 }
 
+/// Unsupported curved copper is visibly refused instead of drawing a straight-only board.
+#[test]
+fn circular_copper_keeps_native_bytes_and_explains_the_unavailable_canvas() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[{
+        "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+        "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.run();
+    assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().arc_tracks().is_empty());
+}
+
 pub(super) fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
     h.state().session.project().unwrap().boards().next().unwrap().tracks().to_vec()
 }
@@ -1827,7 +1847,7 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
         let source = h.state().views.active.input(&h.state().session);
         let project = h.state().session.snapshot().unwrap();
         let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-        h.state_mut().views.active.board.copper_connectivity(board, source)
+        h.state_mut().views.active.board.copper_connectivity(board, source).unwrap()
     }
     let mut h = routable();
     let line = airwires(&h)[0].clone();
@@ -1863,8 +1883,8 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
 
     let project = h.state().session.snapshot().unwrap();
     let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None);
-    let another = h.state_mut().views.active.board.copper_connectivity(board, None);
+    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
+    let another = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
     assert_eq!(uncached, first);
     assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
     let before_open = cached(&mut h);

@@ -264,8 +264,10 @@ Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin wit
 stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
 in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier
 physical field, including optional zone outlines, and requires the origin record; older headers reject it. A board that
-also adopts assembly output profiles saves as format 22 instead, unless stack fields require 23. Both accept the origin. Boards
-without an origin retain their earlier encoding and measure outputs from board zero;
+also adopts assembly output profiles requires at least format 22; extended stack
+fields require 23, explicit via intent 24, and circular copper arcs 26. The highest
+required format retains the origin. Boards without an origin keep the format
+required by their other content and measure outputs from board zero;
 removing the origin restores the format required by the remaining data.
 
 Project format `pcbcraft-project/36` adds a required nonempty `assembly_profiles`
@@ -289,8 +291,11 @@ writing canonical records.
 
 Board format `pcbcraft-board/22` adds required nonempty `assembly_profiles`:
 identity-sorted `{profile, revision}` adoption records resolving exact pinned
-content. It supports optional origin, rules, zones and earlier fields. Stack-bearing boards use format 23, which also accepts adoptions; headers before 22 reject them. Boards without adoptions retain their earlier
-encoding; removing the last adoption restores the remaining data's format.
+content. It supports optional origin, rules, zones and earlier fields. Extended stack
+fields, explicit via intent, material reports and circular copper arcs require
+at least formats 23, 24, 25 and 26 respectively, retaining adoptions; headers before 22 reject them. Boards without
+adoptions use the format required by their other authored data; removing the last
+adoption restores that format.
 
 The project retains at most 64 identities (including retired watermarks), 128
 content revisions and 4096 corrections across retained revisions. An edit retires
@@ -322,21 +327,22 @@ targets remain readable. See [via net assignments](via-net-assignments.md).
 Board format `pcbcraft-board/25` adds thermal conductivity, thermal expansion,
 dielectric strength and CTI reports to embedded materials. It supports every earlier
 field, including stack fields, assigned via intent, assembly profiles, a placement origin and board rules, and
-requires at least one such report. Older headers reject them. Boards without them
-keep their earlier encoding, and removing them restores the format the remaining
-data requires. Setup profiles follow the same rule with `pcbcraft-setup-profile/3`.
+requires at least one such report. Older headers reject them. Circular copper
+records select format 26 while retaining the reports. Removing reports selects
+the format required by the remaining data. Setup profiles use
+`pcbcraft-setup-profile/3` when reports are present.
 See [board-materials.md](board-materials.md#thermal-and-insulation-reports).
 
 ### Zone outline records
 
 Board format `pcbcraft-board/20` adds a required nonempty `zones` array and accepts
 all board/19 fields, with board rules optional. A zone board with a placement
-origin uses at least format 21; assembly profiles, extended stack fields, assigned
-vias or material reports select formats 22, 23, 24 or 25 respectively. The
-encoder preserves every authored record in the highest applicable envelope. Removing a feature selects the format required by
-the remaining data. Without zones the encoder chooses
-the format required by the remaining content. An absent array in board/20, an
-empty or null array in these formats, or zones in a format below 20, is refused. Zones are
+origin requires at least format 21; assembly profile adoptions require 22,
+extended stack fields 23, explicit via intent 24, material reports 25, and
+circular copper arcs 26. The highest required format retains the zone, origin
+and other authored records. Removing a feature selects the format required by
+the remaining data. An absent array in board/20, an empty or null zone array,
+or zones in a format below 20, is refused. Zones are
 UUID-sorted, one authored record per line, with `id`, `layer`, `net`, `points` and
 `options`; no derived fill is stored. Layer UUIDs resolve to copper on that board,
 and net UUIDs resolve to its persistent registry, including retained ambiguous
@@ -357,7 +363,7 @@ registry's retained identities.
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36` or `/39` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, or `/7` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/25` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier board fields |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier board fields; version 26 adds exact circular copper tracks while retaining those earlier fields |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -759,6 +765,20 @@ layer references and bounded resources (512 drawings, 4096 total vertices and
 128 combined layers); records sort by UUID. Optional setup, silkscreen, assignments
 and placements retain their existing validation and identities. Empty technical
 metadata remains after deleting the last graphic, preserving layer addresses.
+
+Board format 26 requires a nonempty `arcs` array and accepts every field of
+supported board formats through 25. Each [circular track](circular-copper-records.md)
+stores UUID `id` and copper `layer`, integer `width_nm`, integer-nanometre
+`center`, `start`, `end` points and `clockwise`/`counterclockwise` `direction`.
+The radius is derived from center/start, not stored. Each arc occupies one line
+in UUID order, at most 4,096 per board. End radial error is at most 1 nm inclusive;
+zero radius, zero sweep, full circles, invalid dimensions/layers and duplicate
+copper IDs are rejected with exact integer predicates. Older headers refuse
+`arcs`, including empty or null arrays; format 26 refuses missing/empty/null arcs.
+Older readers refuse format 26. No data without arcs is upgraded to this format.
+Native documents and archives round-trip the exact records; the diagnostic
+single-file writer refuses them. Geometry consumers refuse rather than flatten
+these records until circular conductive contours are implemented.
 
 Board format 12 adds a `tracks` array and may carry every earlier field, so routing
 a board never drops its baseline, pending intent, graphics or setup. Each record is

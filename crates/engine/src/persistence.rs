@@ -530,6 +530,7 @@ impl Encoder {
             || project.board.silkscreen.is_some()
             || project.board.outline.is_some()
             || project.board.drawings.is_some()
+            || !project.board.arcs.is_empty()
             || !project.board.tracks.is_empty()
             || !project.board.vias.is_empty()
             || project.board.rules.is_some()
