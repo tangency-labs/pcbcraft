@@ -166,6 +166,7 @@ fn board_netlist_reply(result: Value) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    /// Live exports fit at the escaped reply limit and refuse one byte beyond it.
     #[test]
     fn live_board_netlist_reply_counts_escaping_and_envelope() {
         let report = |contents: String| json!({"revision":7,"netlist":{"files":[{"name":"netlist.json","contents":contents}],"findings":[]}});

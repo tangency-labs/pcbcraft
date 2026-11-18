@@ -138,7 +138,10 @@ fn capture_uses_project_connectivity_instead_of_the_active_sheet_projection() {
     }
     expected.sort();
     let proposed = capture(session.project().unwrap(), 1);
-    assert_eq!(proposed.nets, vec![NetState { display_name: Some("SHARED".into()), terminals: expected, names: vec!["SHARED".into()], origin: None }]);
+    assert_eq!(
+        proposed.nets,
+        vec![NetState { display_name: Some("SHARED".into()), terminals: expected, names: vec!["SHARED".into()], origin: None }]
+    );
     assert_eq!(session.project().unwrap().for_sheet(remote).unwrap().connectivity().nets[0].len(), 1);
 }
 

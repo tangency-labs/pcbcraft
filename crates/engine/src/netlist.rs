@@ -351,7 +351,8 @@ struct CaptureText {
 /// Read a source capture that must be present but may be null, with a hyphenated capture ID.
 fn nullable_capture<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<crate::board::update::SourceCapture>, D::Error> {
     Option::<Object<CaptureText>>::deserialize(de).map(|capture| {
-        capture.map(|Object(capture)| crate::board::update::SourceCapture { capture_id: capture.capture_id.0, content_digest: capture.content_digest })
+        capture
+            .map(|Object(capture)| crate::board::update::SourceCapture { capture_id: capture.capture_id.0, content_digest: capture.content_digest })
     })
 }
 

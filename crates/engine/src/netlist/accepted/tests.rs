@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     APPLY_UPDATE, ASSIGN_FOOTPRINT, CONNECT_PINS, DELETE_SYMBOL, DELETE_WIRE, PLACE_ASSIGNED_FOOTPRINT, PLACE_RESISTOR, PLACE_SYMBOL, PREVIEW_UPDATE,
-    SET_SYMBOL_FIELDS, board::definition::basic_components,
+    SET_SYMBOL_FIELDS,
+    board::definition::basic_components,
     netlist::FORMAT,
     netlist::tests::{Fixture, apply, check, fixture, fixture_with_symbol, integer_spellings, schema, schema_v2, terminal, validate, wire},
     persistence::{decode_documents, encode_documents},
@@ -457,6 +458,7 @@ fn reopen(s: &mut Session, expected: &Export) {
     assert_eq!(actual.findings, expected.findings);
 }
 
+/// A pending label cannot give an accepted pad-only net a current schematic UUID.
 #[test]
 fn accepted_pad_net_cannot_borrow_a_pending_named_net_uuid() {
     let Fixture { mut session, sheets: [_, _, sheet], r2, .. } = multipad();
@@ -478,6 +480,7 @@ fn accepted_pad_net_cannot_borrow_a_pending_named_net_uuid() {
     reopen(&mut session, &accepted);
 }
 
+/// A disconnected schematic-origin net stays pending until Apply accepts its pad-only replacement.
 #[test]
 fn accepted_schematic_singleton_remains_pending_until_pad_only_origin_is_accepted() {
     let Fixture { mut session, sheets: [_, _, sheet], r2, .. } = multipad();
@@ -511,6 +514,7 @@ fn accepted_schematic_singleton_remains_pending_until_pad_only_origin_is_accepte
     reopen(&mut session, &pads_only);
 }
 
+/// Older unnamed singletons export an unknown origin without upgrading their native bytes.
 #[test]
 fn older_unnamed_singletons_have_unknown_origin_and_round_trip_without_upgrade() {
     use crate::board::update::{DISPLAY_FORMAT, NET_ORIGIN_FORMAT};
@@ -815,6 +819,7 @@ fn reader_checks_the_format_against_the_content() {
     assert!(check(&schema(), &schema(), &value, "$").unwrap_err().starts_with("$.format"));
 }
 
+/// Direct readers and writers enforce tag and basis rules even for ordinary components.
 #[test]
 fn direct_serde_rejects_wrong_version_and_basis_fields_on_both_sides() {
     let Fixture { session, .. } = synced();
@@ -855,6 +860,7 @@ fn direct_serde_rejects_wrong_version_and_basis_fields_on_both_sides() {
     }
 }
 
+/// All document records reject tuples in text and in serde JSON values.
 #[test]
 fn document_records_refuse_positional_arrays() {
     let Fixture { session, .. } = synced();
