@@ -3,6 +3,9 @@
 @@ -0,0 +1,2 @@
 +// PCBcraft patch: local-first STEP composition backported from SolidCraft #17776
 +// (7dc89ee26e4d5f20c3bb93137fc35fb430e34245); see ../PATCH.md.
+@@ -50 +52 @@
+-/// representation by `target · origin⁻¹`. Refuses cycles and past the record's depth or
++/// representation by `origin⁻¹ · target`. Refuses cycles and past the record's depth or
 @@ -102,0 +105,2 @@
 +    /// Visit a definition's bodies and children, applying each child's local frame before
 +    /// the inherited world frame. Existing cycle, depth and visit refusals remain unchanged.

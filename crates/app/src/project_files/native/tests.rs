@@ -51,7 +51,7 @@ impl Fixture {
 /// Deliver a completed worker result using the editor's normal adoption logic.
 fn complete(files: &mut ProjectFiles, session: &mut Session, result: Result<Outcome, String>) -> Option<Update> {
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     send.send(result).unwrap();
     files.poll(session, &egui::Context::default())
 }
@@ -291,7 +291,7 @@ fn assert_late_move() {
     let target = fixture.files.saved.as_ref().unwrap().target.clone();
     let original = fixture.files.saved.as_ref().unwrap().snapshot.clone();
     let (send, receiver) = mpsc::channel();
-    fixture.files.job = Some(Job { receiver, revision: fixture.session.revision() });
+    fixture.files.job = Some(Job { receiver, revision: fixture.session.revision(), operation: "test", destination: None });
 
     std::thread::scope(|scope| {
         let (ready, wait_ready) = mpsc::sync_channel(0);
