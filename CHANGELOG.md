@@ -2,6 +2,33 @@
 
 ## 0.1.0 (unreleased)
 
+- Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
+
+Pins and Pads can now be selected for inspection through their per-view filters,
+canvas and Browser rows, or the live `view.select_inspection` command. Inspection
+has its own highlight and read-only Properties label without selecting an owner
+for editing. These filters start off to preserve existing picking defaults;
+project edits and reopened documents do not restore stale inspection selections.
+
+`list_commands` adds the command API version, a catalog revision and the
+optional protocol features the build offers, so an agent can tell when the
+commands it was written for may no longer work and when its cached discovery
+data is out of date. Existing replies keep their fields; see
+[command API version](docs/mcp.md#command-api-version).
+
+Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
+on one copper layer that go round existing pads, tracks and vias, locked or not,
+keeping the effective track width, net-class clearances and board-edge clearance.
+A route that cannot get through stops at its last legal point and names what
+blocked it. Planning never edits the board; the points go to `pcb.add_tracks` as
+one undo step. The route tool now uses the same planner with bounded search,
+magnetic target hysteresis and full-path validation before fixing a clicked
+vertex or placing a through via (#246).
+
+Placing a via at the current fixed route head now validates that exact location,
+even when an earlier, longer route preview remains visible, so invalid vias are
+rejected before changing layers.
+
 Preferences → Appearance → **Panel style** switches the workspace shell
 between **Floating** cards and a **Compact** layout, following SolidCraft. In
 Compact the ribbon, workspace tile, Browser, Net Inspector, docked panels and
@@ -12,6 +39,22 @@ Footprint editors no longer show a dark strip between the ribbon and the
 canvas. The choice is remembered with your settings and available
 through `app.set_preferences`; each view keeps its saved dock side and floating
 positions, and project data and history are unchanged.
+
+Part instances can be collected into named part groups shared by the schematic
+and the board. `part_groups.create`, `update`, `remove` and `inspect`
+manage the catalog, and `part_instances.set_groups` and
+`part_instances.inspect_groups` set and read a part instance's groups by its
+stable ID, so annotation does not change membership. A group that still has
+members cannot be removed. Projects with part groups save as
+`pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
+exist). Dense memberships use `pcbcraft-project/39` and board instances
+`pcbcraft-instances/7` through a compact UUID dictionary when expanded records
+exceed existing size limits; no supported membership is dropped. Earlier files
+keep the expanded representation while it fits, and compact files keep their
+encoding after reopening. Unchanged saves preserve canonical encoder bytes;
+accepted noncanonical input may normalize. Copy/Cut leave part groups in their
+owning project, so duplicated parts start ungrouped; projects without groups
+keep their format and canonical encoder bytes.
 
 Nets share readable names across schematic browsing, Rules and PCB inspection.
 Unnamed signals use net-owned numbers such as `Net-0001`, which survive component
@@ -39,8 +82,22 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
-- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin use board format 21; boards without one keep their previous encoding. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
-- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules use board format 19; boards without rules retain their previous encoding.
+- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; board format 22 records adoptions unless other authored content requires a later envelope. Generic rows and other profiles are unchanged. No placement file is written yet.
+- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin require at least board format 21; profiles, stack fields, via intent or material reports select their later format, and clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
+- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin, profile adoptions, stack fields, via intent or material reports select their later format.
+
+Board setup stores an optional role and base copper for each copper layer, a
+tolerance and basis for its finished thickness, and the declared finished board
+thickness, through `pcb.set_board_setup`. Boards using these fields need at least
+board format 23 and setup profile version 2; material reports select their later
+format. Older builds refuse these formats; other boards keep their encoding.
+
+Materials take sourced thermal conductivity, thermal expansion, dielectric
+strength and CTI reports, each with its unit in the field name, its test
+conditions and a required source; a CTI given with a material group must lie in
+that group's IEC 60664-1 band. Boards that use them save as board format 25 and
+setup profiles as version 3, which older builds refuse; other boards keep their
+encoding.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.

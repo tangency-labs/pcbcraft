@@ -92,6 +92,18 @@ pub struct PadView {
     pub net: Option<String>,
 }
 
+impl PadView {
+    /// Test actual copper, including rotated round/oval/rounded corners. Legacy markers
+    /// have no physical land and are inspected separately by their displayed center.
+    /// Queries outside supported board coordinates return false.
+    pub fn contains_point(&self, at: Point) -> bool {
+        crate::wire::valid_point(&at)
+            && self.copper.is_some_and(|corners| {
+                super::geometry::Contour::pad(self.center, corners, self.shape, self.corner_radius_nm).overlaps_segment(at, at, 0.)
+            })
+    }
+}
+
 /// A technical footprint rectangle resolved independently of copper visibility and layer ownership.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphicView {
@@ -101,6 +113,10 @@ pub struct GraphicView {
     pub points: Vec<Point>,
     pub stroke_nm: Option<i64>,
     pub closed: bool,
+    /// The closed points trace straight-edged authored geometry (a rectangle or closed polyline)
+    /// up to nearest-nanometer rotation, rather than a polygonized curve, an open path or text.
+    /// Area checks may decide exactly only from such paths and must treat others conservatively.
+    pub exact: bool,
     /// This path belongs to the generated reference text rather than fixed footprint artwork.
     pub reference: bool,
 }
@@ -270,7 +286,7 @@ impl<'a> BoardView<'a> {
     }
 
     /// Find a canonical placement without resolving geometry or accepted-net membership.
-    fn placement(self, id: &str) -> Option<&'a super::Footprint> {
+    pub(super) fn placement(self, id: &str) -> Option<&'a super::Footprint> {
         let ordinal = crate::schematic::wiring::parse_id(id, "footprint-")?;
         if id != format!("footprint-{ordinal}") {
             return None;
@@ -501,6 +517,7 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
             points: rectangle_points(footprint, g.center, g.width_nm, g.height_nm, g.rotation).to_vec(),
             stroke_nm: None,
             closed: true,
+            exact: true,
             reference: false,
         })
         .collect();
@@ -520,6 +537,7 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
                     points: path.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: false,
+                    exact: false,
                     reference: false,
                 }));
             } else {
@@ -529,6 +547,10 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
                     points: points.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: artwork.graphic.closed(),
+                    exact: matches!(
+                        artwork.graphic.geometry,
+                        crate::library_graphics::Geometry::Rectangle { .. } | crate::library_graphics::Geometry::Polyline { closed: true, .. }
+                    ),
                     reference: false,
                 });
             }
@@ -551,6 +573,7 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
         points: path.into_iter().map(|point| footprint.point(point)).collect(),
         stroke_nm: Some(style.stroke_width_nm),
         closed: false,
+        exact: false,
         reference: false,
     }));
     result.extend(reference_graphics(project, footprint, reference, footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET)));
@@ -573,6 +596,7 @@ fn reference_graphics(project: &Project, footprint: &super::Footprint, reference
             points: path.into_iter().map(|point| footprint.point(point)).collect(),
             stroke_nm: Some(stroke_nm),
             closed: false,
+            exact: false,
             reference: true,
         })
         .collect()

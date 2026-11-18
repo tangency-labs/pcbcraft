@@ -1,0 +1,19 @@
+{
+  "toolchain": "rustc 1.100.0 (0ef1bc386 2026-11-09), aarch64-apple-darwin",
+  "revision": "343e04ae5d714454f47efed2d87f4382e24f44dd",
+  "checks": [
+    {"command": "cargo fmt --all --check", "exit": 0},
+    {"command": "cargo clippy --locked --workspace --all-targets -- -D warnings", "exit": 0},
+    {"command": "cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings", "exit": 0},
+    {"command": "cargo test --locked --workspace --no-fail-fast", "exit": 0, "result": "2025 passed, 3 ignored", "note": "TMPDIR set to a canonical path; under the default macOS /var symlink, six existing recent-project tests compare /var with /private/var paths and fail; this change does not touch that code"},
+    {"command": "cargo test --locked -p pcbcraft-app --features performance-harness performance::", "exit": 0, "result": "16 passed"},
+    {"command": "cargo check --locked -p pcbcraft-web --target wasm32-unknown-unknown", "exit": 0},
+    {"command": "cargo check --locked -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown", "exit": 0},
+    {"command": "cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1 (Node WASI runner)", "exit": 0, "result": "291 passed"},
+    {"command": "cargo deny --locked check licenses sources bans (0.20.2)", "exit": 0},
+    {"command": "python3 -B scripts/check-markdown-links.py", "exit": 0},
+    {"command": "python3 -B -m unittest discover -s scripts -p 'test*performance*.py'", "exit": 0, "result": "18 passed"},
+    {"command": "python3 -B -m unittest discover -s scripts -p 'test_markdown_links.py'", "exit": 0, "note": "TMPDIR set to a canonical path, as above"},
+    {"command": "node --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs", "exit": 0}
+  ]
+}

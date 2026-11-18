@@ -399,6 +399,7 @@ impl PcbApp {
             self.preferences.board_grid_style,
             label,
             &[],
+            &[],
             self.preferences.units,
         );
         if pointer.is_some() {
@@ -447,6 +448,7 @@ impl PcbApp {
     }
     /// Apply one mixed editing selection after correspondence handling has cleared old categories.
     pub(super) fn select_board_items(&mut self, selected: BoardSelection) {
+        self.views.active.inspection.clear();
         self.views.select_board(selected.footprints, &self.session, self.preferences.selection_follow);
         self.views.active.board.zones.select_many(selected.zones);
         self.views.active.board.drawing.select_many(selected.drawings);

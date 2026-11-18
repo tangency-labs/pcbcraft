@@ -15,6 +15,7 @@ pub mod conversion;
 mod folder;
 pub mod layout;
 pub mod library;
+pub mod recovery;
 pub use folder::{load, save};
 
 /// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling

@@ -467,6 +467,10 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
 /// Empty boards also expose a compatibility layer derived from their distinct board IDs.
 /// Check each occurrence's sheet/use references before normalizing its independently allocated IDs.
 fn without_sheet_identity(mut state: Value) -> Value {
+    if let Some(project) = state["project"].as_object_mut() {
+        assert_eq!(project["id"].as_str().unwrap().len(), 36);
+        project.insert("id".into(), json!("<independent-project>"));
+    }
     if let Some(registry) = state["project"].get_mut("net_registry") {
         let scope = registry["scope"].clone();
         let records = registry["records"].as_array_mut().unwrap();
@@ -652,6 +656,39 @@ fn list_commands_filters() {
     assert_eq!(all[0]["id"], "edit.undo");
 }
 
+/// `list_commands` reports the command API version, the revision of the whole catalog (the same
+/// with or without a filter, and equal to `catalog_revision` of the unfiltered list) and the
+/// capabilities. `describe_command` and the catalog resource agree with the list, and the listed
+/// contracts match the committed snapshot.
+#[test]
+fn discovery_reports_the_api_version_and_catalog_revision() {
+    use pcbcraft_engine::command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision, check_snapshot};
+    let mut s = server();
+    body(&call(&mut s, "execute", json!({"command": "project.new"})));
+    let listed = call(&mut s, "list_commands", json!({}));
+    let commands = body(&listed);
+    let about: Value = serde_json::from_str(listed["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(about, listed["structuredContent"]);
+    let revision = catalog_revision(commands.as_array().unwrap());
+    assert_eq!(about, json!({"command_api_version": COMMAND_API_VERSION, "catalog_revision": revision, "capabilities": CAPABILITIES}));
+    assert!(about["capabilities"].as_array().unwrap().contains(&json!("command_api")));
+    let filtered = call(&mut s, "list_commands", json!({"filter": "undo"}));
+    assert!(body(&filtered).as_array().unwrap().len() < commands.as_array().unwrap().len());
+    assert_eq!(filtered["structuredContent"]["catalog_revision"], json!(revision));
+    for command in commands.as_array().unwrap() {
+        assert!(command.get("version").is_none(), "{command}");
+        assert_eq!(&body(&call(&mut s, "describe_command", json!({"command": command["id"]}))), command);
+    }
+    let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
+    assert_eq!(check_snapshot(&snapshot, "commands", commands.as_array().unwrap(), COMMAND_API_VERSION), Ok(()));
+    let reply = rpc(&mut s, "resources/read", json!({"uri": "pcbcraft://commands"}));
+    let resource: Value = serde_json::from_str(reply["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(resource, commands);
+    let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
+    assert_eq!(failed["isError"], true);
+    assert!(failed.get("structuredContent").is_none());
+}
+
 #[test]
 fn resources_read_the_project_and_catalog() {
     let mut s = server();
@@ -736,6 +773,123 @@ fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {
     let bad = call(&mut server, "cross_probe", json!({"pad":{"board":"00000000-0000-0000-0000-000000000001","footprint":"footprint-3","pad":"2"}}));
     assert_eq!(bad["isError"], true);
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), inspected);
+}
+
+/// Complete correspondence is additive: legacy singular payloads keep their published shape.
+#[test]
+fn resolve_counterparts_preserves_legacy_cross_probe_and_returns_complete_sets() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let project = setup.project().unwrap();
+    let component = project.components().next().unwrap().id();
+    let terminal = project.symbols()[0].terminals()[0].inspect();
+    let sheet = project.sheet_target().id();
+    let package = setup.project().unwrap().footprint_catalog().into_iter().find(|package| package.id == "sot23").unwrap();
+    setup
+        .apply(
+            pcbcraft_engine::board::assignment::ASSIGN_FOOTPRINT,
+            &json!({"component":component,"library":package.library,
+        "definition":package.id,"definition_revision":package.revision,"mapping":{"1":["1","3"],"2":"2"},"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    setup
+        .apply(
+            pcbcraft_engine::board::assignment::PLACE_ASSIGNED_FOOTPRINT,
+            &json!({"component":component,"x_nm":0,"y_nm":0,"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let project_id = before["project"]["id"].clone();
+    assert!(project_id.as_str().is_some(), "qualified query inputs must be discoverable through inspection");
+    let source = json!({"kind":"terminal","project":project_id,"sheet":sheet,"symbol":terminal["symbol"],"terminal":terminal["terminal"]});
+    let params = json!({"source":source,"expected_revision":before["revision"]});
+    let response = call(&mut server, "resolve_counterparts", params.clone());
+    assert!(response.is_object(), "expected a tool result, got {response}");
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["format"], "pcbcraft-counterparts/1");
+    assert_eq!(result["status"], "resolved");
+    assert_eq!(result["pads"].as_array().unwrap().len(), 2);
+    assert_eq!(result["terminals"].as_array().unwrap().len(), 1);
+    let old = body(&call(&mut server, "cross_probe", json!({"terminal":terminal})));
+    assert_eq!(old.as_object().unwrap().len(), 1);
+    assert_eq!(old["pad"]["pad"], "1");
+    assert_eq!(body(&call(&mut server, "cross_probe", json!({"pad":old["pad"]}))), json!({"terminal":terminal}));
+    for pad in result["pads"].as_array().unwrap() {
+        let reverse = body(&call(&mut server, "resolve_counterparts", json!({"source":pad,"expected_revision":before["revision"]})));
+        assert_eq!(reverse["terminals"], result["terminals"]);
+        assert_eq!(reverse["pads"], result["pads"]);
+    }
+    let stale = body(&call(&mut server, "resolve_counterparts", json!({"source":source,"expected_revision":0})));
+    assert_eq!(stale["status"], "stale");
+    assert_eq!(stale["pads"], json!([]));
+    assert_eq!(stale["terminals"], json!([]));
+    for invalid in [
+        json!({"source":source}),
+        json!({"source":source,"expected_revision":-1}),
+        json!({"source":source,"expected_revision":1.5}),
+        json!({"source":{"kind":"terminal","project":project_id,"sheet":sheet,"symbol":"symbol-01","terminal":"1"},"expected_revision":before["revision"]}),
+        json!({"source":{"kind":"terminal","project":project_id,"sheet":sheet,"symbol":terminal["symbol"],"terminal":"1","extra":true},"expected_revision":before["revision"]}),
+    ] {
+        let refused = rpc(&mut server, "tools/call", json!({"name":"resolve_counterparts","arguments":invalid}));
+        assert!(refused.get("error").is_some() || refused["result"]["isError"] == true, "{refused}");
+    }
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    let tool = tool_definitions().into_iter().find(|tool| tool["name"] == "resolve_counterparts").unwrap();
+    assert_eq!(tool["annotations"]["readOnlyHint"], true);
+    assert_eq!(tool["annotations"]["destructiveHint"], false);
+}
+
+/// Live and headless queries use the same resolver without invoking editor commands or edits.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn resolve_counterparts_agrees_through_headless_and_live_dispatch() {
+    use crate::{
+        Backend,
+        live::{Editor, call_editor},
+    };
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        /// The fixture shares the engine session with the live dispatcher.
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        /// A query is not an editor command and must not reach this path.
+        fn refusal(&self, _: &str) -> Option<String> {
+            Some("unexpected editor command".into())
+        }
+        /// No presentation commands are needed for model correspondence.
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        /// Query dispatch must not replace its result with editor inspection.
+        fn inspect(&self) -> Value {
+            json!({"unexpected":true})
+        }
+        /// A correspondence query never invokes an editor mutation.
+        fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), String> {
+            Err("unexpected editor command".into())
+        }
+    }
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let snapshot = setup.snapshot().unwrap();
+    let terminal = snapshot.symbols()[0].terminals()[0].inspect();
+    let source = json!({"kind":"terminal","project":snapshot.id(),"sheet":snapshot.sheet_target().id(),"symbol":terminal["symbol"],"terminal":terminal["terminal"]});
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot);
+    let mut editor = OpenEditor(live);
+    let before = headless.call("project.inspect", json!({})).unwrap();
+    let params = json!({"source":source,"expected_revision":before["revision"]});
+    let actual = headless.call("project.resolve_counterparts", params.clone()).unwrap();
+    assert_eq!(actual["status"], "unassigned");
+    assert_eq!(call_editor(&mut editor, &json!({"method":"project.resolve_counterparts","params":params})).unwrap(), actual);
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), before);
+    assert_eq!(editor.0.inspect(), before);
 }
 
 /// MCP exposes rotated placement and authored routes to all library pins, including pin 4;
@@ -1303,6 +1457,127 @@ fn fabrication_result_names_the_placement_origin_it_used() {
     assert_eq!(origin["source"], json!({"kind":"board","origin":authored["id"]}));
     assert_eq!(origin["at"], json!({"x_nm":0,"y_nm":10_000_000}));
     assert_eq!(origin["axes"], "x_right_y_up");
+}
+
+/// Immutable profiles are pinned, previewed, adopted and retired through the shared dispatcher;
+/// malformed content is refused without changing the catalog or board adoption.
+#[test]
+fn assembly_output_profiles_round_trip_through_execute() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap().board;
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let description = call(&mut server, "describe_command", json!({"command":pcbcraft_engine::SET_ASSEMBLY_PROFILE}));
+    assert_ne!(description["isError"], true, "{description}");
+    let set = |server: &mut Server, profile: Option<&Value>, content: Value| {
+        let revision = body(&call(server, "inspect_project", json!({})))["revision"].clone();
+        let mut params = json!({"expected_revision":revision,"content":content});
+        if let Some(profile) = profile {
+            params["profile"] = profile.clone();
+        }
+        call(server, "execute", json!({"command":pcbcraft_engine::SET_ASSEMBLY_PROFILE,"params":params}))
+    };
+    let profile = json!({"revision":1,"provenance":{"kind":"authored"},"name":"Reel","bottom_side":"viewed_from_bottom","corrections":[
+        {"library":"basic-components","definition":"sot23","rotation":180},
+        {"library":"basic-components","definition":"capacitor-0402","centroid":{"x_nm":100_000,"y_nm":0}}
+    ]});
+    let response = set(&mut server, None, profile);
+    assert_ne!(response["isError"], true, "{response}");
+    let profiles = body(&response)["project"]["assembly_profiles"]["revisions"].clone();
+    assert_eq!(profiles.as_array().unwrap().len(), 1);
+    assert_eq!(profiles[0]["format"], "pcbcraft-assembly-profile/1");
+    assert_eq!(profiles[0]["content"]["bottom_side"], "viewed_from_bottom");
+    assert_eq!(profiles[0]["content"]["corrections"][0]["definition"], "capacitor-0402", "corrections come back in canonical order");
+    assert_eq!(profiles[0]["content"]["corrections"][1], json!({"library":"basic-components","definition":"sot23","rotation":180}));
+    assert_eq!(body(&response)["project"]["boards"][0]["assembly_profiles"], json!([]));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let mut adoption = json!({"board":board,"expected_revision":before["revision"],"profile":profiles[0]["id"],"revision":1});
+    let reviewed = call(&mut server, "execute", json!({"command":pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE,"params":adoption,"inspect":false}));
+    assert_ne!(reviewed["isError"], true, "{reviewed}");
+    let review = body(&reviewed);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    adoption["acceptance"] = review["acceptance"].clone();
+    let accepted = call(&mut server, "execute", json!({"command":pcbcraft_engine::ADOPT_ASSEMBLY_PROFILE,"params":adoption}));
+    assert_ne!(accepted["isError"], true, "{accepted}");
+
+    let refused = set(
+        &mut server,
+        None,
+        json!({"revision":1,"provenance":{"kind":"authored"},"name":"Bad","corrections":[{"library":"basic-components","definition":"sot23","rotation":360}]}),
+    );
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(refused["content"][0]["type"], "text");
+    let reason = refused["content"][0]["text"].as_str().unwrap();
+    assert!(reason.contains("`content`") && reason.contains("immutable profile content"), "{refused}");
+    let inspected = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(inspected["project"]["assembly_profiles"]["revisions"], profiles);
+    assert_eq!(inspected["project"]["boards"][0]["assembly_profiles"], json!([{"profile":profiles[0]["id"],"revision":1}]));
+
+    let response = set(&mut server, Some(&profiles[0]["id"]), Value::Null);
+    assert_ne!(response["isError"], true, "{response}");
+    assert_eq!(body(&response)["project"]["boards"][0]["assembly_profiles"], inspected["project"]["boards"][0]["assembly_profiles"]);
+    assert_eq!(body(&response)["project"]["assembly_profiles"]["heads"][0]["removed"], true);
+    assert_eq!(body(&response)["project"]["assembly_profiles"]["revisions"], profiles);
+}
+
+/// Suppressing inspection preserves identical read-only profile previews on headless and live dispatch.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn assembly_output_profiles_preview_through_headless_and_live() {
+    use crate::{
+        Backend,
+        live::{Editor, call_editor},
+    };
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        /// The live dispatcher uses this same command session.
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        /// This fixture has no modal interaction.
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        /// The fixture exposes engine commands only.
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        /// No editor-local state participates in a profile review.
+        fn inspect(&self) -> Value {
+            json!({})
+        }
+        /// A mistaken window dispatch fails explicitly.
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), String> {
+            Err("not a window operation".into())
+        }
+    }
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    let id = "00000000-0000-0000-0000-000000000093";
+    setup.apply(pcbcraft_engine::SET_ASSEMBLY_PROFILE,&json!({"expected_revision":setup.revision(),"profile":id,"content":{"revision":1,"name":"Portable","provenance":{"kind":"authored"},"bottom_side":"viewed_from_bottom"}})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap().board;
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot);
+    let mut editor = OpenEditor(live);
+    let before = headless.call("project.inspect", json!({})).unwrap();
+    let params = json!({"board":board,"expected_revision":before["revision"],"profile":id,"revision":1});
+    let request = json!({"command":pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE,"params":params,"inspect":false});
+    let headless_review = headless.call("engine.execute", request.clone()).unwrap();
+    let live_review = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    assert_eq!(serde_json::to_vec(&headless_review).unwrap(), serde_json::to_vec(&live_review).unwrap());
+    assert!(headless_review["acceptance"].as_str().is_some_and(|digest| digest.len() == 64));
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), before);
+    assert_eq!(editor.0.inspect(), before);
+    let mut accept = params;
+    accept["acceptance"] = headless_review["acceptance"].clone();
+    let request = json!({"command":pcbcraft_engine::ADOPT_ASSEMBLY_PROFILE,"params":accept,"inspect":false});
+    assert_eq!(
+        headless.call("engine.execute", request.clone()).unwrap(),
+        call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap()
+    );
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), editor.0.inspect());
 }
 
 /// A netlist export with inspect:false still returns its file and leaves the project unchanged.

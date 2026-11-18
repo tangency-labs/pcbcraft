@@ -8,6 +8,22 @@ use uuid::Uuid;
 /// Maximum portable profile payload, bounded before parsing or writing.
 pub const MAX_PROFILE_BYTES: usize = 1_048_576;
 const FORMAT: &str = "pcbcraft-setup-profile/1";
+/// Adds copper roles, base copper, copper thickness qualifiers and finished board thickness.
+const STACK_FORMAT: &str = "pcbcraft-setup-profile/2";
+/// Adds thermal conductivity, thermal expansion, dielectric strength and tracking reports and
+/// may carry every version 2 field.
+const REPORT_FORMAT: &str = "pcbcraft-setup-profile/3";
+
+/// The lowest profile version that holds this setup, so older readers keep opening the rest.
+fn format_for(setup: &BoardSetup) -> &'static str {
+    if setup.requires_report_format() {
+        REPORT_FORMAT
+    } else if setup.requires_stack_format() {
+        STACK_FORMAT
+    } else {
+        FORMAT
+    }
+}
 
 /// A self-contained, named setup profile. Applying copies its values into an explicitly addressed
 /// board; it does not create an automatic link or claim fabrication/routing rule qualification.
@@ -24,7 +40,8 @@ pub struct SetupProfile {
 impl SetupProfile {
     /// Capture a new shareable snapshot without changing board or material identities.
     pub fn new(name: String, setup: BoardSetup, silkscreen: Settings) -> Result<Self, String> {
-        let profile = Self { format: FORMAT.into(), id: crate::fresh_id().map_err(|e| e.to_string())?, revision: 1, name, setup, silkscreen };
+        let profile =
+            Self { format: format_for(&setup).into(), id: crate::fresh_id().map_err(|e| e.to_string())?, revision: 1, name, setup, silkscreen };
         profile.validate()?;
         Ok(profile)
     }
@@ -47,10 +64,20 @@ impl SetupProfile {
         }
         Ok(bytes)
     }
-    /// In-memory construction receives the same validation as a decoded profile.
+    /// In-memory construction receives the same validation as a decoded profile. Version 1 cannot
+    /// carry the stack fields, and version 2 is written only for a setup that uses them. Version 3
+    /// is written only for a setup whose materials carry thermal or insulation reports.
     fn validate(&self) -> Result<(), String> {
-        if self.format != FORMAT || self.id.is_nil() || self.revision == 0 {
+        if ![FORMAT, STACK_FORMAT, REPORT_FORMAT].contains(&self.format.as_str()) || self.id.is_nil() || self.revision == 0 {
             return Err("Unsupported or invalid setup profile identity/version.".into());
+        }
+        if self.format != format_for(&self.setup) {
+            return Err(if self.setup.requires_report_format() || self.format == REPORT_FORMAT {
+                "Thermal conductivity, thermal expansion, dielectric strength and tracking reports require setup profile version 3, which requires at least one of them."
+            } else {
+                "Copper roles, base copper, copper thickness qualifiers and finished board thickness require setup profile version 2, which requires at least one of them."
+            }
+            .into());
         }
         if self.name.trim() != self.name || self.name.is_empty() || self.name.chars().count() > 80 || self.name.chars().any(char::is_control) {
             return Err("Profile name must contain 1–80 characters without surrounding whitespace or control characters.".into());
@@ -61,10 +88,11 @@ impl SetupProfile {
     }
 }
 impl BoardSetup {
-    /// Rebase a portable profile onto this board's retained physical and unambiguous technical
-    /// layer IDs. Extra target layers survive, preserving graphic ownership. Existing material
-    /// pins cannot be rewritten; ambiguity/name collisions fail through ordinary setup validation.
-    /// Shrinking authored strata retains the same protection as a manual copper-count edit.
+    /// Rebase a portable profile onto this board's surviving physical and unambiguous technical
+    /// layer IDs. Extra target technical layers survive, preserving their graphic ownership.
+    /// Existing material pins cannot be rewritten; ambiguity/name collisions fail through ordinary
+    /// setup validation. Copper-count changes use the ordinary authored-stratum/removal checks.
+    /// The profile's declared finished board thickness, tolerance and minimum replace the board's.
     pub fn with_profile(&self, profile: &SetupProfile) -> Result<Self, CommandError> {
         profile.validate().map_err(CommandError::InvalidParams)?;
         let incoming = &profile.setup;
@@ -119,7 +147,8 @@ impl BoardSetup {
                 materials.push(material.clone());
             }
         }
-        Self::try_from(SetupRecords { materials, layers, stackup: Stackup { id: target.stackup.id, strata } }).map_err(CommandError::InvalidParams)
+        let stackup = Stackup { id: target.stackup.id, strata, ..incoming.stackup.clone() };
+        Self::try_from(SetupRecords { materials, layers, stackup }).map_err(CommandError::InvalidParams)
     }
 }
 
@@ -153,6 +182,73 @@ mod tests {
         value["constraints"] = json!({"minimum_copper_clearance_nm":200000});
         assert!(SetupProfile::decode(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(SetupProfile::decode(&vec![b' '; MAX_PROFILE_BYTES + 1]).is_err());
+    }
+    /// Version 2 is written only for setups with copper roles, base copper, copper thickness
+    /// qualifiers or finished board thickness; each version refuses the other's content.
+    #[test]
+    fn stack_fields_select_profile_version_2() {
+        let s = session();
+        let plain = s.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4OneOz).unwrap();
+        let mut value = serde_json::to_value(&plain).unwrap();
+        value["stackup"]["strata"][0]["role"] = json!("signal");
+        value["stackup"]["strata"][0]["thickness_basis"] = json!("nominal");
+        value["stackup"]["finished_thickness_nm"] = json!(1_600_000);
+        let stacked: BoardSetup = serde_json::from_value(value).unwrap();
+        let old = SetupProfile::new("Plain".into(), plain, Settings::default()).unwrap();
+        let new = SetupProfile::new("Stack".into(), stacked.clone(), Settings::default()).unwrap();
+        assert_eq!(old.format, FORMAT);
+        assert_eq!(new.format, STACK_FORMAT);
+        let bytes = new.encode().unwrap();
+        assert_eq!(SetupProfile::decode(&bytes).unwrap(), new);
+        assert_eq!(SetupProfile::decode(&bytes).unwrap().encode().unwrap(), bytes);
+        let adopted = s.project().unwrap().board_setup().unwrap().with_profile(&new).unwrap();
+        assert_eq!(adopted.stackup().finished_thickness_nm, Some(1_600_000));
+        let mut downgraded = serde_json::to_value(&new).unwrap();
+        downgraded["format"] = json!(FORMAT);
+        let version_refusal = "require setup profile version 2, which requires at least one of them";
+        let error = SetupProfile::decode(&serde_json::to_vec(&downgraded).unwrap()).unwrap_err();
+        assert!(error.contains(version_refusal), "{error}");
+        let mut upgraded = serde_json::to_value(&old).unwrap();
+        upgraded["format"] = json!(STACK_FORMAT);
+        let error = SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).unwrap_err();
+        assert!(error.contains(version_refusal), "{error}");
+    }
+    /// Version 3 is written only when a material carries thermal or insulation reports; it
+    /// carries version 2's stack fields, and the reports travel into the target board.
+    #[test]
+    fn material_reports_select_profile_version_3() {
+        let s = session();
+        let plain = s.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4OneOz).unwrap();
+        let mut value = serde_json::to_value(&plain).unwrap();
+        let material = json!({"id":uuid::Uuid::from_u128(77),"revision":1,"name":"Synthetic",
+            "cti":[{"cti_v":175,"material_group":"IIIa","basis":"minimum","source":{"document":"Synthetic"}}]});
+        match value["materials"].as_array_mut() {
+            Some(materials) => materials.push(material),
+            None => value["materials"] = json!([material]),
+        }
+        let reported: BoardSetup = serde_json::from_value(value.clone()).unwrap();
+        value["stackup"]["strata"][0]["role"] = json!("signal");
+        let both: BoardSetup = serde_json::from_value(value).unwrap();
+        for setup in [reported, both] {
+            let profile = SetupProfile::new("Reports".into(), setup, Settings::default()).unwrap();
+            assert_eq!(profile.format, REPORT_FORMAT);
+            let bytes = profile.encode().unwrap();
+            assert_eq!(SetupProfile::decode(&bytes).unwrap().encode().unwrap(), bytes);
+            let adopted = s.project().unwrap().board_setup().unwrap().with_profile(&profile).unwrap();
+            let reports = |setup: &BoardSetup| setup.materials().iter().find(|m| m.id == uuid::Uuid::from_u128(77)).map(|m| m.cti.clone());
+            assert_eq!(reports(&adopted), reports(&profile.setup));
+            assert!(reports(&adopted).is_some_and(|cti| cti.len() == 1));
+            for older in [FORMAT, STACK_FORMAT] {
+                let mut downgraded = serde_json::to_value(&profile).unwrap();
+                downgraded["format"] = json!(older);
+                let error = SetupProfile::decode(&serde_json::to_vec(&downgraded).unwrap()).map(|_| ()).unwrap_err();
+                assert!(error.contains("require setup profile version 3"), "{older}: {error}");
+            }
+        }
+        let mut upgraded = serde_json::to_value(SetupProfile::new("Plain".into(), plain, Settings::default()).unwrap()).unwrap();
+        upgraded["format"] = json!(REPORT_FORMAT);
+        let error = SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).map(|_| ()).unwrap_err();
+        assert!(error.contains("require setup profile version 3"), "{error}");
     }
     /// Import preserves target-owned graphic layers and material pins, then applies atomically
     /// through the same revision-bound command as manual edits and supports exact undo.

@@ -40,6 +40,22 @@ impl Work for pcbcraft_engine::board::track::preparation::CopperEditJob {
     }
 }
 
+impl Work for pcbcraft_engine::board::route::PlanningJob {
+    type Output = pcbcraft_engine::board::route::Plan;
+    fn source(&self) -> &CheckSource {
+        self.source()
+    }
+    fn progress(&self) -> CheckProgress {
+        self.progress()
+    }
+    fn step(&mut self, budget: usize) -> bool {
+        self.step(budget)
+    }
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+        self.take_result().map_err(|e| e.to_string())
+    }
+}
+
 /// One immutable checker request tagged with its owner's publication generation.
 pub(crate) struct Request<J: Work = CheckJob> {
     pub id: u64,

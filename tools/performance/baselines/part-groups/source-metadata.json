@@ -1,0 +1,18 @@
+{
+  "before": {
+    "revision": "703f4ace7e52f807f493f8317045d9d55c2e3493",
+    "cargo_lock_sha256": "d6e9e78410856431f42d1a642c57a9d835c0d332bfca876e2360acc17549bd5e",
+    "executable_sha256": "c21678676715c0f93cc574e51d4786b280b3f21d43ab4ab1f8233ded1a2e9d1f"
+  },
+  "after": {
+    "revision": "7d4f23fe144076c7f500fd0a9df21abf030763fa",
+    "cargo_lock_sha256": "34bef4f851c881d71994050ac990689321cb5a00d38a5872e616e95707719fae",
+    "executable_sha256": "10d17411f12d1e45d117cd593b050a0113ec933b635ee94e096c93d57881b1d3"
+  },
+  "runner_sha256": "43e132aab3400531a27f7ff69d99c6d0915f677d2d2d832159a4a71a7493fa1a",
+  "fixture_sha256": "0a37add31eb3b3e5976e77d1021d19eeb371c5e5c0c3fd70737479f3e4b4c1fa",
+  "engine_dependency_trees_equal": true,
+  "collector_sha256": "63f9b4e4443575d80340b7cfbefc45abec8d68d110542bac9aada034550828d2",
+  "build_command": "CARGO_BUILD_JOBS=8 CARGO_INCREMENTAL=0 cargo build --offline --locked --release -p pcbcraft-engine --example pr378_membership_memory",
+  "runner_source_install": "Temporarily copy membership-memory.rs to crates/engine/examples/pr378_membership_memory.rs on each recorded revision; remove after building."
+}

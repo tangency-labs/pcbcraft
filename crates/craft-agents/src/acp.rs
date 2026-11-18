@@ -201,7 +201,8 @@ pub fn is_bridge_tool(title: &str, kind: Option<&str>, server: &str) -> bool {
 
 /// The tools the bridge serves (`pcbcraft-cli mcp`); only these count as its tools. The desktop
 /// app checks this list against the MCP server's own.
-pub const BRIDGE_TOOLS: &[&str] = &["list_commands", "describe_command", "execute", "inspect_project", "inspect_editor", "cross_probe"];
+pub const BRIDGE_TOOLS: &[&str] =
+    &["list_commands", "describe_command", "execute", "inspect_project", "inspect_editor", "cross_probe", "resolve_counterparts"];
 
 /// The MCP server the agent starts to reach the project:
 /// `pcbcraft-cli mcp --connect PORT --token-file FILE --wait SECONDS`, bridged to the chat's own

@@ -18,7 +18,7 @@ cargo build --locked -p pcbcraft -p pcbcraft-cli
 cargo run --locked -p pcbcraft
 ```
 
-GitHub access is required while the repository is private. The desktop app needs
+The repository is public, so the clone needs no GitHub sign-in. The desktop app needs
 a working graphical session; a headless shell can run the checks and MCP example
 described below. See [Contributing](../CONTRIBUTING.md) for the toolchain and
 browser build commands.
@@ -152,15 +152,15 @@ the same `VCC` net name, which can be changed before placement.
    header's **Expand** control returns to the large form with the same library,
    search and selection. The compact catalog stays open during placement and can
    be floated or docked at either edge from its **…** menu.
-3. Click an unconnected pin or free wire end to start directly, or hover a pin,
-   wire or grid point and press **W** to start there immediately. Connected nodes
-   use W or **Capture → Wire**, which waits for a first click. The green wire cursor
+3. Click an unconnected pin or free wire end to start directly, or press **W**
+   or choose **Capture → Wire** to activate the tool, then click a pin, wire or
+   grid point to choose the start. Connected nodes require the Wire tool. The green wire cursor
    rings an existing connection target. Hold **Ctrl** to draw off-grid; releasing it
    restores snapping, while pins and wires remain connection targets. Click corners
    and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end. The wire tool stays ready for a new route;
-   **Esc** exits it or cancels an unfinished wire.
+   **Esc** cancels an unfinished wire while keeping the tool ready; press it again to exit.
    Finish on an existing wire segment to create a connected branch. Dragging a
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
@@ -187,7 +187,8 @@ the same `VCC` net name, which can be changed before placement.
    Copying a sheet body includes its child subtree. For a same-project Cut,
    Paste Options requires **Reuse original unparented sheets** to be enabled
    explicitly; leaving it unchecked creates independent copies.
-5. Click a wire segment; only that segment turns blue, and **Delete** removes
+5. **Ctrl+A** (**Cmd+A** on macOS) selects all supported items on the current sheet,
+   respecting Selection filters. Click a wire segment; only that segment turns blue, and **Delete** removes
    it. Use **Undo**, then drag the segment perpendicular to its direction to
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
@@ -237,6 +238,9 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
+The route preview walks around fixed copper, keeping its starting net through
+vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
+blocked or incomplete searches keep the last legal preview and refuse that target.
 
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
@@ -794,3 +798,9 @@ footprint…** to author a footprint-only part, or add the symbol independently 
 Browse. When both are present, complete the pin mapping before publishing.
 Schematic placement requires a symbol; the current placement command does not
 create board-owned symbol-less instances.
+
+For standalone vias, choose **Via** and click its ribbon **Via net** to search for
+a current board net and confirm **Use net** before placing, or keep **Automatic**.
+Selected-via Properties uses the same search form to change or clear
+that assignment; [via net assignments](via-net-assignments.md) explains how intent
+remains distinct from physical copper connections.

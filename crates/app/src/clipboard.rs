@@ -497,6 +497,7 @@ impl PcbApp {
             false,
             block,
             &Default::default(),
+            &[],
             self.views.active.filters,
             false,
             true,

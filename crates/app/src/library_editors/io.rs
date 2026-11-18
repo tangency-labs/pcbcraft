@@ -10,7 +10,8 @@ pub(super) enum Outcome {
     Opened(Box<Item>),
     #[cfg(not(target_arch = "wasm32"))]
     Saved(u64, Arc<Item>),
-    Exported,
+    /// The notice to show, such as a whole-library export report.
+    Exported(String),
     Cancelled,
 }
 #[derive(Debug, Default)]
@@ -68,6 +69,38 @@ impl Files {
         self.pending = Some(receive);
         Ok(())
     }
+    /// Save a whole-library bundle to a new file chosen on the worker, never replacing an
+    /// existing one; the browser downloads it instead. `report` becomes the completion notice.
+    pub(super) fn start_bundle(&mut self, ctx: &egui::Context, export: pcbcraft_engine::library::sources::Export) -> Result<(), String> {
+        if self.busy() {
+            return Err("Finish the current library file operation first.".into());
+        }
+        let (send, receive) = mpsc::sync_channel(1);
+        let ctx = ctx.clone();
+        let finish = move |result| {
+            let _ = send.send(result);
+            ctx.request_repaint();
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::Builder::new()
+            .name("library-bundle".into())
+            .spawn(move || {
+                let dialog = rfd::FileDialog::new().set_title("Export library to a new file").add_filter("PCBcraft library bundle", &["json"]);
+                finish(match dialog.set_file_name(&export.file_name).save_file() {
+                    Some(path) => publish(&path, &export.bytes).map(|()| Outcome::Exported(export.report)),
+                    None => Ok(Outcome::Cancelled),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        #[cfg(target_arch = "wasm32")]
+        finish(
+            download(&export.bytes, &export.file_name)
+                .map(|()| Outcome::Exported(export.report))
+                .map_err(|e| format!("Library download failed: {e:?}")),
+        );
+        self.pending = Some(receive);
+        Ok(())
+    }
 }
 
 /// Use regular bounded input files; a FIFO or device must not block the worker indefinitely.
@@ -94,7 +127,7 @@ fn publish(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("Choose a destination directory.")?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     temp.write_all(bytes).and_then(|_| temp.as_file().sync_all()).map_err(|e| e.to_string())?;
-    temp.persist_noclobber(path).map_err(|e| format!("Could not publish library copy; choose a new filename: {}", e.error))?;
+    temp.persist_noclobber(path).map_err(|e| format!("That file already exists or could not be created; choose a new filename: {}", e.error))?;
     // The visible file is complete even if directory sync is unavailable; don't claim a durable
     // save when that final confirmation fails. A retry must use a new name.
     #[cfg(unix)]
@@ -127,7 +160,7 @@ fn native(save: Option<(u64, Arc<Item>, bool)>) -> Result<Outcome, String> {
                 return Ok(Outcome::Cancelled);
             };
             publish(&path, &bytes)?;
-            Ok(if export { Outcome::Exported } else { Outcome::Saved(id, item) })
+            Ok(if export { Outcome::Exported("Exported library item".into()) } else { Outcome::Saved(id, item) })
         }
     }
 }
@@ -152,7 +185,7 @@ async fn web(save: Option<(u64, Arc<Item>, bool)>, picker: Option<js_sys::Promis
         let bytes = if export { serde_json::to_vec_pretty(&item.export_native()?).map_err(|e| e.to_string())? } else { item.encode()? };
         download(&bytes, &format!("{}-r{}{}.json", item.id, item.revision, if export { ".native" } else { ".pcitem" }))
             .map_err(|e| format!("Library download failed: {e:?}"))?;
-        return Ok(Outcome::Exported);
+        return Ok(Outcome::Exported("Exported library item".into()));
     }
     let picker = picker.ok_or("Library picker was not started.")?;
     let data = wasm_bindgen_futures::JsFuture::from(picker).await.map_err(|e| format!("Library open failed: {e:?}"))?;

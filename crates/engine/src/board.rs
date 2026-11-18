@@ -7,10 +7,12 @@ use std::{
     sync::Arc,
 };
 
+pub mod assembly_profile;
 pub mod assignment;
 pub mod class_rules;
 pub mod clearance;
 pub mod clipboard;
+pub mod correspondence;
 pub mod definition;
 pub mod drawing;
 pub mod drc;
@@ -24,6 +26,7 @@ pub mod origin;
 pub mod outline;
 pub mod ratsnest;
 pub mod reference;
+pub mod route;
 pub mod rules;
 pub mod setup;
 #[cfg(test)]
@@ -298,6 +301,8 @@ pub(crate) struct Board {
     pub(crate) rules: Option<rules::Settings>,
     /// The named origin outputs are measured from; absent boards use board zero.
     pub(crate) placement_origin: Option<origin::Origin>,
+    /// Explicit pinned assembly output profile revisions, sorted by profile identity.
+    pub(crate) assembly_profiles: Vec<assembly_profile::Adoption>,
     /// Copper segments in stable ID order; empty boards keep their earlier saved format.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
@@ -446,3 +451,6 @@ pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, crate::lib
         })
         .collect()
 }
+
+/// Explicit via assignments and accepted physical membership projection.
+pub mod via_nets;

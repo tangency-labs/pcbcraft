@@ -179,9 +179,10 @@ impl PcbApp {
             if self.views.active.schematic.properties.draft.take().is_some_and(|edit| edit.changed()) {
                 self.message = Some("Selection changed; unapplied property edits were discarded.".into());
             }
-            let count = self.views.active.schematic.selection.len();
+            let count = self.views.active.schematic.selection.len() + self.views.active.inspection.len();
             let enabled = matches!(self.dialog, Dialog::None);
             let mut net_rules = false;
+            let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
             let wires = !self.views.active.schematic.selection.wires.is_empty();
             let sheet = match self.views.active.target() {
                 Some(crate::editor_view::DocumentTarget::Sheet(sheet)) if count == 0 => Some(sheet),
@@ -207,7 +208,14 @@ impl PcbApp {
                         parameter_change = crate::sheet_parameters::show(ui, project, sheet, revision, drafts);
                         return;
                     }
-                    ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
+                    if let [label] = inspection_labels.as_slice() {
+                        ui.label(label);
+                    } else if !inspection_labels.is_empty() {
+                        ui.label(format!("{} pins selected", inspection_labels.len()));
+                    }
+                    if inspection_labels.is_empty() || count > inspection_labels.len() {
+                        ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
+                    }
                     if wires {
                         net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net rules…")).inner.clicked();
                     }

@@ -44,6 +44,9 @@ pub struct Instances {
     /// Sparse persistent identities, absent until the first record is authored.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "registry_value")]
     pub net_registry: Option<crate::nets::Registry>,
+    /// Explicit part-group memberships, absent until the first membership is authored.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::part_groups::stored_memberships")]
+    pub part_group_memberships: Option<Vec<crate::part_groups::Membership>>,
 }
 
 /// A present registry must be an object; explicit null is not an older-format omission.
@@ -95,10 +98,12 @@ impl Project {
 
     /// Inspect single-use identities without changing revision, dirty state or saved bytes.
     /// Parent/slot relationships come from authored hierarchy and never independently retarget it.
-    /// Include an existing sparse net registry without promoting any derived network.
+    /// Include an existing sparse net registry without promoting any derived network, and any
+    /// explicit part-group memberships.
     pub fn sheet_instances(&self) -> Instances {
         let mut records = self.occurrence_instances();
         records.net_registry = (!self.net_registry.records.is_empty()).then(|| (*self.net_registry).clone());
+        records.part_group_memberships = (!self.part_group_memberships.is_empty()).then(|| self.part_group_memberships.to_records());
         records
     }
 
@@ -124,7 +129,7 @@ impl Project {
             })
             .collect();
         sheet_occurrences.sort_by_key(|record| record.id);
-        Instances { circuit_uses: vec![CircuitUse { id: circuit_use }], sheet_occurrences, net_registry: None }
+        Instances { circuit_uses: vec![CircuitUse { id: circuit_use }], sheet_occurrences, net_registry: None, part_group_memberships: None }
     }
 
     /// Return a sheet's stored ID or its deterministic compatibility ID before first Save.
@@ -146,7 +151,8 @@ impl Project {
 
     /// Validate the exact single-use hierarchy before installing decoded or migrated identities.
     /// No missing record, duplicate definition or foreign relationship is repaired by inference.
-    /// An optional net registry is validated against the installed occurrences before adoption.
+    /// An optional net registry is validated against the installed occurrences before adoption,
+    /// and optional part-group memberships against the project's part instances and groups.
     pub(crate) fn install_sheet_instances(&mut self, records: Instances) -> Result<(), String> {
         if records.circuit_uses.len() != 1 || records.sheet_occurrences.len() != self.sheets.len() {
             return Err("Instance records require one circuit use and one occurrence per sheet.".into());
@@ -191,6 +197,10 @@ impl Project {
             }
             self.net_registry = Arc::new(registry);
             self.net_registry.validate(self)?;
+        }
+        if let Some(memberships) = records.part_group_memberships {
+            self.validate_part_group_memberships(memberships.iter().copied())?;
+            self.part_group_memberships = Arc::new(crate::part_groups::Memberships::from_records(&memberships));
         }
         Ok(())
     }

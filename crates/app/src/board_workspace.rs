@@ -337,6 +337,29 @@ impl PcbApp {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         self.active_layer_field(ui, compact);
         self.board_size_controls(ui, enabled, compact);
+        if self.views.active.board.tracks.via_tool {
+            let revision = self.session.revision();
+            if let Some(project) = self.session.project() {
+                let state = &mut self.views.active.board.tracks;
+                if let Some(board) = project.board_target() {
+                    if let Some(view) = project.board_view(board) {
+                        state.refresh_net_choices(view, revision);
+                    }
+                    let choices = &state.via_choices.as_ref().map(|(_, _, c)| c.as_slice()).unwrap_or_default();
+                    let current = state.via_target.as_ref().map_or_else(
+                        || "Automatic".to_owned(),
+                        |target| choices.iter().find(|c| &c.target == target).map_or_else(|| "Selected net".into(), |c| c.label.clone()),
+                    );
+                    let response =
+                        workspace::ribbon_field(ui, "Via net", compact, |ui| crate::board_net_choice::trigger(ui, "Via placement net", &current));
+                    if response.clicked()
+                        && let Some(source) = self.views.active.input(&self.session)
+                    {
+                        self.begin_via_net_choice(source, crate::board_net_choice::Destination::Placement);
+                    }
+                }
+            }
+        }
     }
 
     /// Analysis keeps physical checks board-gated while shared class authoring needs only a project.
@@ -590,13 +613,15 @@ impl PcbApp {
                         self.preferences.grid_opacity(true),
                         self.preferences.board_grid_style,
                         &label,
+                        &view.inspection,
                         &markers,
                         self.preferences.units,
                     )
                 })
             })
             .inner;
-        if (pick.clipboard.is_some()
+        if (pick.inspection.is_some()
+            || pick.clipboard.is_some()
             || pick.error.is_some()
             || pick.items.is_some()
             || pick.selection.is_some()
@@ -615,14 +640,22 @@ impl PcbApp {
             {
                 self.message = Some(error);
             }
+            if let Some((pad, modifiers)) = pick.inspection {
+                self.inspect_pad(pad, modifiers);
+            }
             if let Some(action) = pick.clipboard {
                 self.board_clipboard_action(ui.ctx(), action);
             }
+            let previous_inspection =
+                (pick.extend_inspection && (pick.items.is_some() || pick.selection.is_some())).then(|| self.views.active.inspection.clone());
             if let Some(items) = pick.items {
                 self.select_board_items(items);
             }
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(inspection) = previous_inspection {
+                self.views.active.inspection = inspection;
             }
             if let Some(footprint) = pick.reference_pick {
                 self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);

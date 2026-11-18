@@ -2830,7 +2830,9 @@ version = "0.1.0"
 dependencies = [
  "log",
  "pcbcraft-units",
+ "serde_json",
  "solidcore-ops",
+ "solidcore-record",
  "solidcore-step",
 ]
 
@@ -3874,7 +3876,6 @@ dependencies = [
 [[package]]
 name = "solidcore-ops"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
 dependencies = [
  "solidcore",
  "solidcore-convert",

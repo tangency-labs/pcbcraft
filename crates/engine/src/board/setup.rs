@@ -22,6 +22,8 @@ const MAX_COPPER: usize = 64;
 const MAX_NAME: usize = 80;
 /// Maximum supported laminate thickness, in nanometers (100 mm).
 const MAX_THICKNESS_NM: i64 = 100_000_000;
+/// Largest accepted base copper weight, in thousandths of an ounce per square foot (100 oz).
+const MAX_COPPER_WEIGHT_MILLI_OZ: u32 = 100_000;
 
 /// Which board surface a layer serves; internal copper has no surface side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,8 +60,63 @@ pub struct Layer {
     pub side: Option<Side>,
 }
 
+/// How a copper layer is used: routed signals, a plane, or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopperRole {
+    Signal,
+    Plane,
+    Mixed,
+}
+
+impl<'de> Deserialize<'de> for CopperRole {
+    /// Accept only the published string variants, not externally tagged maps.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "signal" => Ok(Self::Signal),
+            "plane" => Ok(Self::Plane),
+            "mixed" => Ok(Self::Mixed),
+            value => Err(serde::de::Error::unknown_variant(value, &["signal", "plane", "mixed"])),
+        }
+    }
+}
+
+/// Whether a specified thickness is the expected value or a guaranteed lower bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThicknessBasis {
+    Nominal,
+    Minimum,
+}
+
+impl<'de> Deserialize<'de> for ThicknessBasis {
+    /// Accept only the published string variants, not externally tagged maps.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "nominal" => Ok(Self::Nominal),
+            "minimum" => Ok(Self::Minimum),
+            value => Err(serde::de::Error::unknown_variant(value, &["nominal", "minimum"])),
+        }
+    }
+}
+
+/// Copper foil as ordered, before plating and processing. Either value may be known alone;
+/// foil thickness is never derived from the weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BaseCopper {
+    /// Nominal foil weight in thousandths of an ounce per square foot; 1000 is 1 oz.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub weight_milli_oz: Option<u32>,
+    /// Foil thickness as stated by its source.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub thickness_nm: Option<i64>,
+}
+
 /// Copper references a catalog layer; dielectric has its own identity, legacy descriptive label,
 /// optional construction and finished thickness. Ply stock thickness is never added to this value.
+/// Copper `thickness_nm` is the finished conductor thickness, including any outer-layer plating;
+/// its tolerance and basis qualify that value, and base copper describes the foil separately.
 /// Omitted thickness is unknown. Zero is never an unspecified-thickness sentinel.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -68,6 +125,18 @@ pub enum Stratum {
         layer: Uuid,
         #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         thickness_nm: Option<i64>,
+        /// How the layer is used; it does not assign nets.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        role: Option<CopperRole>,
+        /// The foil as ordered; it never changes the finished `thickness_nm`.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        base_copper: Option<BaseCopper>,
+        /// Symmetric tolerance on finished copper thickness; requires a specified thickness.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        thickness_tolerance_nm: Option<i64>,
+        /// Requires a specified thickness. Omitted means the basis is unknown.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        thickness_basis: Option<ThicknessBasis>,
     },
     Dielectric {
         id: Uuid,
@@ -91,6 +160,18 @@ impl Stratum {
         }
     }
 
+    /// Whether any optional physical data is authored, so removing the stratum would discard it.
+    fn is_specified(&self) -> bool {
+        match self {
+            Self::Copper { thickness_nm, role, base_copper, thickness_tolerance_nm, thickness_basis, .. } => {
+                thickness_nm.is_some() || role.is_some() || base_copper.is_some() || thickness_tolerance_nm.is_some() || thickness_basis.is_some()
+            }
+            Self::Dielectric { material, construction, thickness_tolerance_nm, thickness_nm, .. } => {
+                material.is_some() || construction.is_some() || thickness_tolerance_nm.is_some() || thickness_nm.is_some()
+            }
+        }
+    }
+
     /// Compare only physical membership and order, excluding editable thickness/material data.
     fn identity(&self) -> (bool, Uuid) {
         match self {
@@ -101,11 +182,58 @@ impl Stratum {
 }
 
 /// One rigid stackup profile, ordered from front to back. Surface coatings are not included.
+/// The finished board thickness is declared separately from the strata: it covers plating,
+/// coatings and fabrication variation, so it is never derived from the laminate sum.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stackup {
     pub id: Uuid,
     pub strata: Vec<Stratum>,
+    /// Nominal finished board thickness.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub finished_thickness_nm: Option<i64>,
+    /// Symmetric tolerance on the nominal finished thickness; requires that thickness.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub finished_thickness_tolerance_nm: Option<i64>,
+    /// Lowest finished thickness the board is declared to have, independent of the tolerance.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub declared_minimum_thickness_nm: Option<i64>,
+}
+
+impl Stackup {
+    /// A profile with no declared board thickness.
+    pub fn new(id: Uuid, strata: Vec<Stratum>) -> Self {
+        Self { id, strata, finished_thickness_nm: None, finished_thickness_tolerance_nm: None, declared_minimum_thickness_nm: None }
+    }
+
+    /// The same board declarations around different strata.
+    fn with_strata(&self, strata: Vec<Stratum>) -> Self {
+        Self { strata, ..self.clone() }
+    }
+}
+
+/// A copper layer's finished thickness with the qualifiers stored beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopperThickness {
+    /// Finished conductor thickness, always positive.
+    pub thickness_nm: i64,
+    /// Symmetric tolerance, `None` when unknown.
+    pub tolerance_nm: Option<i64>,
+    /// Whether `thickness_nm` is nominal or a guaranteed minimum, `None` when unknown.
+    pub basis: Option<ThicknessBasis>,
+}
+
+/// The stack facts of one copper layer. Every field is `None` when unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopperFacts {
+    /// The catalog copper layer these facts describe.
+    pub layer: Uuid,
+    /// How the layer is used.
+    pub role: Option<CopperRole>,
+    /// The foil as ordered.
+    pub base_copper: Option<BaseCopper>,
+    /// The finished thickness with its qualifiers; `None` when the thickness is unspecified.
+    pub finished: Option<CopperThickness>,
 }
 
 /// Validated board configuration. Deserialization validates all cross-references and bounds,
@@ -176,7 +304,24 @@ impl TryFrom<SetupRecords> for BoardSetup {
                 known_thickness += thickness;
             }
             match stratum {
-                Stratum::Copper { layer, .. } if index % 2 == 0 => {
+                Stratum::Copper { layer, thickness_nm, base_copper, thickness_tolerance_nm, thickness_basis, .. } if index % 2 == 0 => {
+                    if !symmetric_tolerance(*thickness_tolerance_nm, *thickness_nm) {
+                        return Err("copper tolerance requires a specified thickness with positive lower and at most 100 mm upper bounds".to_owned());
+                    }
+                    if thickness_basis.is_some() && thickness_nm.is_none() {
+                        return Err("copper thickness basis requires a specified thickness".to_owned());
+                    }
+                    if let Some(base) = base_copper {
+                        if base.weight_milli_oz.is_none() && base.thickness_nm.is_none() {
+                            return Err("base copper needs a weight or a foil thickness".to_owned());
+                        }
+                        if base.weight_milli_oz.is_some_and(|weight| !(1..=MAX_COPPER_WEIGHT_MILLI_OZ).contains(&weight)) {
+                            return Err("base copper weight must be from 0.001 to 100 oz".to_owned());
+                        }
+                        if base.thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)) {
+                            return Err("base copper foil thickness must be from 1 nm to 100 mm".to_owned());
+                        }
+                    }
                     let record = records
                         .layers
                         .iter()
@@ -201,10 +346,7 @@ impl TryFrom<SetupRecords> for BoardSetup {
                     if let Some(material) = material {
                         valid_text("dielectric material", material)?;
                     }
-                    if let Some(tolerance) = thickness_tolerance_nm
-                        && (*tolerance < 0
-                            || !thickness_nm.is_some_and(|thickness| *tolerance < thickness && *tolerance <= MAX_THICKNESS_NM - thickness))
-                    {
+                    if !symmetric_tolerance(*thickness_tolerance_nm, *thickness_nm) {
                         return Err(
                             "dielectric tolerance requires a specified thickness with positive lower and at most 100 mm upper bounds".to_owned()
                         );
@@ -222,6 +364,21 @@ impl TryFrom<SetupRecords> for BoardSetup {
         }
         if known_thickness > MAX_THICKNESS_NM {
             return Err("specified stackup thickness exceeds 100 mm".to_owned());
+        }
+        let stackup = &records.stackup;
+        if stackup.finished_thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)) {
+            return Err("finished board thickness must be a positive whole number of nanometers, at most 100 mm".to_owned());
+        }
+        if stackup.declared_minimum_thickness_nm.is_some_and(|thickness| !(1..=MAX_THICKNESS_NM).contains(&thickness)) {
+            return Err("declared minimum board thickness must be a positive whole number of nanometers, at most 100 mm".to_owned());
+        }
+        if !symmetric_tolerance(stackup.finished_thickness_tolerance_nm, stackup.finished_thickness_nm) {
+            return Err("board thickness tolerance requires a finished thickness with positive lower and at most 100 mm upper bounds".to_owned());
+        }
+        if let (Some(minimum), Some(nominal)) = (stackup.declared_minimum_thickness_nm, stackup.finished_thickness_nm)
+            && minimum > nominal
+        {
+            return Err("declared minimum board thickness cannot exceed the nominal finished thickness".to_owned());
         }
         if ply_count > materials::MAX_TOTAL_PLIES {
             return Err(format!("board setup supports at most {} prepreg plies", materials::MAX_TOTAL_PLIES));
@@ -258,8 +415,9 @@ impl BoardSetup {
     }
 
     /// Resize the physical copper stack while retaining surface IDs, surviving inner-layer IDs,
-    /// finished dimensions and dielectric construction. Removing authored strata is refused;
-    /// callers can clear their metadata deliberately before reduction. Adoption validates drawings.
+    /// finished dimensions and dielectric construction. Removing authored strata is refused,
+    /// including a copper layer with only a role or base copper; callers can clear their metadata
+    /// deliberately before reduction. The declared board thickness is kept. Adoption validates drawings.
     pub fn with_copper_count(&self, count: u64) -> Result<Self, CommandError> {
         let mut preset = Self::preset(count)?;
         let old: Vec<_> = self.stackup.strata.iter().step_by(2).cloned().collect();
@@ -267,9 +425,12 @@ impl BoardSetup {
             return Ok(self.clone());
         }
         let retained_inner = (count as usize - 2).min(old.len() - 2);
-        if old.iter().skip(retained_inner+1).take(old.len()-retained_inner-2).any(|s|s.thickness_nm().is_some())
-            || self.stackup.strata.iter().skip(count as usize * 2 - 1).any(|s| matches!(s,Stratum::Dielectric{material,construction,thickness_nm,thickness_tolerance_nm,..} if material.is_some()||construction.is_some()||thickness_nm.is_some()||thickness_tolerance_nm.is_some())) {
-            return Err(CommandError::InvalidParams("clear the removed copper/dielectric thickness and construction fields before reducing the layer count".into()));
+        if old.iter().skip(retained_inner + 1).take(old.len() - retained_inner - 2).any(Stratum::is_specified)
+            || self.stackup.strata.iter().skip(count as usize * 2 - 1).any(|s| matches!(s, Stratum::Dielectric { .. }) && s.is_specified())
+        {
+            return Err(CommandError::InvalidParams(
+                "clear the removed copper/dielectric thickness, role, base copper and construction fields before reducing the layer count".into(),
+            ));
         }
         for index in 0..count as usize {
             let previous = if index == 0 {
@@ -298,12 +459,8 @@ impl BoardSetup {
                 layers.push(layer);
             }
         }
-        Self::try_from(SetupRecords {
-            materials: self.materials.clone(),
-            layers,
-            stackup: Stackup { id: self.stackup.id, strata: preset.stackup.strata },
-        })
-        .map_err(CommandError::InvalidParams)
+        Self::try_from(SetupRecords { materials: self.materials.clone(), layers, stackup: self.stackup.with_strata(preset.stackup.strata) })
+            .map_err(CommandError::InvalidParams)
     }
 
     /// Fit finished laminate thickness by dividing the exact residual among unlocked dielectric
@@ -368,6 +525,63 @@ impl BoardSetup {
             })
     }
 
+    /// Whether saving needs the board format that carries thermal conductivity, thermal
+    /// expansion, dielectric strength or tracking reports on a material.
+    pub(crate) fn requires_report_format(&self) -> bool {
+        self.materials.iter().any(Material::has_thermal_or_insulation_reports)
+    }
+
+    /// Whether saving needs the board format that carries copper roles, base copper, copper
+    /// thickness qualifiers or the declared finished board thickness.
+    pub(crate) fn requires_stack_format(&self) -> bool {
+        let stackup = &self.stackup;
+        stackup.finished_thickness_nm.is_some()
+            || stackup.finished_thickness_tolerance_nm.is_some()
+            || stackup.declared_minimum_thickness_nm.is_some()
+            || stackup.strata.iter().any(|stratum| {
+                matches!(stratum, Stratum::Copper { role, base_copper, thickness_tolerance_nm, thickness_basis, .. }
+                    if role.is_some() || base_copper.is_some() || thickness_tolerance_nm.is_some() || thickness_basis.is_some())
+            })
+    }
+
+    /// Stack facts of one copper layer, or `None` when the layer is not copper in this stackup.
+    /// The finished thickness is `None` when unspecified; it is never reported as zero.
+    pub fn copper(&self, layer: Uuid) -> Option<CopperFacts> {
+        self.stackup.strata.iter().find_map(|stratum| match stratum {
+            Stratum::Copper { layer: id, thickness_nm, role, base_copper, thickness_tolerance_nm, thickness_basis } if *id == layer => {
+                Some(CopperFacts {
+                    layer,
+                    role: *role,
+                    base_copper: *base_copper,
+                    finished: thickness_nm.map(|thickness_nm| CopperThickness {
+                        thickness_nm,
+                        tolerance_nm: *thickness_tolerance_nm,
+                        basis: *thickness_basis,
+                    }),
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// Copper layers' stack facts in physical order, front to back.
+    pub fn copper_stack(&self) -> impl Iterator<Item = CopperFacts> + '_ {
+        self.stackup.strata.iter().filter_map(|stratum| match stratum {
+            Stratum::Copper { layer, .. } => self.copper(*layer),
+            Stratum::Dielectric { .. } => None,
+        })
+    }
+
+    /// The finished board thickness a conservative check should use: the declared minimum when
+    /// given, otherwise the nominal value, with the basis that says which. `None` when unknown.
+    pub fn board_thickness_for_checks(&self) -> Option<(i64, ThicknessBasis)> {
+        match (self.stackup.declared_minimum_thickness_nm, self.stackup.finished_thickness_nm) {
+            (Some(minimum), _) => Some((minimum, ThicknessBasis::Minimum)),
+            (None, Some(nominal)) => Some((nominal, ThicknessBasis::Nominal)),
+            (None, None) => None,
+        }
+    }
+
     /// The layer catalog in stable ID order, independent of names and stack order.
     pub fn layers(&self) -> &[Layer] {
         &self.layers
@@ -417,7 +631,14 @@ impl BoardSetup {
             };
             let id = fresh_id()?;
             layers.push(Layer { id, name, purpose: LayerPurpose::Copper, side });
-            strata.push(Stratum::Copper { layer: id, thickness_nm: None });
+            strata.push(Stratum::Copper {
+                layer: id,
+                thickness_nm: None,
+                role: None,
+                base_copper: None,
+                thickness_tolerance_nm: None,
+                thickness_basis: None,
+            });
             if index + 1 < copper_layers {
                 strata.push(Stratum::Dielectric {
                     id: fresh_id()?,
@@ -440,7 +661,7 @@ impl BoardSetup {
             }
         }
         layers.push(Layer { id: fresh_id()?, name: "Board Outline".to_owned(), purpose: LayerPurpose::Outline, side: None });
-        Self::try_from(SetupRecords { materials: Vec::new(), layers, stackup: Stackup { id: fresh_id()?, strata } })
+        Self::try_from(SetupRecords { materials: Vec::new(), layers, stackup: Stackup::new(fresh_id()?, strata) })
             .map_err(CommandError::InvalidParams)
     }
 
@@ -459,6 +680,18 @@ impl BoardSetup {
         let id = json!({"type":"string", "format":"uuid"});
         let name = json!({"type":"string", "minLength":1, "maxLength":MAX_NAME});
         let thickness = json!({"type":"integer", "minimum":1, "maximum":MAX_THICKNESS_NM});
+        let tolerance = json!({"type":"integer", "minimum":0, "maximum":MAX_THICKNESS_NM});
+        let integer_tokens = "The native reader requires parsed integer-kind numbers; decimal/exponent spellings (including -0) are refused, although JSON Schema counts integral values such as 1.0 as integers.";
+        let stack_thickness = json!({"type":"integer", "minimum":1, "maximum":MAX_THICKNESS_NM, "description":integer_tokens});
+        let stack_tolerance = json!({"type":"integer", "minimum":0, "maximum":MAX_THICKNESS_NM, "description":integer_tokens});
+        let base_copper = json!({"type":"object", "additionalProperties":false, "minProperties":1, "properties":{
+            "weight_milli_oz":{"type":"integer", "minimum":1, "maximum":MAX_COPPER_WEIGHT_MILLI_OZ, "description":integer_tokens}, "thickness_nm":stack_thickness
+        }});
+        let copper = json!({"type":"object", "additionalProperties":false, "required":["kind","layer"], "properties":{
+            "kind":{"const":"copper"}, "layer":id, "thickness_nm":thickness,
+            "role":{"type":"string", "enum":["signal","plane","mixed"]}, "base_copper":base_copper,
+            "thickness_tolerance_nm":stack_tolerance, "thickness_basis":{"type":"string", "enum":["nominal","minimum"]}
+        }});
         json!({"type":"object", "additionalProperties":false, "required":["layers","stackup"], "properties": {
             "materials":materials::schema::catalog(),
             "layers":{"type":"array", "minItems":2, "maxItems":MAX_LAYERS, "items":{
@@ -468,14 +701,13 @@ impl BoardSetup {
                 }
             }},
             "stackup":{"type":"object", "additionalProperties":false, "required":["id","strata"], "properties":{
+                "finished_thickness_nm":stack_thickness, "finished_thickness_tolerance_nm":stack_tolerance, "declared_minimum_thickness_nm":stack_thickness,
                 "id":id, "strata":{"type":"array", "minItems":3, "maxItems":2*MAX_COPPER-1, "items":{"oneOf":[
-                    {"type":"object", "additionalProperties":false, "required":["kind","layer"], "properties":{
-                        "kind":{"const":"copper"}, "layer":id, "thickness_nm":thickness
-                    }},
+                    copper,
                     {"type":"object", "additionalProperties":false, "required":["kind","id"], "properties":{
                         "kind":{"const":"dielectric"}, "id":id, "material":name, "thickness_nm":thickness,
                         "construction":materials::schema::construction(),
-                        "thickness_tolerance_nm":{"type":"integer","minimum":0,"maximum":MAX_THICKNESS_NM}
+                        "thickness_tolerance_nm":tolerance
                     }}
                 ]}}
             }}
@@ -581,6 +813,14 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// A symmetric tolerance needs its thickness, keeps the lower bound positive and the upper bound
+/// within the representable 100 mm.
+fn symmetric_tolerance(tolerance: Option<i64>, thickness: Option<i64>) -> bool {
+    tolerance.is_none_or(|tolerance| {
+        tolerance >= 0 && thickness.is_some_and(|thickness| tolerance < thickness && tolerance <= MAX_THICKNESS_NM - thickness)
+    })
 }
 
 /// Keep IDs unique across layers, dielectrics, prepreg plies and the profile; nil is never authored.

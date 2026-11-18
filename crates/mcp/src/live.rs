@@ -118,7 +118,7 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, St
             commands.extend(editor.window_commands());
             Ok(Value::Array(commands))
         }
-        "project.inspect" | "project.cross_probe" => call_session(editor.session(), method, params),
+        "project.inspect" | "project.cross_probe" | "project.resolve_counterparts" => call_session(editor.session(), method, params),
         "editor.inspect" => Ok(editor.inspect()),
         "engine.execute" => {
             let id = params["command"].as_str().ok_or("missing `command`")?;

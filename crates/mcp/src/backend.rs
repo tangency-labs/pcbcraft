@@ -23,7 +23,7 @@ In the desktop app choose Help → Connect AI assistants…, then connect with `
 }
 
 /// Something that answers `engine.commands`, `engine.execute`, `project.inspect`,
-/// `project.cross_probe` and `editor.inspect`.
+/// `project.cross_probe`, `project.resolve_counterparts` and `editor.inspect`.
 pub trait Backend {
     /// Run an engine or project operation and return its result or a tool error.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
@@ -75,9 +75,13 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
+                        | pcbcraft_engine::board::route::PLAN_ROUTE
                         | pcbcraft_engine::net_classes::INSPECT
                         | pcbcraft_engine::net_classes::RESOLVE
+                        | pcbcraft_engine::part_groups::INSPECT
+                        | pcbcraft_engine::part_groups::INSPECT_GROUPS
                         | pcbcraft_engine::PREVIEW_UPDATE
+                        | pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION
@@ -101,6 +105,14 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
         }
         "project.inspect" => Ok(session.inspect()),
         "project.cross_probe" => cross_probe(session, params),
+        "project.resolve_counterparts" => {
+            let source = pcbcraft_engine::board::correspondence::Source::parse(&params["source"])?;
+            let revision = params["expected_revision"].as_u64().ok_or("expected_revision must be an unsigned integer")?;
+            let mut result = session.resolve_counterparts(source, revision).inspect();
+            result["revision"] = json!(session.revision());
+            result["opening"] = json!(session.history_root_revision());
+            Ok(result)
+        }
         "editor.inspect" => Err(needs_live_editor("Editor inspection")),
         _ => Err(format!("unknown method `{method}`")),
     }

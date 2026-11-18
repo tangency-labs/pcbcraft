@@ -1,26 +1,62 @@
+# Drafts skip builds; ordinary PR pushes run repository checks and a quick compile.
+# approved-for-ci runs affected native checks; broad platforms run on main, merge groups and nightly.
 name: CI
+run-name: "CI: ${{ github.sha }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'approved-for-ci' && ' (labels)' || '' }}"
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
   merge_group:
   push:
     branches: [main]
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR pushes supersede their previous run. Main must finish to refresh the caches.
+  group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.run_attempt > 1 && format('-rerun-{0}', github.run_id) || '' }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'approved-for-ci' && format('-label-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
   TRUNK_VERSION: v0.21.14
   CARGO_DENY_VERSION: 0.20.2
 
 jobs:
+  changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+      quick: ${{ steps.select.outputs.quick }}
+      native: ${{ steps.select.outputs.native }}
+      windows: ${{ steps.select.outputs.windows }}
+      windows_full: ${{ steps.select.outputs.windows_full }}
+      web: ${{ steps.select.outputs.web }}
+      wasi: ${{ steps.select.outputs.wasi }}
+      licenses: ${{ steps.select.outputs.licenses }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - id: select
+        run: python -B scripts/ci/policy.py
+
   documentation-links:
-    runs-on: ubuntu-latest
+    needs: changes
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,14 +64,13 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
-      - name: Check local Markdown links
-        run: python -B scripts/check-markdown-links.py
-      - name: Test Markdown link checker
-        run: python -B -m unittest discover -s scripts -p 'test_markdown_links.py'
+          python-version: '3.12'
+      - run: python -B scripts/check-markdown-links.py
 
   library-schemas:
-    runs-on: ubuntu-latest
+    needs: changes
+    # Cheap repository/script checks always run, including on documentation-only PRs.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,36 +78,84 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
-      - run: python -m pip install "jsonschema==4.23.0"
-      - run: python scripts/check-library-schemas.py
-      - run: python scripts/check-footprint-schemas.py
-      - run: python -B -m unittest discover -s scripts -p 'test_*schemas.py'
+          python-version: '3.12'
+      - run: python -m pip install 'jsonschema==4.23.0'
+      - run: python -B scripts/check-library-schemas.py
+      - run: python -B scripts/check-footprint-schemas.py
+      - run: python -B -m unittest discover -s scripts -p 'test_*.py'
+      - run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
+      - run: node scripts/test-native-library-picker.cjs
 
-  checks:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  quick-compile:
+    needs: changes
+    if: needs.changes.outputs.quick == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS || '4' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: linux-native
+          cache-workspace-crates: true
+          save-if: false
+      - run: cargo fmt --all --check
+      - run: cargo check --locked --profile ci --workspace
+
+  native-tests:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS || '4' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: linux-native
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: cargo fmt --all --check
-      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --workspace
-      - name: Check opt-in performance harness
+      - name: Check affected native packages (full workspace outside PRs)
+        run: python -B scripts/ci/native.py
+        env:
+          CI_MODE: ${{ needs.changes.outputs.mode }}
+      - name: Compare command contracts with the base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
-          cargo test --locked -p pcbcraft-app --features performance-harness performance::
-          python3 -B -m unittest discover -s scripts -p 'test*performance*.py'
-          node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
+          if git cat-file -e "$BASE_SHA:docs/schemas/command-contracts.json" 2>/dev/null; then
+            git show "$BASE_SHA:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
+            cargo run --locked --profile ci -q -p pcbcraft-engine --example command_contracts_against_base -- "$RUNNER_TEMP/base-command-contracts.json" docs/schemas/command-contracts.json
+          else
+            echo "No command contract snapshot on the base branch; checking the first snapshot against the catalog in workspace tests."
+          fi
+      - name: Test command-contract workflow baseline
+        run: python -B -m unittest discover -s scripts -p 'test_command_contract_workflow.py'
 
   windows-tests:
-    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: ${{ vars.CI_RUNNER_WINDOWS || 'windows-latest' }}
     timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS_WINDOWS || '2' }}
     steps:
       - name: Use Git for Windows checkout line endings
         run: git config --global core.autocrlf true
@@ -82,33 +165,59 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
-      - name: Install Python schema dependency
-        run: python -m pip install "jsonschema==4.23.0"
-      - name: Lint Rust workspace
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Run Rust workspace tests
-        if: ${{ !cancelled() }}
-        run: cargo test --locked --workspace
-      - name: Lint opt-in performance harness
-        if: ${{ !cancelled() }}
-        run: cargo clippy --locked -p pcbcraft-app --features performance-harness --all-targets -- -D warnings
-      - name: Run opt-in performance harness tests
-        if: ${{ !cancelled() }}
-        run: 'cargo test --locked -p pcbcraft-app --features performance-harness performance::'
-      - name: Run Python script tests
-        if: ${{ !cancelled() }}
-        run: python -B -m unittest discover -s scripts -p "test_*.py"
-      - name: Test performance diagnostic pages
-        if: ${{ !cancelled() }}
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: windows-native
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - run: python -m pip install 'jsonschema==4.23.0'
+      - name: Windows script regressions
+        run: python -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Windows diagnostic-page regressions
         run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
+      - name: Full Windows tests and native-window artifact
+        run: python -B scripts/ci/windows.py --artifacts ci-artifacts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-lifecycle
+          path: ci-artifacts/
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-smoke:
+    needs: [changes, windows-tests]
+    if: needs.changes.outputs.windows == 'true'
+    # A real desktop is required for frame presentation, including with a custom build runner.
+    runs-on: windows-latest
+    timeout-minutes: 5
+    env:
+      WGPU_BACKEND: dx12
+      WGPU_DX12_COMPILER: fxc
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-lifecycle
+          path: ci-artifacts
+      - run: python -B scripts/ci/window_smoke.py ci-artifacts/native_window_lifecycle.exe
 
   web:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS || '4' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -117,22 +226,30 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: web
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - name: Check browser performance diagnostics
-        run: cargo check --locked -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
+        run: cargo check --locked --profile ci -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
       - name: Install trunk
         run: |
           mkdir -p "$HOME/.local/bin"
           curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Check browser library folder and bundle limits
-        run: node scripts/test-native-library-picker.cjs
       - name: Build the web app
         working-directory: apps/pcbcraft-web
-        run: trunk build --release
+        run: trunk build --release --locked
 
   geometry-webassembly:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.wasi == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS || '4' }}
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -141,35 +258,23 @@ jobs:
         with:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: node --version
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: wasi
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - name: Check WASI runner exit status
         run: node --test scripts/test-wasi-test-runner.cjs
-      - name: Run board geometry and query tests as WebAssembly
-        env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
-        run: |
-          cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1
-      - name: Run net-class catalog and resolver tests as WebAssembly
-        env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
-        run: |
-          cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib net_classes:: -- --test-threads=1
-      - name: Run net registry and assignment tests as WebAssembly
-        env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
-        run: |
-          cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib nets:: -- --test-threads=1
-      - name: Run shared length parser tests as WebAssembly
-        env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
-        run: cargo test --locked -p pcbcraft-units --target wasm32-wasip1 --lib -- --test-threads=1
-      - name: Run geometry kernel boundary tests as WebAssembly
-        env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-test-runner.cjs
-        run: cargo test --locked -p pcbcraft-geometry --target wasm32-wasip1 --lib -- --test-threads=1
+      - run: 'cargo test --locked --profile ci -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1'
+      - run: 'cargo test --locked --profile ci -p pcbcraft-engine --target wasm32-wasip1 --lib net_classes:: -- --test-threads=1'
+      - run: 'cargo test --locked --profile ci -p pcbcraft-engine --target wasm32-wasip1 --lib nets:: -- --test-threads=1'
+      - run: cargo test --locked --profile ci -p pcbcraft-units --target wasm32-wasip1 --lib -- --test-threads=1
+      - run: cargo test --locked --profile ci -p pcbcraft-geometry --target wasm32-wasip1 --lib -- --test-threads=1
 
   licenses:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.licenses == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -178,5 +283,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-deny
         run: cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
-      - name: Reject GPL, LGPL and AGPL dependencies
-        run: cargo deny --locked check licenses sources bans
+      - run: cargo deny --locked check licenses sources bans
+
+  checks:
+    # Report the selected stage honestly: passing quick feedback is green, not full qualification.
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, web, geometry-webassembly, licenses]
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: python -B scripts/ci/check.py
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}

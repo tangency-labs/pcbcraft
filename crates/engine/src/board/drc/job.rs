@@ -20,7 +20,7 @@ pub struct CheckJob {
     cursor: (usize, usize),
     work: usize,
     found: Findings,
-    courtyards: Vec<(String, bool, [i64; 4])>,
+    courtyards: Vec<super::courtyard::Courtyard>,
     report: Option<Report>,
 }
 
@@ -113,16 +113,7 @@ impl CheckJob {
         match self.phase {
             0 => {
                 let footprints: Vec<_> = view.footprints_range(self.work, budget.min(32)).collect();
-                for f in &footprints {
-                    let points: Vec<_> =
-                        f.graphics.iter().filter(|g| g.purpose == GraphicPurpose::Courtyard).flat_map(|g| g.points.iter().copied()).collect();
-                    if let Some(p) = points.first() {
-                        let bounds = points
-                            .iter()
-                            .fold([p.x_nm, p.y_nm, p.x_nm, p.y_nm], |b, p| [b[0].min(p.x_nm), b[1].min(p.y_nm), b[2].max(p.x_nm), b[3].max(p.y_nm)]);
-                        self.courtyards.push((f.id.clone(), f.bottom, bounds));
-                    }
-                }
+                self.courtyards.extend(footprints.iter().filter_map(super::courtyard::Courtyard::capture));
                 self.lands.extend(lands_from_footprints(footprints.into_iter()));
                 self.work = self.work.saturating_add(budget.min(32));
                 if self.work < self.source.snapshot.board.footprints.len() {
@@ -264,16 +255,8 @@ impl CheckJob {
                     }
                     self.cursor.1 += 1;
                     self.work += 1;
-                    let (a, sa, ba) = &self.courtyards[i];
-                    let (b, sb, bb) = &self.courtyards[j];
-                    if sa == sb && ba[0] < bb[2] && bb[0] < ba[2] && ba[1] < bb[3] && bb[1] < ba[3] {
-                        self.found.push(Violation {
-                            kind: Kind::CourtyardOverlap,
-                            message: "Footprint courtyards overlap".into(),
-                            at: Point { x_nm: (ba[0].max(bb[0]) + ba[2].min(bb[2])) / 2, y_nm: (ba[1].max(bb[1]) + ba[3].min(bb[3])) / 2 },
-                            items: vec![a.clone(), b.clone()],
-                            nets: Vec::new(),
-                        });
+                    if let Some(violation) = self.courtyards[i].overlap(&self.courtyards[j]) {
+                        self.found.push(violation);
                     }
                 }
                 if self.cursor.0 < self.courtyards.len() {

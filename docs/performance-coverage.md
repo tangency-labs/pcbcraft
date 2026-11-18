@@ -29,7 +29,7 @@ to collect matched evidence for a change.
 | Memory/allocations | Raw Linux process RSS/VmHWM samples and separate Valgrind whole-process allocation totals | Isolated index/query allocations need instrumentation in #244; profiler timings are not baselines |
 | Comparisons | CPU and rendered comparators reject changed fixture, trace, environment, sample boundaries, renderer, viewport or window-state sequence | Keep native/browser and software/hardware series separate |
 | Jobs/queues | #243 adds shared bounded native/browser checker and copper jobs, separate `checks`/`routes` CPU diagnostics, replacement/cancellation counters and publication timings; regression tests cover stale source/view/request authority | Physical cancellation-to-visible latency and isolated allocation attribution remain unmeasured; later index metrics belong with #244 |
-| Later feature evidence | Reusable fixtures, raw distributions, query oracle, trace driver, resource collector and documented commands | ERC progress/cancel #47; walkaround/shove #245–#247; BGA and curves as above |
+| Later feature evidence | Reusable fixtures, raw distributions, query oracle, trace driver, resource collector and documented commands | ERC progress/cancel #47; the #246 engine solver has a separate `walkaround` CPU diagnostic, while its preview/commit traces and shove #247 remain; BGA and curves as above |
 
 GPU readback proves that pixels were produced after a checked app pass. Its transfer,
 software rendering and instrumentation costs prevent treating it as a substitute
