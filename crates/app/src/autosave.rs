@@ -90,6 +90,12 @@ impl Autosave {
         self.epoch.get_or_insert_with(Instant::now).elapsed()
     }
 
+    /// Make the native clock reach the scheduled interval without wall-clock sleeps in tests.
+    #[cfg(test)]
+    pub(crate) fn advance_native_clock(&mut self, by: Duration) {
+        self.epoch = Instant::now().checked_sub(by);
+    }
+
     pub(crate) fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }

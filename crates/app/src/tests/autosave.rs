@@ -159,6 +159,44 @@ fn an_untitled_project_waits_for_an_explicit_first_save() {
     assert!(matches!(h.state().dialog, Dialog::None));
 }
 
+/// A painted native callback pair handles Ctrl/Cmd+O before a timed Save due on the same pass.
+#[test]
+fn visible_open_takes_precedence_over_due_timed_save() {
+    use std::time::Duration;
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("project");
+    let mut source = Session::default();
+    source.apply("project.new", &json!({"name":"Open precedence"})).unwrap();
+    pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+    let mut h = harness();
+    let rev = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
+    run_at(&mut h, 1.0);
+    let saved = tree(&root);
+    let mut app = std::mem::take(h.state_mut());
+    let mut frame = eframe::Frame::_new_kittest();
+    let ctx = egui::Context::default();
+    app.preferences.save_to_project_minutes = 1;
+    let revision = app.session.revision();
+    app.run(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    app.autosave_tick(&ctx, Duration::ZERO);
+    app.autosave.advance_native_clock(Duration::from_secs(61));
+    let modifiers = egui::Modifiers::COMMAND;
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key { key: egui::Key::O, physical_key: None, pressed: true, repeat: false, modifiers }],
+        ..egui::RawInput::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    // There is no renderer in this test; explicitly discard the generated textures.
+    output.textures_delta.clear();
+    assert!(matches!(app.dialog, Dialog::SaveChanges(crate::unsaved::Then::Open)));
+    assert!(!app.files.busy(), "explicit Open must hold off the due Save");
+    assert_eq!(tree(&root), saved);
+}
+
 /// A due timed save waits for a dialog and never starts another job behind an explicit Save.
 #[test]
 fn a_dialog_and_a_running_save_hold_back_the_timed_save() {

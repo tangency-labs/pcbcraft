@@ -2643,8 +2643,9 @@ impl PcbApp {
         self.autosave_tick(ctx, now);
     }
 
-    /// Native framework frames already ran project-file and timer logic in `App::logic`.
-    fn frame_inner(&mut self, ui: &mut Ui, logic_ran: bool) {
+    /// Process explicit editor actions before timed Save on a painted pass. The framework
+    /// path uses the same monotonic clock as logic-only passes; embedded hosts use input time.
+    fn frame_inner(&mut self, ui: &mut Ui, _native_framework: bool) {
         let ctx = ui.ctx().clone();
         // Apply source availability before restored readers capture their catalog generation.
         self.sync_library_preferences();
@@ -2666,9 +2667,7 @@ impl PcbApp {
             Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
             Some(Err(error)) => self.message = Some(error),
         }
-        if !logic_ran {
-            self.project_file_tick(&ctx);
-        }
+        self.project_file_tick(&ctx);
         #[cfg(target_arch = "wasm32")]
         self.warn_before_leaving();
         self.views.sync(&self.session);
@@ -2701,8 +2700,10 @@ impl PcbApp {
             self.message = Some(notice);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if !logic_ran {
-            self.autosave_tick(&ctx, std::time::Duration::from_secs_f64(ctx.input(|input| input.time).max(0.0)));
+        {
+            let now =
+                if _native_framework { self.autosave.now() } else { std::time::Duration::from_secs_f64(ctx.input(|input| input.time).max(0.0)) };
+            self.autosave_tick(&ctx, now);
         }
         if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp()) {
             self.repaint_editors(&ctx);
@@ -2924,11 +2925,14 @@ impl eframe::App for PcbApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         self.automation_input(ctx, input);
     }
-    /// Run project file lifecycle and autosave on visible and logic-only native passes.
+    /// Service project files and timers here only if this integration pass has no UI callback.
+    /// A painted pass services timers after explicit actions such as Open have run.
     #[cfg(not(target_arch = "wasm32"))]
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        let now = self.autosave.now();
-        self.native_project_tick(ctx, now);
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut Frame) {
+        if frame.is_logic_only() {
+            let now = self.autosave.now();
+            self.native_project_tick(ctx, now);
+        }
     }
 
     /// Draw visible hosts, then release a dismissed native root and

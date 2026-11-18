@@ -211,6 +211,7 @@ pub struct EpiIntegration {
 }
 
 impl EpiIntegration {
+    /// Initialize the native frame from the renderer and root window. No callback is active yet.
     #[allow(clippy::allow_attributes, clippy::too_many_arguments)]
     pub fn new(
         egui_ctx: egui::Context,
@@ -228,6 +229,7 @@ impl EpiIntegration {
     ) -> Self {
         let frame = epi::Frame {
             retire_root_window: false,
+            logic_only: false,
             info: epi::IntegrationInfo { cpu_usage: None },
             storage,
             #[cfg(feature = "glow")]
@@ -433,7 +435,9 @@ impl EpiIntegration {
 
         let logic_output = self.egui_ctx.run_logic(&raw_input, |ctx| {
             profiling::scope!("App::logic");
+            self.frame.logic_only = true;
             app.logic(ctx, &mut self.frame);
+            self.frame.logic_only = false;
         });
 
         // No pass consumed the input, so save it for the next one:
