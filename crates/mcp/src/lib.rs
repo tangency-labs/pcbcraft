@@ -8,12 +8,14 @@
 //! Adapted from SolidCraft's `crates/mcp` (see `ATTRIBUTION.md`).
 
 mod backend;
+mod failure;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod live;
 mod server;
 mod tools;
 
 pub use backend::{Backend, Headless, WINDOW_NAMESPACES, is_window_command};
+pub use failure::Failure;
 pub use server::{PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
 pub use tools::{call_tool, tool_definitions};
 

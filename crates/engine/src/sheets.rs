@@ -146,7 +146,7 @@ impl Project {
                 .sheets()
                 .find(|sheet| sheet.target.sheet.to_string() == id)
                 .map(|sheet| sheet.target)
-                .ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into())),
+                .ok_or_else(|| CommandError::NotFound("unknown sheet ID".into())),
             None if self.sheets.len() == 1 => Ok(self.sheet_target()),
             None => Err(CommandError::InvalidParams("sheet is required when a project has multiple sheets".into())),
         }
@@ -209,7 +209,7 @@ impl Session {
         check_params(command, params)?;
         let project = self.open_project()?;
         let target = project.resolve_sheet(params.get("sheet").and_then(Value::as_str))?;
-        let projected = project.for_sheet(target).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?;
+        let projected = project.for_sheet(target).ok_or_else(|| CommandError::NotFound("unknown sheet ID".into()))?;
         let mut transaction = Self {
             libraries: self.libraries.clone(),
             project: Some(Arc::new(projected)),
@@ -222,7 +222,7 @@ impl Session {
         if transaction.revision != self.revision {
             let mut project = transaction.open_project()?.clone();
             if project.components.len() > MAX_SYMBOLS || project.sheets.iter().map(|s| s.wires.len()).sum::<usize>() > MAX_WIRES {
-                return Err(CommandError::Unavailable("project exceeds the symbol or wire limit".into()));
+                return Err(CommandError::CapExceeded("project exceeds the symbol or wire limit".into()));
             }
             project.sheet_index = 0;
             self.change(project)?;
@@ -251,7 +251,7 @@ impl Session {
         match (id, index) {
             (CREATE_SHEET, _) => {
                 if project.sheets.len() >= MAX_SHEETS {
-                    return Err(CommandError::Unavailable(format!("project already has {MAX_SHEETS} sheets")));
+                    return Err(CommandError::CapExceeded(format!("project already has {MAX_SHEETS} sheets")));
                 }
                 let name = name.ok_or_else(|| CommandError::InvalidParams("missing sheet name".into()))?;
                 let sheet = project.new_sheet_record(fresh_id()?, name)?;

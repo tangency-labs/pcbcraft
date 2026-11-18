@@ -529,7 +529,7 @@ impl Project {
         match target {
             Target::Project => Ok(Arc::make_mut(&mut self.parameters)),
             Target::Sheet(sheet) => {
-                let index = self.sheets().position(|s| s.target == sheet).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?;
+                let index = self.sheets().position(|s| s.target == sheet).ok_or_else(|| CommandError::NotFound("unknown sheet ID".into()))?;
                 Ok(Arc::make_mut(&mut Arc::make_mut(&mut self.sheets)[index].parameters))
             }
         }
@@ -588,7 +588,7 @@ fn apply(list: &mut Parameters, name: &str, value: Option<String>, rename: Optio
         None => match value {
             Some(value) => {
                 if !list.contains_key(name) && list.len() >= MAX_PARAMETERS {
-                    return Err(CommandError::Unavailable(format!("a list holds at most {MAX_PARAMETERS} parameters")));
+                    return Err(CommandError::CapExceeded(format!("a list holds at most {MAX_PARAMETERS} parameters")));
                 }
                 list.insert(name.to_owned(), value);
             }
@@ -675,7 +675,7 @@ impl Session {
             let (own, sheet) = match target {
                 Target::Project => (project.parameters(), None),
                 Target::Sheet(sheet) => {
-                    (project.sheet_parameters(sheet).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?, Some(sheet))
+                    (project.sheet_parameters(sheet).ok_or_else(|| CommandError::NotFound("unknown sheet ID".into()))?, Some(sheet))
                 }
             };
             let rows = project.parameter_rows(target.scope(), sheet);

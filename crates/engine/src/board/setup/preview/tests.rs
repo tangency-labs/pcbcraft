@@ -360,15 +360,14 @@ fn malformed_preview_inputs_preserve_current_authority_and_project() {
     let candidate = reduced(&s);
     let report = preview(&mut s, candidate.clone(), false);
     let snapshot = s.snapshot().unwrap();
-    for (params, reason, unavailable) in [
-        (json!({"setup":candidate,"expected_revision":s.revision()-1}), "project changed", true),
-        (json!({"setup":candidate,"expected_revision":s.revision(),"board":crate::fresh_id().unwrap()}), "unknown board ID", false),
-        (json!({"setup":{},"expected_revision":s.revision()}), "missing field `layers`", false),
-        (json!({"setup":candidate,"expected_revision":s.revision(),"extra":true}), "extra", false),
+    for (params, reason, code) in [
+        (json!({"setup":candidate,"expected_revision":s.revision()-1}), "project changed", "stale_revision"),
+        (json!({"setup":candidate,"expected_revision":s.revision(),"board":crate::fresh_id().unwrap()}), "unknown board ID", "not_found"),
+        (json!({"setup":{},"expected_revision":s.revision()}), "missing field `layers`", "invalid_params"),
+        (json!({"setup":candidate,"expected_revision":s.revision(),"extra":true}), "extra", "invalid_params"),
     ] {
         let error = s.apply(PREVIEW_BOARD_SETUP, &params).unwrap_err();
-        assert_eq!(matches!(error, CommandError::Unavailable(_)), unavailable, "{error:?}");
-        assert!(matches!(error, CommandError::InvalidParams(_) | CommandError::Unavailable(_)));
+        assert_eq!(error.code().as_str(), code, "{error:?}");
         assert!(error.to_string().contains(reason), "expected {reason}, got {error}");
         assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
         assert_eq!(s.board_setup_preview().unwrap().plan_token.to_string(), report["plan_token"].as_str().unwrap());

@@ -310,7 +310,7 @@ impl Fragment {
             || destination.sheets.iter().map(|s| s.wires.len()).sum::<usize>() + self.project.wires().len() > crate::schematic::wiring::MAX_WIRES
             || destination.sheets.iter().map(|s| s.net_labels.len()).sum::<usize>() + self.project.net_labels().len() > crate::net_labels::MAX_LABELS
         {
-            return Err(invalid("pasted objects exceed project limits"));
+            return Err(CommandError::CapExceeded("pasted objects exceed project limits".into()));
         }
         if options.net_name_suffix.len() > 200 || options.net_name_suffix.chars().any(char::is_control) {
             return Err(invalid("invalid net-name suffix"));
