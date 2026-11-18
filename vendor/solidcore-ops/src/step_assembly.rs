@@ -49,7 +49,7 @@ struct Walk<'a> {
 ///
 /// A root definition is placed by the identity. Each occurrence multiplies the child's
 /// placement by the occurrence transformation, and each mapped item places the mapped
-/// representation by `target · origin⁻¹`. Refuses cycles and past the record's depth or
+/// representation by `origin⁻¹ · target`. Refuses cycles and past the record's depth or
 /// instance bounds.
 pub fn placed_bodies(structure: &ProductStructure) -> Result<Vec<PlacedBody>, String> {
     let mut children = vec![Vec::new(); structure.definitions.len()];
