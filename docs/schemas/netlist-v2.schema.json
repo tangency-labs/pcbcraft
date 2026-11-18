@@ -1,0 +1,369 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:netlist:2",
+  "title": "PCBcraft netlist, format 2",
+  "description": "What one board has accepted through reviewed updates: every accepted component with its package and each terminal's pads, and every accepted net. Format 2 widens format 1, which stays the format of the schematic netlist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "project",
+    "basis",
+    "board",
+    "components",
+    "nets",
+    "unconnected"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-netlist/2"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "basis": {
+      "description": "Always `accepted`: what the named board has accepted through reviewed updates. A schematic netlist is format 1.",
+      "const": "accepted"
+    },
+    "board": {
+      "description": "The board the netlist describes.",
+      "$ref": "#/$defs/board"
+    },
+    "components": {
+      "description": "The components the board accepted, including one since deleted from the schematic, in numeric component ID order: component-9 before component-10.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    },
+    "nets": {
+      "description": "Nets with at least one terminal, ordered by their first terminal.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/net"
+      }
+    },
+    "unconnected": {
+      "description": "Accepted terminals on no accepted net, in numeric component ID and then exported terminal order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/terminal_ref"
+      }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "source"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "description": "The source captured by the board's last accepted update; null before the first one.",
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "capture_id",
+                "content_digest"
+              ],
+              "properties": {
+                "capture_id": {
+                  "description": "Never the nil UUID.",
+                  "$ref": "#/$defs/uuid",
+                  "not": {
+                    "const": "00000000-0000-0000-0000-000000000000"
+                  }
+                },
+                "content_digest": {
+                  "description": "Lowercase SHA-256 of the captured source.",
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "reference",
+        "value",
+        "definition",
+        "units",
+        "terminals"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable component ID, such as `component-3`.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`power` marks a power port that names its net. `unknown` means no live definition matches the accepted library, symbol, revision and terminal table; the baseline does not retain the role.",
+          "enum": [
+            "part",
+            "power",
+            "unknown"
+          ]
+        },
+        "reference": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "library",
+            "id",
+            "revision"
+          ],
+          "properties": {
+            "library": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          }
+        },
+        "units": {
+          "description": "Always empty: a board netlist has no schematic units.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/unit"
+          },
+          "maxItems": 0
+        },
+        "terminals": {
+          "description": "Logical terminals, each listed once: native order while the current symbol matches the accepted revision and terminals, otherwise lexical order from the accepted baseline.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/terminal"
+          }
+        },
+        "package": {
+          "description": "The footprint the board accepted; absent for a component accepted without a package.",
+          "$ref": "#/$defs/package"
+        }
+      }
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "symbol",
+        "sheet",
+        "occurrence"
+      ],
+      "properties": {
+        "unit": {
+          "type": "string"
+        },
+        "symbol": {
+          "description": "The placement's symbol ID, such as `symbol-4`.",
+          "type": "string"
+        },
+        "sheet": {
+          "$ref": "#/$defs/uuid"
+        },
+        "occurrence": {
+          "description": "Sheet occurrence IDs from the root sheet down to the unit's own sheet.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      }
+    },
+    "package": {
+      "description": "The footprint the board accepted for the component.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "library",
+        "id",
+        "revision",
+        "footprint",
+        "unconnected_pads"
+      ],
+      "properties": {
+        "library": {
+          "description": "Null for a legacy two-pad marker.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "footprint": {
+          "description": "The placement ID, such as `footprint-2`, or null while the footprint is not placed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unconnected_pads": {
+          "description": "Pads no terminal uses, sorted.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terminal",
+        "name",
+        "electrical_type",
+        "pads"
+      ],
+      "properties": {
+        "terminal": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Null when the terminal has no name or the component's current symbol is not the accepted revision with the same terminals."
+        },
+        "electrical_type": {
+          "description": "Null for a component whose current symbol is not the accepted revision with the same terminals.",
+          "enum": [
+            "passive",
+            "input",
+            "output",
+            "bidirectional",
+            "power_in",
+            "power_out",
+            "unspecified",
+            "tri_state",
+            "open_collector",
+            "open_emitter",
+            "no_connect",
+            null
+          ]
+        },
+        "pads": {
+          "description": "Footprint pads the terminal maps to, empty when it maps to none.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "net": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "names",
+        "terminals"
+      ],
+      "properties": {
+        "id": {
+          "description": "Persistent net UUID, or null for a net without one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "The display name captured in the board's accepted baseline.",
+          "type": "string"
+        },
+        "names": {
+          "description": "The authored names captured in the board's accepted baseline, sorted.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "terminals": {
+          "description": "Joined terminals in numeric component ID and then exported terminal order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/terminal_ref"
+          }
+        }
+      }
+    },
+    "terminal_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "part",
+        "terminal"
+      ],
+      "properties": {
+        "part": {
+          "type": "string"
+        },
+        "terminal": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

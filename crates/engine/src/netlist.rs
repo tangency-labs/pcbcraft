@@ -8,6 +8,11 @@
 //! ordered by the number in the component ID (`component-9` before `component-10`) and then by
 //! terminal-table order, never by connectivity traversal, so the same design always gives the
 //! same bytes.
+//!
+//! A board's netlist ([`EXPORT_BOARD_NETLIST`]) uses format 2 with the `accepted` basis:
+//! the components and connections that board has accepted through reviewed updates, with each
+//! terminal's pads. Its terminal order is native while the live symbol matches the accepted
+//! revision and terminal table, otherwise lexical from the accepted baseline.
 
 use crate::{
     CommandError, Project, Session,
@@ -19,27 +24,67 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+mod accepted;
+mod integer;
+pub use accepted::EXPORT_BOARD_NETLIST;
+
 /// Generate the project's netlist file; edits nothing.
 pub const EXPORT_NETLIST: &str = "project.export_netlist";
-/// The format tag written into, and required from, every netlist document.
+/// The format tag of a schematic netlist, the shape `docs/schemas/netlist-v1.schema.json`
+/// describes.
 pub const FORMAT: &str = "pcbcraft-netlist/1";
+/// The format tag of a board's accepted netlist. Format 2 widens format 1 with the board,
+/// packages, pads, unknown component kinds and null electrical types;
+/// `docs/schemas/netlist-v2.schema.json` describes it.
+pub const FORMAT_V2: &str = "pcbcraft-netlist/2";
 
 /// A complete netlist document.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Netlist {
-    /// Always [`FORMAT`].
+    /// [`FORMAT`] for a `schematic` netlist, [`FORMAT_V2`] for an `accepted` one.
     pub format: String,
     pub project: ProjectRef,
     /// Which connectivity the nets describe.
     pub basis: Basis,
+    /// The board whose accepted state an `accepted` netlist describes; absent otherwise.
+    pub board: Option<BoardRef>,
     /// Components in numeric component ID order: `component-9` before `component-10`.
     pub components: Vec<Component>,
     /// Nets with at least one terminal, ordered by their first terminal.
     pub nets: Vec<Net>,
-    /// Terminals of placed units that are on no net, in numeric component ID and then
-    /// terminal-table order.
+    /// Terminals on no net, in numeric component ID and then exported terminal order.
     pub unconnected: Vec<TerminalRef>,
+}
+
+/// The document's field order and field-level rules, shared by both serde entry points.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "Netlist", rename = "Netlist", deny_unknown_fields)]
+struct NetlistText {
+    format: String,
+    project: ProjectRef,
+    basis: Basis,
+    #[serde(default, deserialize_with = "present_nonnull", skip_serializing_if = "Option::is_none")]
+    board: Option<BoardRef>,
+    components: Vec<Component>,
+    nets: Vec<Net>,
+    unconnected: Vec<TerminalRef>,
+}
+
+impl Serialize for Netlist {
+    /// Write the document without admitting an unknown kind into the schematic format.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.check_part_kinds().map_err(serde::ser::Error::custom)?;
+        NetlistText::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Netlist {
+    /// Read the document's fields, refusing unknown kinds outside accepted format 2.
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let netlist = NetlistText::deserialize(de)?;
+        netlist.check_part_kinds().map_err(serde::de::Error::custom)?;
+        Ok(netlist)
+    }
 }
 
 /// The exported project's identity and display name.
@@ -57,14 +102,41 @@ pub struct ProjectRef {
 pub enum Basis {
     /// The schematic's current wiring, labels and hierarchy across all sheets.
     Schematic,
+    /// The board's accepted connectivity and packages. Reference and value follow the live
+    /// component; unapplied wiring changes stay out of the accepted connections.
+    Accepted,
 }
 
-/// Whether a component is an ordinary part or a power port that names its net.
+impl Basis {
+    /// The basis as the document spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Schematic => "schematic",
+            Self::Accepted => "accepted",
+        }
+    }
+}
+
+/// The board an accepted netlist describes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardRef {
+    #[serde(deserialize_with = "hyphenated")]
+    pub id: Uuid,
+    pub name: String,
+    /// The source captured by the board's last accepted update; null before the first one.
+    #[serde(deserialize_with = "nullable_capture")]
+    pub source: Option<crate::board::update::SourceCapture>,
+}
+
+/// The component's role when known from the definition matching the exported state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentKind {
     Part,
     Power,
+    /// An accepted component with no matching live definition to supply its role.
+    Unknown,
 }
 
 /// One logical component and every terminal of its definition.
@@ -79,8 +151,29 @@ pub struct Component {
     pub definition: DefinitionRef,
     /// Placed units in unit ID order. Units not placed on any sheet are absent.
     pub units: Vec<Unit>,
-    /// The definition's logical terminals in native terminal order, each listed once.
+    /// Logical terminals, each listed once. Native order for the schematic or a matching
+    /// accepted symbol revision and terminal table; lexical order for an accepted fallback.
     pub terminals: Vec<TerminalInfo>,
+    /// The accepted physical package; present only in an `accepted` netlist.
+    #[serde(default, deserialize_with = "present_nonnull", skip_serializing_if = "Option::is_none")]
+    pub package: Option<PackageRef>,
+}
+
+/// The pinned footprint a board accepted for a component, and where it is placed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageRef {
+    /// Null for a legacy two-pad marker, which has no library.
+    #[serde(deserialize_with = "nullable")]
+    pub library: Option<String>,
+    pub id: String,
+    #[serde(deserialize_with = "integer::revision")]
+    pub revision: u32,
+    /// The placement ID, such as `footprint-2`, or null while the footprint is not placed.
+    #[serde(deserialize_with = "nullable")]
+    pub footprint: Option<String>,
+    /// Pads of the footprint that no terminal uses, sorted.
+    pub unconnected_pads: Vec<String>,
 }
 
 /// The pinned library definition of a component.
@@ -89,6 +182,7 @@ pub struct Component {
 pub struct DefinitionRef {
     pub library: String,
     pub id: String,
+    #[serde(deserialize_with = "integer::revision")]
     pub revision: u32,
 }
 
@@ -116,7 +210,13 @@ pub struct TerminalInfo {
     /// The terminal's name, or explicit null when it has none.
     #[serde(deserialize_with = "nullable")]
     pub name: Option<String>,
-    pub electrical_type: ElectricalType,
+    /// Null only in an `accepted` netlist, for a component whose current symbol is not the
+    /// accepted revision with the same terminals.
+    #[serde(deserialize_with = "nullable")]
+    pub electrical_type: Option<ElectricalType>,
+    /// The footprint pads the terminal maps to; present only in an `accepted` netlist.
+    #[serde(default, deserialize_with = "present_nonnull", skip_serializing_if = "Option::is_none")]
+    pub pads: Option<Vec<String>>,
 }
 
 /// One electrical net and the logical terminals it joins.
@@ -126,11 +226,12 @@ pub struct Net {
     /// Persistent registry UUID, or explicit null for a net the registry does not identify.
     #[serde(deserialize_with = "nullable_hyphenated")]
     pub id: Option<Uuid>,
-    /// The name the Net Inspector shows.
+    /// The current Net Inspector display name for the schematic basis, or the display name
+    /// captured in the board's accepted baseline for the accepted basis.
     pub name: String,
-    /// Every authored name on the net, sorted.
+    /// Authored names on the net, sorted; captured at the accepted update for the accepted basis.
     pub names: Vec<String>,
-    /// Joined terminals in numeric component ID and then terminal-table order.
+    /// Joined terminals in numeric component ID and then exported terminal order.
     pub terminals: Vec<TerminalRef>,
 }
 
@@ -140,6 +241,12 @@ pub struct Net {
 pub struct TerminalRef {
     pub part: String,
     pub terminal: String,
+}
+
+/// Read a value only when the field is present, refusing explicit null. Paired with
+/// `serde(default)`, omission stays `None` without confusing it with a null value.
+fn present_nonnull<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(de).map(Some)
 }
 
 /// Read an optional value that must still be present: the format writes null rather than
@@ -179,14 +286,95 @@ fn nullable_hyphenated<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option
     Option::<Hyphenated>::deserialize(de).map(|id| id.map(|id| id.0))
 }
 
+/// A source capture as the netlist format writes it, so its `capture_id` is read in the
+/// hyphenated form like every other UUID in the document.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureText {
+    capture_id: Hyphenated,
+    content_digest: String,
+}
+
+/// Read a source capture that must be present but may be null, with a hyphenated capture ID.
+fn nullable_capture<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<crate::board::update::SourceCapture>, D::Error> {
+    Option::<CaptureText>::deserialize(de).map(|capture| {
+        capture.map(|capture| crate::board::update::SourceCapture { capture_id: capture.capture_id.0, content_digest: capture.content_digest })
+    })
+}
+
 impl Netlist {
     /// Read a netlist document, refusing other formats, unknown fields and malformed values.
+    /// The format tag is read first, so a document of a later format is refused by its tag
+    /// rather than by the first field this reader does not know. Omitted fields are refused
+    /// even where null is allowed, and so are fields that do not belong to the document's
+    /// basis: see [`Netlist::check_basis`]. The tag must be the one the content needs: format 1
+    /// for a `schematic` netlist and format 2 for an `accepted` one, so a format 1 reader never
+    /// meets format 2 fields under its own tag.
     pub fn parse(text: &str) -> Result<Self, String> {
-        let netlist: Self = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
-        if netlist.format != FORMAT {
-            return Err(format!("unsupported netlist format `{}`", netlist.format));
+        #[derive(Deserialize)]
+        struct Header {
+            format: String,
         }
+        let header: Header = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
+        if header.format != FORMAT && header.format != FORMAT_V2 {
+            return Err(format!("unsupported netlist format `{}`", header.format));
+        }
+        let netlist: Self = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
+        let expected = Self::format_for(netlist.basis);
+        if netlist.format != expected {
+            return Err(format!("unsupported netlist format `{}` for the {} basis, which takes `{expected}`", netlist.format, netlist.basis.name()));
+        }
+        netlist.check_basis().map_err(|error| format!("invalid netlist: {error}"))?;
         Ok(netlist)
+    }
+
+    /// The format tag a netlist of this basis is written with: the lowest one that carries it.
+    pub fn format_for(basis: Basis) -> &'static str {
+        match basis {
+            Basis::Schematic => FORMAT,
+            Basis::Accepted => FORMAT_V2,
+        }
+    }
+
+    /// Refuse the accepted-only kind on other bases or tags, including direct serde calls.
+    fn check_part_kinds(&self) -> Result<(), String> {
+        if (self.basis != Basis::Accepted || self.format != FORMAT_V2)
+            && self.components.iter().any(|component| component.kind == ComponentKind::Unknown)
+        {
+            return Err("unknown component kinds require an accepted format 2 netlist".into());
+        }
+        Ok(())
+    }
+
+    /// Check the fields that depend on the basis. An `accepted` netlist names its board (with a
+    /// well-formed source capture when present), lists no units and gives every terminal its
+    /// pads. A `schematic` netlist names no board, packages or pads, and every terminal has an
+    /// electrical type.
+    fn check_basis(&self) -> Result<(), String> {
+        let terminals = || self.components.iter().flat_map(|component| &component.terminals);
+        match self.basis {
+            Basis::Accepted => {
+                let board = self.board.as_ref().ok_or("an accepted netlist names its board")?;
+                if let Some(source) = &board.source {
+                    source.validate()?;
+                }
+                if self.components.iter().any(|component| !component.units.is_empty()) {
+                    return Err("an accepted netlist lists no units".into());
+                }
+                if terminals().any(|terminal| terminal.pads.is_none()) {
+                    return Err("every terminal of an accepted netlist lists its pads".into());
+                }
+            }
+            Basis::Schematic => {
+                if self.board.is_some() || self.components.iter().any(|component| component.package.is_some()) {
+                    return Err("only an accepted netlist names a board or packages".into());
+                }
+                if terminals().any(|terminal| terminal.pads.is_some() || terminal.electrical_type.is_none()) {
+                    return Err("a schematic netlist terminal has an electrical type and no pads".into());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The document text: two-space indented JSON with a final newline.
@@ -265,8 +453,14 @@ impl Project {
                         .definition
                         .pins()
                         .iter()
-                        .map(|pin| TerminalInfo { terminal: pin.number.clone(), name: pin.name.clone(), electrical_type: pin.electrical_type })
+                        .map(|pin| TerminalInfo {
+                            terminal: pin.number.clone(),
+                            name: pin.name.clone(),
+                            electrical_type: Some(pin.electrical_type),
+                            pads: None,
+                        })
                         .collect(),
+                    package: None,
                 }
             })
             .collect();
@@ -308,6 +502,7 @@ impl Project {
             format: FORMAT.to_owned(),
             project: ProjectRef { id: self.id, name: self.name.clone() },
             basis: Basis::Schematic,
+            board: None,
             components,
             nets: nets.into_iter().map(|(_, net)| net).collect(),
             unconnected,
@@ -329,9 +524,14 @@ impl Session {
     /// The execute result: the file's name and text (only its name for a dry run) and the findings.
     pub(crate) fn netlist_report(&self, params: &Value) -> Result<Value, CommandError> {
         let (file, findings) = self.export_netlist()?;
-        let file = if params["dry_run"].as_bool() == Some(true) { json!({"name": file.name}) } else { json!(file) };
-        Ok(json!({"files": [file], "findings": findings}))
+        Ok(report(file, findings, params))
     }
+}
+
+/// The shape both netlist commands return; a dry run drops the file text.
+fn report(file: Output, findings: Vec<Value>, params: &Value) -> Value {
+    let file = if params["dry_run"].as_bool() == Some(true) { json!({"name": file.name}) } else { json!(file) };
+    json!({"files": [file], "findings": findings})
 }
 
 #[cfg(test)]

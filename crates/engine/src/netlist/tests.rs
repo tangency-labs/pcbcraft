@@ -9,22 +9,28 @@ use std::{collections::BTreeSet, sync::Arc};
 
 const SYMBOL: &str = include_str!("../../../../examples/native-parts/symbols/dual-amplifier.json");
 const SCHEMA: &str = include_str!("../../../../docs/schemas/netlist-v1.schema.json");
+const SCHEMA_V2: &str = include_str!("../../../../docs/schemas/netlist-v2.schema.json");
 
 /// Submit authored changes through the same revision-checked path as GUI and MCP.
-fn apply(s: &mut Session, command: &str, mut params: Value) {
+pub(super) fn apply(s: &mut Session, command: &str, mut params: Value) {
     params["expected_revision"] = json!(s.revision());
     s.apply(command, &params).unwrap();
 }
 
 /// A new project with the dual amplifier's unit `a` placed on the root sheet.
 fn session() -> Session {
+    session_with_symbol(SYMBOL)
+}
+
+/// Load a supplied symbol definition through the library command before placing unit `a`.
+fn session_with_symbol(symbol: &str) -> Session {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     s.execute(
         "library.load_source",
         &json!({"source":"units", "documents":{
             "library.json":r#"{"format":"pcbcraft-library/1","id":"units","name":"Unit tests","license":"MIT OR Apache-2.0"}"#,
-            "symbols/dual.json":SYMBOL,
+            "symbols/dual.json":symbol,
         }}),
     )
     .unwrap();
@@ -68,18 +74,23 @@ fn wire(s: &mut Session, sheet: SheetTarget, from: WireEndpoint, to: WireEndpoin
 /// - U1.1 on the root sheet to the child's `OUT` port, which reaches U1.5 on the child.
 /// - U1.6 on the child to the grandchild's `IN` port, which reaches R2.1.
 /// - U1.4 and R2.2 stay unconnected.
-struct Fixture {
-    session: Session,
-    sheets: [SheetTarget; 3],
-    u1: String,
-    r1: String,
-    r2: String,
+pub(super) struct Fixture {
+    pub(super) session: Session,
+    pub(super) sheets: [SheetTarget; 3],
+    pub(super) u1: String,
+    pub(super) r1: String,
+    pub(super) r2: String,
     /// The expected nets as `(reference, terminal)` pairs, in export order: by first terminal.
-    expected: Vec<BTreeSet<(&'static str, &'static str)>>,
+    pub(super) expected: Vec<BTreeSet<(&'static str, &'static str)>>,
 }
 
-fn fixture() -> Fixture {
-    let mut s = session();
+pub(super) fn fixture() -> Fixture {
+    fixture_with_symbol(SYMBOL)
+}
+
+/// Build the hierarchical fixture with a supplied dual-amplifier terminal table.
+pub(super) fn fixture_with_symbol(symbol: &str) -> Fixture {
+    let mut s = session_with_symbol(symbol);
     let root = s.project().unwrap().sheet_target();
     let unit_a = last_symbol(&s, root);
     let u1 = s.project().unwrap().symbols()[0].component_id();
@@ -360,34 +371,77 @@ fn reader_and_schema_agree_on_field_edges() {
     }
 }
 
-/// Known difference: the schema's `integer` type counts by value, so `1.0` and `1e0` are valid
-/// integers there, but the reader, like the other native readers, takes integers only as plain
-/// digits. Every integer in the exported document is tried in both spellings; the writer never
-/// produces them.
+/// Integral decimal and exponent spellings read back as the same u32 values and are
+/// rewritten as plain digits, without widening the published schematic schema.
 #[test]
-fn integers_spelled_as_decimals_are_valid_in_the_schema_but_refused_by_the_reader() {
+fn schematic_integer_spellings_agree_with_the_schema() {
     let Fixture { session, .. } = fixture();
-    let text = session.export_netlist().unwrap().0.contents;
-    let original: Value = serde_json::from_str(&text).unwrap();
+    integer_spellings(&session.export_netlist().unwrap().0.contents, &schema());
+}
+
+/// Exercise every integer field through the production reader and published schema at
+/// zero, u32::MAX and adjacent invalid values, preserving raw decimal and exponent tokens.
+pub(super) fn integer_spellings(text: &str, schema: &Value) {
+    let original: Value = serde_json::from_str(text).unwrap();
     let mut numbers = Vec::new();
     numbers_in(&original, String::new(), &mut numbers);
-    assert!(!numbers.is_empty());
+    assert!(numbers.iter().any(|pointer| pointer.ends_with("/definition/revision")), "{numbers:?}");
+    if original["basis"] == "accepted" {
+        assert!(numbers.iter().any(|pointer| pointer.ends_with("/package/revision")), "{numbers:?}");
+    }
     for pointer in numbers {
-        // The writer uses plain digits for every integer.
-        let plain = original.pointer(&pointer).unwrap().as_u64().unwrap();
-        for spelling in [format!("{plain}.0"), format!("{plain}e0")] {
-            let mut marked = original.clone();
-            *marked.pointer_mut(&pointer).unwrap() = json!("@integer@");
-            let document = marked.to_string().replace("\"@integer@\"", &spelling);
-            let value: Value = serde_json::from_str(&document).unwrap();
-            assert!(check(&schema(), &schema(), &value, "$").is_ok(), "schema: {pointer} = {spelling}");
-            assert!(Netlist::parse(&document).unwrap_err().contains("floating point"), "reader: {pointer} = {spelling}");
+        let mut marked = original.clone();
+        *marked.pointer_mut(&pointer).unwrap() = json!("@integer@");
+        let document = |spelling: &str| marked.to_string().replace("\"@integer@\"", spelling);
+        for (spelling, expected) in [
+            ("0", 0),
+            ("-0", 0),
+            ("1.0", 1),
+            ("1e0", 1),
+            ("10e-1", 1),
+            ("100.000e-2", 1),
+            ("4294967295", u32::MAX),
+            ("4294967295.0", u32::MAX),
+            ("429496729500e-2", u32::MAX),
+            ("4.294967295e9", u32::MAX),
+        ] {
+            let text = document(spelling);
+            schema::check_text(schema, schema, &text, "$").unwrap_or_else(|error| panic!("{pointer} = {spelling}: {error}"));
+            let read = Netlist::parse(&text).unwrap();
+            let mut expected_document = original.clone();
+            *expected_document.pointer_mut(&pointer).unwrap() = json!(expected);
+            assert_eq!(serde_json::to_value(&read).unwrap(), expected_document, "{pointer} = {spelling}");
+            assert_eq!(read.to_text().unwrap(), Netlist::parse(&expected_document.to_string()).unwrap().to_text().unwrap());
+        }
+        for (spelling, reason) in [
+            ("4294967296", "above 4294967295"),
+            ("4294967296.0", "above 4294967295"),
+            ("4.294967296e9", "above 4294967295"),
+            ("-1", "below 0"),
+            ("0.5", "number is not \"integer\""),
+            ("1e-1", "number is not \"integer\""),
+            ("4294967295.0000000001", "above 4294967295"),
+            ("1.0000000000000000001", "number is not \"integer\""),
+            ("0.9999999999999999999", "number is not \"integer\""),
+            ("1e-999999999999999999999", "number is not \"integer\""),
+            ("1e999999999999999999999", "above 4294967295"),
+        ] {
+            let text = document(spelling);
+            let error = schema::check_text(schema, schema, &text, "$").unwrap_err();
+            assert!(error.ends_with(reason), "schema: {pointer} = {spelling}: {error}");
+            let error = Netlist::parse(&text).unwrap_err();
+            assert!(error.starts_with("invalid netlist: revision must be an integer from 0 to 4294967295"), "{pointer} = {spelling}: {error}");
+        }
+        for spelling in ["0.000e9999999999999999999999", "-0e-9999999999999999999999", "1e000000000000000000000000000"] {
+            let text = document(spelling);
+            schema::check_text(schema, schema, &text, "$").unwrap_or_else(|error| panic!("{pointer} = {spelling}: {error}"));
+            assert!(Netlist::parse(&text).is_ok(), "{pointer} = {spelling}");
         }
     }
 }
 
 /// The JSON pointer of every number in a document.
-fn numbers_in(value: &Value, at: String, found: &mut Vec<String>) {
+pub(super) fn numbers_in(value: &Value, at: String, found: &mut Vec<String>) {
     match value {
         Value::Number(_) => found.push(at),
         Value::Object(map) => map.iter().for_each(|(key, child)| numbers_in(child, format!("{at}/{key}"), found)),
@@ -415,12 +469,16 @@ fn schema_vocabularies_match_the_types() {
     for value in kinds {
         match value {
             ComponentKind::Part | ComponentKind::Power => {}
+            // Accepted format 2 only; schematic readers and writers refuse it.
+            ComponentKind::Unknown => {}
         }
     }
     let bases = [Basis::Schematic];
     for value in bases {
         match value {
             Basis::Schematic => {}
+            // Format 2 only: its schema's vocabulary is checked with the board netlist.
+            Basis::Accepted => {}
         }
     }
     assert_eq!(listed("/$defs/terminal/properties/electrical_type/enum"), names(types.iter().map(|t| json!(t)).collect()));
@@ -477,94 +535,27 @@ fn named<'a>(reference: &'a BTreeMap<String, String>, net: &'a Net) -> BTreeSet<
 }
 
 /// The published schema as JSON.
-fn schema() -> Value {
+pub(super) fn schema() -> Value {
     serde_json::from_str(SCHEMA).unwrap()
 }
 
+/// The published format 2 schema, for board netlists.
+pub(super) fn schema_v2() -> Value {
+    serde_json::from_str(SCHEMA_V2).unwrap()
+}
+
 /// Panic unless the document satisfies the published schema.
-fn validate(value: &Value) {
+pub(super) fn validate(value: &Value) {
     let schema = schema();
     check(&schema, &schema, value, "$").unwrap();
 }
 
-/// A small JSON Schema checker covering exactly the keywords the netlist schema uses. Any
-/// other keyword fails, so the schema cannot quietly rely on something this test ignores.
-fn check(root: &Value, schema: &Value, value: &Value, at: &str) -> Result<(), String> {
-    let schema = schema.as_object().ok_or(format!("{at}: schema is not an object"))?;
-    for (keyword, rule) in schema {
-        match keyword.as_str() {
-            "$schema" | "$id" | "title" | "description" | "$defs" => {}
-            "$ref" => {
-                let pointer = rule.as_str().and_then(|r| r.strip_prefix('#')).ok_or(format!("{at}: only local references"))?;
-                check(root, root.pointer(pointer).ok_or(format!("{at}: missing {pointer}"))?, value, at)?;
-            }
-            "type" => {
-                let allowed: Vec<_> = rule.as_array().cloned().unwrap_or_else(|| vec![rule.clone()]);
-                let actual = match value {
-                    Value::Null => "null",
-                    Value::Bool(_) => "boolean",
-                    // JSON Schema counts integers by value, so 1.0 and 1e0 are integers too.
-                    Value::Number(n) if n.is_u64() || n.is_i64() || n.as_f64().is_some_and(|f| f.fract() == 0.0) => "integer",
-                    Value::Number(_) => "number",
-                    Value::String(_) => "string",
-                    Value::Array(_) => "array",
-                    Value::Object(_) => "object",
-                };
-                if !allowed.iter().any(|t| t == actual || (t == "number" && actual == "integer")) {
-                    return Err(format!("{at}: {actual} is not {rule}"));
-                }
-            }
-            "const" if value != rule => return Err(format!("{at}: not {rule}")),
-            "const" => {}
-            "enum" if !rule.as_array().unwrap().contains(value) => return Err(format!("{at}: {value} not in {rule}")),
-            "enum" => {}
-            "minimum" if value.as_f64().is_some_and(|n| n < rule.as_f64().unwrap()) => return Err(format!("{at}: below {rule}")),
-            "minimum" => {}
-            "maximum" if value.as_f64().is_some_and(|n| n > rule.as_f64().unwrap()) => return Err(format!("{at}: above {rule}")),
-            "maximum" => {}
-            "format" if rule == "uuid" => {
-                if let Some(text) = value.as_str() {
-                    super::parse_hyphenated(text).ok_or_else(|| format!("{at}: not a hyphenated UUID"))?;
-                }
-            }
-            "required" => {
-                for name in rule.as_array().unwrap() {
-                    if value.is_object() && value.get(name.as_str().unwrap()).is_none() {
-                        return Err(format!("{at}: missing {name}"));
-                    }
-                }
-            }
-            "properties" => {
-                if let Some(object) = value.as_object() {
-                    for (name, property) in rule.as_object().unwrap() {
-                        if let Some(child) = object.get(name) {
-                            check(root, property, child, &format!("{at}.{name}"))?;
-                        }
-                    }
-                }
-            }
-            "additionalProperties" if rule == false => {
-                if let Some(object) = value.as_object() {
-                    let known = schema.get("properties").and_then(Value::as_object);
-                    if let Some(extra) = object.keys().find(|name| !known.is_some_and(|known| known.contains_key(*name))) {
-                        return Err(format!("{at}: unexpected {extra}"));
-                    }
-                }
-            }
-            "items" => {
-                for (index, item) in value.as_array().into_iter().flatten().enumerate() {
-                    check(root, rule, item, &format!("{at}[{index}]"))?;
-                }
-            }
-            "anyOf" => {
-                if !rule.as_array().unwrap().iter().any(|option| check(root, option, value, at).is_ok()) {
-                    return Err(format!("{at}: matches no alternative"));
-                }
-            }
-            other => return Err(format!("{at}: unsupported schema keyword {other}")),
-        }
-    }
-    Ok(())
+mod schema;
+
+/// Validate an already-decoded fixture. Raw number-spelling tests call `check_text` directly
+/// so their input never passes through the floating-point representation in `Value`.
+pub(super) fn check(root: &Value, schema: &Value, value: &Value, at: &str) -> Result<(), String> {
+    schema::check_text(root, schema, &value.to_string(), at)
 }
 
 /// A terminal drawn on two units is one logical terminal: wiring its second appearance joins
