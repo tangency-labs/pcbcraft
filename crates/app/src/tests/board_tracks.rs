@@ -124,7 +124,8 @@ fn an_unconnected_pad_route_cannot_join_a_named_terminal() {
         h.key_press(Key::Enter);
         h.run_steps(30);
         // Enter may finish the already fixed, legal prefix, never the rejected connection.
-        assert!(h.state().session.project().unwrap().boards().next().unwrap().copper_nets().is_empty());
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        assert!(board.copper_nets().expect("arc-free test board has a copper net map").is_empty());
         assert_eq!(h.state().session.revision(), revision + u64::from(vertex));
         if vertex {
             h.state_mut().run("edit.undo", &json!({}));
