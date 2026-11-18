@@ -2,7 +2,10 @@
 use super::*;
 use pcbcraft_engine::{
     Project,
-    library::sources::inventory::{Entry, Inventory},
+    library::sources::{
+        inventory::{Entry, Inventory},
+        where_used::Report,
+    },
 };
 use std::sync::{Arc, Weak};
 
@@ -13,7 +16,66 @@ pub(crate) struct Cache {
     inventory: Option<Result<Arc<Inventory>, String>>,
 }
 
+/// Pane-local view of an explicit query. Copies of a pane share the immutable rows.
+#[derive(Clone, Debug)]
+pub(super) struct WhereUsedPreview {
+    version: (u64, u64),
+    report: Result<Arc<Report>, String>,
+}
+
 impl PcbApp {
+    /// Run the shared query only on request; hide stale results after document or catalog changes.
+    /// Draw only the visible rows so reopening a large result does not redraw the entire list.
+    pub(super) fn where_used_preview(&self, ui: &mut egui::Ui, state: &mut State, key: &Key) {
+        if self.session.project().is_none() {
+            state.where_used = None;
+            return;
+        }
+        let version = (self.session.revision(), self.session.libraries().generation());
+        if state.where_used.as_ref().is_some_and(|result| result.version != version) {
+            state.where_used = None;
+        }
+        if controls::small_button(ui, "Where used").clicked() {
+            state.where_used =
+                Some(WhereUsedPreview { version, report: self.session.library_where_used(key).map(Arc::new).map_err(|error| error.to_string()) });
+        }
+        let Some(result) = &state.where_used else { return };
+        let report = match &result.report {
+            Ok(report) => report,
+            Err(error) => {
+                ui.label(egui::RichText::new(error).color(pcbcraft_chrome::Tokens::get().error));
+                return;
+            }
+        };
+        let latest = match report.newest_revision {
+            Some(true) => "Yes",
+            Some(false) => "No",
+            None => "Unknown",
+        };
+        chrome::detail(ui, "Newest loaded revision", latest);
+        let count = report.instances.len();
+        if count == 0 {
+            ui.label("No instances use this revision");
+        } else {
+            ui.label(format!("Instances: {count}"));
+            let height = ui.text_style_height(&egui::TextStyle::Body);
+            egui::ScrollArea::vertical().id_salt("library_where_used_rows").max_height(144.).show_rows(ui, height, count, |ui, range| {
+                for row in &report.instances[range] {
+                    let reference = row.reference.as_deref().unwrap_or(&row.part_instance);
+                    let location = match &row.board {
+                        Some(board) if board.pending_removal => format!("{} (pending removal)", board.name),
+                        Some(board) if board.footprint.is_some() => board.name.clone(),
+                        Some(board) => format!("{} (assigned, not placed)", board.name),
+                        None if row.assigned => "Assigned, no board".into(),
+                        None => "Schematic only".into(),
+                    };
+                    let label = format!("{reference} · {location}");
+                    ui.add(egui::Label::new(&label).truncate()).on_hover_text(label);
+                }
+            });
+        }
+    }
+
     /// Expand/collapse changes navigation only and preserves the selected pinned/source record.
     pub(super) fn library_tree_action(&self, state: &mut State, action: chrome::TreeAction) {
         match action {

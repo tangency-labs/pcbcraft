@@ -51,7 +51,7 @@ pub(super) fn inspect(project: &Project, catalog: &Catalog, revision: u64) -> Re
 /// Compare an immutable project pin with the highest loaded address of the same kind and
 /// identity. A conflicting or unresolved latest revision is reported without falling back to
 /// an older candidate. Availability alone makes no assertion about adoption compatibility.
-fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
+pub(super) fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
     let mut status = inventory.status(pinned, catalog);
     let latest = if status == "Project-only" {
         None

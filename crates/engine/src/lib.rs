@@ -3123,6 +3123,7 @@ impl Session {
             | "project.rename"
             | netlist::EXPORT_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::WHERE_USED
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE

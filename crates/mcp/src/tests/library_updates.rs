@@ -11,7 +11,7 @@ use pcbcraft_engine::{
         publishing::{new_library, prepare},
     },
     error_codes::ErrorCode,
-    library::sources::{AVAILABLE_REVISIONS, LOAD, symbol_digest},
+    library::sources::{AVAILABLE_REVISIONS, LOAD, WHERE_USED, symbol_digest},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -32,10 +32,30 @@ fn available_revisions_is_discoverable_and_keeps_query_results() {
     assert_eq!(report["outdated_instances"], json!([]));
 }
 
-/// Loaded revisions produce the same two-of-three report through live and headless execution.
-/// Modal ownership is checked before dispatch; both paths preserve project inspection state.
+/// Where-used rejects bad input and unavailable projects with the same stable codes across adapters.
 #[test]
-fn available_revisions_has_identical_live_and_headless_results() {
+fn where_used_preserves_coded_failures_across_live_and_headless() {
+    let mut headless = Headless::default();
+    let mut editor = OpenEditor { session: Session::default(), blocked: false };
+    let params = json!({"library":"demo","kind":"symbol","definition":"drawing","definition_revision":1});
+    let mut invalid = params.clone();
+    invalid["definition_revision"] = json!(0);
+    let mut unexpected = params.clone();
+    unexpected["expected_revision"] = json!(1);
+    for (params, expected) in [(params, ErrorCode::Unavailable), (invalid, ErrorCode::InvalidParams), (unexpected, ErrorCode::InvalidParams)] {
+        let execute = json!({"command":WHERE_USED,"params":params,"inspect":false});
+        let headless_error = headless.call("engine.execute", execute.clone()).unwrap_err();
+        let live_error = call_editor(&mut editor, &json!({"method":"engine.execute","params":execute})).unwrap_err();
+        assert_eq!(headless_error.code(), expected.as_str());
+        assert_eq!(headless_error.details(), &json!({}));
+        assert_eq!(live_error, headless_error);
+    }
+}
+
+/// Revision discovery and exact where-used agree across live and headless dispatch.
+/// Both preserve project inspection state; modal ownership is checked before dispatch.
+#[test]
+fn available_revisions_and_where_used_match_live_and_headless() {
     let manifest = new_library("query-demo", "Query demo", "MIT OR Apache-2.0").unwrap();
     let first = prepare(Arc::new(Item::new(Kind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
     let mut next = first.item().as_ref().clone();
@@ -74,6 +94,15 @@ fn available_revisions_has_identical_live_and_headless_results() {
     let ids: Vec<_> = snapshot.components().take(2).map(|instance| instance.id()).collect();
     assert_eq!(live_report["outdated_instances"], json!(ids));
     assert_eq!(live_report["board"], json!(snapshot.board_target().unwrap().board));
+    let command = body(&call(&mut server(), "describe_command", json!({"command":WHERE_USED})));
+    assert_eq!(command["params"]["required"], json!(["library", "kind", "definition", "definition_revision"]));
+    let item = first.item();
+    let where_used = json!({"command":WHERE_USED,"inspect":false,"params":{
+        "library":item.library,"kind":"symbol","definition":item.id,"definition_revision":item.revision}});
+    let live_uses = call_editor(&mut editor, &json!({"method":"engine.execute","params":where_used})).unwrap();
+    assert_eq!(headless.call("engine.execute", where_used).unwrap(), live_uses);
+    assert_eq!(live_uses["instances"].as_array().unwrap().iter().map(|row| row["part_instance"].as_str().unwrap()).collect::<Vec<_>>(), ids);
+    assert_eq!(live_uses["newest_revision"], false);
     assert_eq!(headless.call("project.inspect", json!({})).unwrap(), before);
     assert_eq!(editor.session.inspect(), before);
     assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));

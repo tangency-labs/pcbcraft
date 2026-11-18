@@ -178,6 +178,41 @@ pins, project revision, dirty state, source registrations and Undo/Redo are unch
 Reviewed differences, compatibility decisions and revision-checked adoption remain
 separate work.
 
+## Find where a revision is used
+
+With a project open, select an exact item revision in Parts Library and click
+**Where used** in Preview. This lists actual instances with their reference
+designators and board names where applicable. Run the query again after a project
+or source change. The Project table's **Used by** column instead describes the
+saved dependency inventory; it can include unselected package options and
+accepted history that no longer has a placement.
+
+`library.where_used` takes `library`, `kind`, `definition` and
+`definition_revision`; `kind` is `symbol`, `footprint`, `part`, `category` or
+`manufacturer_part`. This is the same read-only query in live or headless MCP,
+including with `inspect: false`. The item address includes its exact revision;
+a later revision is not substituted. An unused or unknown address has no
+instances. The query does not refresh sources or change project state or Undo.
+
+`instances` has one row per matching logical instance, even when multiple units
+are placed or a footprint is both assigned and placed. Each row includes the
+stable `part_instance` ID, display `reference`, optional generic `part` address,
+and optional `board` with its `id`, `name`, `footprint` placement ID (or null)
+and `pending_removal` flag. For footprint queries, `assigned` distinguishes a
+current exact package choice from a physical footprint still awaiting a
+reviewed replacement or removal. A retained placement keeps its former instance
+ID and reference; a boardless assignment has `board: null`. Unselected package
+options and history with no placement do not count as uses.
+
+The report also returns `project`, runtime `revision`, `catalog_generation` and
+the requested `item`. `revision_info` follows [the loaded-source comparison
+above](#query-available-revisions) for a project pin or exact loaded item; it is
+null when neither can be inspected. `newest_revision` is true for `Matches
+source`, false for `Update available`, and null when the loaded catalog cannot
+establish either status. This is not a compatibility or adoption decision.
+The query does not search other projects or address future model and reusable
+module records.
+
 ## Edit and publish native items
 
 On desktop, **New → Library** creates a native library in an unused folder and

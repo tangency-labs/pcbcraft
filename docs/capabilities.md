@@ -231,6 +231,11 @@ loaded native revisions, including through live/headless MCP with `inspect: fals
 It preserves project pins and history, reports missing/conflicting/unresolved
 sources explicitly, and makes no compatibility or adoption decision; see
 [query available revisions](native-library-sources.md#query-available-revisions).
+Parts Library Preview and `library.where_used` list actual instances of an exact
+native item revision in the open project, separating footprint assignments from
+physical placements and showing whether a newer loaded revision exists. See
+[where-used](native-library-sources.md#find-where-a-revision-is-used) for the
+read-only result and its limits.
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

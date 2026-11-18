@@ -692,6 +692,17 @@ part rather than separately updating its drawing dependencies. See
 [query available revisions](native-library-sources.md#query-available-revisions)
 for the result contract; dedicated update review and adoption remain future work.
 
+To find where an exact revision is used in the open project, select that item in
+Parts Library and click **Where used** in Preview. From MCP, pass its exact
+address (replace these example values with your library item's address):
+
+```json
+{"command":"library.where_used","params":{"library":"parts-demo","kind":"footprint","definition":"resistor-0603","definition_revision":1},"inspect":false}
+```
+
+See [where-used](native-library-sources.md#find-where-a-revision-is-used) for
+what counts as a use and how to distinguish assignments from board placements.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and

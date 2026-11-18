@@ -69,6 +69,30 @@ fn project_tree_browses_pins_without_mutating_or_requiring_a_source() {
     }
 }
 
+/// The preview only queries on request and drops results after an edit, without editing itself.
+#[test]
+fn where_used_preview_is_read_only_and_does_not_show_stale_rows() {
+    let mut h = fixture(1800.);
+    place(h.state_mut());
+    let before = h.state().session.inspect();
+    let snapshot = h.state().session.snapshot().unwrap();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id();
+    h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":view.0,"scope":"project","type":1,"item":"resistor"})).unwrap();
+    h.run();
+    assert!(h.query_all_by_label("Instances: 1").next().is_none());
+    click(&mut h, "Where used");
+    h.get_by_label("Instances: 1");
+    h.get_by_label("R1 · Schematic only");
+    assert_eq!(h.state().session.inspect(), before);
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    place(h.state_mut());
+    h.run();
+    assert!(h.query_all_by_label("Instances: 1").next().is_none());
+    click(&mut h, "Where used");
+    h.get_by_label("Instances: 2");
+}
+
 /// Project selection has no source authority; explicit copies use pinned geometry when offline.
 #[test]
 fn project_navigation_and_copy_are_owner_bound_and_source_actions_are_safe() {
