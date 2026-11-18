@@ -178,10 +178,10 @@ commands allocate UUIDs, so regenerating a recipe does **not** recreate identica
 native bytes. Retain and reuse the exact artifact across revisions and runtimes;
 reports hash the entire envelope, including the trace. Changing recipes, seeds,
 trace semantics or measurements requires a version change and a new baseline.
-Fixtures are synthetic workloads, not manufacturable reference designs or BGA
-capacity claims. The extended recipes below add branching/channel and current
-hierarchy-limit workloads. BGA, ERC progress and curved-routing cases still need
-their owning feature implementations.
+Fixtures are synthetic workloads, not manufacturable reference designs. The
+extended recipes below add branching/channel, current hierarchy-limit and
+full-size ball grid array workloads. BGA routing, ERC progress and
+curved-routing cases still need their owning feature implementations.
 
 `route-reverse-layer-cancel-edit-v1` arms X, starts a route in empty board space,
 reverses pointer direction repeatedly, changes copper layer with PgDn, cancels
@@ -421,13 +421,15 @@ The following original command-generated recipes extend the existing artifacts:
 | `channels-v1` | 64 footprints, mixed widths/pad sizes, 410 tracks, through vias, two narrow parallel rails and 48 attached branches |
 | `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
 | `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |
+| `bga-v1` | The `reference-v1` board plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits, loaded as a native library and placed with all eight symbol units and the full terminal map. Each iteration also times library load, part, unit and footprint placement, baseline capture, packed encode and decode, and the design check of a fresh project holding only the array (`bga.*` metrics). It has no routing |
 
 Generate with `board_perf generate RECIPE REVISION ARTIFACT`, retain the exact
 artifact, then reuse it across runs. CPU reports now distinguish sheet-local
 connectivity from project-wide electrical connectivity and include a channel
-probe checked against the exhaustive contour reference. BGA/high-pin-count and
-curved tracks remain owned by #251–#253 and #259–#262; straight-track fixtures do
-not qualify unsupported geometry or routing features.
+probe checked against the exhaustive contour reference. BGA fan-out and
+high-pin-count routing remain owned by #253, and curved tracks by
+#259–#262; straight-track fixtures do not qualify unsupported geometry or
+routing features.
 
 Collect process memory without adding an allocator to production Rust:
 

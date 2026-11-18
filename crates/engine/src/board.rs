@@ -45,6 +45,8 @@ pub mod zones;
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;
+/// The published assign/place commands retain their per-terminal pad-array bound.
+pub(crate) const MAX_COMMAND_PADS_PER_TERMINAL: usize = 128;
 const HALF_PAD_PITCH_NM: i64 = 1_270_000;
 
 /// A stable electrical pad identifier within a placed footprint. Resolution validates that the pad exists.
@@ -160,7 +162,7 @@ impl Footprint {
                     && definition::valid_id(&self.definition)
                     && self.definition_revision > 0
                     && self.pin_1_pad == 0
-                    && self.mapping.as_ref().is_some_and(|m| !m.is_empty() && m.len() <= 128)
+                    && self.mapping.as_ref().is_some_and(|m| !m.is_empty() && m.len() <= crate::library::MAX_TERMINALS)
             }
             None => {
                 self.definition == FOOTPRINT_DEFINITION
@@ -447,16 +449,20 @@ impl Board {
     }
 }
 
-/// Parse bounded terminal-to-pad mappings before schema dispatch; resolution checks actual identities.
+/// Parse command mappings with at most 1,024 terminals and 128 pads per terminal.
+/// Resolution separately checks actual identities and complete pad ownership.
 pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, crate::library::parts::PadIds>> {
     let object = value.as_object()?;
-    if object.is_empty() || object.len() > 128 {
+    if object.is_empty() || object.len() > crate::library::MAX_TERMINALS {
         return None;
     }
     object
         .iter()
         .map(|(terminal, pad)| {
             PinNumber::new(terminal)?;
+            if pad.as_array().is_some_and(|pads| pads.len() > MAX_COMMAND_PADS_PER_TERMINAL) {
+                return None;
+            }
             let pads: crate::library::parts::PadIds = serde_json::from_value(pad.clone()).ok()?;
             pads.valid().then(|| (terminal.clone(), crate::library::parts::PadIds::from(pads.pads().to_vec())))
         })

@@ -6,6 +6,10 @@ use std::{collections::BTreeSet, sync::Arc};
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
 pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
+/// Most pads in one footprint: a full 32 x 32 ball grid array.
+pub(crate) const MAX_PADS: usize = 1024;
+/// Most parameterized artwork objects in one footprint.
+pub(crate) const MAX_ARTWORK: usize = 256;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
     "resistor-0603",
@@ -264,7 +268,14 @@ impl FootprintDefinition {
         self.validate_mode(true)
     }
     /// Check shared constraints before accepting either an editable draft or a published package.
+    /// Exceeding the pad or artwork limit is refused with a message that names the limit and the count.
     fn validate_mode(&self, draft: bool) -> Result<(), String> {
+        if self.pads.len() > MAX_PADS {
+            return Err(format!("a footprint has at most {MAX_PADS} pads, not {}", self.pads.len()));
+        }
+        if self.artwork.len() > MAX_ARTWORK {
+            return Err(format!("a footprint has at most {MAX_ARTWORK} artwork objects, not {}", self.artwork.len()));
+        }
         let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
         if self.format != "pcbcraft-footprint/1"
             || !valid_id(&self.library)
@@ -276,10 +287,8 @@ impl FootprintDefinition {
             || !text(&self.source.reference, 2048)
             || !text(&self.source.locator, 1024)
             || (!draft && self.pads.is_empty())
-            || self.pads.len() > 128
             || numbers.len() != self.pads.len()
             || self.pads.iter().any(|p| crate::schematic::PinNumber::new(&p.number).is_none())
-            || self.artwork.len() > 128
             || self.artwork.iter().any(|a| a.graphic.fill != crate::library_graphics::Fill::None || a.graphic.validate(MAX_OFFSET_NM).is_err())
             || self.graphics.len() > 64
             || self.silkscreen.len() > 64

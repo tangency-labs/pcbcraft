@@ -40,7 +40,7 @@
     "mapping": {
       "type": "object",
       "minProperties": 1,
-      "maxProperties": 128,
+      "maxProperties": 1024,
       "propertyNames": {
         "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id"
       },
@@ -52,7 +52,7 @@
           {
             "type": "array",
             "minItems": 1,
-            "maxItems": 128,
+            "maxItems": 1024,
             "uniqueItems": true,
             "items": {
               "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
@@ -141,7 +141,7 @@
     "unconnected_pads": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 128,
+      "maxItems": 1024,
       "uniqueItems": true,
       "items": {
         "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"

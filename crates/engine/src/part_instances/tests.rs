@@ -8,6 +8,7 @@ use crate::{
 };
 use serde_json::json;
 
+mod capacity;
 mod retained;
 
 /// Inventory mirrors native Save's complete pinned closure and remains authoritative offline.

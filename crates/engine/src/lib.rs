@@ -235,7 +235,7 @@ impl ParamKind {
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::PartMetadata => schematic::fields::metadata_schema(),
             Self::UnconnectedPads => {
-                json!({"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+                json!({"type":"array","maxItems":board::definition::MAX_PADS,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
             }
             Self::OptionalNativeId => json!({"type":["string","null"],"minLength":1,"maxLength":64}),
             Self::NativeReference => {
@@ -352,7 +352,7 @@ impl ParamKind {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::BASIC_COMPONENT_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
-                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
+                json!({"type":"object","minProperties":1,"maxProperties":library::MAX_TERMINALS,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":board::MAX_COMMAND_PADS_PER_TERMINAL,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -450,7 +450,7 @@ impl ParamKind {
                 .ok_or("must contain a valid text appearance"),
             Self::UnconnectedPads
                 if serde_json::from_value::<Vec<String>>(value.clone()).is_ok_and(|pads| {
-                    pads.len() <= 128
+                    pads.len() <= board::definition::MAX_PADS
                         && pads.iter().all(|pad| schematic::PinNumber::new(pad).is_some())
                         && pads.iter().collect::<std::collections::BTreeSet<_>>().len() == pads.len()
                 }) =>
@@ -690,6 +690,13 @@ impl ParamKind {
                 if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::BASIC_COMPONENT_IDS.contains(&id)) =>
             {
                 Ok(())
+            }
+            Self::FootprintMapping
+                if value.as_object().is_some_and(|mapping| {
+                    mapping.values().any(|pads| pads.as_array().is_some_and(|pads| pads.len() > board::MAX_COMMAND_PADS_PER_TERMINAL))
+                }) =>
+            {
+                Err("must map each terminal to at most 128 pads")
             }
             Self::FootprintMapping if board::parse_mapping(value).is_some() => Ok(()),
             Self::BoardRotation if value.as_u64().is_some_and(|degrees| degrees < 360) => Ok(()),
