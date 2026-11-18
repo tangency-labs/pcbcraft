@@ -59,6 +59,13 @@ impl Edit {
             form::field(ui, "Materials", |ui| {
                 ui.label(self.candidate.materials.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", "));
             });
+            form::field(ui, "Layer groups", |ui| {
+                if self.candidate.groups.is_empty() {
+                    ui.label("None");
+                } else {
+                    ui.label(self.candidate.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>().join(", "));
+                }
+            });
             for (label, length) in ["Text height", "Stroke width", "Pad clearance"].into_iter().zip(&self.silkscreen) {
                 form::field(ui, label, |ui| {
                     ui.label(&length.text);
@@ -91,6 +98,17 @@ impl PcbApp {
             Ok(profile_io::Outcome::Imported(profile)) => {
                 match edit.candidate.value(edit.unit).and_then(|setup| setup.with_profile(&profile).map_err(|e| e.to_string())) {
                     Ok(setup) => {
+                        let group_notice = if profile.setup.stackup().layer_groups.is_empty() {
+                            if edit.candidate.groups == setup.stackup().layer_groups {
+                                " Existing layer groups are kept."
+                            } else {
+                                " Existing layer groups are kept; memberships of removed copper layers were dropped."
+                            }
+                        } else if !edit.candidate.groups.is_empty() && edit.candidate.groups != setup.stackup().layer_groups {
+                            " This draft replaces the previous layer groups with the profile's groups."
+                        } else {
+                            " The profile's layer groups are staged below Current settings."
+                        };
                         edit.candidate = Candidate::new(setup, edit.unit);
                         edit.silkscreen =
                             [profile.silkscreen.text_height_nm, profile.silkscreen.stroke_width_nm, profile.silkscreen.pad_clearance_nm]
@@ -99,7 +117,7 @@ impl PcbApp {
                         edit.locked.clear();
                         edit.material_edit = None;
                         edit.error = None;
-                        edit.profile_notice = Some(format!("Imported {}.", profile.name));
+                        edit.profile_notice = Some(format!("Imported {}.{group_notice}", profile.name));
                     }
                     Err(error) => edit.error = Some(error),
                 }

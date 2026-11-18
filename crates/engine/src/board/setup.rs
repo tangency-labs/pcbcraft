@@ -807,7 +807,7 @@ impl Session {
     /// Shared edit preparation checks cross-project invariants before any publication.
     pub(super) fn board_setup_candidate(&self, params: &Value) -> Result<Option<crate::Project>, CommandError> {
         let project = self.open_project()?;
-        let setup = groups::candidate(project, &params["setup"])?;
+        let (setup, _) = groups::candidate(project, &params["setup"])?;
         let before = project.board.setup.as_ref().ok_or_else(|| CommandError::Unavailable("initialize board setup first".to_owned()))?;
         if before.stackup.id != setup.stackup.id {
             return Err(CommandError::InvalidParams("editing board setup must retain its stackup profile ID".to_owned()));

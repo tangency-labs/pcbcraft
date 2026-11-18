@@ -104,6 +104,8 @@ impl BoardSetup {
     /// Existing material pins cannot be rewritten; ambiguity/name collisions fail through ordinary
     /// setup validation. Copper-count changes use the ordinary authored-stratum/removal checks.
     /// The profile's declared finished board thickness, tolerance and minimum replace the board's.
+    /// Profiles without authored groups retain target groups, pruned to the surviving copper;
+    /// profiles with authored groups replace them and rebase their member IDs.
     pub fn with_profile(&self, profile: &SetupProfile) -> Result<Self, CommandError> {
         profile.validate().map_err(CommandError::InvalidParams)?;
         let incoming = &profile.setup;
@@ -159,9 +161,13 @@ impl BoardSetup {
             }
         }
         let mut stackup = Stackup { id: target.stackup.id, strata, ..incoming.stackup.clone() };
-        for group in &mut stackup.layer_groups {
-            for layer in &mut group.layers {
-                *layer = ids.get(layer).copied().unwrap_or(*layer);
+        if stackup.layer_groups.is_empty() {
+            stackup.layer_groups = target.stackup.layer_groups;
+        } else {
+            for group in &mut stackup.layer_groups {
+                for layer in &mut group.layers {
+                    *layer = ids.get(layer).copied().unwrap_or(*layer);
+                }
             }
         }
         Self::try_from(SetupRecords { materials, layers, stackup }).map_err(CommandError::InvalidParams)

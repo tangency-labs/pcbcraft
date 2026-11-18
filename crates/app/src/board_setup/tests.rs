@@ -82,6 +82,16 @@ fn layer_group_controls_apply_and_undo_one_complete_candidate() {
     assert_eq!(top.role, Some(CopperRole::Plane));
     assert_eq!(setup.stackup().layer_groups[0].name, "Return layers");
     assert_eq!(setup.stackup().layer_groups[0].layers, vec![top.layer]);
+    let grouped = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Board setup");
+    page(&mut h, "Physical stackup");
+    h.get_by_label("Remove group").scroll_to_me();
+    h.run();
+    click(&mut h, "Remove group");
+    click(&mut h, "Apply board setup");
+    assert!(h.state().session.project().unwrap().board_setup().unwrap().stackup().layer_groups.is_empty());
+    click(&mut h, "Undo");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), grouped);
     click(&mut h, "Undo");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

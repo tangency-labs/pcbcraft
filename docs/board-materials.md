@@ -258,8 +258,9 @@ the Board setup copper-count control refuse to drop a copper layer carrying thes
 facts; the complete setup command instead accepts an explicit replacement, subject
 to ordinary topology and occupancy validation. The two-layer starting
 stackups replace copper thickness, so they clear its tolerance, basis and base copper
-and keep roles and the board thickness. The Board setup form keeps these fields
-when it applies other edits but does not edit them yet.
+and keep roles and the board thickness. The Board setup form edits copper roles
+and preserves base copper, copper thickness qualifiers and finished board thickness
+when applying other edits.
 
 ## Persistence and limits
 
@@ -295,9 +296,13 @@ User groups live in `stackup.layer_groups`: stable group UUID, name and copper-l
 UUIDs. Up to 64 groups with 64 distinct members each are supported. Names contain
 1–80 characters without padding/control characters and are unique ignoring case.
 Membership is normalized to physical order, independent of layer renames. Empty
-memberships are valid. Removing a copper layer lists its groups in setup Preview
-and drops the deleted member on Apply; Undo restores both stack and groups.
-Invented or otherwise foreign layer IDs are refused rather than silently dropped.
+memberships are valid. A setup edit that omits `stackup.layer_groups` keeps
+existing groups. An explicit empty array clears them. Removing copper drops
+that layer from the groups on Apply; Undo restores both stack and groups.
+Preview lists changed or removed existing groups in `changes.affected_groups`
+and reports discarded members by proposed group UUID in
+`changes.pruned_group_memberships`, including for new groups. Foreign layer IDs
+are refused rather than silently dropped.
 
 The Physical stackup page stages the selected copper's role and named group
 memberships with every other setup field; `pcb.set_board_setup` remains the only
@@ -334,8 +339,11 @@ These setup snapshots carry no required electrical/fabrication constraints or pr
 paths and do not establish a live link to their source file. Every export creates a
 new snapshot identity. Broader fabrication/process profiles remain planned.
 
-Import stages a preview. Layer IDs are rebased to the target's surviving physical
-stack and unambiguous technical roles. Extra target technical layers survive,
+Import stages a draft for review. Profiles without named groups retain target
+groups and drop only members whose copper is removed. Profiles with named groups
+replace the target groups in the draft. The Profiles page shows the staged groups
+and notes any replacement or pruning before Apply. Layer IDs are rebased to the
+target's surviving physical stack and unambiguous technical roles. Extra target technical layers survive,
 preserving their drawing ownership; copper-count changes use the ordinary
 authored-stratum/removal checks. Existing immutable material pins cannot be replaced
 by contradictory data.

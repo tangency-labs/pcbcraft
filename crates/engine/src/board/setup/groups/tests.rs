@@ -128,6 +128,81 @@ fn removed_members_are_reported_and_pruned_by_the_shared_candidate() {
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
 }
 
+/// Legacy clients can omit the field without losing data, but a clear requires its own Preview.
+#[test]
+fn omission_preserves_groups_in_legacy_and_reviewed_apply() {
+    for reviewed in [false, true] {
+        let mut s = session(4);
+        let ids = copper(&s);
+        let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[ids[0],ids[1]]});
+        let mut setup = candidate(&s);
+        setup["stackup"]["layer_groups"] = json!([group]);
+        apply(&mut s, setup);
+        let mut legacy = candidate(&s);
+        legacy["stackup"].as_object_mut().unwrap().remove("layer_groups");
+        legacy["stackup"]["strata"][0]["role"] = json!("plane");
+        let mut params = json!({"setup":legacy,"expected_revision":s.revision()});
+        if reviewed {
+            let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
+            assert_eq!(report["changes"]["affected_groups"], json!([]));
+            params["plan_token"] = report["plan_token"].clone();
+            let mut clear = params.clone();
+            clear["setup"]["stackup"]["layer_groups"] = json!([]);
+            assert!(s.apply(SET_BOARD_SETUP, &clear).unwrap_err().to_string().contains("does not match the candidate"));
+        }
+        s.apply(SET_BOARD_SETUP, &params).unwrap();
+        assert_eq!(candidate(&s)["stackup"]["layer_groups"], json!([group]));
+        let mut clear = candidate(&s);
+        clear["stackup"]["layer_groups"] = json!([]);
+        let mut params = json!({"setup":clear,"expected_revision":s.revision()});
+        if reviewed {
+            let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
+            assert_eq!(report["changes"]["affected_groups"], json!([group]));
+            params["plan_token"] = report["plan_token"].clone();
+        }
+        s.apply(SET_BOARD_SETUP, &params).unwrap();
+        assert!(candidate(&s)["stackup"].get("layer_groups").is_none());
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(candidate(&s)["stackup"]["layer_groups"], json!([group]));
+    }
+}
+
+/// Preview lists discarded references even for a new group or an unchanged effective membership.
+#[test]
+fn preview_lists_pruned_members_for_new_and_effectively_unchanged_groups() {
+    let mut s = session(4);
+    let ids = copper(&s);
+    let existing = crate::fresh_id().unwrap();
+    let new = crate::fresh_id().unwrap();
+    let mut setup = candidate(&s);
+    setup["stackup"]["layer_groups"] = json!([{"id":existing,"name":"Existing","layers":[ids[0]]}]);
+    apply(&mut s, setup);
+    let before = s.snapshot().unwrap();
+    let mut smaller = json!(before.board_setup().unwrap().with_copper_count(2).unwrap());
+    smaller["stackup"]["layer_groups"] = json!([
+        {"id":existing,"name":"Existing","layers":[ids[0],ids[1]]},
+        {"id":new,"name":"New","layers":[ids[2],ids[3]]}
+    ]);
+    let mut params = json!({"setup":smaller,"expected_revision":s.revision()});
+    let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
+    let mut expected = [(existing, ids[1]), (new, ids[2])];
+    expected.sort_unstable();
+    assert_eq!(report["changes"]["affected_groups"], json!([]));
+    assert_eq!(
+        report["changes"]["pruned_group_memberships"],
+        Value::Array(expected.into_iter().map(|(group, layer)| json!({"group":group,"layers":[layer]})).collect())
+    );
+    assert_eq!(report["can_apply"], true);
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    params["plan_token"] = report["plan_token"].clone();
+    s.apply(SET_BOARD_SETUP, &params).unwrap();
+    let groups = &s.project().unwrap().board_setup().unwrap().stackup().layer_groups;
+    assert_eq!(groups.iter().find(|g| g.id == existing).unwrap().layers, vec![ids[0]]);
+    assert_eq!(groups.iter().find(|g| g.id == new).unwrap().layers, vec![ids[3]]);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+}
+
 /// Pruning must not repair a malformed submitted membership in Preview or either Apply path.
 #[test]
 fn submitted_group_members_are_checked_before_pruning() {
@@ -291,6 +366,28 @@ fn profile_groups_rebase_members_and_require_the_group_header() {
     let error = query.execute(INSPECT_LAYER_GROUPS, &json!({"board":crate::fresh_id().unwrap()})).unwrap_err();
     assert!(matches!(error, CommandError::InvalidParams(_)));
     assert!(error.to_string().contains("unknown board ID"));
+}
+
+/// An older group-free profile keeps target group identity and prunes only removed copper.
+#[test]
+fn older_profile_preserves_target_groups_across_copper_reduction() {
+    use super::super::profile::SetupProfile;
+    let source = session(2);
+    let profile = SetupProfile::new("Older profile".into(), source.project().unwrap().board_setup().unwrap().clone(), Default::default()).unwrap();
+    let profile = SetupProfile::decode(&profile.encode().unwrap()).unwrap();
+    assert!(profile.setup.stackup().layer_groups.is_empty());
+    let mut target = session(4);
+    let ids = copper(&target);
+    let group = crate::fresh_id().unwrap();
+    let mut setup = candidate(&target);
+    setup["stackup"]["layer_groups"] = json!([{"id":group,"name":"Target","layers":[ids[0],ids[1],ids[3]]}]);
+    apply(&mut target, setup);
+    let before = target.snapshot().unwrap();
+    let imported = before.board_setup().unwrap().with_profile(&profile).unwrap();
+    assert_eq!(imported.stackup().layer_groups, vec![UserLayerGroup { id: group, name: "Target".into(), layers: vec![ids[0], ids[3]] }]);
+    apply(&mut target, json!(imported));
+    target.apply("edit.undo", &json!({})).unwrap();
+    assert!(Arc::ptr_eq(&before, &target.snapshot().unwrap()));
 }
 
 /// Groups preserve reports, stack fields, origins, rules, zones, assigned vias and profile adoptions;

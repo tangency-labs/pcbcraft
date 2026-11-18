@@ -117,26 +117,31 @@ pub(super) fn schema() -> Value {
     }}})
 }
 
-/// Before dropping deleted copper, reject submitted lists that could become valid only by pruning.
-fn prune_removed_members(layers: &mut Vec<Value>, removed: &BTreeSet<Uuid>) -> Result<(), crate::CommandError> {
+/// Removed former copper UUIDs from one proposed group, even if the normalized group is unchanged.
+#[derive(Debug, Serialize)]
+pub struct PrunedGroupMembership {
+    pub group: Uuid,
+    pub layers: Vec<Uuid>,
+}
+
+/// Reject invalid submitted membership counts and duplicates before removing any former copper.
+fn prune_removed_members(layers: &mut Vec<Uuid>, removed: &BTreeSet<Uuid>) -> Result<Vec<Uuid>, crate::CommandError> {
     if layers.len() > MAX_COPPER {
         return Err(crate::CommandError::InvalidParams(format!("user layer groups support at most {MAX_COPPER} submitted members per group")));
     }
-    let mut submitted = BTreeSet::new();
-    for member in layers.iter() {
-        let id = Uuid::deserialize(member).map_err(|error| crate::CommandError::InvalidParams(error.to_string()))?;
-        if !submitted.insert(id) {
-            return Err(crate::CommandError::InvalidParams("user layer groups need distinct submitted layer IDs".into()));
-        }
+    let submitted: BTreeSet<_> = layers.iter().copied().collect();
+    if submitted.len() != layers.len() {
+        return Err(crate::CommandError::InvalidParams("user layer groups need distinct submitted layer IDs".into()));
     }
-    layers.retain(|id| !id.as_str().and_then(|s| Uuid::parse_str(s).ok()).is_some_and(|id| removed.contains(&id)));
-    Ok(())
+    layers.retain(|id| !removed.contains(id));
+    Ok(submitted.intersection(removed).copied().collect())
 }
 
-/// Preview and Apply validate submitted memberships before removing deleted former copper IDs.
-/// Invented references still fail the complete candidate validation.
-pub(super) fn candidate(project: &crate::Project, value: &Value) -> Result<BoardSetup, crate::CommandError> {
+/// Omitted groups inherit current memberships. Preview and Apply validate before pruning removed
+/// copper; the separate pruning list includes submitted memberships of new groups as well.
+pub(super) fn candidate(project: &crate::Project, value: &Value) -> Result<(BoardSetup, Vec<PrunedGroupMembership>), crate::CommandError> {
     let mut value = value.clone();
+    let mut pruned = Vec::new();
     if let Some(before) = project.board_setup() {
         let current: BTreeSet<_> = value["layers"]
             .as_array()
@@ -147,15 +152,29 @@ pub(super) fn candidate(project: &crate::Project, value: &Value) -> Result<Board
             .collect();
         let removed: BTreeSet<_> =
             before.layers.iter().filter(|l| l.purpose == LayerPurpose::Copper && !current.contains(&l.id)).map(|l| l.id).collect();
-        if !removed.is_empty()
-            && let Some(groups) = value.get_mut("stackup").and_then(|s| s.get_mut("layer_groups")).and_then(Value::as_array_mut)
-        {
-            for group in groups {
-                if let Some(layers) = group.get_mut("layers").and_then(Value::as_array_mut) {
-                    prune_removed_members(layers, &removed)?;
+        if let Some(stackup) = value.get_mut("stackup").and_then(Value::as_object_mut) {
+            if !before.stackup.layer_groups.is_empty() && !stackup.contains_key("layer_groups") {
+                stackup.insert("layer_groups".into(), json!(before.stackup.layer_groups));
+            }
+            if !removed.is_empty()
+                && let Some(raw) = stackup.get_mut("layer_groups")
+            {
+                if raw.as_array().is_some_and(|groups| groups.len() > MAX_GROUPS) {
+                    return Err(crate::CommandError::InvalidParams(format!("a stack supports at most {MAX_GROUPS} user layer groups")));
                 }
+                let mut groups: Vec<UserLayerGroup> =
+                    serde_json::from_value(std::mem::take(raw)).map_err(|error| crate::CommandError::InvalidParams(error.to_string()))?;
+                for group in &mut groups {
+                    let layers = prune_removed_members(&mut group.layers, &removed)?;
+                    if !layers.is_empty() {
+                        pruned.push(PrunedGroupMembership { group: group.id, layers });
+                    }
+                }
+                *raw = json!(groups);
+                pruned.sort_unstable_by_key(|entry| entry.group);
             }
         }
     }
-    serde_json::from_value(value).map_err(|e| crate::CommandError::InvalidParams(e.to_string()))
+    let setup = serde_json::from_value(value).map_err(|e| crate::CommandError::InvalidParams(e.to_string()))?;
+    Ok((setup, pruned))
 }
