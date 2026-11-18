@@ -423,7 +423,8 @@ fn canonical_creation_priority_explicit_selection_and_four_anchor_cap() {
     assert_eq!(&explicit.primary, selected);
     assert_eq!(explicit.fallbacks.first().unwrap().kind, AnchorKind::Label);
     let mut reserved = (1..=MAX_RECORDS as u128).map(Uuid::from_u128).collect();
-    assert!(reconcile::allocate(&mut reserved).is_err());
+    let error = reconcile::allocate(MAX_RECORDS, &mut reserved).unwrap_err();
+    assert!(matches!(error, crate::CommandError::Unavailable(ref reason) if reason == "Net identity registry is full."), "{error:?}");
     assert_eq!(reserved.len(), MAX_RECORDS);
 }
 

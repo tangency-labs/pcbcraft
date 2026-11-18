@@ -126,8 +126,8 @@ fn promoted(original: &Project, graph: &Graph, anchor: &super::Anchor, index: us
         project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
     }
     let mut registry = (*project.net_registry).clone();
-    let mut ids = registry.records.iter().map(|r| r.id).chain(registry.pairs.iter().map(|pair| pair.id)).collect();
-    let record = graph.networks[index].record(allocate(&mut ids)?, Some(anchor)).map_err(CommandError::InvalidParams)?;
+    let mut ids = registry.reserved_ids();
+    let record = graph.networks[index].record(allocate(registry.records.len(), &mut ids)?, Some(anchor)).map_err(CommandError::InvalidParams)?;
     registry.records.push(record);
     registry.records.sort_by_key(|r| r.id);
     project.net_registry = Arc::new(registry);

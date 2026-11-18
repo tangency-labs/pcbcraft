@@ -51,31 +51,42 @@ pub struct Pair {
     /// Display name, not an identity or suffix-derived membership rule.
     pub name: String,
     /// Omission means active; review context survives save/reopen without physical qualification.
-    #[serde(default, skip_serializing_if = "PairState::is_active")]
+    #[serde(default, skip_serializing_if = "PairState::is_active", deserialize_with = "stored_state")]
     pub state: PairState,
 }
 
-/// Native pair records are objects, not positional aliases for the named fields.
+/// Native records and review states are keyed objects, never positional aliases.
+/// Preserve the key stream for Serde's missing, duplicate and unknown field checks.
+fn stored_object<'de, D: de::Deserializer<'de>, T: Deserialize<'de>>(de: D, expected: &'static str) -> Result<T, D::Error> {
+    struct Object<T>(&'static str, std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> de::Visitor<'de> for Object<T> {
+        type Value = T;
+
+        /// Describe the only allowed shape.
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(self.0)
+        }
+
+        /// Decode the closed typed value directly from its map.
+        fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    de.deserialize_map(Object(expected, std::marker::PhantomData))
+}
+
+/// A present state must use the keyed native representation; omission defaults separately.
+fn stored_state<'de, D: de::Deserializer<'de>>(de: D) -> Result<PairState, D::Error> {
+    stored_object(de, "a differential pair state object")
+}
+
+/// Decode list members using the keyed native record shape.
 struct StoredPair(Pair);
 
 impl<'de> Deserialize<'de> for StoredPair {
-    /// Preserve the key stream for Serde's missing, duplicate and unknown field checks.
+    /// Refuse list items encoded as positional data.
     fn deserialize<D: de::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        struct RecordObject;
-        impl<'de> de::Visitor<'de> for RecordObject {
-            type Value = StoredPair;
-
-            /// Describe the only allowed record shape.
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a differential pair object")
-            }
-
-            /// Decode the closed typed record directly from its map.
-            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-                Pair::deserialize(de::value::MapAccessDeserializer::new(map)).map(StoredPair)
-            }
-        }
-        de.deserialize_map(RecordObject)
+        stored_object(de, "a differential pair object").map(Self)
     }
 }
 
@@ -115,6 +126,11 @@ fn valid_text(text: &str) -> bool {
 }
 
 impl Registry {
+    /// Reserve both net and pair identities against UUID collisions, independently of capacity.
+    pub(super) fn reserved_ids(&self) -> BTreeSet<Uuid> {
+        self.records.iter().map(|record| record.id).chain(self.pairs.iter().map(|pair| pair.id)).collect()
+    }
+
     /// Sparse relationship intent selects the pair-capable native envelope only when present.
     pub(crate) fn has_pairs(&self) -> bool {
         !self.pairs.is_empty()

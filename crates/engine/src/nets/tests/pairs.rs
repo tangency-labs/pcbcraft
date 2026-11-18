@@ -132,6 +132,8 @@ fn pair_codec_rejects_malformed_records_with_specific_reasons() {
             ("name", json!("界".repeat(MAX_PAIR_NAME_CHARS + 1)), "Pair names"),
             ("state", Value::Null, "invalid type"),
             ("state", json!("active"), "invalid type"),
+            ("state", json!(["active"]), "a differential pair state object"),
+            ("state", json!(["needs_review", "Check endpoints"]), "a differential pair state object"),
             ("state", json!({"kind":"future"}), "unknown variant"),
             ("state", json!({"kind":"active","extra":true}), "unknown field"),
             ("state", json!({"kind":"needs_review"}), "missing field"),
@@ -311,6 +313,155 @@ fn pair_resource_edges_are_bounded_and_history_shares_records() {
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     Arc::make_mut(&mut Arc::make_mut(&mut project.net_registry).pairs).push(Arc::new(pair));
     assert_eq!(project.net_registry.validate_pairs().unwrap_err(), "Differential pair count exceeds its limit.");
+}
+
+/// Add historical records without taking the two live networks out of the fixture.
+fn fill_with_retired_nets(project: &mut crate::Project, count: usize) -> crate::board::update::SourceCapture {
+    let snapshot = crate::board::update::capture_source(project).unwrap();
+    let registry = Arc::make_mut(&mut project.net_registry);
+    let template = registry.records[0].clone();
+    let occupied = registry.reserved_ids();
+    let last_number = registry.records.iter().filter_map(|record| record.generated_number).max().unwrap();
+    let missing = count - registry.records.len();
+    registry.records.extend((1..).map(Uuid::from_u128).filter(|id| !occupied.contains(id)).take(missing).enumerate().map(|(index, id)| Record {
+        id,
+        generated_number: Some(last_number + index as u32 + 1),
+        state: State::Retired { snapshot: snapshot.clone(), reason: Retirement::Removed, successors: vec![] },
+        ..template.clone()
+    }));
+    registry.records.sort_by_key(|record| record.id);
+    snapshot
+}
+
+/// Pair IDs reserve UUIDs, not net slots: the last legal named net fits, one more does not.
+#[test]
+fn pair_ids_do_not_consume_net_record_capacity() {
+    let (mut session, pair, _) = paired(false);
+    let mut project = session.project().unwrap().clone();
+    fill_with_retired_nets(&mut project, MAX_RECORDS - 1);
+    assert_eq!(project.net_registry.reserved_ids().len(), MAX_RECORDS);
+    project.net_registry.validate(&project).unwrap();
+    session.open_snapshot(Arc::new(project));
+    apply(&mut session, crate::net_labels::ADD, json!({"name":"Last slot","style":"local","x_nm":0,"y_nm":25_400_000}));
+    let full = session.snapshot().unwrap();
+    assert_eq!(full.net_registry.records.len(), MAX_RECORDS);
+    assert_eq!(*full.net_registry.pairs[0], pair);
+    let added = id_for(&session, &json!({"net_label":full.net_labels().last().unwrap().object_id()}));
+    assert_ne!(added, pair.id);
+    let revision = session.revision();
+    let error = session
+        .apply(
+            crate::net_labels::ADD,
+            &json!({
+                "name":"No slot","style":"local","x_nm":0,"y_nm":50_800_000,"expected_revision":revision
+            }),
+        )
+        .unwrap_err();
+    assert!(matches!(error, crate::CommandError::Unavailable(ref reason) if reason == "Net identity registry is full."), "{error:?}");
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&full, &session.snapshot().unwrap()));
+}
+
+/// Preserve the exact stack contents as well as the current project and revision on refusal.
+fn refuse_candidate_atomically(session: &mut Session, candidate: crate::Project, expected: &str) {
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let (undo, redo) = (session.undo.clone(), session.redo.clone());
+    assert!(!undo.is_empty() && !redo.is_empty());
+    let error = session.change(candidate).unwrap_err();
+    assert!(matches!(error, crate::CommandError::InvalidParams(ref reason) if reason == expected), "{error:?}");
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    for (actual, saved) in [(&session.undo, &undo), (&session.redo, &redo)] {
+        assert_eq!(actual.len(), saved.len());
+        for (a, b) in actual.iter().zip(saved) {
+            assert!(match (a, b) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            });
+        }
+    }
+}
+
+/// Stage an undone rename so a later atomic refusal has both history stacks to preserve.
+fn populate_history(session: &mut Session) {
+    apply(session, "project.rename", json!({"name":"Keep"}));
+    apply(session, "project.rename", json!({"name":"Redo"}));
+    apply(session, "edit.undo", json!({}));
+}
+
+/// Do not silently discard an invalid pair mutation while publishing a topology change.
+#[test]
+fn pair_edit_with_topology_change_refuses_the_whole_candidate() {
+    let (mut session, pair, _) = paired(false);
+    populate_history(&mut session);
+    let mut candidate = session.project().unwrap().clone();
+    Arc::make_mut(&mut candidate.sheet_mut().net_labels).remove(0);
+    candidate.sheet_mut().connectivity = Arc::default();
+    let pairs = Arc::make_mut(&mut Arc::make_mut(&mut candidate.net_registry).pairs);
+    Arc::make_mut(&mut pairs[0]).negative = pair.positive;
+    refuse_candidate_atomically(&mut session, candidate, "Differential pair edits cannot accompany net topology changes.");
+}
+
+/// Legal records and pair text can together exceed the shared byte cap. Exercise both native
+/// decoding and unchanged-topology candidate refusal, not just a list or text limit.
+#[test]
+fn pair_bytes_cross_the_registry_budget_without_publishing_edits() {
+    let (mut session, _, _) = paired(false);
+    let mut project = session.project().unwrap().clone();
+    let snapshot = fill_with_retired_nets(&mut project, MAX_RECORDS);
+    let registry = Arc::make_mut(&mut project.net_registry);
+    registry.pairs = Arc::default();
+    let retired_ids: Vec<_> = registry.records.iter().filter(|record| matches!(record.state, State::Retired { .. })).map(|r| r.id).collect();
+    let mut bytes = serde_json::to_vec(registry).unwrap().len();
+    let cap_before_pairs = MAX_REGISTRY_BYTES - 4096;
+    for record in registry.records.iter_mut().filter(|record| matches!(record.state, State::Retired { .. })) {
+        for object in 1..=8 {
+            let source = Lineage { snapshot: snapshot.clone(), net: None, anchor: Anchor { object, ..record.primary.clone() } };
+            let extra = serde_json::to_vec(&source).unwrap().len() + usize::from(!record.lineage.is_empty());
+            if bytes + extra > cap_before_pairs {
+                break;
+            }
+            bytes += extra;
+            record.lineage.push(source);
+        }
+    }
+    assert_eq!(serde_json::to_vec(registry).unwrap().len(), bytes);
+    assert!((cap_before_pairs - 1024..=cap_before_pairs).contains(&bytes));
+    project.net_registry.validate(&project).unwrap();
+    session.open_snapshot(Arc::new(project));
+    populate_history(&mut session);
+    let before = session.snapshot().unwrap();
+    let mut candidate = (*before).clone();
+    let registry = Arc::make_mut(&mut candidate.net_registry);
+    registry.pairs = Arc::new(
+        retired_ids
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .take(8)
+            .enumerate()
+            .map(|(index, members)| {
+                Arc::new(Pair {
+                    id: Uuid::from_u128(10_000 + index as u128),
+                    positive: members[0],
+                    negative: members[1],
+                    name: "界".repeat(MAX_PAIR_NAME_CHARS),
+                    state: PairState::NeedsReview { reason: "界".repeat(MAX_PAIR_NAME_CHARS) },
+                })
+            })
+            .collect(),
+    );
+    registry.validate_pairs().unwrap();
+    assert!(serde_json::to_vec(registry).unwrap().len() > MAX_REGISTRY_BYTES);
+    let docs = encode_documents(before).unwrap();
+    let mut stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+    stored["format"] = json!("pcbcraft-project/45");
+    stored_registry(&mut stored)["pairs"] = json!(registry.pairs);
+    let error = decode_documents(&replaced(&docs, ENTRY_POINT, &stored)).unwrap_err();
+    assert!(error.contains("Net registry exceeds its byte limit."), "{error}");
+    refuse_candidate_atomically(&mut session, candidate, "Net registry exceeds its byte limit.");
 }
 
 /// Pair envelopes can retain fully unnumbered compatibility registries, but not mixed numbering.
