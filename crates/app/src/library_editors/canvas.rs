@@ -725,8 +725,10 @@ impl Document {
                 }
                 // Command-only C/V arrive as normalized clipboard events on desktop; a raw
                 // key press only appears when another modifier bypasses that translation.
+                // egui-winit emits Paste("") when the OS clipboard read is empty and
+                // PasteImage when it holds only an image — both mean "paste intent" here.
                 let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
-                let pasted = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Paste(_))));
+                let pasted = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))));
                 if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
                     self.copy(ui.ctx());
                 }

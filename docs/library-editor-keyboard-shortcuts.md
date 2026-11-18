@@ -14,10 +14,12 @@ E opened the selected object's properties, M started a move, the pending-fields
 refusal message appeared, Delete removed the selected object, Ctrl+Z restored
 it, Ctrl+S opened the publish dialog, Ctrl+Q opened the unsaved-items prompt,
 and Ctrl+, opened Preferences in all three workspaces. The raw-key clipboard
-path (Ctrl+Shift+C/V) was exercised live; the normalized `Event::Copy` /
-`Event::Paste` path that plain Ctrl+C/V produce is covered by
-`normalized_clipboard_events_drive_library_copy_and_paste`, which injects the
-same events `egui-winit` emits for a physical chord.
+path (Ctrl+Shift+C/V) was exercised live; plain Ctrl+C/V are covered through
+the real `egui_winit` translation boundary —
+`native_paste_translation_reaches_the_internal_library_paste` feeds the events
+the vendored translator emits for empty and image-only clipboards into the
+harness, and `clipboard_translation_tests` inside `vendor/egui-winit` checks
+the emission itself.
 macOS and Windows have not been tested; for command
 chords, macOS uses **⌘** where **Ctrl** is shown. The browser build differs in
 three rows — **Ctrl+S** uses the save/export path, and **Ctrl+Q** and
@@ -79,7 +81,7 @@ area, not covered by a panel or floating layer.
 | **Ctrl+A** | Selects all objects in the definition. |
 | **Ctrl+D** | Duplicates the selection into a cancellable Paste preview. Refuses while property fields are pending. |
 | **Ctrl+C** | Copies the selection to the internal library clipboard via the normalized Copy event; the raw key is also accepted when another modifier bypasses native translation. |
-| **Ctrl+V** | Arms the cancellable paste preview via the normalized Paste event (same raw-key fallback); refuses while property fields are pending. |
+| **Ctrl+V** | Arms the cancellable paste preview via the normalized Paste or PasteImage event (same raw-key fallback); the chord completes even when the OS clipboard holds nothing usable; refuses while property fields are pending. |
 
 Tools with ribbon buttons but **no** key binding: Rectangle, Circle, Arc,
 Polyline, Mirror X and Array. Polyline is armed from the ribbon and committed
@@ -89,10 +91,15 @@ with Enter.
 
 On desktop, `egui-winit` translates command-only **C**/**V**/**X** presses into
 `Event::Copy`, `Event::Paste` and `Event::Cut` and does not emit the
-corresponding `Event::Key`. The canvas consumes the normalized **Copy** and
-**Paste** events, so plain **Ctrl+C**/**Ctrl+V** reach the internal clipboard
-operations; **Ctrl+X** has no library operation and its `Event::Cut` remains
-unhandled.
+corresponding `Event::Key`. A plain **Ctrl+V** press is a completed clipboard
+read even when the OS clipboard holds nothing usable: the vendored
+`egui-winit` (`vendor/egui-winit/PATCH.md`) emits `Event::Paste("")` when the
+read comes back empty or unsupported — a no-op for text fields — and keeps
+upstream's `Event::PasteImage` for image-only clipboards. The canvas consumes
+`Paste` (text or empty) and `PasteImage` as paste intent, so plain
+**Ctrl+C**/**Ctrl+V** reach the internal clipboard operations whatever the OS
+clipboard contains; **Ctrl+X** has no library operation and its `Event::Cut`
+remains unhandled.
 
 Adding a second modifier escapes the translation: **Ctrl+Shift+C** and
 **Ctrl+Shift+V** emit their `Key` events, and the canvas accepts those too —
@@ -127,7 +134,7 @@ so canvas keys do not fire while a field is focused.
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
 | Ctrl+A | `canvas` → `select_many(all)` | — (the Ctrl+A presses in `library_editors/tests.rs` are field-scoped select-all, not canvas) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | — |
-| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Paste`, or the raw key when another modifier bypasses translation) | `normalized_clipboard_events_drive_library_copy_and_paste` |
+| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Paste`/`Event::PasteImage`, or the raw key when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates + pending refusal), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |
 | Workspace boundary | `PcbApp::shortcuts` not invoked; `library_frame` key block | `home_has_no_editor_shortcuts_and_selected_copy_enters_the_workspace` |
 | Parts Library | `library_workspace.rs` — `COMMAND_COMMA` only | `library_workspaces_share_the_picker_with_schematic_and_pcb` |
 

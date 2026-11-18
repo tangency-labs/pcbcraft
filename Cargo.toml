@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["apps/*", "crates/*"]
-exclude = ["vendor/eframe", "vendor/solidcore-ops"]
+exclude = ["vendor/eframe", "vendor/egui-winit", "vendor/solidcore-ops"]
 
 [workspace.package]
 version = "0.1.0"
@@ -67,6 +67,9 @@ debug = false
 # Local native-root lifetime fix; source and patch boundary are recorded in vendor/eframe/PATCH.md.
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }
+
+# Empty-clipboard paste-chord completion + test seams; see vendor/egui-winit/PATCH.md.
+egui-winit = { path = "vendor/egui-winit" }
 
 # Shared viewport callbacks require SolidCraft's published renderer fixes.
 egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
