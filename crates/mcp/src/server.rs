@@ -1,12 +1,15 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods.
 
-use std::io::{BufRead, Write};
+use std::{
+    collections::BTreeMap,
+    io::{BufRead, Write},
+};
 
 use craft_control::{Frame, read_frame, write_frame};
 
 use crate::backend::Backend;
 use crate::tools::{call_tool, check_arguments, tool_definitions};
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 
 /// The newest protocol revision we speak; offered when the client asks for one we don't know.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -44,6 +47,29 @@ fn response(id: Value, result: Value) -> Value {
 }
 fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
+}
+
+/// Only the remap item needs its original JSON; ordinary transport arguments keep their existing codecs.
+fn has_raw_remap_item(message: &Value) -> bool {
+    let params = &message["params"];
+    message.get("id").is_some()
+        && message["method"] == "tools/call"
+        && params["name"] == "execute"
+        && params["arguments"]["command"] == pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
+        && params["arguments"]["params"]["item"].is_object()
+}
+
+/// Borrow the selected member's exact bytes, including any repeated keys inside it.
+fn raw_member<'a>(text: &'a str, key: &str) -> Result<&'a str, String> {
+    let object: BTreeMap<String, &RawValue> = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    object.get(key).map(|value| value.get()).ok_or_else(|| format!("Missing raw `{key}` member."))
+}
+
+fn validate_raw_remap_item(mut text: &str) -> Result<(), String> {
+    for key in ["params", "arguments", "params", "item"] {
+        text = raw_member(text, key)?;
+    }
+    pcbcraft_engine::authoring::Item::decode(text.as_bytes()).map(|_| ())
 }
 
 impl Server {
@@ -90,13 +116,30 @@ impl Server {
             Ok(Value::Array(batch)) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
             Ok(Value::Array(batch)) if batch.len() > MAX_BATCH => Some(error(Value::Null, INVALID_REQUEST, "batch too large")),
             Ok(Value::Array(batch)) => {
-                let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
+                let replies: Vec<Value> = if batch.iter().any(has_raw_remap_item) {
+                    match serde_json::from_str::<Vec<&RawValue>>(line) {
+                        Ok(raw) => batch.into_iter().zip(raw).filter_map(|(msg, raw)| self.handle_raw(msg, raw.get())).collect(),
+                        Err(e) => return Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}")).to_string()),
+                    }
+                } else {
+                    batch.into_iter().filter_map(|msg| self.handle(msg)).collect()
+                };
                 (!replies.is_empty()).then_some(Value::Array(replies))
             }
-            Ok(msg) => self.handle(msg),
+            Ok(msg) => self.handle_raw(msg, line),
             Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}"))),
         };
         reply.map(|r| r.to_string())
+    }
+
+    /// Validate the native item from the wire before its normalized `Value` can reach the backend.
+    fn handle_raw(&mut self, msg: Value, raw: &str) -> Option<Value> {
+        if has_raw_remap_item(&msg)
+            && let Err(message) = validate_raw_remap_item(raw)
+        {
+            return Some(error(msg["id"].clone(), INVALID_PARAMS, message));
+        }
+        self.handle(msg)
     }
 
     pub fn handle(&mut self, msg: Value) -> Option<Value> {

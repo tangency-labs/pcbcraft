@@ -31,6 +31,29 @@ fn pin_remap_mcp_preserves_the_preview_without_general_inspection() {
     assert_eq!(session.inspect(), before);
 }
 
+/// Raw remap items must preserve duplicate-key validation for single requests and batches.
+#[test]
+fn pin_remap_wire_refuses_duplicate_primitive_ids() {
+    let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
+    let item = serde_json::to_value(item).unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{
+        "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"params":{"item":item,"pins":[{"unit":"main","object":"1","number":"7"}]}
+    }}})
+    .to_string();
+    let duplicate = request.replacen("\"objects\":{", &format!("\"objects\":{{\"1\":{},", item["objects"]["1"]), 1);
+    let mut server = Server::new(Box::new(Headless::default()));
+    let reply = |server: &mut Server, line: &str| serde_json::from_str::<Value>(&server.handle_line(line).unwrap()).unwrap();
+    let valid = reply(&mut server, &request);
+    assert!(valid["result"]["content"][0]["text"].is_string(), "{valid}");
+    assert_ne!(valid["result"]["isError"], true, "{valid}");
+    let refused = reply(&mut server, &duplicate);
+    assert_eq!(refused["id"], 1);
+    assert_eq!(refused["error"]["code"], -32602);
+    assert!(refused["error"]["message"].as_str().unwrap().to_ascii_lowercase().contains("duplicate"));
+    let batch = reply(&mut server, &format!(r#"[{duplicate},{{"jsonrpc":"2.0","id":2,"method":"ping"}}]"#));
+    assert_eq!(batch, json!([refused,{"jsonrpc":"2.0","id":2,"result":{}}]));
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
