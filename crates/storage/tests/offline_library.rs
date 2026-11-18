@@ -43,7 +43,7 @@ fn source_documents() -> BTreeMap<String, String> {
     ])
 }
 
-/// Author revision-checked edits with an explicit board whenever the command addresses one.
+/// Apply a revision-checked edit, supplying the board ID for footprint placement and transform.
 fn edit(session: &mut Session, command: &str, mut params: Value) {
     if matches!(command, PLACE_ASSIGNED_FOOTPRINT | SET_FOOTPRINT_TRANSFORM) {
         params["board"] = json!(session.project().unwrap().board_target().unwrap().board);
@@ -121,7 +121,8 @@ fn save_open(form: Form, path: &Path, project: Arc<Project>, baseline: Option<&D
     reopened
 }
 
-/// Both disk forms preserve pinned bytes and stable identities through source-free edits and no-op saves.
+/// Check canonical pinned-document equality and stable identities after source-free edits in both forms.
+/// Check a no-op folder save and byte-identical archive re-encoding without saving the archive again.
 #[test]
 fn pinned_library_folder_and_archive_remain_editable_without_registered_sources() {
     let original = fixture();
