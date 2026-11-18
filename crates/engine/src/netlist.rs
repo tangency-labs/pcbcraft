@@ -61,29 +61,45 @@ pub struct Netlist {
 #[serde(remote = "Netlist", rename = "Netlist", deny_unknown_fields)]
 struct NetlistText {
     format: String,
+    #[serde(deserialize_with = "object")]
     project: ProjectRef,
     basis: Basis,
-    #[serde(default, deserialize_with = "present_nonnull", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_object", skip_serializing_if = "Option::is_none")]
     board: Option<BoardRef>,
+    #[serde(deserialize_with = "objects")]
     components: Vec<Component>,
+    #[serde(deserialize_with = "objects")]
     nets: Vec<Net>,
+    #[serde(deserialize_with = "objects")]
     unconnected: Vec<TerminalRef>,
 }
 
 impl Serialize for Netlist {
-    /// Write the document without admitting an unknown kind into the schematic format.
+    /// Check the tagged document before writing any bytes.
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.check_part_kinds().map_err(serde::ser::Error::custom)?;
+        self.validate_document().map_err(serde::ser::Error::custom)?;
         NetlistText::serialize(self, serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for Netlist {
-    /// Read the document's fields, refusing unknown kinds outside accepted format 2.
+    /// Read one closed document object, then validate its tag and basis-specific fields.
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        let netlist = NetlistText::deserialize(de)?;
-        netlist.check_part_kinds().map_err(serde::de::Error::custom)?;
-        Ok(netlist)
+        struct Document;
+        impl<'de> serde::de::Visitor<'de> for Document {
+            type Value = Netlist;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a netlist object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Netlist, A::Error> {
+                let netlist = NetlistText::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                netlist.validate_document().map_err(serde::de::Error::custom)?;
+                Ok(netlist)
+            }
+        }
+        de.deserialize_map(Document)
     }
 }
 
@@ -148,14 +164,17 @@ pub struct Component {
     pub kind: ComponentKind,
     pub reference: String,
     pub value: String,
+    #[serde(deserialize_with = "object")]
     pub definition: DefinitionRef,
     /// Placed units in unit ID order. Units not placed on any sheet are absent.
+    #[serde(deserialize_with = "objects")]
     pub units: Vec<Unit>,
     /// Logical terminals, each listed once. Native order for the schematic or a matching
     /// accepted symbol revision and terminal table; lexical order for an accepted fallback.
+    #[serde(deserialize_with = "objects")]
     pub terminals: Vec<TerminalInfo>,
     /// The accepted physical package; present only in an `accepted` netlist.
-    #[serde(default, deserialize_with = "present_nonnull", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_object", skip_serializing_if = "Option::is_none")]
     pub package: Option<PackageRef>,
 }
 
@@ -232,6 +251,7 @@ pub struct Net {
     /// Authored names on the net, sorted; captured at the accepted update for the accepted basis.
     pub names: Vec<String>,
     /// Joined terminals in numeric component ID and then exported terminal order.
+    #[serde(deserialize_with = "objects")]
     pub terminals: Vec<TerminalRef>,
 }
 
@@ -241,6 +261,39 @@ pub struct Net {
 pub struct TerminalRef {
     pub part: String,
     pub terminal: String,
+}
+
+/// A record must be an object, not the positional sequence a derived struct can also read.
+struct Object<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        struct Record<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Record<T> {
+            type Value = Object<T>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(Object)
+            }
+        }
+        de.deserialize_map(Record(std::marker::PhantomData))
+    }
+}
+
+fn object<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<T, D::Error> {
+    Object::deserialize(de).map(|Object(value)| value)
+}
+
+fn objects<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Vec<T>, D::Error> {
+    Vec::<Object<T>>::deserialize(de).map(|records| records.into_iter().map(|Object(value)| value).collect())
+}
+
+fn present_object<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Option<T>, D::Error> {
+    object(de).map(Some)
 }
 
 /// Read a value only when the field is present, refusing explicit null. Paired with
@@ -297,8 +350,8 @@ struct CaptureText {
 
 /// Read a source capture that must be present but may be null, with a hyphenated capture ID.
 fn nullable_capture<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<crate::board::update::SourceCapture>, D::Error> {
-    Option::<CaptureText>::deserialize(de).map(|capture| {
-        capture.map(|capture| crate::board::update::SourceCapture { capture_id: capture.capture_id.0, content_digest: capture.content_digest })
+    Option::<Object<CaptureText>>::deserialize(de).map(|capture| {
+        capture.map(|Object(capture)| crate::board::update::SourceCapture { capture_id: capture.capture_id.0, content_digest: capture.content_digest })
     })
 }
 
@@ -307,7 +360,7 @@ impl Netlist {
     /// The format tag is read first, so a document of a later format is refused by its tag
     /// rather than by the first field this reader does not know. Omitted fields are refused
     /// even where null is allowed, and so are fields that do not belong to the document's
-    /// basis: see [`Netlist::check_basis`]. The tag must be the one the content needs: format 1
+    /// basis: see [`Netlist::validate_document`]. The tag must be the one the content needs: format 1
     /// for a `schematic` netlist and format 2 for an `accepted` one, so a format 1 reader never
     /// meets format 2 fields under its own tag.
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -315,17 +368,11 @@ impl Netlist {
         struct Header {
             format: String,
         }
-        let header: Header = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
+        let Object(header): Object<Header> = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
         if header.format != FORMAT && header.format != FORMAT_V2 {
             return Err(format!("unsupported netlist format `{}`", header.format));
         }
-        let netlist: Self = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
-        let expected = Self::format_for(netlist.basis);
-        if netlist.format != expected {
-            return Err(format!("unsupported netlist format `{}` for the {} basis, which takes `{expected}`", netlist.format, netlist.basis.name()));
-        }
-        netlist.check_basis().map_err(|error| format!("invalid netlist: {error}"))?;
-        Ok(netlist)
+        serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))
     }
 
     /// The format tag a netlist of this basis is written with: the lowest one that carries it.
@@ -336,21 +383,19 @@ impl Netlist {
         }
     }
 
-    /// Refuse the accepted-only kind on other bases or tags, including direct serde calls.
-    fn check_part_kinds(&self) -> Result<(), String> {
+    /// Check the tag/basis pair and the fields that depend on it, on both sides of the codec.
+    /// Accepted documents name a board, give terminals their pads and list no units. Schematic
+    /// documents have no board, packages, pads or unknown part kinds, and require electrical types.
+    fn validate_document(&self) -> Result<(), String> {
         if (self.basis != Basis::Accepted || self.format != FORMAT_V2)
             && self.components.iter().any(|component| component.kind == ComponentKind::Unknown)
         {
             return Err("unknown component kinds require an accepted format 2 netlist".into());
         }
-        Ok(())
-    }
-
-    /// Check the fields that depend on the basis. An `accepted` netlist names its board (with a
-    /// well-formed source capture when present), lists no units and gives every terminal its
-    /// pads. A `schematic` netlist names no board, packages or pads, and every terminal has an
-    /// electrical type.
-    fn check_basis(&self) -> Result<(), String> {
+        let expected = Self::format_for(self.basis);
+        if self.format != expected {
+            return Err(format!("unsupported netlist format `{}` for the {} basis, which takes `{expected}`", self.format, self.basis.name()));
+        }
         let terminals = || self.components.iter().flat_map(|component| &component.terminals);
         match self.basis {
             Basis::Accepted => {

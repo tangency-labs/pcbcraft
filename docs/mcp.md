@@ -365,7 +365,10 @@ components, packages, terminal pads and nets the board accepted at its last
 reviewed update. Findings report nets and components the schematic has changed
 since (`pending_net`, `pending_removal`) and a `pending_update` summary matching
 `pcb.preview_update` when comparison is available, or `update_unavailable` otherwise.
-It fails for a board with footprints but no accepted baseline.
+It fails for a board with footprints but no accepted baseline. `dry_run: true`
+returns the filename and findings without rendering the file text. If the full
+reply exceeds the live editor's 16 MiB frame limit, save the project and use the
+headless command for the full export.
 
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks

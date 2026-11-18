@@ -181,7 +181,7 @@ also a normal desired-assignment edit.
 
 | Baseline field | Meaning |
 | --- | --- |
-| `format` | `pcbcraft-board-baseline/1`, `/2` for extended mappings, or `/3` for retained typed quantities |
+| `format` | `pcbcraft-board-baseline/1`, `/2` for extended mappings, `/3` for retained typed quantities, `/4` for accepted net display names, or `/5` for explicit origin on unnamed one-terminal nets |
 | `project`, `board` | Explicit owners; both must match the loaded design |
 | `source` | Frozen source `capture_id` UUID and lowercase SHA-256 `content_digest` |
 | `components` | Canonical positive numeric ID keys, with historical symbol identity, reference/value, sorted terminal tokens and accepted package |

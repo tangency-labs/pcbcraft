@@ -330,7 +330,7 @@
           ]
         },
         "name": {
-          "description": "The display name captured in the board's accepted baseline.",
+          "description": "The accepted display name, or for older baselines the smallest authored name or a historical reference and terminal designator.",
           "type": "string"
         },
         "names": {

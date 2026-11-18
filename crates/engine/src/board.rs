@@ -360,14 +360,14 @@ impl Board {
     }
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format-3/4 history also retains the last visible typed quantity; older history
+    /// Format 3 and later also retain the last visible typed quantity; older history
     /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
-            let quantity = if matches!(baseline.format.as_str(), update::QUANTITY_FORMAT | update::DISPLAY_FORMAT) {
+            let quantity = if matches!(baseline.format.as_str(), update::QUANTITY_FORMAT | update::DISPLAY_FORMAT | update::NET_ORIGIN_FORMAT) {
                 update::PartInstanceState::quantity_for(part)
             } else {
                 None

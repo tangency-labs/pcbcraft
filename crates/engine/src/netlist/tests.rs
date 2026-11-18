@@ -50,14 +50,14 @@ fn last_symbol(s: &Session, sheet: SheetTarget) -> String {
 }
 
 /// One terminal of a placed symbol, addressed by its logical terminal number.
-fn terminal(s: &Session, sheet: SheetTarget, symbol: &str, number: &str) -> WireEndpoint {
+pub(super) fn terminal(s: &Session, sheet: SheetTarget, symbol: &str, number: &str) -> WireEndpoint {
     let projection = s.project().unwrap().for_sheet(sheet).unwrap();
     let placed = projection.symbols().iter().find(|placed| placed.id() == symbol).unwrap();
     WireEndpoint::Terminal(placed.terminals()[placed.unit_definition().pin_index(number).unwrap()])
 }
 
 /// Draw one wire between two endpoints of a sheet, with a single bend when they are not aligned.
-fn wire(s: &mut Session, sheet: SheetTarget, from: WireEndpoint, to: WireEndpoint) {
+pub(super) fn wire(s: &mut Session, sheet: SheetTarget, from: WireEndpoint, to: WireEndpoint) {
     let projection = s.project().unwrap().for_sheet(sheet).unwrap();
     let start = projection.endpoint_position(from).unwrap();
     let end = projection.endpoint_position(to).unwrap();

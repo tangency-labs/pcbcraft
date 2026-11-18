@@ -10,7 +10,7 @@ use crate::{
     CommandError, Session,
     board::{
         fabrication::{Output, file_part},
-        update::{Baseline, TerminalKey, capture_source, preview},
+        update::{Baseline, NetOrigin, TerminalKey, capture_source, preview},
         view::BoardView,
     },
 };
@@ -132,23 +132,36 @@ impl BoardView<'_> {
                 (!members.is_empty()).then_some((members, index))
             })
             .collect();
-        let wired: BTreeSet<_> = current.keys().flatten().collect();
         let mut nets = Vec::new();
         for (index, net) in accepted.nets.iter().enumerate() {
             let name = accepted.net_name(index).ok_or("accepted net index out of range")?;
-            let row = current.get(&net.terminals).copied();
-            let id = row.and_then(|row| ids.get(row).copied().flatten());
-            // An unwired terminal mapped to several pads still needs copper joining them.
-            let pads_only = net.names.is_empty() && matches!(net.terminals.as_slice(), [terminal] if !wired.contains(terminal));
-            match (row, id) {
-                (None, _) if pads_only => findings.push(json!({"kind":"pad_net","net":name,
-                    "message":format!("Net {name} joins the pads of one unwired terminal and has no schematic net; its id is null.")})),
-                (None, _) => findings.push(json!({"kind":"pending_net","net":name,
-                    "message":format!("Net {name} differs from the schematic until the board is updated; its id is null.")})),
-                (Some(_), None) => findings.push(json!({"kind":"unregistered_net","net":name,
-                    "message":format!("Net {name} has no persistent ID; its id is null.")})),
-                (Some(_), Some(_)) => {}
-            }
+            let id = match net.accepted_origin() {
+                Some(NetOrigin::PadOnly) => {
+                    findings.push(json!({"kind":"pad_net","net":name,
+                        "message":format!("At the accepted update, net {name} joined only pads of one unwired terminal; its id is null.")}));
+                    None
+                }
+                None => {
+                    findings.push(json!({"kind":"net_origin_unknown","net":name,
+                        "message":format!("The accepted baseline does not record whether net {name} came from the schematic; its id is null.")}));
+                    None
+                }
+                Some(NetOrigin::Schematic) => match current.get(&net.terminals).copied() {
+                    None => {
+                        findings.push(json!({"kind":"pending_net","net":name,
+                            "message":format!("Net {name} differs from the schematic until the board is updated; its id is null.")}));
+                        None
+                    }
+                    Some(row) => {
+                        let id = ids.get(row).copied().flatten();
+                        if id.is_none() {
+                            findings.push(json!({"kind":"unregistered_net","net":name,
+                                "message":format!("Net {name} has no persistent ID; its id is null.")}));
+                        }
+                        id
+                    }
+                },
+            };
             let mut terminals = net.terminals.clone();
             terminals.sort_by_key(key);
             let Some(first) = terminals.first().map(key) else { continue };
@@ -197,22 +210,32 @@ fn pending_update(project: &crate::Project, accepted: &Baseline) -> Option<Value
 }
 
 impl Session {
-    /// Build the addressed board's netlist file without editing anything. Fails when no
-    /// project is open, the board is unknown, or [`BoardView::netlist`] fails.
-    pub fn export_board_netlist(&self, params: &Value) -> Result<(Output, Vec<Value>), CommandError> {
+    /// Resolve the file name and project the accepted rows and findings without rendering JSON.
+    fn prepare_board_netlist(&self, params: &Value) -> Result<(String, Export), CommandError> {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
         let export = view.netlist().map_err(CommandError::Unavailable)?;
-        let contents = export.netlist.to_text().map_err(CommandError::Unavailable)?;
         let name = format!("{}-{}-netlist.json", file_part(&project.name), file_part(view.name()));
-        Ok((Output { name, contents }, export.findings))
+        Ok((name, export))
     }
 
-    /// The execute result: the file's name and text (only its name for a dry run) and the findings.
+    /// Build the addressed board's netlist file without editing anything. Fails when no
+    /// project is open, the board is unknown, or [`BoardView::netlist`] fails.
+    pub fn export_board_netlist(&self, params: &Value) -> Result<(Output, Vec<Value>), CommandError> {
+        let (name, Export { netlist, findings }) = self.prepare_board_netlist(params)?;
+        let contents = netlist.to_text().map_err(CommandError::Unavailable)?;
+        Ok((Output { name, contents }, findings))
+    }
+
+    /// A dry run still projects findings but does not render the file text.
     pub(crate) fn board_netlist_report(&self, params: &Value) -> Result<Value, CommandError> {
+        if params["dry_run"].as_bool() == Some(true) {
+            let (name, export) = self.prepare_board_netlist(params)?;
+            return Ok(json!({"files":[{"name":name}],"findings":export.findings}));
+        }
         let (file, findings) = self.export_board_netlist(params)?;
-        Ok(super::report(file, findings, params))
+        Ok(json!({"files":[file],"findings":findings}))
     }
 }
 

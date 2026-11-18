@@ -138,7 +138,7 @@ fn capture_uses_project_connectivity_instead_of_the_active_sheet_projection() {
     }
     expected.sort();
     let proposed = capture(session.project().unwrap(), 1);
-    assert_eq!(proposed.nets, vec![NetState { display_name: Some("SHARED".into()), terminals: expected, names: vec!["SHARED".into()] }]);
+    assert_eq!(proposed.nets, vec![NetState { display_name: Some("SHARED".into()), terminals: expected, names: vec!["SHARED".into()], origin: None }]);
     assert_eq!(session.project().unwrap().for_sheet(remote).unwrap().connectivity().nets[0].len(), 1);
 }
 
@@ -243,7 +243,12 @@ fn malformed_baselines_are_rejected_without_aliasing_history() {
     invalid.source.content_digest = "A".repeat(64);
     assert!(invalid.validate().is_err());
     invalid = baseline.clone();
-    invalid.nets.push(NetState { display_name: None, terminals: vec![TerminalKey { component: id, terminal: "1".into() }; 2], names: Vec::new() });
+    invalid.nets.push(NetState {
+        display_name: None,
+        terminals: vec![TerminalKey { component: id, terminal: "1".into() }; 2],
+        names: Vec::new(),
+        origin: None,
+    });
     assert!(invalid.validate().is_err());
     invalid = baseline.clone();
     invalid.board = Uuid::from_u128(999);

@@ -22,16 +22,15 @@ through the matching sheet pin; global and power names join anywhere. This is
 A board export has `basis: accepted`: its components, packages and nets are the
 board's [accepted baseline](single-board-update.md), what the board took in at its
 last reviewed update. Unapplied connectivity changes stay out of those connections;
-findings report the pending update. Reference and value follow the live component,
-rather than waiting for that update. When every part is on the board, all schematic
-units are placed and the board is in sync, the two documents list the same components,
-terminals, nets and net IDs,
-apart from units, packages, pads and `pad_net` nets. Parts excluded from the
-board, which power ports are by default, appear only in the project netlist. Package
-and pad mappings are recorded in `package` and `pads`; accepting a mapping of one
-unwired terminal to several pads can also introduce a board-only `pad_net`, moving
-that terminal from `unconnected` into `nets`. Pending mapping changes stay outside
-the baseline until accepted. Board copper is not consulted here either.
+findings report the pending update. Reference and canonical value text follow the
+live component rather than waiting for that update; typed values may be formatted
+differently in the editor. Comparing the two exports in sync still requires applying
+the board's projection: excluded parts (including power ports by default) do not
+contribute board terminals, and an unnamed schematic net that projects to a single
+terminal with no multi-pad mapping is omitted. An unnamed one-pin wire stub is one
+example. The board's `package` and `pads` fields describe the accepted mapping. An
+unwired terminal mapped to several pads instead becomes a board-only `pad_net`,
+moving that terminal from `unconnected` into `nets`. Board copper is not consulted.
 
 ## Document
 
@@ -84,7 +83,8 @@ is empty, and `package` names the accepted footprint (`library`, `id`,
 `revision`), the placement as `footprint` (`footprint-2`, or null before it is
 placed) and `unconnected_pads`, the footprint's pads no terminal uses. Each
 terminal adds `pads`, the footprint pads it maps to. `reference` and `value`
-follow the live component, as the board shows them. When the component's current
+follow the live component when present; `value` is canonical text, not the board
+view's formatted typed value. When the component's current
 symbol is not the accepted revision with the same terminals (the part was
 deleted, or its symbol changed and the update is pending), terminals use the
 accepted baseline's lexical order with `name` and `electrical_type` null.
@@ -99,9 +99,9 @@ substitutes the Net Inspector's row number, which changes as the design changes.
 With `basis: schematic`, `name` is the current Net Inspector display name and
 `names` every authored name on the net, sorted. With `basis: accepted`, these are
 the display name and sorted authored names captured in the board's accepted
-baseline. A pending label or reference rename does not change those accepted net
-names until the next update, even when terminal membership and the net ID stay
-the same.
+baseline. Older baselines without a stored display name derive it from the
+smallest accepted authored name or a historical reference and terminal designator.
+Pending schematic renames do not supply accepted net names.
 
 `terminals` lists the joined part terminals as `{part, terminal}`, the same
 logical address that commands such as `schematic.set_no_connect` accept. Each
@@ -111,14 +111,17 @@ a shared terminal drawn on a placed unit is still included. In an `accepted`
 netlist, every accepted terminal appears in one accepted net or in `unconnected`,
 whether its schematic unit is currently placed or not.
 
-In an `accepted` netlist a net keeps the persistent `id` of the current schematic
-net with exactly the same board terminals. A net the schematic has changed since
-the update has `id: null` and a `pending_net` finding; a net that only joins the
-pads of one unwired terminal has `id: null` and a `pad_net` finding.
+An accepted schematic net keeps the persistent `id` of the current schematic net
+with exactly the same board terminals. If there is no matching membership, it has
+`id: null` and a `pending_net` finding. A net accepted solely to join pads of one
+unwired terminal has `id: null` and a `pad_net` finding even if a pending edit now
+wires that terminal. Older baseline formats do not distinguish the two origins for
+unnamed one-terminal nets. Those rows have `id: null` and a `net_origin_unknown`
+finding rather than borrowing a current UUID.
 
 ## Board findings
 
-Besides `pending_net`, `pad_net` and `unregistered_net`, a board export reports
+Besides `pending_net`, `pad_net`, `net_origin_unknown` and `unregistered_net`, a board export reports
 `pending_removal` for an accepted component that was deleted or excluded from the
 board in the schematic, and one `pending_update` with the counts
 `pcb.preview_update` would show (`component_changes`, `removed_nets`,

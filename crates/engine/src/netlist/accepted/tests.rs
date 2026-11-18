@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
-    APPLY_UPDATE, ASSIGN_FOOTPRINT, CONNECT_PINS, DELETE_SYMBOL, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL, PREVIEW_UPDATE, SET_SYMBOL_FIELDS,
-    board::definition::basic_components,
+    APPLY_UPDATE, ASSIGN_FOOTPRINT, CONNECT_PINS, DELETE_SYMBOL, DELETE_WIRE, PLACE_ASSIGNED_FOOTPRINT, PLACE_RESISTOR, PLACE_SYMBOL, PREVIEW_UPDATE,
+    SET_SYMBOL_FIELDS, board::definition::basic_components,
     netlist::FORMAT,
-    netlist::tests::{Fixture, apply, check, fixture, fixture_with_symbol, integer_spellings, schema, schema_v2, validate},
+    netlist::tests::{Fixture, apply, check, fixture, fixture_with_symbol, integer_spellings, schema, schema_v2, terminal, validate, wire},
     persistence::{decode_documents, encode_documents},
+    schematic::WireEndpoint,
 };
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -405,20 +406,26 @@ fn nonlexical_native_terminal_order_falls_back_to_lexical_after_pending_deletion
     assert_eq!(reopened.board_view(reopened.board_target().unwrap()).unwrap().netlist().unwrap().netlist.to_text().unwrap(), text);
 }
 
+/// Accept a three-pad mapping for each R2 terminal; R2.2 starts as a pad-only net.
+fn multipad() -> Fixture {
+    let mut fixture = synced();
+    apply(
+        &mut fixture.session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":fixture.r2,"library":"units","definition":"illustrative-six-pad","definition_revision":1,
+            "mapping":{"1":["1","4","5"],"2":["2","3","6"]}}),
+    );
+    update(&mut fixture.session);
+    fixture
+}
+
 /// An unwired terminal mapped to several pads still needs copper between them, so the board keeps
 /// a net of that one terminal. The schematic has no such net: its id is null and a `pad_net`
 /// finding names it, while the board is otherwise in sync.
 #[test]
 fn unwired_terminal_on_several_pads_is_a_pad_net() {
-    let Fixture { mut session, r2, .. } = synced();
-    let s = &mut session;
-    apply(
-        s,
-        ASSIGN_FOOTPRINT,
-        json!({"component":r2,"library":"units","definition":"illustrative-six-pad","definition_revision":1,
-            "mapping":{"1":["1","4","5"],"2":["2","3","6"]}}),
-    );
-    update(s);
+    let Fixture { session, r2, .. } = multipad();
+    let s = &session;
     let Export { netlist, findings } = board(s);
     let pads_only: Vec<_> = netlist.nets.iter().filter(|net| net.terminals.len() == 1).collect();
     assert_eq!(pads_only.len(), 1, "{:?}", netlist.nets);
@@ -433,6 +440,96 @@ fn unwired_terminal_on_several_pads_is_a_pad_net() {
     assert_eq!(findings[0]["net"], json!(net.name));
     assert!(netlist.nets.iter().filter(|other| other.terminals.len() > 1).all(|other| other.id.is_some()));
     validate_v2(&serde_json::to_value(&netlist).unwrap());
+}
+
+fn multipad_net<'a>(export: &'a Export, part: &str) -> &'a Net {
+    export.netlist.nets.iter().find(|net| net.terminals.as_slice() == [TerminalRef { part: part.to_owned(), terminal: "2".into() }]).unwrap()
+}
+
+/// A native reopen does not reclassify the accepted net or alter the serialized board files.
+fn reopen(s: &mut Session, expected: &Export) {
+    let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&docs).unwrap();
+    assert_eq!(encode_documents(Arc::clone(&reopened)).unwrap(), docs);
+    s.open_snapshot(reopened);
+    let actual = board(s);
+    assert_eq!(actual.netlist, expected.netlist);
+    assert_eq!(actual.findings, expected.findings);
+}
+
+#[test]
+fn accepted_pad_net_cannot_borrow_a_pending_named_net_uuid() {
+    let Fixture { mut session, sheets: [_, _, sheet], r2, .. } = multipad();
+    let symbol = symbol_of(&session, sheet, &r2);
+    let from = terminal(&session, sheet, &symbol, "2");
+    apply(&mut session, crate::net_labels::ADD, json!({"sheet":sheet.id(),"name":"NEW","style":"local","x_nm":25_400_000,"y_nm":-12_700_000}));
+    let label = session.project().unwrap().for_sheet(sheet).unwrap().net_labels()[0].id;
+    wire(&mut session, sheet, from, WireEndpoint::NetLabel(label));
+    let current = schematic(&session).nets.into_iter().find(|net| net.names == ["NEW"]).unwrap();
+    assert!(current.id.is_some());
+    let pending = board(&session);
+    assert_eq!(multipad_net(&pending, &r2).id, None);
+    assert_eq!(kinds(&pending.findings), ["pad_net", "pending_update"]);
+    reopen(&mut session, &pending);
+    update(&mut session);
+    let accepted = board(&session);
+    assert_eq!(multipad_net(&accepted, &r2), &current);
+    assert!(accepted.findings.is_empty());
+    reopen(&mut session, &accepted);
+}
+
+#[test]
+fn accepted_schematic_singleton_remains_pending_until_pad_only_origin_is_accepted() {
+    let Fixture { mut session, sheets: [_, _, sheet], r2, .. } = multipad();
+    apply(&mut session, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":35_560_000,"y_nm":10_160_000}));
+    let project = session.project().unwrap();
+    let projection = project.for_sheet(sheet).unwrap();
+    let extra = projection.symbols().last().unwrap();
+    let part = project.component(extra).unwrap();
+    let (symbol, reference, value, mut metadata) = (extra.id(), part.reference().to_owned(), part.value().to_owned(), part.metadata.clone());
+    metadata.attributes.exclude_from_board = true;
+    apply(&mut session, SET_SYMBOL_FIELDS, json!({"sheet":sheet.id(),"symbol":symbol,"reference":reference,"value":value,"metadata":metadata}));
+    let from = terminal(&session, sheet, &symbol_of(&session, sheet, &r2), "2");
+    let to = terminal(&session, sheet, &symbol, "1");
+    wire(&mut session, sheet, from, to);
+    let wire_id = session.project().unwrap().for_sheet(sheet).unwrap().wires().last().unwrap().id();
+    update(&mut session);
+    let accepted = board(&session);
+    assert!(multipad_net(&accepted, &r2).id.is_some());
+    assert!(multipad_net(&accepted, &r2).names.is_empty());
+    assert!(accepted.findings.is_empty());
+    reopen(&mut session, &accepted);
+    apply(&mut session, DELETE_WIRE, json!({"sheet":sheet.id(),"wire":wire_id}));
+    let pending = board(&session);
+    assert_eq!(multipad_net(&pending, &r2).id, None);
+    assert_eq!(kinds(&pending.findings), ["pending_net", "pending_update"]);
+    reopen(&mut session, &pending);
+    update(&mut session);
+    let pads_only = board(&session);
+    assert_eq!(multipad_net(&pads_only, &r2).id, None);
+    assert_eq!(kinds(&pads_only.findings), ["pad_net"]);
+    reopen(&mut session, &pads_only);
+}
+
+#[test]
+fn older_unnamed_singletons_have_unknown_origin_and_round_trip_without_upgrade() {
+    use crate::board::update::{DISPLAY_FORMAT, NET_ORIGIN_FORMAT};
+    let Fixture { mut session, r2, .. } = multipad();
+    let mut project = (*session.snapshot().unwrap()).clone();
+    let baseline = Arc::make_mut(Arc::make_mut(&mut project.board).baseline.as_mut().unwrap());
+    assert_eq!(baseline.format, NET_ORIGIN_FORMAT);
+    let index = baseline.nets.iter().position(|net| net.origin.is_some()).unwrap();
+    assert_eq!(baseline.nets[index].origin, Some(NetOrigin::PadOnly));
+    baseline.nets[index].origin = None;
+    assert!(baseline.encode().unwrap_err().contains("origin"));
+    baseline.format = DISPLAY_FORMAT.to_owned();
+    let legacy = baseline.encode().unwrap();
+    assert_eq!(Baseline::decode(&legacy).unwrap().encode().unwrap(), legacy);
+    session.open_snapshot(Arc::new(project));
+    let old = board(&session);
+    assert_eq!(multipad_net(&old, &r2).id, None);
+    assert_eq!(kinds(&old.findings), ["net_origin_unknown", "pending_update"]);
+    reopen(&mut session, &old);
 }
 
 /// The accepted partition includes terminals belonging only to an unplaced unit, while
@@ -608,7 +705,7 @@ fn reader_and_schema_agree_at_board_field_edges() {
         both_refuse(read_edited(&text, digest, Some(json!(bad))), digest);
     }
     let nil_capture = read_edited(&text, "/board/source/capture_id", Some(json!(Uuid::nil())));
-    assert_eq!(nil_capture.0.unwrap_err(), "invalid netlist: invalid board source capture identity");
+    assert!(nil_capture.0.unwrap_err().starts_with("invalid netlist: invalid board source capture identity"));
     assert_eq!(nil_capture.1, Err("$.board.source: matches no alternative".to_owned()));
     let schema = schema_v2();
     let capture_rule = &schema["$defs"]["board"]["properties"]["source"]["anyOf"][0]["properties"]["capture_id"];
@@ -716,6 +813,74 @@ fn reader_checks_the_format_against_the_content() {
     let mut value: Value = serde_json::from_str(&plain).unwrap();
     value["format"] = json!(FORMAT_V2);
     assert!(check(&schema(), &schema(), &value, "$").unwrap_err().starts_with("$.format"));
+}
+
+#[test]
+fn direct_serde_rejects_wrong_version_and_basis_fields_on_both_sides() {
+    let Fixture { session, .. } = synced();
+    let plain = schematic(&session);
+    let accepted = board(&session).netlist;
+    let mut retagged = accepted.clone();
+    retagged.format = FORMAT.into();
+    let mut untyped = plain.clone();
+    untyped.components[0].terminals[0].electrical_type = None;
+    let mut padded = plain.clone();
+    padded.components[0].terminals[0].pads = Some(vec!["1".into()]);
+    let mut packaged = plain.clone();
+    packaged.components[0].package = accepted.components[0].package.clone();
+    let mut absent_board = accepted.clone();
+    absent_board.board = None;
+    for (bad, mut raw, pointer, replacement, expected) in [
+        (retagged, json!(accepted), "/format", json!(FORMAT), "for the accepted basis"),
+        (untyped, json!(plain), "/components/0/terminals/0/electrical_type", Value::Null, "electrical type"),
+        (padded, json!(plain), "/components/0/terminals/0/pads", json!(["1"]), "no pads"),
+        (packaged, json!(plain), "/components/0/package", json!(accepted.components[0].package), "names a board or packages"),
+        (absent_board, json!(accepted), "/board", Value::Null, "names its board"),
+    ] {
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        let object = raw.pointer_mut(parent).unwrap().as_object_mut().unwrap();
+        if pointer == "/board" {
+            object.remove(field);
+        } else {
+            object.insert(field.into(), replacement);
+        }
+        let text = raw.to_string();
+        assert!(serde_json::from_str::<Netlist>(&text).unwrap_err().to_string().contains(expected));
+        assert!(serde_json::from_value::<Netlist>(raw).unwrap_err().to_string().contains(expected));
+        assert!(serde_json::to_value(&bad).unwrap_err().to_string().contains(expected));
+        assert!(bad.to_text().unwrap_err().contains(expected));
+        let mut bytes = Vec::new();
+        assert!(serde_json::to_writer(&mut bytes, &bad).unwrap_err().to_string().contains(expected));
+        assert!(bytes.is_empty());
+    }
+}
+
+#[test]
+fn document_records_refuse_positional_arrays() {
+    let Fixture { session, .. } = synced();
+    let accepted = json!(board(&session).netlist);
+    let plain = json!(schematic(&session));
+    for (base, pointer, fields) in [
+        (&accepted, "", &(["format", "project", "basis", "board", "components", "nets", "unconnected"])[..]),
+        (&accepted, "/board", &["id", "name", "source"]),
+        (&accepted, "/board/source", &["capture_id", "content_digest"]),
+        (&accepted, "/components/0/package", &["library", "id", "revision", "footprint", "unconnected_pads"]),
+        (&plain, "/project", &["id", "name"]),
+        (&plain, "/components/0", &["id", "kind", "reference", "value", "definition", "units", "terminals"]),
+        (&plain, "/components/0/definition", &["library", "id", "revision"]),
+        (&plain, "/components/0/units/0", &["unit", "symbol", "sheet", "occurrence"]),
+        (&plain, "/components/0/terminals/0", &["terminal", "name", "electrical_type"]),
+        (&plain, "/nets/0", &["id", "name", "names", "terminals"]),
+        (&plain, "/nets/0/terminals/0", &["part", "terminal"]),
+        (&plain, "/unconnected/0", &["part", "terminal"]),
+    ] {
+        let row = base.pointer(pointer).unwrap();
+        let mut mutated = base.clone();
+        *mutated.pointer_mut(pointer).unwrap() = fields.iter().map(|&field| row[field].clone()).collect::<Vec<_>>().into();
+        let text = mutated.to_string();
+        assert!(Netlist::parse(&text).unwrap_err().contains("invalid type: sequence"), "{pointer}");
+        assert!(serde_json::from_value::<Netlist>(mutated).unwrap_err().to_string().contains("invalid type: sequence"), "{pointer}");
+    }
 }
 
 /// The schematic writer retains the format 1 field order and bytes for ordinary parts and
