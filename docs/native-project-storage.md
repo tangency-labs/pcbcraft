@@ -318,10 +318,10 @@ writing canonical records.
 
 Board format `pcbcraft-board/22` adds required nonempty `assembly_profiles`:
 identity-sorted `{profile, revision}` adoption records resolving exact pinned
-content. It supports optional origin, rules, zones and earlier fields. Stack-bearing
-boards require at least format 23; explicit via assignments require 24, material
-reports 25 and footprint locks 34. These higher formats accept adoptions; headers before 22 reject
-them. Boards without adoptions retain the format their other content requires;
+content. It supports optional origin, rules, zones and earlier fields. Boards with
+the extended stack fields described below require at least format 23; explicit
+via assignments require 24, material reports 25 and footprint locks 34. These
+higher formats accept adoptions; headers before 22 reject them. Boards without adoptions retain the format their other content requires;
 removing the last adoption restores the remaining data's format.
 
 The project retains at most 64 identities (including retired watermarks), 128

@@ -159,6 +159,19 @@ fn footprint_locks_require_their_own_nonempty_format() {
     }
 }
 
+/// Reject the unsupported header above format 34 without triggering the true-lock gate.
+#[test]
+fn board_format_35_is_unsupported() {
+    let saved = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
+    let path = test_board_path(&saved);
+    let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/1");
+    assert!(board["footprints"][0].get("locked").is_none());
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    board["format"] = json!("pcbcraft-board/35");
+    assert_invalid_board_record(&saved, &board, "unsupported board format or incompatible setup: pcbcraft-board/35");
+}
+
 /// Board formats 23 and 25 need their own content even when setup is valid. A report does
 /// not satisfy the lock gate, and format 34 still validates earlier extension records.
 #[test]
@@ -479,6 +492,12 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
                     }
                     let loaded = decode_documents(&saved).unwrap();
                     assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
+                    if stack && !reports && !profiles && !via_intent {
+                        let mut invalid = expected.clone();
+                        assert_eq!(invalid["setup"]["stackup"]["finished_thickness_nm"], 1_600_000);
+                        invalid["setup"]["stackup"]["finished_thickness_nm"] = json!(0);
+                        assert_invalid_board_record(&saved, &invalid, "finished board thickness must be a positive whole number of nanometers");
+                    }
                     if profiles && !reports && !stack && !via_intent {
                         let mut invalid = expected.clone();
                         invalid["assembly_profiles"][0]["revision"] = json!(2);
