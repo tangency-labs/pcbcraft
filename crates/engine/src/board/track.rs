@@ -416,10 +416,9 @@ pub(super) struct IslandBuilder {
 enum Nearby {
     /// Not looked up yet.
     Lookup,
-    /// Every node below this one, tested from the highest down.
-    Below(usize),
-    /// Resume the indexed search without allocating or sorting its candidates.
-    Indexed,
+    /// An active search. When enumerating directly, this is the exclusive upper bound of
+    /// the remaining neighbors. Indexed builders resume their separate traversal cursor.
+    Active(usize),
 }
 
 impl IslandBuilder {
@@ -499,22 +498,18 @@ impl IslandBuilder {
             }
             let next = match (&mut self.nearby, &self.index) {
                 (Nearby::Lookup, index) => {
-                    self.nearby = match index {
-                        None => Nearby::Below(i),
-                        Some(index) => {
-                            index.begin(&mut self.search, 0.);
-                            Nearby::Indexed
-                        }
-                    };
+                    if let Some(index) = index {
+                        index.begin(&mut self.search, 0.);
+                    }
+                    self.nearby = Nearby::Active(i);
                     continue;
                 }
-                (Nearby::Below(below), _) => below.checked_sub(1).inspect(|&j| *below = j),
-                (Nearby::Indexed, Some(index)) => match index.next(i, &mut self.search) {
+                (Nearby::Active(below), None) => below.checked_sub(1).inspect(|&j| *below = j),
+                (Nearby::Active(_), Some(index)) => match index.next(i, &mut self.search) {
                     Hit::Pending => continue,
                     Hit::Candidate(candidate) => Some(candidate),
                     Hit::Done => None,
                 },
-                (Nearby::Indexed, None) => unreachable!("only an indexed builder starts an indexed search"),
             };
             let Some(j) = next else {
                 self.node += 1;
