@@ -154,4 +154,6 @@ listed beside it.
   editor but mirrors a symbol in the schematic, and **Ctrl+A** selects all in
   the board editor while the schematic offers Select All as a tool action
   instead. The [board keyboard shortcuts](board-keyboard-shortcuts.md) page
-  inventories that workspace's bindings.
+  inventories that workspace's bindings, and the
+  [library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md)
+  page covers the Symbol Editor, Footprint Editor and Parts Library.
