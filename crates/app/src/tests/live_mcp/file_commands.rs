@@ -133,32 +133,46 @@ fn failed_live_file_commands_preserve_the_design() {
     unchanged(&h, &before);
 }
 
-/// A file job stalled on an unresponsive disk holds live commands until a client stops waiting
-/// for it. The late result then reaches nobody, so the design stays as it was and unsaved.
+/// An open stalled on an unresponsive disk holds live commands until a client stops waiting for
+/// it; its late result reaches nobody and the design stays as it was. A save can't be abandoned,
+/// and abandoned workers still running are bounded.
 #[test]
-fn stopping_a_stalled_file_job_releases_the_editor() {
+fn stopping_a_stalled_open_releases_the_editor() {
     let mut h = harness();
     wiring_project(&mut h);
     let (port, token) = connect(&mut h);
     let connection = (port, token.as_str());
     let revision = h.state().session().revision();
     let before = h.state().session().snapshot().unwrap();
-    let late = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
+    let late = h.state_mut().files.stall("open", Some("/stalled/board"), revision);
     let blocked = tool(&mut h, connection, "execute", json!({"command": "view.fit", "params": {"view": 0}}));
     assert!(blocked["content"][0]["text"].as_str().unwrap().contains("file operation"), "{blocked}");
 
     let inspected = window(&mut h, connection, "file.abandon", json!({}));
     assert_eq!(inspected["file"]["operation"], Value::Null);
     assert_eq!(inspected["file"]["last"]["status"], "abandoned");
-    assert!(inspected["file"]["last"]["error"].as_str().unwrap().contains("may still finish on disk"), "{inspected}");
-    assert_eq!(inspected["unsaved"], true);
-    assert!(!late(), "the late result has no receiver to adopt it");
+    assert!(late(), "the stalled worker's result is received and dropped");
+    h.run();
     assert!(Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()));
     window(&mut h, connection, "view.fit", json!({"view": 0}));
 
-    // A picker job ends only when the person answers it.
-    let _picker = h.state_mut().files.stall("open", None, revision);
+    let _save = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
     let refused = tool(&mut h, connection, "execute", json!({"command": "file.abandon", "params": {}}));
-    assert!(refused["content"][0]["text"].as_str().unwrap().contains("file picker"), "{refused}");
+    assert!(refused["content"][0]["text"].as_str().unwrap().contains("may still be writing"), "{refused}");
     assert!(h.state().files.busy());
+}
+
+/// Abandoned opens whose workers keep running are bounded; one that ends frees its place.
+#[test]
+fn abandoned_open_workers_are_bounded() {
+    let mut app = PcbApp::default();
+    let mut late = Vec::new();
+    for _ in 0..4 {
+        late.push(app.files.stall("open", Some("/stalled"), 0));
+        app.files.abandon().unwrap();
+    }
+    let _fifth = app.files.stall("open", Some("/stalled"), 0);
+    assert!(app.files.abandon().unwrap_err().contains("Too many"));
+    assert!(late.pop().unwrap()(), "one stalled worker ends");
+    app.files.abandon().unwrap();
 }

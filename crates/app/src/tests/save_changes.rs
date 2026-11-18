@@ -238,20 +238,25 @@ fn closing_during_a_save_decides_when_it_finishes() {
     }
 }
 
-/// A close held by a save stalled on an unresponsive disk can stop waiting. The project is
-/// still unsaved, so the question follows, and Don't Save closes; the late result is dropped.
+/// A close held by a stalled file job can stop waiting. A stalled open is dropped and the close
+/// goes on; a stalled save offers to close without waiting, since it may still be writing.
 #[test]
-fn closing_can_stop_waiting_for_a_stalled_save() {
-    let mut h = unsaved_project();
-    let revision = h.state().session().revision();
-    let late = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
-    assert!(!request_close(&mut h));
-    assert!(matches!(h.state().dialog, Dialog::None));
-    press(&mut h, "Stop waiting");
-    assert!(!h.state().files.busy());
-    assert!(!late(), "nobody adopts the late result");
-    assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::Close)), "the project is still unsaved");
-    assert!(click_closes(&mut h, "Don't Save"));
+fn closing_can_stop_waiting_for_a_stalled_file_job() {
+    for (operation, button) in [("open", "Stop waiting"), ("save", "Close without waiting")] {
+        let mut h = unsaved_project();
+        let revision = h.state().session().revision();
+        let _late = h.state_mut().files.stall(operation, Some("/stalled/board"), revision);
+        assert!(!request_close(&mut h));
+        assert!(matches!(h.state().dialog, Dialog::None));
+        if operation == "open" {
+            press(&mut h, button);
+            assert!(!h.state().files.busy());
+            assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::Close)), "the project is still unsaved");
+            assert!(click_closes(&mut h, "Don't Save"));
+        } else {
+            assert!(click_closes(&mut h, button));
+        }
+    }
 }
 
 /// Quit, Ctrl+Q and the integrated title bar's close control all ask the window to close, so

@@ -65,6 +65,8 @@ pub(super) struct ProjectFiles {
     /// File jobs finished so far. Jobs run one at a time, so the running one is `completed + 1`
     /// and `last` is `completed`: inspection reports these as job IDs.
     completed: u64,
+    /// Workers of abandoned opens that may still be running.
+    stalled: abandon::Stalled,
     /// In tests, saves wait here for the test to finish them instead of opening a native picker.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     stand_in: Option<StandIn>,
