@@ -92,6 +92,18 @@ pub struct PadView {
     pub net: Option<String>,
 }
 
+impl PadView {
+    /// Test actual copper, including rotated round/oval/rounded corners. Legacy markers
+    /// have no physical land and are inspected separately by their displayed center.
+    /// Queries outside supported board coordinates return false.
+    pub fn contains_point(&self, at: Point) -> bool {
+        crate::wire::valid_point(&at)
+            && self.copper.is_some_and(|corners| {
+                super::geometry::Contour::pad(self.center, corners, self.shape, self.corner_radius_nm).overlaps_segment(at, at, 0.)
+            })
+    }
+}
+
 /// A technical footprint rectangle resolved independently of copper visibility and layer ownership.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphicView {

@@ -30,6 +30,7 @@ mod footprint_assignment;
 mod grab;
 mod grid_spacing;
 mod hierarchy;
+mod inspection_selection;
 mod mirror;
 mod multiple_sheets;
 mod multiunit;

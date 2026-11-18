@@ -72,7 +72,11 @@ a list of Shortcuts and, on the desktop, the AI page for the Assistant. The
 [schematic keyboard shortcuts](keyboard-shortcuts.md) page inventories the
 schematic bindings with their focus and selection conditions; the
 [board keyboard shortcuts](board-keyboard-shortcuts.md) page does the same for
-the PCB editor, whose keys deliberately reuse several letters differently.
+the PCB editor, whose keys deliberately reuse several letters differently. The
+[library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md) page
+covers the Symbol Editor, Footprint Editor and Parts Library workspaces, which
+dispatch their own small set of chords rather than the project-workspace
+bindings.
 Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
 same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
 bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).
@@ -347,7 +351,8 @@ local cleanup does not route around obstacles or resolve conflicting net names
 ## Symbol properties and selection
 
 The **Selection filters** card sits below Properties in schematic and PCB views.
-Its checkboxes control symbols (including power/ground), wires, no-connect
+[Pins and Pads](pin-pad-selection.md) enable individual inspection selection and start off to preserve existing picking defaults.
+Its checkboxes also control symbols (including power/ground), wires, no-connect
 markers, local/global and hierarchical labels, and sheets in the schematic, and footprints and board graphics in PCB layout. **All items** toggles
 the supported categories together; **Reset** enables them all. Categories without
 individual selection support are disabled. Filtering does not hide geometry or

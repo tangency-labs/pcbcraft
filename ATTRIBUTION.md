@@ -1768,3 +1768,15 @@ a bounded warm-query search before queuing its continuation. The separate starti
 contact used for same-net exemptions follows @travle1's unconnected-pad report;
 whole-path contact unions retain their short/class role. These are original PCBcraft
 changes with no new dependency, asset, external source or persisted format.
+
+
+## Pin and pad inspection selection
+
+The #397 runtime view selection and qualified live command are original PCBcraft
+work. Browser rows/disclosures, filter checkboxes and Properties labels reuse
+the existing chrome adapters and pinned Craft toolkit. The toolkit has no
+electronics endpoint inspection primitive, so the host draws original endpoint
+rings using the shared accent ink. Pad inspection reuses the existing copper
+emphasis and physical shape painter. Pad hit testing reuses the exact copper
+contours already used by connectivity; no external implementation, artwork,
+dependency or native format was introduced.

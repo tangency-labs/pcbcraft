@@ -2,7 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
-- Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; individual pin/pad selection and highlighting remain follow-ups.
+- Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
+
+Pins and Pads can now be selected for inspection through their per-view filters,
+canvas and Browser rows, or the live `view.select_inspection` command. Inspection
+has its own highlight and read-only Properties label without selecting an owner
+for editing. These filters start off to preserve existing picking defaults;
+project edits and reopened documents do not restore stale inspection selections.
 
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the

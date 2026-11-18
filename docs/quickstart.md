@@ -191,7 +191,8 @@ the same `VCC` net name, which can be changed before placement.
    Copying a sheet body includes its child subtree. For a same-project Cut,
    Paste Options requires **Reuse original unparented sheets** to be enabled
    explicitly; leaving it unchecked creates independent copies.
-5. Click a wire segment; only that segment turns blue, and **Delete** removes
+5. **Ctrl+A** (**Cmd+A** on macOS) selects all supported items on the current sheet,
+   respecting Selection filters. Click a wire segment; only that segment turns blue, and **Delete** removes
    it. Use **Undo**, then drag the segment perpendicular to its direction to
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
