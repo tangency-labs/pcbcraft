@@ -864,7 +864,18 @@ fn aperture_exports_preserve_revision_storage_and_history() {
     let revision = s.revision();
     let result = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
     let direct = view(&s).fabrication().unwrap();
-    assert_eq!(result["fabrication"], serde_json::to_value(&direct).unwrap());
+    let records: Vec<_> = direct
+        .files
+        .iter()
+        .map(|output| {
+            let bytes = output.contents.as_bytes();
+            json!({"name": output.name, "size_bytes": bytes.len(), "sha256": format!("{:x}", Sha256::digest(bytes))})
+        })
+        .collect();
+    assert_eq!(
+        result["fabrication"],
+        json!({"files": direct.files, "origin": direct.origin, "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records}})
+    );
     assert_eq!(s.revision(), revision);
     assert_eq!(s.apply(EXPORT_FABRICATION, &json!({})).unwrap(), revision);
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
