@@ -184,8 +184,8 @@ change becomes one revision-checked library undo step. An explicit unchanged map
 is a no-op. Headless `library.preview_pin_remap` prepares the same read-only report.
 The two remap commands use exact decimal strings for their routing identities and
 revisions; existing native records and other commands keep their codecs. Different,
-unassociated or known conflicting revisions do not supply placed evidence; placed
-copies, wires and native part maps stay unchanged. Preparation refuses more than
+unassociated or known conflicting revisions do not supply current pin names, nets
+or pads; placed copies, wires and native part maps stay unchanged. Preparation refuses more than
 4096 affected rows before building a report. All routes charge report evidence
 against 4 MiB, even with no matching copy. Only a lookup for an associated,
 placed terminal triggers the modeled whole-project graph-input and path-text

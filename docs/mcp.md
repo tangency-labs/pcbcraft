@@ -154,8 +154,10 @@ an acknowledgement/project revision, not the capture. Native preview counts the
 complete prospective inspection reply against the existing 16 MiB JSON limit
 before publishing a new capture/modal; oversize refusal preserves the previous
 capture. No report rows are silently truncated. This bounds encoded reply bytes,
-not peak heap. All report routes separately enforce the common 4 MiB report budget
-and conservative graph-input admission described in the [editor guide](properties-and-library-editors.md#review-pin-renumbering).
+not peak heap. All report routes enforce the common 4 MiB report budget. The
+[editor guide](properties-and-library-editors.md#review-pin-renumbering) describes
+conservative graph-input and path-text admission, which runs only for a
+connectivity lookup on an associated, placed terminal.
 A failed form refresh keeps its old token/map owned by the form, so its visible Cancel
 or dismissal can retire it. Refresh can adopt a changed project snapshot while the
 library revision is still current; if the library revision changed, cancel and reopen

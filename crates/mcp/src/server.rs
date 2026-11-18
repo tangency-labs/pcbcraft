@@ -1,14 +1,19 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
     io::{BufRead, Write},
 };
 
 use craft_control::{Frame, read_frame, write_frame};
 
 use crate::backend::Backend;
-use crate::tools::{call_tool, check_arguments, tool_definitions};
+use crate::tools::{call_tool, check_arguments, failure, tool_definitions};
+use serde::{
+    Deserializer,
+    de::{MapAccess, Visitor},
+};
 use serde_json::{Value, json, value::RawValue};
 
 /// The newest protocol revision we speak; offered when the client asks for one we don't know.
@@ -65,12 +70,41 @@ fn raw_member<'a>(text: &'a str, key: &str) -> Result<&'a str, String> {
     object.get(key).map(|value| value.get()).ok_or_else(|| format!("Missing raw `{key}` member."))
 }
 
-/// Validate the exact remap item bytes with the native authoring decoder.
-fn validate_raw_remap_item(mut text: &str) -> Result<(), String> {
-    for key in ["params", "arguments", "params", "item"] {
-        text = raw_member(text, key)?;
+/// Detect repeated decoded keys in a primitive map without decoding its values.
+fn duplicate_primitive_ids(text: &str) -> bool {
+    struct DuplicateKeys;
+    impl<'de> Visitor<'de> for DuplicateKeys {
+        type Value = bool;
+
+        fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+            out.write_str("a primitive map")
+        }
+
+        /// Compare decoded keys so equivalent JSON escapes cannot hide a repeated ID.
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<bool, A::Error> {
+            let mut keys = BTreeSet::new();
+            let mut duplicate = false;
+            while let Some((key, _)) = map.next_entry::<String, &RawValue>()? {
+                duplicate |= !keys.insert(key);
+            }
+            Ok(duplicate)
+        }
     }
-    pcbcraft_engine::authoring::Item::decode(text.as_bytes()).map(|_| ())
+    serde_json::Deserializer::from_str(text).deserialize_map(DuplicateKeys).unwrap_or(false)
+}
+
+/// Look only for repeated primitive keys. Leave size, shape and semantics to the normalized decoder.
+fn raw_remap_has_duplicate_ids(mut text: &str) -> bool {
+    for key in ["params", "arguments", "params", "item"] {
+        let Ok(member) = raw_member(text, key) else { return false };
+        text = member;
+    }
+    let active = raw_member(text, "objects").is_ok_and(duplicate_primitive_ids);
+    active
+        || raw_member(text, "other_units")
+            .ok()
+            .and_then(|units| serde_json::from_str::<BTreeMap<String, &RawValue>>(units).ok())
+            .is_some_and(|units| units.values().any(|objects| duplicate_primitive_ids(objects.get())))
 }
 
 impl Server {
@@ -133,17 +167,18 @@ impl Server {
         reply.map(|r| r.to_string())
     }
 
-    /// Validate the native item from the wire before its normalized `Value` can reach the backend.
+    /// Detect duplicate remap keys on the wire without changing normal request validation.
     fn handle_raw(&mut self, msg: Value, raw: &str) -> Option<Value> {
-        if has_raw_remap_item(&msg)
-            && let Err(message) = validate_raw_remap_item(raw)
-        {
-            return Some(error(msg["id"].clone(), INVALID_PARAMS, message));
-        }
-        self.handle(msg)
+        let duplicate_remap_ids = has_raw_remap_item(&msg) && raw_remap_has_duplicate_ids(raw);
+        self.handle_message(msg, duplicate_remap_ids)
     }
 
     pub fn handle(&mut self, msg: Value) -> Option<Value> {
+        self.handle_message(msg, false)
+    }
+
+    /// Share JSON-RPC handling for programmatic messages and requests parsed from the wire.
+    fn handle_message(&mut self, msg: Value, duplicate_remap_ids: bool) -> Option<Value> {
         let Value::Object(o) = &msg else { return Some(error(Value::Null, INVALID_REQUEST, "message must be an object")) };
         let id = o.get("id").cloned();
         let Some(method) = o.get("method").and_then(Value::as_str) else {
@@ -160,13 +195,13 @@ impl Server {
             }
             return None;
         };
-        Some(match self.request(method, &params) {
+        Some(match self.request(method, &params, duplicate_remap_ids) {
             Ok(r) => response(id, r),
             Err((code, m)) => error(id, code, m),
         })
     }
 
-    fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
+    fn request(&mut self, method: &str, params: &Value, duplicate_remap_ids: bool) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
@@ -187,6 +222,9 @@ impl Server {
                     Some(a) => a.clone(),
                 };
                 check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
+                if duplicate_remap_ids {
+                    return Ok(failure("Duplicate primitive ID in the pin remap item."));
+                }
                 Ok(call_tool(self.backend.as_mut(), name, &args))
             }
             "resources/list" => Ok(json!({"resources": [

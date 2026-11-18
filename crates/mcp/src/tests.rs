@@ -48,10 +48,21 @@ fn pin_remap_wire_refuses_duplicate_primitive_ids() {
     assert_ne!(valid["result"]["isError"], true, "{valid}");
     let refused = reply(&mut server, &duplicate);
     assert_eq!(refused["id"], 1);
-    assert_eq!(refused["error"]["code"], -32602);
-    assert!(refused["error"]["message"].as_str().unwrap().to_ascii_lowercase().contains("duplicate"));
+    assert!(refused.get("error").is_none(), "{refused}");
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(refused["result"]["content"][0]["text"], "Duplicate primitive ID in the pin remap item.");
     let batch = reply(&mut server, &format!(r#"[{duplicate},{{"jsonrpc":"2.0","id":2,"method":"ping"}}]"#));
     assert_eq!(batch, json!([refused,{"jsonrpc":"2.0","id":2,"result":{}}]));
+
+    let padded = request.replacen("\"objects\":{", &format!("\"objects\":{{{}", " ".repeat(1 << 20)), 1);
+    assert!(padded.len() > 1 << 20);
+    assert_eq!(reply(&mut server, &padded), valid, "raw spacing must not count against the normalized item limit");
+
+    let mut invalid: Value = serde_json::from_str(&request).unwrap();
+    invalid["params"]["arguments"]["params"]["item"] = json!({});
+    let ordinary = server.handle(invalid.clone()).unwrap();
+    assert_eq!(ordinary["result"]["isError"], true);
+    assert_eq!(reply(&mut server, &invalid.to_string()), ordinary, "ordinary invalid items must keep their existing tool error");
 }
 
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.

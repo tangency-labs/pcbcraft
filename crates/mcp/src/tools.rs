@@ -124,7 +124,7 @@ fn listing(commands: &Value, all: &[Value]) -> Value {
 }
 
 /// A failed command is a tool result the agent can read, not a protocol error.
-fn failure(message: &str) -> Value {
+pub(crate) fn failure(message: &str) -> Value {
     json!({"isError": true, "content": [{"type": "text", "text": message}]})
 }
 
