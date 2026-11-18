@@ -70,42 +70,47 @@ fn raw_member<'a>(text: &'a str, key: &str) -> Result<&'a str, String> {
     object.get(key).map(|value| value.get()).ok_or_else(|| format!("Missing raw `{key}` member."))
 }
 
-/// Detect repeated decoded keys in a primitive map without decoding its values.
-fn duplicate_primitive_ids(text: &str) -> bool {
-    struct DuplicateKeys;
+/// Inspect raw drawing or unit map keys without decoding primitive values.
+fn duplicate_drawing_keys(text: &str, units: bool) -> Option<&'static str> {
+    struct DuplicateKeys(bool);
     impl<'de> Visitor<'de> for DuplicateKeys {
-        type Value = bool;
+        type Value = Option<&'static str>;
 
         /// Describe the JSON shape accepted by the duplicate-key check.
         fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-            out.write_str("a primitive map")
+            out.write_str("a drawing or unit map")
         }
 
-        /// Compare decoded keys so equivalent JSON escapes cannot hide a repeated ID.
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<bool, A::Error> {
+        /// Compare decoded keys and inspect every original inactive drawing before any normalization.
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
             let mut keys = BTreeSet::new();
             let mut duplicate = false;
-            while let Some((key, _)) = map.next_entry::<String, &RawValue>()? {
+            let mut drawing_error = None;
+            while let Some((key, body)) = map.next_entry::<String, &RawValue>()? {
                 duplicate |= !keys.insert(key);
+                if self.0 && drawing_error.is_none() {
+                    drawing_error = duplicate_drawing_keys(body.get(), false);
+                }
             }
-            Ok(duplicate)
+            Ok(if duplicate {
+                Some(if self.0 { "Duplicate unit name in the pin remap item." } else { "Duplicate primitive ID in the pin remap item." })
+            } else {
+                drawing_error
+            })
         }
     }
-    serde_json::Deserializer::from_str(text).deserialize_map(DuplicateKeys).unwrap_or(false)
+    serde_json::Deserializer::from_str(text).deserialize_map(DuplicateKeys(units)).ok().flatten()
 }
 
-/// Look only for repeated primitive keys. Leave size, shape and semantics to the normalized decoder.
-fn raw_remap_has_duplicate_ids(mut text: &str) -> bool {
+/// Detect repeated drawing and unit keys; leave size, shape and semantics to the normalized decoder.
+fn raw_remap_duplicate(mut text: &str) -> Option<&'static str> {
     for key in ["params", "arguments", "params", "item"] {
-        let Ok(member) = raw_member(text, key) else { return false };
-        text = member;
+        text = raw_member(text, key).ok()?;
     }
-    let active = raw_member(text, "objects").is_ok_and(duplicate_primitive_ids);
-    active
-        || raw_member(text, "other_units")
-            .ok()
-            .and_then(|units| serde_json::from_str::<BTreeMap<String, &RawValue>>(units).ok())
-            .is_some_and(|units| units.values().any(|objects| duplicate_primitive_ids(objects.get())))
+    raw_member(text, "objects")
+        .ok()
+        .and_then(|objects| duplicate_drawing_keys(objects, false))
+        .or_else(|| raw_member(text, "other_units").ok().and_then(|units| duplicate_drawing_keys(units, true)))
 }
 
 impl Server {
@@ -170,17 +175,17 @@ impl Server {
 
     /// Detect duplicate remap keys on the wire without changing normal request validation.
     fn handle_raw(&mut self, msg: Value, raw: &str) -> Option<Value> {
-        let duplicate_remap_ids = has_raw_remap_item(&msg) && raw_remap_has_duplicate_ids(raw);
-        self.handle_message(msg, duplicate_remap_ids)
+        let remap_error = has_raw_remap_item(&msg).then(|| raw_remap_duplicate(raw)).flatten();
+        self.handle_message(msg, remap_error)
     }
 
     /// Handle an already-decoded message, which has no raw wire keys to inspect.
     pub fn handle(&mut self, msg: Value) -> Option<Value> {
-        self.handle_message(msg, false)
+        self.handle_message(msg, None)
     }
 
     /// Share JSON-RPC handling for programmatic messages and requests parsed from the wire.
-    fn handle_message(&mut self, msg: Value, duplicate_remap_ids: bool) -> Option<Value> {
+    fn handle_message(&mut self, msg: Value, remap_error: Option<&'static str>) -> Option<Value> {
         let Value::Object(o) = &msg else { return Some(error(Value::Null, INVALID_REQUEST, "message must be an object")) };
         let id = o.get("id").cloned();
         let Some(method) = o.get("method").and_then(Value::as_str) else {
@@ -197,14 +202,14 @@ impl Server {
             }
             return None;
         };
-        Some(match self.request(method, &params, duplicate_remap_ids) {
+        Some(match self.request(method, &params, remap_error) {
             Ok(r) => response(id, r),
             Err((code, m)) => error(id, code, m),
         })
     }
 
-    /// Dispatch a request; a duplicate remap ID fails inside the checked tool call.
-    fn request(&mut self, method: &str, params: &Value, duplicate_remap_ids: bool) -> Result<Value, (i64, String)> {
+    /// Dispatch a request, surfacing duplicate remap keys inside the checked tool call.
+    fn request(&mut self, method: &str, params: &Value, remap_error: Option<&'static str>) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
@@ -225,8 +230,8 @@ impl Server {
                     Some(a) => a.clone(),
                 };
                 check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
-                if duplicate_remap_ids {
-                    return Ok(failure("Duplicate primitive ID in the pin remap item."));
+                if let Some(message) = remap_error {
+                    return Ok(failure(message));
                 }
                 Ok(call_tool(self.backend.as_mut(), name, &args))
             }

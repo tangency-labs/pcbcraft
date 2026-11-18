@@ -65,6 +65,44 @@ fn pin_remap_wire_refuses_duplicate_primitive_ids() {
     assert_eq!(reply(&mut server, &invalid.to_string()), ordinary, "ordinary invalid items must keep their existing tool error");
 }
 
+/// Refuse two different raw bodies for one inactive unit while accepting two unique units.
+#[test]
+fn pin_remap_wire_refuses_duplicate_unit_names() {
+    use pcbcraft_engine::authoring::{Action, Item, Kind, Primitive, Session as Editor};
+
+    let mut editor = Editor::new(Item::new(Kind::Symbol).unwrap(), false).unwrap();
+    let template = editor.snapshot().objects[&1].clone();
+    for (unit, pin) in [("aux", "3"), ("spare", "4")] {
+        editor.execute(editor.revision(), Action::AddUnit { unit: unit.into() }).unwrap();
+        let mut primitive = template.clone();
+        let Primitive::Pin { number, .. } = &mut primitive else { panic!("fixture primitive must be a pin") };
+        *number = pin.into();
+        editor.execute(editor.revision(), Action::Insert { primitive }).unwrap();
+    }
+    editor.execute(editor.revision(), Action::SelectUnit { unit: "main".into() }).unwrap();
+    let item = serde_json::to_value(editor.snapshot()).unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{
+        "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"params":{"item":item,"pins":[{"unit":"main","object":"1","number":"7"}]}
+    }}});
+    let wire = request.to_string();
+    let units = &item["other_units"];
+    assert_ne!(units["aux"], units["spare"]);
+    let duplicate = wire.replacen("\"other_units\":{", &format!("\"other_units\":{{\"aux\":{},", units["spare"]), 1);
+    assert_ne!(duplicate, wire);
+    assert_eq!(serde_json::from_str::<Value>(&duplicate).unwrap(), request, "normalization would silently keep the last aux body");
+
+    let mut server = Server::new(Box::new(Headless::default()));
+    let reply = |server: &mut Server, line: &str| serde_json::from_str::<Value>(&server.handle_line(line).unwrap()).unwrap();
+    let accepted = reply(&mut server, &wire);
+    assert!(accepted["result"]["content"][0]["text"].is_string(), "{accepted}");
+    assert_ne!(accepted["result"]["isError"], true, "{accepted}");
+    let refused = reply(&mut server, &duplicate);
+    assert_eq!(refused["id"], 1);
+    assert!(refused.get("error").is_none(), "{refused}");
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(refused["result"]["content"][0]["text"], "Duplicate unit name in the pin remap item.");
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
