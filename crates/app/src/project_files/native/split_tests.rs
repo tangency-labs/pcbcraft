@@ -98,7 +98,7 @@ fn replacement(s: &mut Session) {
 /// Deliver worker results through the same editor-side revision and dirty-state logic.
 fn complete(files: &mut ProjectFiles, session: &mut Session, result: Result<Outcome, String>) -> Option<Update> {
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     send.send(result).unwrap();
     files.poll(session, &egui::Context::default())
 }
@@ -202,7 +202,7 @@ fn startup_home_enters_the_workspace_only_after_a_successful_open() {
     for result in [Ok(Outcome::Cancelled), Err("Could not open fixture".to_owned()), load(&root).map(Outcome::Opened)] {
         let (send, receiver) = mpsc::channel();
         let app = harness.state_mut();
-        app.files.job = Some(Job { receiver, revision: app.session.revision() });
+        app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
         // A pending file job deliberately keeps repainting while waiting for its worker.
         harness.step();
         harness.get_by_label("Open Project");
@@ -445,7 +445,7 @@ fn folder_save_does_not_mark_later_edits_saved() {
     apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1270000,"y_nm":0}));
     let staged = s.snapshot().unwrap();
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: s.revision() });
+    files.job = Some(Job { receiver, revision: s.revision(), operation: "test", destination: None });
     std::thread::scope(|scope| {
         let (ready, wait) = mpsc::sync_channel(0);
         let (release, resume) = mpsc::sync_channel(0);
@@ -719,6 +719,46 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert_eq!(decode_packed(&packed).unwrap().documents, custom);
 }
 
+/// Native Save reuses an unchanged lock-bearing board verbatim but rewrites it after
+/// deletion of the only locked placement.
+#[test]
+fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    for x_nm in [0, 25_400_000] {
+        apply(&mut s, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":0}));
+        let symbol = s.project().unwrap().symbols().last().unwrap().id();
+        apply(&mut s, PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x_nm,"y_nm":0}));
+    }
+    let path = s.project().unwrap().board_document_path().unwrap();
+    let mut original = encode_documents(s.snapshot().unwrap()).unwrap();
+    let mut board: serde_json::Value = serde_json::from_slice(&original[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/1");
+    assert_eq!(board["footprints"].as_array().unwrap().len(), 2);
+    let locked_id = board["footprints"][0]["id"].as_u64().unwrap();
+    let survivor = board["footprints"][1].clone();
+    board["format"] = json!("pcbcraft-board/34");
+    board["footprints"][0]["locked"] = json!(true);
+    board["footprints"][1]["locked"] = json!(false);
+    original.insert(path.clone(), serde_json::to_vec(&board).unwrap());
+    let previous = decode_documents(&original).unwrap();
+    s.open_snapshot(previous.clone());
+    let symbol = s.project().unwrap().symbols()[0].id();
+    apply(&mut s, MOVE_SYMBOL, json!({"symbol":symbol,"x_nm":1_270_000,"y_nm":0}));
+    let moved = s.snapshot().unwrap();
+    let saved = working_documents(&moved, Some(&previous), Some(&original)).unwrap();
+    assert!(saved.iter().any(|(name, bytes)| name.starts_with("sheets/") && original.get(name) != Some(bytes)));
+    assert_eq!(saved[&path], original[&path]);
+
+    apply(&mut s, pcbcraft_engine::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{locked_id}")]}));
+    let rewritten = working_documents(&s.snapshot().unwrap(), Some(&moved), Some(&saved)).unwrap();
+    let board: serde_json::Value = serde_json::from_slice(&rewritten[&path]).unwrap();
+    assert_ne!(rewritten[&path], saved[&path]);
+    assert_eq!(board["format"], "pcbcraft-board/1");
+    assert_eq!(board["footprints"], json!([survivor]));
+    assert_eq!(encode_documents(decode_documents(&rewritten).unwrap()).unwrap(), rewritten);
+}
+
 /// The shared headless reader accepts the same folder, entry point and archive as desktop.
 #[test]
 fn headless_and_desktop_read_the_same_split_project() {
@@ -923,7 +963,7 @@ fn recent_history_records_only_successful_file_jobs() {
     }
     let (send, receiver) = mpsc::channel();
     let ctx = egui::Context::default();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     assert!(files.open_path(path.clone(), session.revision(), &ctx).is_err());
     assert!(files.busy());
     send.send(load(&path).map(Outcome::Opened)).unwrap();
@@ -932,7 +972,7 @@ fn recent_history_records_only_successful_file_jobs() {
     assert_eq!(session.project().unwrap().name, "Keep edits");
     assert_eq!(files.recent.to_text(), before);
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     drop(send);
     assert!(matches!(files.poll(&mut session, &ctx), Some(Update::Error(_))));
     assert!(!files.busy());

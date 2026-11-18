@@ -107,12 +107,16 @@ explicit local tool sizes remain a per-view choice. Changing rules invalidates
 previous checks and unfinished route authority without resizing existing copper.
 
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
-Authored defaults have a stable rule UUID and use board format 19 or later
-(20 with zone outlines, 21 with a placement origin, 22 with assembly profile
-adoptions, 23 with copper or board thickness fields, 24 with explicit via intent,
-25 with thermal or insulation material reports); removing the record restores built-in resolution and the format required
-by the remaining
-board data. A board without rules retains its current bytes. Request-local DRC
+Authored defaults have a stable rule UUID and require at least board format 19.
+Zone outlines require at least 20, a placement origin 21, assembly profile adoptions
+22, and the board setup's copper or board thickness fields 23. The highest format
+required by the remaining data takes precedence, including explicit via assignments
+(24), thermal or insulation material reports (25) and footprint locks (34); see the
+[native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
+Removing the record restores built-in resolution and the format required by the
+remaining board data. Omitting rules does not itself require a new board format.
+Unchanged canonical codec bytes are stable; host Open and Save may apply the
+existing [storage migrations](native-project-storage.md). Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
 
 [Class definitions and dimensional resolution](net-classes.md),
@@ -249,8 +253,9 @@ ribbon's planned entries and the editor guide have a stated destination.
 - **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
-  flags and the shared snapshot publication guard. Footprint/zone locks and an
-  optional locked-object selection filter remain broader #81 work.
+  flags and the shared snapshot publication guard. Footprint lock commands/protection, zone locks and an
+  optional locked-object selection filter remain broader #81 work; footprint
+  lock metadata has the storage-only contract below.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -258,6 +263,24 @@ ribbon's planned entries and the editor guide have a stated destination.
   between the schematic and the board.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
+
+## Footprint lock metadata (storage only)
+
+Placed footprints now retain an optional `locked` flag in native board format
+34. Inspection and typed board views report a boolean, defaulting to false for
+older files. Fresh canonical encoding omits false and preserves true; Native Save
+can reuse an unchanged board document verbatim, including explicit false.
+Without active footprint locks, the encoder uses format 25 if material reports
+remain, otherwise the format required by the remaining data. Reports are optional under format 34. This slice
+does **not** expose a lock/unlock command or GUI action, nor does the flag yet
+protect footprint movement, rotation, flipping, alignment or deletion. It is not
+a fixed-obstacle promise. Those shared-command and enforcement workflows remain
+under #81. Clipboard Copy, Cut, Duplicate and Paste refuse active footprint
+locks; that is a clipboard restriction, not Delete protection. Diagnostic
+single-file storage also refuses the flag when true. Canonical clipboard
+fragments without active footprint locks keep their previous encoding. See
+[clipboard](clipboard.md#pcb-canvas) and
+[native storage](native-project-storage.md#placed-footprint-lock-metadata).
 
 ## Fixed tracks and vias
 
@@ -281,10 +304,12 @@ track's fixed geometry. Locking/unlocking alone changes no copper connectivity.
 Copy, duplicate and paste preserve lock flags while assigning new identities
 and the requested new positions to copies. Existing source objects remain
 protected. Cut refuses a selection containing locked copper. Native folder and
-archive saves preserve locks; board format 18 and board-kind clipboard format 3
-are used only while locks are present. Older readers refuse these extensions.
-Unlocked boards/fragments keep their earlier encodings. Unlocking the last object
-returns to the format needed by the remaining authored data. Inspection exposes
+archive saves preserve copper locks; board format 18 (or a later extension
+required by other content) and board-kind clipboard format 3 (or format 4 with
+explicit via assignments) carry them. Older readers refuse these extensions.
+Canonical boards and fragments without copper locks use the formats required by
+their other content. Clearing the last copper lock leaves those requirements in
+force. Inspection exposes
 an explicit `locked` boolean for every track and via, and typed board snapshots
 carry it for later walkaround/shove consumers. No routing solver is added here.
 
@@ -296,12 +321,15 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 2. Board rules (implemented) | board/19 | Board-scoped rule records |
 | 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
-| 4. Zones | next after rules | Zone records; fills are not stored |
+| 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
+| Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) | At least one active footprint lock; can also carry named layer groups |
 
-Each format step follows the existing ladder: a superset of the previous format,
-empty collections refused, older readers rejecting the new format, and
-byte-identical round trips.
+These are selected layout formats, not a consecutive version list. Canonical
+saves use the highest supported format required by the authored data; compatible
+extensions keep their validation rules. Older readers refuse unsupported formats.
+Canonical no-op saves preserve encoding; accepted noncanonical input can be
+normalized, for example by omitting an explicit `locked: false`.
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](via-net-assignments.md) for automatic inheritance, physical
