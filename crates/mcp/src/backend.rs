@@ -82,6 +82,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::part_groups::INSPECT_GROUPS
                         | pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE
+                        | pcbcraft_engine::PREVIEW_BOARD_SETUP
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION

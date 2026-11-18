@@ -13,6 +13,7 @@ use crate::{CommandError, Session, fresh_id};
 mod tests;
 
 mod presets;
+pub mod preview;
 pub mod profile;
 pub use presets::StackupPreset;
 
@@ -770,6 +771,19 @@ impl Session {
     /// Optional silkscreen settings join the same validated edit, retaining no-op history semantics.
     pub(crate) fn set_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
+        self.validate_board_setup_token(params)?;
+        match self.board_setup_candidate(params) {
+            Ok(Some(project)) => self.change(project)?,
+            Ok(None) => {}
+            Err(error) => return Err(self.board_setup_refusal(params, error)),
+        }
+        self.setup_preview = None;
+        Ok(())
+    }
+
+    /// Build the same complete candidate for Preview and Apply without adopting it. All validation,
+    /// including zone ownership otherwise checked on publication, completes before returning.
+    pub(super) fn board_setup_candidate(&self, params: &Value) -> Result<Option<crate::Project>, CommandError> {
         let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
         let project = self.open_project()?;
         let before = project.board.setup.as_ref().ok_or_else(|| CommandError::Unavailable("initialize board setup first".to_owned()))?;
@@ -809,9 +823,10 @@ impl Session {
             }
             crate::board::track::validate(&project, &mut project.board.tracks.clone(), &mut project.board.vias.clone())
                 .map_err(CommandError::InvalidParams)?;
-            self.change(project)?;
+            crate::board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+            return Ok(Some(project));
         }
-        Ok(())
+        Ok(None)
     }
 }
 
