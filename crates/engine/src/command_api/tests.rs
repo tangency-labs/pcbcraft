@@ -4,6 +4,33 @@ use super::*;
 
 const SNAPSHOT: &str = include_str!("../../../../docs/schemas/command-contracts.json");
 
+/// Deprecations invalidate discovery, preserve the locked contract, and warn only on use.
+#[test]
+fn deprecations_change_discovery_not_the_contract_and_warn_on_explicit_use() {
+    let original = json!({"id": "demo", "params": {"properties": {
+        "deprecated": {"type": "boolean"}, "data": {"default": {"deprecated": "still part of the default"}}
+    }}});
+    let deprecations = [
+        Deprecation { command: "demo", parameter: None, since: "0.2.0", replacement: Some("other") },
+        Deprecation { command: "demo", parameter: Some("deprecated"), since: "0.2.0", replacement: None },
+    ];
+    let mut marked = original.clone();
+    mark_deprecations(&mut marked, &deprecations);
+    assert_eq!(marked["deprecated"], true);
+    assert_eq!(marked["params"]["properties"]["deprecated"]["deprecated"], true);
+    assert_eq!(contract_of(&original), contract_of(&marked));
+    assert_eq!(contract_of(&marked)["params"]["properties"]["deprecated"]["type"], "boolean");
+    assert_eq!(contract_of(&marked)["params"]["properties"]["data"]["default"]["deprecated"], "still part of the default");
+    assert_ne!(catalog_revision(&[original]), catalog_revision(&[marked]));
+    let warnings = deprecation_warnings("demo", &json!({"deprecated": null}), &deprecations);
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings[0]["parameter"].is_null());
+    assert_eq!(warnings[0]["replacement"], "other");
+    assert_eq!(warnings[1]["parameter"], "deprecated");
+    assert_eq!(deprecation_warnings("demo", &json!({}), &deprecations).len(), 1);
+    assert!(deprecation_warnings("other", &json!({}), &deprecations).is_empty());
+}
+
 fn described() -> Vec<Value> {
     crate::catalog().iter().map(crate::Command::to_json).collect()
 }

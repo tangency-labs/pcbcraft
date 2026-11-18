@@ -14,7 +14,11 @@ project edits and reopened documents do not restore stale inspection selections.
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version).
+[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+accepts an optional pin to that API version, refusing a different version with
+`version_mismatch`. Discovery can mark deprecated commands and parameters;
+successful calls that use them add warnings without changing the ordinary result.
+See [stating a version](docs/mcp.md#stating-a-version).
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,

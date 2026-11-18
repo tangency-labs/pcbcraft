@@ -1,6 +1,13 @@
 //! Dispatch MCP tools to a headless session or an open desktop editor.
 
-use pcbcraft_engine::{Project, Session, board::Pad, catalog, error_codes::ErrorCode, schematic::Terminal};
+use pcbcraft_engine::{
+    Project, Session,
+    board::Pad,
+    catalog,
+    command_api::{self, CAPABILITIES, COMMAND_API_VERSION, DEPRECATIONS, Deprecation},
+    error_codes::ErrorCode,
+    schematic::Terminal,
+};
 use serde_json::{Value, json};
 
 use crate::Failure;
@@ -43,12 +50,47 @@ pub trait Backend {
     }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
+    /// Discover commands and their serving backend's API metadata.
+    fn command_catalog(&mut self) -> Result<(Value, Value), Failure> {
+        self.call("engine.commands", json!({})).map(|commands| (commands, api_metadata(COMMAND_API_VERSION)))
+    }
+    /// Execute a command, returning its ordinary result and any deprecation warnings separately.
+    fn execute(&mut self, request: Value) -> Result<(Value, Vec<Value>), Failure> {
+        self.call("engine.execute", request).map(|result| (result, Vec::new()))
+    }
+}
+
+pub(crate) fn api_metadata(version: u32) -> Value {
+    json!({"command_api_version": version, "capabilities": CAPABILITIES})
+}
+
+pub(crate) fn execute_warnings(request: &Value, deprecations: &[Deprecation]) -> Vec<Value> {
+    request["command"].as_str().map_or_else(Vec::new, |id| command_api::deprecation_warnings(id, &request["params"], deprecations))
+}
+
+pub(crate) fn describe_engine_commands(deprecations: &[Deprecation]) -> Vec<Value> {
+    catalog()
+        .iter()
+        .map(|command| {
+            let mut described = command.to_json();
+            command_api::mark_deprecations(&mut described, deprecations);
+            described
+        })
+        .collect()
 }
 
 /// A session of its own, with no window.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Headless {
     session: Session,
+    api_version: u32,
+    deprecations: &'static [Deprecation],
+}
+
+impl Default for Headless {
+    fn default() -> Self {
+        Self { session: Session::default(), api_version: COMMAND_API_VERSION, deprecations: DEPRECATIONS }
+    }
 }
 
 impl Headless {
@@ -56,14 +98,31 @@ impl Headless {
     pub fn with_project(project: std::sync::Arc<Project>) -> Self {
         let mut session = Session::default();
         session.open_snapshot(project);
-        Self { session }
+        Self { session, ..Self::default() }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_command_api(api_version: u32, deprecations: &'static [Deprecation]) -> Self {
+        Self { api_version, deprecations, ..Self::default() }
     }
 }
 
 impl Backend for Headless {
     /// Apply the requested command and return either inspection or the resulting revision.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
-        call_session(&mut self.session, method, &params)
+        if method == "engine.commands" {
+            return Ok(Value::Array(describe_engine_commands(self.deprecations)));
+        }
+        serve_session(&mut self.session, method, &params, self.api_version)
+    }
+
+    fn command_catalog(&mut self) -> Result<(Value, Value), Failure> {
+        self.call("engine.commands", json!({})).map(|commands| (commands, api_metadata(self.api_version)))
+    }
+
+    fn execute(&mut self, request: Value) -> Result<(Value, Vec<Value>), Failure> {
+        let result = serve_session(&mut self.session, "engine.execute", &request, self.api_version)?;
+        Ok((result, execute_warnings(&request, self.deprecations)))
     }
 
     fn describe(&self) -> String {
@@ -76,13 +135,22 @@ impl Backend for Headless {
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
 /// because a bare session has no window to act on. Clipboard/export queries retain their
 /// requested data even when project inspection is suppressed.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
+    serve_session(session, method, params, COMMAND_API_VERSION)
+}
+
+/// Dispatch with the serving backend's version before invoking engine handlers.
+fn serve_session(session: &mut Session, method: &str, params: &Value, api_version: u32) -> Result<Value, Failure> {
     match method {
-        "engine.commands" => Ok(json!(catalog().iter().map(|c| c.to_json()).collect::<Vec<_>>())),
+        "engine.commands" => Ok(Value::Array(describe_engine_commands(DEPRECATIONS))),
         "engine.execute" => {
             let id = command_id(params)?;
             if is_window_command(id) {
                 return Err(needs_live_editor(&format!("`{id}`")));
+            }
+            if !params["version"].is_null() && pcbcraft_engine::command(id).is_some() {
+                command_api::check_version(id, &params["version"], api_version)?;
             }
             if params["inspect"].as_bool() == Some(false)
                 && !matches!(
