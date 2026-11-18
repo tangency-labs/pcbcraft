@@ -2542,3 +2542,62 @@ fn review408_via_uses_latched_preview_target_until_release() {
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     }
 }
+
+/// A one-point reached plan at the fixed head must validate its via there, even while
+/// the display retains a longer preview. Landing on a bottom-layer class that rejects
+/// the via size cannot change layers or history.
+#[test]
+fn review408_via_at_fixed_head_validates_adopted_geometry() {
+    for blocked in [false, true] {
+        let mut h = routable();
+        let start = Point { x_nm: 1_270_000, y_nm: -5_080_000 };
+        let head = Point { x_nm: 5_080_000, y_nm: -5_080_000 };
+        let old_target = Point { x_nm: 7_620_000, y_nm: -5_080_000 };
+        let top = layer_named(&h, "Top");
+        let bottom = layer_named(&h, "Bottom");
+        if blocked {
+            let pad = airwires(&h)[0].from.position;
+            let revision = h.state().session.revision();
+            h.state_mut().run(
+                pcbcraft_engine::ADD_TRACKS,
+                &json!({
+                    "layer":top,"width_nm":250_000,
+                    "points":[pad,Point { x_nm: pad.x_nm, y_nm: 2_540_000 },
+                        Point { x_nm: head.x_nm, y_nm: 2_540_000 },head],
+                    "layer_changes":[{"at":1,"layer":bottom}],
+                    "via_diameter_nm":1_000_000,"via_drill_nm":500_000,
+                    "expected_revision":revision
+                }),
+            );
+            assert_eq!(h.state().message, None);
+            h.run();
+            classify_route(&mut h, "Larger landing via", json!({"min_via_diameter_nm":800_000}));
+        }
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, start);
+        click_route(&mut h, head);
+        h.hover_at(at(&h, old_target));
+        h.run_steps(30);
+        assert!(preview_ends_at(&h, pcbcraft_chrome::Tokens::get().board_front, at(&h, old_target)));
+        via_at(&mut h, head);
+        h.run_steps(30);
+        let state = &h.state().views.active.board;
+        assert_eq!(state.active_layer.as_deref(), Some(if blocked { top.as_str() } else { bottom.as_str() }), "blocked={blocked}");
+        assert!(state.tracks.routing(), "the fixed route must survive via validation");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        if blocked {
+            assert!(h.state().message.is_some(), "the via at the head must fail before layer adoption");
+        } else {
+            assert_eq!(h.state().message, None);
+            h.key_press(Key::Enter);
+            h.run_steps(30);
+            assert_eq!(h.state().message, None);
+            assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), vec![head]);
+            assert!(tracks(&h).iter().all(|track| track.start != old_target && track.end != old_target));
+            h.state_mut().run("edit.undo", &json!({}));
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
+}

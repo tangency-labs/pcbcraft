@@ -97,6 +97,11 @@ through vias, publishes through the existing prepared `pcb.add_tracks` transacti
 with one undo entry. Escape, focus/view release, hidden or changed active layers,
 size changes, shared edits and project replacement revoke pending adoption.
 
+Validation extends the fixed vertices with the current reached plan and checks a
+pending via at the last adopted point. Returning to the fixed head can produce a
+one-point plan while an older, longer preview remains visible; that preview is
+display-only and does not determine the validated path or via location.
+
 `Session::route_planning` captures a reusable `PlanningContext` without projecting
 pads. `prepare_route_plan` returns a read-only `PlanningJob`. Hosts check its source
 and their input generation before adopting a result. Contact projection yields

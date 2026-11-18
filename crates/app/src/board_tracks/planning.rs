@@ -32,6 +32,14 @@ struct Ready {
     key: Key,
     plan: Plan,
 }
+impl Ready {
+    /// Extend the fixed prefix with this plan, omitting its duplicate route head.
+    fn points(&self) -> Vec<Point> {
+        let mut points = self.key.prefix.clone();
+        points.extend(self.plan.points.iter().copied().skip(1));
+        points
+    }
+}
 
 /// Retain one coalesced search, reusable obstacle preparation and the latest valid preview.
 #[derive(Default)]
@@ -151,9 +159,14 @@ impl Planning {
     pub(super) fn committing(&self) -> bool {
         self.wanted.as_ref().is_some_and(|w| w.action.is_some())
     }
-    /// Whether the displayed path is also the current pointer's fully solved path.
+    /// Whether the current request is reached, independently of retained display geometry.
     pub(super) fn current_ready(&self) -> bool {
         matches!((&self.wanted, &self.ready), (Some(w), Some(r)) if w.key == r.key && r.plan.outcome == Outcome::Reached)
+    }
+    /// Exact points a current reached request will adopt, including a one-point plan at
+    /// the fixed head. Retained display geometry never supplies validation authority.
+    pub(super) fn current_path(&self) -> Option<Vec<Point>> {
+        self.ready.as_ref().filter(|_| self.current_ready()).map(Ready::points)
     }
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
@@ -248,8 +261,7 @@ impl Planning {
                 wanted.action = None;
                 return Some(Err(self.status().unwrap_or_default()));
             }
-            let mut points = wanted.key.prefix.clone();
-            points.extend(ready.plan.points.iter().copied().skip(1));
+            let points = ready.points();
             if points.len() > MAX_PATH_POINTS {
                 wanted.action = None;
                 return Some(Err("Route has too many vertices".into()));
@@ -476,11 +488,48 @@ mod tests {
         }
         assert_eq!(p.status().as_deref(), Some("Route search incomplete"));
         assert!(!p.current_ready());
+        assert!(p.current_path().is_none(), "display fallback cannot authorize validation");
         assert_eq!(p.preview(&draft, sizes.0), visible, "a failed search must not erase legal geometry");
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, Some(Action::Vertex { finish: true }));
         assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().is_err());
         assert!(s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().tracks().is_empty());
         p.cancel();
         assert_eq!(p.preview(&draft, sizes.0), draft.points);
+    }
+
+    /// Returning to the fixed head retains the old ghost but validates and adopts only
+    /// the prefix. Pending requests supply no candidate.
+    #[test]
+    fn one_point_reached_plan_keeps_display_separate_from_adoption() {
+        let (s, view, mut draft) = fixture();
+        let head = Point { x_nm: 2_000_000, y_nm: 0 };
+        draft.points.push(head);
+        let mut p = Planning::default();
+        let sizes = (250_000, 600_000, 300_000);
+        let target = Point { x_nm: 5_000_000, y_nm: 0 };
+        p.request(&draft, view.board.target.unwrap(), target, false, sizes, None);
+        assert!(p.current_path().is_none());
+        for _ in 0..100 {
+            p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None);
+            if p.current_ready() {
+                break;
+            }
+        }
+        assert_eq!(p.current_path().unwrap().last(), Some(&target));
+        let visible = p.preview(&draft, sizes.0);
+        p.request(&draft, view.board.target.unwrap(), head, false, sizes, Some(Action::Vertex { finish: false }));
+        for _ in 0..100 {
+            assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None).is_none());
+            if p.current_ready() {
+                break;
+            }
+        }
+        assert!(p.current_ready());
+        assert_eq!(p.ready.as_ref().unwrap().plan.points, vec![head]);
+        assert_eq!(p.preview(&draft, sizes.0), visible);
+        assert_eq!(p.current_path(), Some(draft.points.clone()));
+        let (adopted, _) = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().unwrap();
+        assert_eq!(adopted, draft.points);
+        assert!(p.current_path().is_none());
     }
 }

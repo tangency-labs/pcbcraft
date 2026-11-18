@@ -1196,7 +1196,8 @@ pub(super) fn paint(
 /// While the menu is open the preview stays at its opening point and the system pointer returns.
 /// Paint the clearance envelope behind the draft copper at the same width used by DRC.
 /// The draft retains its layer color while preparation is pending; readiness is status, not
-/// a different copper material that flashes on every pointer change.
+/// a different copper material that flashes on every pointer change. Validation uses the
+/// current reached path and its endpoint via, independently of the retained display preview.
 pub(super) fn paint_draft(
     painter: &egui::Painter,
     response: &Response,
@@ -1230,19 +1231,25 @@ pub(super) fn paint_draft(
     let (at, contact) = state.snap_target((at, contact), pointer, camera, rect, &layer);
     if let Some(draft) = &state.draft {
         state.planning.request(draft, view.target, at, state.diagonal_first, (state.width_nm, state.via_diameter_nm, state.via_drill_nm), None);
-        let path = state.planning.preview(draft, state.width_nm);
-        let mut changes = draft.changes.clone();
-        if let Some(next) = state.planning.via_layer()
-            && path.len() > 1
-        {
-            let at = path.len() - 1;
-            if !changes.iter().any(|(existing, _)| *existing == at) {
-                changes.push((at, next.to_owned()));
+        let changes_at = |points: usize| {
+            let mut changes = draft.changes.clone();
+            if let Some(next) = state.planning.via_layer()
+                && points > 1
+            {
+                let at = points - 1;
+                if !changes.iter().any(|(existing, _)| *existing == at) {
+                    changes.push((at, next.to_owned()));
+                }
             }
-        }
-        // Queue the exact geometry already resolved for painting; do not project every pad
-        // a second time merely to prepare the same pointer request.
-        if state.planning.current_ready() && (2..=MAX_PATH_POINTS).contains(&path.len()) && Some(draft.layer.as_str()) == active {
+            changes
+        };
+        // Validate exactly what the click adopts. A one-point reached plan can retain an
+        // older, longer display preview whose endpoint must never determine the via location.
+        if let Some(path) = state.planning.current_path()
+            && (2..=MAX_PATH_POINTS).contains(&path.len())
+            && Some(draft.layer.as_str()) == active
+        {
+            let changes = changes_at(path.len());
             let mut params = json!({"board":view.target.board,"layer":draft.start,"width_nm":state.width_nm,"points":path,"expected_revision":draft.source.revision});
             if !changes.is_empty() {
                 params["layer_changes"] = json!(changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
@@ -1258,6 +1265,8 @@ pub(super) fn paint_draft(
         } else if !state.preparation.committing() {
             state.preparation.cancel();
         }
+        let path = state.planning.preview(draft, state.width_nm);
+        let changes = changes_at(path.len());
         let layers = segment_layers(&draft.start, &changes, path.len());
         let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
         let width = width_px(camera, rect, state.width_nm);
