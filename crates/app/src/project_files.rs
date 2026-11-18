@@ -342,6 +342,7 @@ impl ProjectFiles {
         }
         let snapshot = session.snapshot().ok_or("no project open")?;
         let previous = self.previous(&snapshot);
+        let path = native::with_extension(format, path)?;
         let destination = Some(path.display().to_string());
         let (send, receiver) = mpsc::channel();
         let ctx = ctx.clone();

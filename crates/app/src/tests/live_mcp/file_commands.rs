@@ -41,7 +41,8 @@ fn live_save_as_and_open_round_trip_folders_and_archives() {
     assert_eq!(h.state().session().project().unwrap().name, "board", "an Untitled project takes the folder's name");
     let saved = authored(&h);
 
-    window(&mut h, connection, "file.save_as", json!({"path": root.join("board-copy"), "format": "archive"}));
+    let started = window(&mut h, connection, "file.save_as", json!({"path": root.join("board-copy"), "format": "archive"}));
+    assert_eq!(started["file"]["operation"]["destination"], archive.display().to_string(), "reports the .pc name it writes");
     finish_file(&mut h);
     let inspected = payload(tool(&mut h, connection, "inspect_editor", json!({})));
     assert_eq!(inspected["file"]["location"], json!({"path": archive.display().to_string(), "format": "archive"}));
