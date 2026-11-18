@@ -40,24 +40,41 @@ this unmeasured boundary into a pass.
 
 ### Copper at the board limits
 
-The track and via limits bound stored counts, not how long a check takes. For copper edits
-that require connectivity validation, the synchronous island check runs to completion.
-Walkaround obstacle preparation, track-move preparation and the design check can advance
-island work in steps, but a single index lookup may still scan and sort a board's worth of
-candidates. Walkaround's probe budget limits the route search, not its obstacle preparation.
-The design check's later clearance sweep is separate from the island check.
+The island check and the separate design-rule clearance pass index copper bounds in four
+projection directions, so long parallel diagonals need not all reach the exact distance checks.
+The incremental paths charge each visited branch or leaf against the traversal budget, after
+building the index. Copper edits that require synchronous connectivity validation still run it
+to completion. Overlap in all projections and large sets of actual clearance violations can
+still require quadratic work. Walkaround's probe budget applies to route search, not to
+obstacle preparation.
 
-Parallel minimum-width tracks on one layer can have overlapping bounds for every pair
-without touching. `overlapping_copper_reaches_every_pair_and_reports_its_island_time`
-checks the all-pairs candidate count and that all tracks stay isolated, then reports the
-island-check time on native targets.
+To reproduce the native release diagnostic, run one process per case. Use `sparse` or
+`overlap` for the layout, `islands`, `sweep` or `job` for the phase, and 16384, 32768 or
+65536 for the track count:
 
-In a historical unoptimised WSL run with a temporary fourth test size, the island check took
-1.0 s, 4.4 s, 13.4 s and 46.4 s at 1,024, 2,048, 4,096 and 8,192 tracks. A quadratic fit
-to the three smaller sizes predicts 48 s for the fourth. Extrapolating the fit to all four
-points gives about 43 minutes at 65,536 tracks. This is not a measurement at the track limit,
-a bound on mixed layouts, or a prediction for an optimised build. This change does not cap
-work over overlapping pairs.
+```sh
+cargo test --locked --release -p pcbcraft-engine --lib --no-run
+# Set TEST_BIN to the pcbcraft_engine test executable printed by the build above.
+PCB_CHECK_LAYOUT=overlap PCB_CHECK_PHASE=islands PCB_CHECK_TRACKS=65536 \
+  timeout 60s "$TEST_BIN" --exact board::drc::job::release_board_checks::release_board_checks --ignored --nocapture
+```
+
+The sparse recipe uses a grid; the overlap recipe uses isolated, minimum-width parallel
+diagonals with a point common to every XY bounding box. Both are fixed, track-only layouts.
+The independent clearance cases supply the known singleton islands in advance. The synchronous
+sweep measures decisions without formatting findings; the incremental job includes capped
+finding collection. Neither is an end-to-end DRC or editor latency measurement.
+
+In a Linux x86-64 release baseline (Intel Core i9-11900F, rustc 1.95.0) before adding the
+four-direction bounds, the measured whole-case times in seconds were:
+
+| Tracks | Islands sparse | Islands overlap | Sync sweep sparse | Sync sweep overlap | Incremental sweep sparse | Incremental sweep overlap |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,384 | 0.015 | 16.13 | 0.032 | 14.78 | 0.032 | 14.02 |
+| 32,768 | 0.032 | >60 | 0.064 | 59.42 | 0.064 | 56.21 |
+| 65,536 | 0.064 | >60 | 0.114 | >60 | 0.114 | >60 |
+
+Each cell is one process. `>60` is a timed-out case, not a measured finish.
 
 ## Recorded platforms
 

@@ -544,7 +544,6 @@ fn board_document_budget_refuses_addition_locking_and_via_assignment_atomically(
 /// Track `k` of `n` parallel minimum-width diagonals 20 um apart along both axes, so 14 um apart
 /// across their width: each runs 1 mm past the origin on both axes, so every track's bounds
 /// contain the origin, while no two tracks touch.
-#[cfg(not(target_arch = "wasm32"))]
 fn diagonal(k: usize, n: usize) -> Track {
     const PITCH: i64 = 20_000;
     let c = (k as i64 - n as i64 / 2) * PITCH;
@@ -552,41 +551,17 @@ fn diagonal(k: usize, n: usize) -> Track {
     Track { id: Uuid::from_u128(1 << 64 | k as u128), locked: false, layer: Uuid::from_u128(9), width_nm: MIN_WIDTH_NM, start, end }
 }
 
-/// Parallel tracks with overlapping bounds and no copper contact exercise the island check's
-/// all-pairs case. The test checks the candidate count and that each track stays isolated, and that the
-/// layout still fits the coordinate range at the track limit. It then writes the build time at
-/// each size to standard error, which the test harness does not capture, for the extrapolation
-/// in `docs/performance-coverage.md`. This timing diagnostic is run only on native targets.
-#[cfg(not(target_arch = "wasm32"))]
+/// Common XY bounds do not force an all-pairs traversal on separated diagonal tracks.
+/// Also keep the coordinate-range check at the actual supported track limit.
 #[test]
-fn overlapping_copper_reaches_every_pair_and_reports_its_island_time() {
-    use std::io::Write;
+fn overlapping_bounds_do_not_join_or_visit_every_isolated_track_pair() {
     let widest = diagonal(0, MAX_TRACKS);
     assert!(widest.start.x_nm.abs().max(widest.end.y_nm.abs()) <= crate::schematic::MAX_CENTER_NM);
-
-    let payload = MAX_TRACKS * std::mem::size_of::<Track>() + MAX_VIAS * std::mem::size_of::<Via>();
-    std::io::stderr()
-        .write_all(
-            format!(
-                "copper vector payload: {payload} bytes per full board, {} bytes across {} Undo states (excluding capacity and other board data)\n",
-                payload * crate::MAX_HISTORY,
-                crate::MAX_HISTORY
-            )
-            .as_bytes(),
-        )
-        .unwrap();
-    for n in [1024, 2048, 4096] {
-        let tracks: Vec<_> = (0..n).map(|k| diagonal(k, n)).collect();
-        let started = std::time::Instant::now();
-        let (_, members) = islands(&[], &tracks, &[]);
-        let elapsed = started.elapsed();
-        assert_eq!(members.len(), n, "no two tracks touch");
-
-        let builder = IslandBuilder::new(&[], &tracks, &[]);
-        let index = builder.index.as_ref().unwrap();
-        let reached: usize = (0..n).map(|i| index.candidates(builder.bounds[i], 0.).into_iter().filter(|&j| j < i).count()).sum();
-        assert_eq!(reached, n * (n - 1) / 2, "every pair reaches the contact test");
-        let line = format!("overlapping copper islands: {n} tracks, {reached} pairs, {} ms\n", elapsed.as_millis());
-        std::io::stderr().write_all(line.as_bytes()).unwrap();
-    }
+    let n = 1024;
+    let tracks: Vec<_> = (0..n).map(|k| diagonal(k, n)).collect();
+    let mut builder = IslandBuilder::new(&[], &tracks, &[]);
+    assert!(builder.bounds.iter().all(|b| b[0] <= 0. && b[1] <= 0. && b[2] >= 0. && b[3] >= 0.));
+    assert!(builder.step(n * 64), "fewer visits than the half-million XY pairs");
+    let (_, members) = builder.finish(&[], &tracks, &[]);
+    assert_eq!(members, (0..n).map(|i| vec![i]).collect::<Vec<_>>());
 }

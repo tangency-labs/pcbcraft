@@ -4,7 +4,10 @@ use super::*;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "release_board_checks.rs"]
 mod release_board_checks;
-use crate::board::track::{Copper, IslandBuilder, lands_from_footprints};
+use crate::board::{
+    pair_index::{PairStep, PairWalk},
+    track::{Copper, IslandBuilder, lands_from_footprints},
+};
 
 pub use super::super::work::{Progress as CheckProgress, Source as CheckSource};
 
@@ -19,8 +22,7 @@ pub struct CheckJob {
     members: Vec<Vec<usize>>,
     geometry: Option<BoardGeometry>,
     class_rules: Option<super::super::class_rules::Context>,
-    pairs: Vec<usize>,
-    bounds: Vec<[f64; 4]>,
+    clearance_walk: Option<PairWalk>,
     cursor: (usize, usize),
     work: usize,
     found: Findings,
@@ -52,8 +54,7 @@ impl Session {
             members: Vec::new(),
             geometry: None,
             class_rules: None,
-            pairs: Vec::new(),
-            bounds: Vec::new(),
+            clearance_walk: None,
             cursor: (0, 1),
             work: 0,
             found: Findings::default(),
@@ -91,7 +92,7 @@ impl CheckJob {
             0 => self.source.snapshot.board.footprints.len(),
             1 => count.saturating_mul(count.saturating_sub(1)) / 2,
             2 => self.lands.len().saturating_mul(self.lands.len().saturating_sub(1)) / 2,
-            5 => self.pairs.len().saturating_mul(self.pairs.len().saturating_sub(1)) / 2,
+            5 => count.saturating_mul(count.saturating_sub(1)) / 2,
             7 => count,
             8 => self.courtyards.len().saturating_mul(self.courtyards.len().saturating_sub(1)) / 2,
             _ => 1,
@@ -113,7 +114,6 @@ impl CheckJob {
             return false;
         };
         let rules = self.source.effective.values;
-        let maximum = self.class_rules.as_ref().map_or(rules.clearance_nm, |context| context.max_clearance(rules.clearance_nm));
         match self.phase {
             0 => {
                 let footprints: Vec<_> = view.footprints_range(self.work, budget.min(32)).collect();
@@ -154,9 +154,7 @@ impl CheckJob {
             3 => {
                 if let Some(g) = &self.geometry {
                     self.class_rules = capture_class_rules(view, g, &self.source.effective, &mut self.found);
-                    self.bounds = g.items.iter().map(|i| i.contour.bounds()).collect();
-                    self.pairs = (0..g.items.len()).collect();
-                    self.pairs.sort_by(|a, b| self.bounds[*a][0].total_cmp(&self.bounds[*b][0]));
+                    self.clearance_walk = Some(g.clearance_walk(rules.clearance_nm, self.class_rules.as_ref()));
                 }
             }
             4 => {
@@ -166,34 +164,19 @@ impl CheckJob {
                 }
             }
             5 => {
-                if let Some(g) = &self.geometry {
+                if let (Some(g), Some(walk)) = (&self.geometry, &mut self.clearance_walk) {
+                    let mut done = false;
                     for _ in 0..budget {
-                        let (p, n) = self.cursor;
-                        if p >= self.pairs.len() {
-                            break;
-                        }
-                        if n >= self.pairs.len() {
-                            self.cursor = (p + 1, p + 2);
-                            continue;
-                        }
-                        let (i, j) = (self.pairs[p], self.pairs[n]);
-                        self.cursor.1 += 1;
+                        let (i, j) = match walk.step() {
+                            PairStep::Pending => continue,
+                            PairStep::Pair(i, j) => (i, j),
+                            PairStep::Done => {
+                                done = true;
+                                break;
+                            }
+                        };
                         self.work += 1;
-                        if self.bounds[j][0] > self.bounds[i][2] + maximum as f64 {
-                            self.cursor = (p + 1, p + 2);
-                            continue;
-                        }
-                        if self.bounds[i][1] > self.bounds[j][3] + maximum as f64 || self.bounds[j][1] > self.bounds[i][3] + maximum as f64 {
-                            continue;
-                        }
-                        let (a, b) = (&g.items[i], &g.items[j]);
-                        if a.island == b.island || (a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets) {
-                            continue;
-                        }
-                        let (i, j) = (i.min(j), i.max(j));
-                        let clearance =
-                            self.class_rules.as_ref().map_or(rules.clearance_nm, |context| context.clearance(Some(i), j, rules.clearance_nm));
-                        if let Some(d) = g.evaluate(i, j, clearance)
+                        if let Some(d) = g.clearance_decision(i, j, rules.clearance_nm, self.class_rules.as_ref())
                             && d.clearance_violation
                         {
                             let (a, b) = (&g.items[i], &g.items[j]);
@@ -211,10 +194,11 @@ impl CheckJob {
                             self.found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
                         }
                     }
-                    if self.cursor.0 < self.pairs.len() {
+                    if !done {
                         return false;
                     }
                 }
+                self.clearance_walk = None;
             }
             6 => {
                 if let Some(r) = view.ratsnest_with_copper(&self.copper) {

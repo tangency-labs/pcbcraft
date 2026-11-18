@@ -26,6 +26,7 @@ pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+mod pair_index;
 pub mod ratsnest;
 pub mod reference;
 pub mod route;

@@ -9,9 +9,9 @@
 #[cfg(test)]
 use super::geometry::{inside, segment_distance};
 use super::{
-    clearance::BoundsTree,
     definition::PadShape,
     geometry::Contour as PadContour,
+    pair_index::{Hit, PairIndex, Search},
     setup::LayerPurpose,
     view::{BoardView, CopperLayers},
 };
@@ -383,11 +383,8 @@ fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs:
 }
 
 /// Copper items (pads, tracks and vias together) below which island contact phases enumerate
-/// neighbors directly instead of building a bounds index. Release board benchmarks put the crossover
-/// between the 76-item reference board, where the index made clearance preparation, the design
-/// check and track moves 7-20% slower by minimum, and the 1,376-item dense board, where it made
-/// them 13-21% faster in three runs. The clearance index switches at the same 128 items for
-/// the same reason.
+/// neighbors directly instead of building a bounds index. Retains the original small-board
+/// threshold for contact preparation.
 pub(super) const PAIRWISE_BELOW: usize = 128;
 
 /// Whether island contact phases enumerate lower-numbered neighbors directly for `items`
@@ -397,9 +394,9 @@ fn compares_every_pair(items: usize) -> bool {
 }
 
 /// Resumable pair enumeration for the existing copper-island predicates. Small boards enumerate
-/// lower-numbered neighbors directly; larger ones use a packed bounds index. If every item's bounds
-/// overlap, every eligible pair is still tested. Work units include neighbor setup, pair tests
-/// and advancing exhausted nodes; one lookup can scan and sort the whole board before yielding.
+/// lower-numbered neighbors directly; larger ones traverse a four-axis bounds tree. A step
+/// charges every visited branch and leaf, not just emitted pairs. Overlap in all projections
+/// can still require visiting every eligible pair.
 /// Pad-to-pad contacts stay separate from legacy clearance islands.
 pub(super) struct IslandBuilder {
     parent: Vec<usize>,
@@ -407,7 +404,8 @@ pub(super) struct IslandBuilder {
     bounds: Vec<[f64; 4]>,
     layers: Vec<Vec<Uuid>>,
     /// None when lower-numbered neighbors are enumerated directly.
-    index: Option<BoundsTree>,
+    index: Option<PairIndex>,
+    search: Search,
     /// The node being joined to its lower-numbered neighbors.
     node: usize,
     /// That node's remaining neighbors to test.
@@ -420,8 +418,8 @@ enum Nearby {
     Lookup,
     /// Every node below this one, tested from the highest down.
     Below(usize),
-    /// The index's candidates, tested from the end.
-    Found(Vec<usize>),
+    /// Resume the indexed search without allocating or sorting its candidates.
+    Indexed,
 }
 
 impl IslandBuilder {
@@ -441,8 +439,17 @@ impl IslandBuilder {
 
     /// Build on the chosen path; tests compare both paths on the same board.
     fn with_path(lands: usize, contours: Vec<PadContour>, bounds: Vec<[f64; 4]>, layers: Vec<Vec<Uuid>>, pairwise: bool) -> Self {
-        let index = (!pairwise).then(|| BoundsTree::new(bounds.clone()));
-        Self { parent: (0..contours.len()).collect(), contours, bounds, layers, index, node: lands, nearby: Nearby::Lookup }
+        let index = (!pairwise).then(|| PairIndex::new(contours.iter()));
+        Self {
+            parent: (0..contours.len()).collect(),
+            contours,
+            bounds,
+            layers,
+            index,
+            search: Search::default(),
+            node: lands,
+            nearby: Nearby::Lookup,
+        }
     }
 
     /// The same builder forced onto one path, to check that both give the same islands.
@@ -495,15 +502,18 @@ impl IslandBuilder {
                     self.nearby = match &self.index {
                         None => Nearby::Below(i),
                         Some(index) => {
-                            let mut found = index.candidates(self.bounds[i], 0.);
-                            found.retain(|&j| j < i);
-                            Nearby::Found(found)
+                            index.begin(&mut self.search, 0.);
+                            Nearby::Indexed
                         }
                     };
                     continue;
                 }
                 Nearby::Below(below) => below.checked_sub(1).inspect(|&j| *below = j),
-                Nearby::Found(found) => found.pop(),
+                Nearby::Indexed => match self.index.as_ref().unwrap().next(i, &mut self.search) {
+                    Hit::Pending => continue,
+                    Hit::Candidate(candidate) => Some(candidate),
+                    Hit::Done => None,
+                },
             };
             let Some(j) = next else {
                 self.node += 1;
