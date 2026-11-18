@@ -305,6 +305,9 @@ mod tests {
         assert_eq!(comparison_netlist_reply(small.clone()).unwrap(), small);
         let large = json!({"comparison":{"notes":[{"message":"\"".repeat(MAX_REPLY_BYTES / 2)}]}});
         let error = comparison_netlist_reply(large).unwrap_err();
-        assert_eq!(error.to_json(), json!({"code":"unavailable","message":"Netlist comparison reply exceeds the live editor's 16 MiB limit.","details":{}}));
+        assert_eq!(
+            error.to_json(),
+            json!({"code":"unavailable","message":"Netlist comparison reply exceeds the live editor's 16 MiB limit.","details":{}})
+        );
     }
 }

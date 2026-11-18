@@ -378,7 +378,8 @@ impl Netlist {
     }
 
     /// Require unique persistent net IDs and component IDs, unique terminal numbers per
-    /// component, and an existing terminal address for every placement (at most one per terminal).
+    /// component, and an existing terminal address for every placement. Placements are unique;
+    /// accepted netlists must place every terminal, even those of unplaced schematic units.
     fn check_addresses(&self) -> Result<(), String> {
         let mut net_ids = BTreeSet::new();
         for id in self.nets.iter().filter_map(|net| net.id) {
@@ -409,6 +410,12 @@ impl Netlist {
             if !listed.insert(key) {
                 return Err(format!("{} terminal {} is listed more than once", terminal.part, terminal.terminal));
             }
+        }
+        if self.basis == Basis::Accepted
+            && listed.len() != table.len()
+            && let Some((part, terminal)) = table.difference(&listed).next()
+        {
+            return Err(format!("accepted netlist omits the placement of {part} terminal {terminal}"));
         }
         Ok(())
     }

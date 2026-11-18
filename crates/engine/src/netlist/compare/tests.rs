@@ -7,6 +7,7 @@ use crate::{
         tests::{Fixture, apply, fixture},
     },
 };
+use serde_json::json;
 use std::sync::Arc;
 
 /// The exported text of the fixture's project netlist, read through the execute path.
@@ -76,13 +77,9 @@ fn edited_copy_with_one_terminal_on_another_net_fails_naming_that_terminal() {
     let moved = &result["differences"][0];
     assert_eq!(moved["part"], json!(u1));
     assert_eq!(moved["terminal"], "2");
-    let net = |index: usize| json!({"net":{"id":original["nets"][index]["id"],"name":original["nets"][index]["name"]}});
+    let net = |index: usize| json!({"net":{"id":original["nets"][index]["id"],"index":index}});
     assert_eq!(moved["expected"], net(from));
-    assert_eq!(moved["found"], json!({"net":{"id":original["nets"][to]["id"],"index":to}}));
-    let message = moved["message"].as_str().unwrap();
-    for part in ["U1", u1.as_str(), "terminal 2", original["nets"][from]["name"].as_str().unwrap(), original["nets"][to]["name"].as_str().unwrap()] {
-        assert!(message.contains(part), "{message} names {part}");
-    }
+    assert_eq!(moved["found"], net(to));
     assert_eq!(result["notes"], json!([]));
     assert_eq!(result["found"]["connections"], result["expected"]["connections"], "a move keeps the counts");
 
@@ -96,8 +93,8 @@ fn edited_copy_with_one_terminal_on_another_net_fails_naming_that_terminal() {
     assert_eq!((&moved["part"], &moved["terminal"]), (&json!(u1), &json!("2")));
     assert_eq!(moved["expected"], net(from));
     assert_eq!(moved["found"], json!({"net":{"id":null,"index":to}}));
-    let destination = original["nets"][to]["name"].as_str().unwrap();
-    assert!(moved["message"].as_str().unwrap().contains(&format!("on file net {to}, paired with net {destination}")));
+    assert_eq!(result["notes"][to]["expected_net"], to);
+    assert_eq!(result["notes"][to]["found_net"], to);
     assert!(kinds(&result["notes"]).iter().all(|kind| *kind == "net_id_changed"));
     assert_eq!(result["notes"].as_array().unwrap().len(), 4);
 }
@@ -216,7 +213,8 @@ fn connectivity_changes_are_differences() {
     split["nets"].as_array_mut().unwrap().push(json!({"id":null,"name":"LONE","names":["LONE"],"terminals":[{"part":r2,"terminal":"2"}]}));
     let result = run(&mut session, &split.to_string());
     assert_eq!(kinds(&result["differences"]), vec!["terminal_moved", "net_extra"]);
-    assert_eq!(result["differences"][1]["found"]["net"]["name"], "LONE");
+    assert_eq!(result["differences"][1]["found_net"], net_of(&split, &r2, "2"));
+    assert!(result["differences"][1].get("expected_net").is_none());
 
     // The same file claimed by another project does not match.
     let mut foreign = original;
@@ -235,8 +233,9 @@ fn missing_nets_terminals_and_basis_compare_without_a_session() {
     let index = file.nets.iter().position(|net| net.terminals.iter().any(|t| t.part == u1 && t.terminal == "6")).unwrap();
     let net = file.nets.remove(index);
     file.unconnected.extend(net.terminals);
-    let result = compare(&design, &file);
+    let result = compare(&design, &file).unwrap();
     assert!(!result.matches);
+    assert_eq!((result.differences[2].expected_net, result.differences[2].found_net), (Some(index), None));
     assert_eq!(result.differences.iter().map(|d| d.kind).collect::<Vec<_>>(), vec![Kind::TerminalMoved, Kind::TerminalMoved, Kind::NetMissing]);
     assert_eq!(result.found.unconnected, result.expected.unconnected + 2);
 
@@ -244,14 +243,14 @@ fn missing_nets_terminals_and_basis_compare_without_a_session() {
     let amplifier = fewer.components.iter_mut().find(|component| component.id == u1).unwrap();
     amplifier.terminals.retain(|terminal| terminal.terminal != "4");
     fewer.unconnected.retain(|t| !(t.part == u1 && t.terminal == "4"));
-    let result = compare(&design, &fewer);
-    assert_eq!(result.differences.iter().map(|d| (d.kind, d.terminal.as_deref())).collect::<Vec<_>>(), vec![(Kind::TerminalMissing, Some("4"))]);
+    let result = compare(&design, &fewer).unwrap();
+    assert_eq!(result.differences.iter().map(|d| (d.kind, d.terminal)).collect::<Vec<_>>(), vec![(Kind::TerminalMissing, Some("4"))]);
 
     let mut accepted = design.clone();
     accepted.basis = Basis::Accepted;
-    let result = compare(&design, &accepted);
+    let result = compare(&design, &accepted).unwrap();
     assert_eq!(result.differences.iter().map(|d| d.kind).collect::<Vec<_>>(), vec![Kind::Basis]);
-    assert!(compare(&design, &design).identical);
+    assert!(compare(&design, &design).unwrap().identical);
 }
 
 /// The reader refuses a terminal listed twice or one its component does not have, and a
@@ -468,9 +467,10 @@ fn board_files_compare_with_the_accepted_netlist() {
         assert_eq!(result["notes"][0]["field"], field, "{path}");
         assert_eq!(result["differences"], json!([]), "{path}");
     }
-    let mut other_board = Netlist::parse(&text).unwrap();
+    let accepted = Netlist::parse(&text).unwrap();
+    let mut other_board = accepted.clone();
     other_board.board.as_mut().unwrap().id = uuid::Uuid::nil();
-    let compared = compare(&Netlist::parse(&text).unwrap(), &other_board);
+    let compared = compare(&accepted, &other_board).unwrap();
     assert_eq!(compared.differences.iter().map(|entry| entry.kind).collect::<Vec<_>>(), vec![Kind::Board]);
 
     let mut swapped = original.clone();
@@ -519,8 +519,8 @@ fn equal_overlaps_pair_the_closest_nets() {
         if order {
             found.nets.reverse();
         }
-        let result = compare(&design, &found);
-        let named: Vec<_> = result.differences.iter().map(|d| (d.kind, d.part.as_deref(), d.terminal.as_deref())).collect();
+        let result = compare(&design, &found).unwrap();
+        let named: Vec<_> = result.differences.iter().map(|d| (d.kind, d.part, d.terminal)).collect();
         assert_eq!(named, vec![(Kind::TerminalMoved, Some(u1.as_str()), Some("2"))], "reversed: {order}");
     }
 }
@@ -602,4 +602,44 @@ fn a_long_net_name_in_the_file_is_reported_once() {
     let name = "N".repeat(room);
     assert_eq!(serialized.matches(name.as_str()).count(), 1, "only the net_renamed note names it");
     assert!(serialized.len() < text.len() + 16 * 1024, "{} bytes for a {} byte file", serialized.len(), text.len());
+}
+
+/// Compact design references fit under a small report budget even when many rows refer to a
+/// design net with a large display name. No move payload needs the name itself.
+#[test]
+fn design_net_display_names_do_not_expand_moves() {
+    let Fixture { session, .. } = fixture();
+    let mut design = session.project().unwrap().netlist().unwrap().netlist;
+    design.nets[0].name = "design net ".repeat(1_024);
+    let mut found = design.clone();
+    let moved = std::mem::take(&mut found.nets[0].terminals);
+    let moves = moved.len();
+    assert!(moves > 1);
+    found.nets[1].terminals.extend(moved);
+    let result = compare_with_budget(&design, &found, 4_096, 32).unwrap();
+    let report = serde_json::to_value(result).unwrap();
+    assert_eq!(report["differences"].as_array().unwrap().len(), moves);
+    for row in report["differences"].as_array().unwrap() {
+        assert_eq!(row["expected"], json!({"net":{"id":design.nets[0].id,"index":0}}));
+        assert_eq!(row["found"], json!({"net":{"id":found.nets[1].id,"index":1}}));
+    }
+    assert!(!report.to_string().contains(design.nets[0].name.as_str()));
+}
+
+/// Enforce one shared row budget and count actually escaped bytes before retaining a row.
+#[test]
+fn report_budget_counts_escaping_and_shares_rows() {
+    let Fixture { session, .. } = fixture();
+    let design = session.project().unwrap().netlist().unwrap().netlist;
+    let mut found = design.clone();
+    found.nets[0].name = "\n".repeat(512);
+    let report = compare_with_budget(&design, &found, 4_096, 1).unwrap();
+    let row_cost = serde_json::to_vec(&report.notes[0]).unwrap().len() + 1;
+    assert!(row_cost > found.nets[0].name.len() * 2);
+    assert!(compare_with_budget(&design, &found, row_cost, 1).is_ok());
+    assert!(matches!(compare_with_budget(&design, &found, row_cost - 1, 1), Err(CommandError::Unavailable(_))));
+
+    found.project.id = uuid::Uuid::nil();
+    assert!(compare_with_budget(&design, &found, 4_096, 2).is_ok());
+    assert!(matches!(compare_with_budget(&design, &found, 4_096, 1), Err(CommandError::Unavailable(_))));
 }

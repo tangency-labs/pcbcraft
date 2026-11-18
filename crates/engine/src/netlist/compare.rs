@@ -4,24 +4,30 @@
 //! an identical terminal set, then by the largest number of shared terminals. Without
 //! persistent IDs, ambiguous edits need not identify which net or terminal originally moved.
 
-use super::{Basis, Component, Net, Netlist, TerminalInfo};
+use super::{Basis, Component, ComponentKind, DefinitionRef, Net, Netlist, PackageRef, TerminalInfo, Unit};
 use crate::{CommandError, Session};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, VecDeque},
+    io,
 };
+use uuid::Uuid;
 
 /// Compare a netlist document with what the open project exports now; edits nothing.
 pub const COMPARE_NETLIST: &str = "project.compare_netlist";
 /// The largest netlist text the command reads, checked before parsing.
 pub const MAX_TEXT_BYTES: usize = 8 << 20;
+const MAX_REPORT_BYTES: usize = 16 << 20;
+const MAX_REPORT_ROWS: usize = 16_384;
+// The fixed header includes the two count tuples, booleans and field/list delimiters.
+const REPORT_HEADER_BYTES: usize = 512;
 
 /// The result of comparing an expected netlist with one that was found, such as a file read
 /// back against the design it was exported from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Comparison {
+pub struct Comparison<'a> {
     /// No entry in `differences`: the same project, basis and board, the same components with
     /// the same terminals, every terminal on the paired net (or unconnected, or listed nowhere)
     /// in both, and in `accepted` netlists the same pads for every terminal. Without persistent
@@ -36,9 +42,9 @@ pub struct Comparison {
     /// re-padded terminals in its terminal order, then its extra terminals, then its moved ones;
     /// then components only `found` has; then expected nets with no counterpart, in expected
     /// order; then nets only `found` has.
-    pub differences: Vec<Difference>,
+    pub differences: Vec<Difference<'a>>,
     /// Differences that leave connectivity unchanged, such as a renamed net or a new value.
-    pub notes: Vec<Difference>,
+    pub notes: Vec<Difference<'a>>,
 }
 
 /// What one document lists.
@@ -100,49 +106,152 @@ pub enum Kind {
     TerminalChanged,
 }
 
-/// One difference between the documents. `expected` and `found` hold the two values, absent
-/// where one side has none. A terminal's place is `"unconnected"`, `"unlisted"` (on no net and
-/// not unconnected, as for a unit that is not placed) or a net: `{"net": {"id", "name"}}` on the
-/// expected side and `{"net": {"id", "index"}}` on the found side, `index` being the net's
-/// position in the found document's `nets`. Moved-terminal entries do not copy the file net's
-/// display name. Persistent IDs and design-side references and names can repeat.
+/// One difference between the documents. Net-level rows identify each applicable net by its
+/// index in that side's export. Moved terminals use `{net: {id, index}}` on either side, or
+/// `unconnected`/`unlisted`. Both forms are unambiguous even for equal names and null IDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Difference {
+pub struct Difference<'a> {
     pub kind: Kind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub part: Option<String>,
+    pub part: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub terminal: Option<String>,
+    pub terminal: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_net: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found_net: Option<usize>,
     /// The changed field, for header, component and terminal notes and for renamed nets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<&'static str>,
-    #[serde(skip_serializing_if = "Value::is_null")]
-    pub expected: Value,
-    #[serde(skip_serializing_if = "Value::is_null")]
-    pub found: Value,
-    pub message: String,
+    #[serde(skip_serializing_if = "Datum::absent")]
+    expected: Datum<'a>,
+    #[serde(skip_serializing_if = "Datum::absent")]
+    found: Datum<'a>,
+    pub message: &'static str,
 }
 
-impl Difference {
-    fn new(kind: Kind, message: String) -> Self {
-        Self { kind, part: None, terminal: None, field: None, expected: Value::Null, found: Value::Null, message }
+/// Borrow rich payloads until the row passes the budget; do not clone a long name or array.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+enum Datum<'a> {
+    Absent,
+    Text(&'a str),
+    Id(Uuid),
+    Basis(Basis),
+    Source(&'a crate::board::update::SourceCapture),
+    Kind(ComponentKind),
+    Definition(&'a DefinitionRef),
+    Units(&'a [Unit]),
+    Package(&'a PackageRef),
+    Strings(&'a [String]),
+    Electrical(super::ElectricalType),
+    Net { net: NetRef },
+}
+
+impl Datum<'_> {
+    /// Whether the value should be omitted in the report.
+    fn absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+/// The position in the named export, plus its optional persistent identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct NetRef {
+    id: Option<Uuid>,
+    index: usize,
+}
+
+impl<'a> Difference<'a> {
+    /// Start a row with no optional addresses or values.
+    fn new(kind: Kind, message: &'static str) -> Self {
+        Self {
+            kind,
+            part: None,
+            terminal: None,
+            expected_net: None,
+            found_net: None,
+            field: None,
+            expected: Datum::Absent,
+            found: Datum::Absent,
+            message,
+        }
     }
 
-    fn values(mut self, expected: Value, found: Value) -> Self {
+    /// Attach the expected and found values without copying them.
+    fn values(mut self, expected: Datum<'a>, found: Datum<'a>) -> Self {
         self.expected = expected;
         self.found = found;
         self
     }
 
-    fn at(mut self, part: &str, terminal: Option<&str>) -> Self {
-        self.part = Some(part.to_owned());
-        self.terminal = terminal.map(str::to_owned);
+    /// Address a component or one of its logical terminals.
+    fn at(mut self, part: &'a str, terminal: Option<&'a str>) -> Self {
+        self.part = Some(part);
+        self.terminal = terminal;
         self
     }
 
+    /// Name the applicable net indices in each export.
+    fn nets(mut self, expected: Option<usize>, found: Option<usize>) -> Self {
+        self.expected_net = expected;
+        self.found_net = found;
+        self
+    }
+
+    /// Name the field changed by an annotation-only edit.
     fn field(mut self, field: &'static str) -> Self {
         self.field = Some(field);
         self
+    }
+}
+
+/// Charge escaped JSON bytes without buffering them. A rejected row is never stored.
+struct ByteBudget(usize);
+
+impl io::Write for ByteBudget {
+    /// Count a serialized fragment without storing it.
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| io::Error::other("netlist comparison budget exceeded"))?;
+        Ok(bytes.len())
+    }
+
+    /// No buffered data to flush.
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct Report<'a> {
+    bytes: ByteBudget,
+    rows_left: usize,
+    differences: Vec<Difference<'a>>,
+    notes: Vec<Difference<'a>>,
+}
+
+impl<'a> Report<'a> {
+    /// Append a row only if it fits the shared note/difference byte and row budgets.
+    fn push(&mut self, row: Difference<'a>, is_note: bool) -> Result<(), CommandError> {
+        let too_large = || CommandError::Unavailable("Netlist comparison report exceeds its size limit (16 MiB or 16,384 entries).".into());
+        self.rows_left = self.rows_left.checked_sub(1).ok_or_else(too_large)?;
+        self.bytes.0 = self.bytes.0.checked_sub(1).ok_or_else(too_large)?; // Allow for a list separator.
+        serde_json::to_writer(&mut self.bytes, &row).map_err(|_| too_large())?;
+        if is_note {
+            self.notes.push(row);
+        } else {
+            self.differences.push(row);
+        }
+        Ok(())
+    }
+
+    /// Add a connectivity difference to the bounded report.
+    fn difference(&mut self, row: Difference<'a>) -> Result<(), CommandError> {
+        self.push(row, false)
+    }
+
+    /// Add an annotation-only change to the bounded report.
+    fn note(&mut self, row: Difference<'a>) -> Result<(), CommandError> {
+        self.push(row, true)
     }
 }
 
@@ -237,106 +346,51 @@ fn pair_nets(expected: &Netlist, found: &Netlist, found_places: &BTreeMap<Key<'_
     pairs
 }
 
-/// A component as messages name it: its reference with its ID.
-fn label(component: &Component) -> String {
-    format!("{} ({})", component.reference, component.id)
-}
-
-/// A net as a difference names it: its persistent ID (or null) and its name.
-fn net_value(net: &Net) -> Value {
-    json!({"net": {"id": net.id, "name": net.name}})
-}
-
-/// A terminal's place as a JSON value: the net it is on, `"unconnected"` or `"unlisted"`.
-/// A net index outside `netlist` gives null.
-fn place_value(netlist: &Netlist, place: Place) -> Value {
+/// Identify a terminal's place without copying a potentially long net name.
+fn place_value(netlist: &Netlist, place: Place) -> Datum<'static> {
     match place {
-        Place::Net(index) => netlist.nets.get(index).map_or(Value::Null, net_value),
-        Place::Unconnected => json!("unconnected"),
-        Place::Unlisted => json!("unlisted"),
+        Place::Net(index) => netlist.nets.get(index).map_or(Datum::Absent, |net| Datum::Net { net: NetRef { id: net.id, index } }),
+        Place::Unconnected => Datum::Text("unconnected"),
+        Place::Unlisted => Datum::Text("unlisted"),
     }
 }
 
-/// A terminal's place for a message, such as "on net GND"; a net index outside `netlist` gives
-/// an empty string.
-fn place_text(netlist: &Netlist, place: Place) -> String {
-    match place {
-        Place::Net(index) => netlist.nets.get(index).map_or_else(String::new, |net| format!("on net {}", net.name)),
-        Place::Unconnected => "unconnected".into(),
-        Place::Unlisted => "on no net".into(),
-    }
+/// Compare two decoded documents without editing either. Refuse reports exceeding the byte
+/// or row limit. The function compares data as supplied; use [`Netlist::parse`] for file text.
+pub fn compare<'a>(expected: &'a Netlist, found: &'a Netlist) -> Result<Comparison<'a>, CommandError> {
+    compare_with_budget(expected, found, MAX_REPORT_BYTES - REPORT_HEADER_BYTES, MAX_REPORT_ROWS)
 }
 
-/// A terminal's place in the found document as a JSON value. A net is named by its persistent
-/// ID and its index in `found.nets`, never by its name, so a long name in the file is not copied
-/// once per terminal. Design-side names can still repeat in moved-terminal messages.
-fn found_value(found: &Netlist, place: Place) -> Value {
-    match place {
-        Place::Net(index) => found.nets.get(index).map_or(Value::Null, |net| json!({"net": {"id": net.id, "index": index}})),
-        Place::Unconnected | Place::Unlisted => place_value(found, place),
-    }
-}
-
-/// A found terminal's place for a message: a net is named by its index in the file and the
-/// design net it pairs with, if any (`back` maps each found net to its paired expected net).
-fn found_text(expected: &Netlist, back: &[Option<usize>], place: Place) -> String {
-    match place {
-        Place::Net(index) => match back.get(index).copied().flatten().and_then(|pair| expected.nets.get(pair)) {
-            Some(net) => format!("on file net {index}, paired with net {}", net.name),
-            None => format!("on file net {index}, which pairs with no expected net"),
-        },
-        Place::Unconnected | Place::Unlisted => place_text(expected, place),
-    }
-}
-
-/// Compare `found` with `expected`. Edits nothing and never fails. Connectivity differences go
-/// to `differences` in the order [`Comparison::differences`] gives; changed annotations and net
-/// metadata go to `notes`. Order-only changes can leave both lists empty while `identical` is
-/// false. The pure function does not validate its inputs; use [`Netlist::parse`] for file text.
-pub fn compare(expected: &Netlist, found: &Netlist) -> Comparison {
-    let mut differences = Vec::new();
-    let mut notes = Vec::new();
+/// Assemble a report with a shared escaped-row byte and row count budget, excluding the header.
+fn compare_with_budget<'a>(expected: &'a Netlist, found: &'a Netlist, bytes: usize, rows: usize) -> Result<Comparison<'a>, CommandError> {
+    let mut report = Report { bytes: ByteBudget(bytes), rows_left: rows, differences: Vec::new(), notes: Vec::new() };
     if expected.project.id != found.project.id {
-        differences.push(
-            Difference::new(Kind::Project, format!("Expected project {}, found project {}.", expected.project.id, found.project.id))
-                .values(json!(expected.project.id), json!(found.project.id)),
-        );
+        report
+            .difference(Difference::new(Kind::Project, "Project IDs differ.").values(Datum::Id(expected.project.id), Datum::Id(found.project.id)))?;
     } else if expected.project.name != found.project.name {
-        notes.push(
-            Difference::new(Kind::Header, format!("Expected project name {}, found {}.", expected.project.name, found.project.name))
+        report.note(
+            Difference::new(Kind::Header, "Project names differ.")
                 .field("project.name")
-                .values(json!(expected.project.name), json!(found.project.name)),
-        );
+                .values(Datum::Text(&expected.project.name), Datum::Text(&found.project.name)),
+        )?;
     }
     if expected.basis != found.basis {
-        differences.push(
-            Difference::new(Kind::Basis, format!("Expected a {} netlist, found a {} netlist.", basis(expected.basis), basis(found.basis)))
-                .values(json!(expected.basis), json!(found.basis)),
-        );
+        report.difference(Difference::new(Kind::Basis, "Netlist bases differ.").values(Datum::Basis(expected.basis), Datum::Basis(found.basis)))?;
     }
-    compare_boards(expected, found, &mut differences, &mut notes);
+    compare_boards(expected, found, &mut report)?;
 
     let found_parts: BTreeMap<_, _> = found.components.iter().rev().map(|component| (component.id.as_str(), component)).collect();
     let expected_ids: BTreeSet<_> = expected.components.iter().map(|component| component.id.as_str()).collect();
     let expected_places = places(expected);
     let found_places = places(found);
     let pairs = pair_nets(expected, found, &found_places);
-    let mut back = vec![None; found.nets.len()];
-    for (expected_index, pair) in pairs.iter().enumerate() {
-        if let Some(slot) = pair.and_then(|index| back.get_mut(index)) {
-            *slot = Some(expected_index);
-        }
-    }
+    let mut paired = vec![false; found.nets.len()];
     for component in &expected.components {
         let Some(other) = found_parts.get(component.id.as_str()) else {
-            differences.push(
-                Difference::new(Kind::PartMissing, format!("{} is missing.", label(component)))
-                    .at(&component.id, None)
-                    .values(json!(component.id), Value::Null),
-            );
+            report.difference(Difference::new(Kind::PartMissing, "Part is missing from the file.").at(&component.id, None))?;
             continue;
         };
-        compare_part(component, other, &mut differences, &mut notes);
+        compare_part(component, other, &mut report)?;
         let numbers: BTreeSet<&str> = other.terminals.iter().map(|terminal| terminal.terminal.as_str()).collect();
         for terminal in component.terminals.iter().filter(|terminal| numbers.contains(terminal.terminal.as_str())) {
             let key = (component.id.as_str(), terminal.terminal.as_str());
@@ -347,162 +401,145 @@ pub fn compare(expected: &Netlist, found: &Netlist) -> Comparison {
                 Place::Unconnected | Place::Unlisted => was == is,
             };
             if !same {
-                differences.push(
-                    Difference::new(
-                        Kind::TerminalMoved,
-                        format!(
-                            "{} terminal {}: expected {}, found {}.",
-                            label(component),
-                            terminal.terminal,
-                            place_text(expected, was),
-                            found_text(expected, &back, is)
-                        ),
-                    )
-                    .at(&component.id, Some(&terminal.terminal))
-                    .values(place_value(expected, was), found_value(found, is)),
-                );
+                report.difference(
+                    Difference::new(Kind::TerminalMoved, "Terminal connection changed.")
+                        .at(&component.id, Some(&terminal.terminal))
+                        .values(place_value(expected, was), place_value(found, is)),
+                )?;
             }
         }
     }
     for component in found.components.iter().filter(|component| !expected_ids.contains(component.id.as_str())) {
-        differences.push(
-            Difference::new(Kind::PartExtra, format!("{} is not expected.", label(component)))
-                .at(&component.id, None)
-                .values(Value::Null, json!(component.id)),
-        );
+        report.difference(Difference::new(Kind::PartExtra, "File has an extra part.").at(&component.id, None))?;
     }
 
-    let mut paired = vec![false; found.nets.len()];
-    for (net, pair) in expected.nets.iter().zip(&pairs) {
-        let Some(other) = pair.and_then(|index| found.nets.get(index)) else {
-            differences.push(Difference::new(Kind::NetMissing, format!("Net {} has no counterpart.", net.name)).values(net_value(net), Value::Null));
+    for (index, (net, pair)) in expected.nets.iter().zip(&pairs).enumerate() {
+        let Some((other_index, other)) = pair.and_then(|i| found.nets.get(i).map(|net| (i, net))) else {
+            report.difference(Difference::new(Kind::NetMissing, "Design net has no counterpart.").nets(Some(index), None))?;
             continue;
         };
-        if let Some(seen) = pair.and_then(|index| paired.get_mut(index)) {
-            *seen = true;
-        }
+        paired[other_index] = true;
         if net.id != other.id {
-            notes.push(
-                Difference::new(Kind::NetIdChanged, format!("Net {} has another persistent ID.", net.name)).values(json!(net.id), json!(other.id)),
-            );
+            report.note(
+                Difference::new(Kind::NetIdChanged, "Paired nets have different persistent IDs.")
+                    .nets(Some(index), Some(other_index))
+                    .values(net.id.map_or(Datum::Absent, Datum::Id), other.id.map_or(Datum::Absent, Datum::Id)),
+            )?;
         }
         if net.name != other.name {
-            notes.push(
-                Difference::new(Kind::NetRenamed, format!("Net {} has another name in the file.", net.name))
+            report.note(
+                Difference::new(Kind::NetRenamed, "Paired nets have different display names.")
+                    .nets(Some(index), Some(other_index))
                     .field("name")
-                    .values(json!(net.name), json!(other.name)),
-            );
+                    .values(Datum::Text(&net.name), Datum::Text(&other.name)),
+            )?;
         }
         if net.names != other.names {
-            notes.push(
-                Difference::new(Kind::NetRenamed, format!("Net {} has other authored names.", net.name))
+            report.note(
+                Difference::new(Kind::NetRenamed, "Paired nets have different authored names.")
+                    .nets(Some(index), Some(other_index))
                     .field("names")
-                    .values(json!(net.names), json!(other.names)),
-            );
+                    .values(Datum::Strings(&net.names), Datum::Strings(&other.names)),
+            )?;
         }
     }
-    for (index, (net, _)) in found.nets.iter().zip(&paired).enumerate().filter(|(_, (_, seen))| !**seen) {
-        differences.push(Difference::new(Kind::NetExtra, format!("File net {index} is not expected.")).values(Value::Null, net_value(net)));
+    for (index, _) in paired.iter().enumerate().filter(|(_, matched)| !**matched) {
+        report.difference(Difference::new(Kind::NetExtra, "File net has no counterpart.").nets(None, Some(index)))?;
     }
-    Comparison {
-        matches: differences.is_empty(),
+    Ok(Comparison {
+        matches: report.differences.is_empty(),
         identical: expected == found,
         expected: Counts::of(expected),
         found: Counts::of(found),
-        differences,
-        notes,
-    }
-}
-
-/// The basis as messages spell it, the same word the format uses.
-fn basis(basis: Basis) -> &'static str {
-    match basis {
-        Basis::Schematic => "schematic",
-        Basis::Accepted => "accepted",
-    }
+        differences: report.differences,
+        notes: report.notes,
+    })
 }
 
 /// A different board, or a board on only one side, is a difference; another name or accepted
 /// source of the same board is a note.
-fn compare_boards(expected: &Netlist, found: &Netlist, differences: &mut Vec<Difference>, notes: &mut Vec<Difference>) {
+fn compare_boards<'a>(expected: &'a Netlist, found: &'a Netlist, report: &mut Report<'a>) -> Result<(), CommandError> {
     match (&expected.board, &found.board) {
         (Some(a), Some(b)) if a.id == b.id => {
             if a.name != b.name {
-                notes.push(
-                    Difference::new(Kind::Header, format!("Expected board name {}, found {}.", a.name, b.name))
-                        .field("board.name")
-                        .values(json!(a.name), json!(b.name)),
-                );
+                report.note(
+                    Difference::new(Kind::Header, "Board names differ.").field("board.name").values(Datum::Text(&a.name), Datum::Text(&b.name)),
+                )?;
             }
             if a.source != b.source {
-                notes.push(
-                    Difference::new(Kind::Header, format!("Board {} has another accepted source.", a.name))
+                report.note(
+                    Difference::new(Kind::Header, "Accepted sources differ.")
                         .field("board.source")
-                        .values(json!(a.source), json!(b.source)),
-                );
+                        .values(a.source.as_ref().map_or(Datum::Absent, Datum::Source), b.source.as_ref().map_or(Datum::Absent, Datum::Source)),
+                )?;
             }
         }
         (None, None) => {}
         (a, b) => {
-            let id = |board: &Option<super::BoardRef>| board.as_ref().map_or(Value::Null, |board| json!(board.id));
-            differences.push(Difference::new(Kind::Board, "The netlists describe different boards.".into()).values(id(a), id(b)));
+            let id = |board: &Option<super::BoardRef>| board.as_ref().map_or(Datum::Absent, |board| Datum::Id(board.id));
+            report.difference(Difference::new(Kind::Board, "The netlists describe different boards.").values(id(a), id(b)))?;
         }
     }
+    Ok(())
+}
+
+/// Physical connectivity is pad membership, not the ordering used for picking a representative.
+fn same_pads(a: Option<&[String]>, b: Option<&[String]>) -> bool {
+    a == b
+        || match (a, b) {
+            (Some(a), Some(b)) => a.iter().collect::<BTreeSet<_>>() == b.iter().collect::<BTreeSet<_>>(),
+            _ => false,
+        }
 }
 
 /// Report terminals only one side lists and different pads as differences, and changed
 /// annotation, definition, units, package, terminal names and electrical types as notes.
-fn compare_part(component: &Component, other: &Component, differences: &mut Vec<Difference>, notes: &mut Vec<Difference>) {
-    let name = label(component);
+fn compare_part<'a>(component: &'a Component, other: &'a Component, report: &mut Report<'a>) -> Result<(), CommandError> {
     let fields = [
-        ("reference", json!(component.reference), json!(other.reference)),
-        ("value", json!(component.value), json!(other.value)),
-        ("kind", json!(component.kind), json!(other.kind)),
-        ("definition", json!(component.definition), json!(other.definition)),
-        ("units", json!(component.units), json!(other.units)),
-        ("package", json!(component.package), json!(other.package)),
+        ("reference", Datum::Text(&component.reference), Datum::Text(&other.reference)),
+        ("value", Datum::Text(&component.value), Datum::Text(&other.value)),
+        ("kind", Datum::Kind(component.kind), Datum::Kind(other.kind)),
+        ("definition", Datum::Definition(&component.definition), Datum::Definition(&other.definition)),
+        ("units", Datum::Units(&component.units), Datum::Units(&other.units)),
+        ("package", component.package.as_ref().map_or(Datum::Absent, Datum::Package), other.package.as_ref().map_or(Datum::Absent, Datum::Package)),
     ];
     for (field, a, b) in fields.into_iter().filter(|(_, a, b)| a != b) {
-        notes.push(Difference::new(Kind::PartChanged, format!("{name} has another {field}.")).at(&component.id, None).field(field).values(a, b));
+        report.note(Difference::new(Kind::PartChanged, "Part metadata changed.").at(&component.id, None).field(field).values(a, b))?;
     }
     let found_terminals: BTreeMap<&str, &TerminalInfo> =
         other.terminals.iter().rev().map(|terminal| (terminal.terminal.as_str(), terminal)).collect();
     let own: BTreeSet<&str> = component.terminals.iter().map(|terminal| terminal.terminal.as_str()).collect();
     for terminal in &component.terminals {
         let Some(found) = found_terminals.get(terminal.terminal.as_str()) else {
-            differences.push(
-                Difference::new(Kind::TerminalMissing, format!("{name} terminal {} is missing.", terminal.terminal))
-                    .at(&component.id, Some(&terminal.terminal)),
-            );
+            report.difference(
+                Difference::new(Kind::TerminalMissing, "Terminal is missing from the file.").at(&component.id, Some(&terminal.terminal)),
+            )?;
             continue;
         };
         let at = Some(terminal.terminal.as_str());
-        if terminal.pads != found.pads {
-            differences.push(
-                Difference::new(Kind::PadsChanged, format!("{name} terminal {} maps to other pads.", terminal.terminal))
-                    .at(&component.id, at)
-                    .values(json!(terminal.pads), json!(found.pads)),
-            );
+        if !same_pads(terminal.pads.as_deref(), found.pads.as_deref()) {
+            report.difference(Difference::new(Kind::PadsChanged, "Terminal maps to different pads.").at(&component.id, at).values(
+                terminal.pads.as_deref().map_or(Datum::Absent, Datum::Strings),
+                found.pads.as_deref().map_or(Datum::Absent, Datum::Strings),
+            ))?;
         }
-        for (field, a, b) in
-            [("name", json!(terminal.name), json!(found.name)), ("electrical_type", json!(terminal.electrical_type), json!(found.electrical_type))]
-        {
+        for (field, a, b) in [
+            ("name", terminal.name.as_deref().map_or(Datum::Absent, Datum::Text), found.name.as_deref().map_or(Datum::Absent, Datum::Text)),
+            (
+                "electrical_type",
+                terminal.electrical_type.map_or(Datum::Absent, Datum::Electrical),
+                found.electrical_type.map_or(Datum::Absent, Datum::Electrical),
+            ),
+        ] {
             if a != b {
-                notes.push(
-                    Difference::new(Kind::TerminalChanged, format!("{name} terminal {} has another {field}.", terminal.terminal))
-                        .at(&component.id, at)
-                        .field(field)
-                        .values(a, b),
-                );
+                report.note(Difference::new(Kind::TerminalChanged, "Terminal metadata changed.").at(&component.id, at).field(field).values(a, b))?;
             }
         }
     }
     for terminal in other.terminals.iter().filter(|terminal| !own.contains(terminal.terminal.as_str())) {
-        differences.push(
-            Difference::new(Kind::TerminalExtra, format!("{name} terminal {} is not expected.", terminal.terminal))
-                .at(&component.id, Some(&terminal.terminal)),
-        );
+        report.difference(Difference::new(Kind::TerminalExtra, "File has an extra terminal.").at(&component.id, Some(&terminal.terminal)))?;
     }
+    Ok(())
 }
 
 impl Session {
@@ -510,8 +547,8 @@ impl Session {
     /// the project netlist for a `schematic` document, or the accepted netlist of the board it
     /// names for an `accepted` one. The file is the found side and the design the expected
     /// side. Edits nothing. Fails when no project is open, the text is not a valid netlist,
-    /// its board is not in the project, or the design's export fails.
-    pub(crate) fn compare_netlist(&self, params: &Value) -> Result<Comparison, CommandError> {
+    /// its board is not in the project, the export fails, or the report exceeds its budget.
+    pub(crate) fn compare_netlist(&self, params: &Value) -> Result<Value, CommandError> {
         let project = self.open_project()?;
         let text = params["netlist"].as_str().ok_or_else(|| CommandError::InvalidParams("`netlist` must be netlist text".into()))?;
         let found = Netlist::parse(text).map_err(CommandError::InvalidParams)?;
@@ -525,7 +562,7 @@ impl Session {
             (Basis::Accepted, None) => return Err(CommandError::InvalidParams("an accepted netlist names its board".into())),
         };
         let design = design.map_err(CommandError::Unavailable)?;
-        Ok(compare(&design.netlist, &found))
+        serde_json::to_value(compare(&design.netlist, &found)?).map_err(|err| CommandError::Unavailable(err.to_string()))
     }
 }
 

@@ -181,9 +181,25 @@ refused. The command edits nothing; `execute` returns the current `revision` and
 revision or undo history. The byte limit is checked before parsing. The discovery schema's
 `maxLength` counts Unicode characters and is only a coarse upper bound; the command also
 checks the encoded byte length, so multibyte text can reach the limit sooner.
-This is the engine's limit, not an MCP transfer limit. Transport frame limits
-include the envelope and JSON escaping; the live editor refuses encoded
-comparison replies over 16 MiB.
+These are separate from the transport limits:
+
+- A live editor request must fit in the **64 KiB** authenticated first frame,
+  including the credential, envelope and JSON escaping. The encoded live reply
+  must fit in **16 MiB**, including its envelope.
+- MCP over stdio allows a **16 MiB** encoded request line, including the JSON
+  envelope and escaping. For a file that does not fit in the live first frame,
+  save the design and start a headless session with
+  `pcbcraft-cli mcp --project path/to/project.json`. Compare against that saved
+  snapshot. The engine's **8 MiB** limit on decoded netlist text still applies.
+
+The engine also refuses a comparison report that would exceed **16 MiB** of
+encoded JSON or **16,384** entries across `differences` and `notes`. It checks
+this as it assembles the report; it does not return a truncated comparison.
+
+The reader rejects duplicate definitions or persistent net IDs, and repeated
+or unknown placements. An accepted-board file must place every defined
+terminal in a net or in `unconnected`. A schematic file may leave terminals
+unlisted, for instance when their unit is not placed.
 
 Terminals are matched by their `{part, terminal}` address, never by net name or
 position in a list. Nets pair up by persistent `id` first, then by an identical
@@ -203,28 +219,26 @@ or terminal originally moved.
 | `notes` | Differences that leave connectivity unchanged. |
 
 Each entry has a `kind` and a `message`, plus `part`, `terminal`, `field`,
-`expected` and `found` where they apply. A terminal's place is `"unconnected"`,
-`"unlisted"` (on no net and not unconnected, as for a unit that is not placed)
-or a net: `{"net": {"id", "name"}}` in `expected` and `{"net": {"id", "index"}}`
-in `found`, where `index` is the net's position in the file's `nets`. The
-message names the design net the file's net pairs with, if any. The file's
-net display names are not copied into each moved-terminal entry; changed or
-extra names are reported in `net_renamed` or `net_extra`. Move entries can repeat
-fixed-size UUIDs and design-side names. The engine's input limit does not bound
-the serialized result size.
+`expected` and `found` where they apply. Use the structured fields to identify
+what changed. Net-level rows have `expected_net`, `found_net` or both: the
+zero-based indices in the design export's and the file's `nets` arrays. A
+moved terminal's place is `"unconnected"`, `"unlisted"` (schematic only), or
+`{"net": {"id", "index"}}` on either side. The index is relative to that side's
+array, and `id` can be null. This identifies distinct nets even when their
+names are equal and their IDs are null. Moved-terminal rows do not repeat
+either net's display name.
 
 The difference kinds are `project` (another project ID), `basis`, `board`
 (another board, or a board on one side only), `part_missing`,
 `part_extra`, `terminal_missing`, `terminal_extra`, `terminal_moved` (between
-nets, `unconnected` or `unlisted`), `pads_changed` (the pad list changed,
-including its order), `net_missing`
+nets, `unconnected` or `unlisted`), `pads_changed` (pad membership changed), `net_missing`
 (a design net with no counterpart in the file) and `net_extra`. The note kinds
 are `net_renamed` (`field` is `name` or `names`), `net_id_changed`, `header`
 (`project.name`, `board.name` or `board.source`), `part_changed`
 (`reference`, `value`, `kind`, `definition`, `units` or `package`) and
 `terminal_changed` (`name` or `electrical_type`). A file whose nets were only
 renamed or reordered therefore matches, with the renames as notes. Reordering the
-component, terminal or net lists alone can leave both result lists empty while
+component, terminal, net or pad lists alone can leave both result lists empty while
 `identical` is false.
 
 ## Not yet covered
