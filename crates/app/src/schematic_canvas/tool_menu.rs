@@ -36,9 +36,10 @@ pub(super) fn idle(ui: &mut Ui, spacing_nm: i64, unit: pcbcraft_chrome::units::U
         return drawing;
     }
     menu::separator(ui);
-    let selection = [("Select all", Action::SelectAll), ("Unselect all", Action::UnselectAll)]
+    let select_all_key = ui.ctx().format_shortcut(&crate::SELECT_ALL);
+    let selection = [("Select all", select_all_key.as_str(), Action::SelectAll), ("Unselect all", "", Action::UnselectAll)]
         .into_iter()
-        .find_map(|(label, action)| MenuItem::new(label).show(ui).then_some(action));
+        .find_map(|(label, key, action)| MenuItem::new(label).shortcut(key).show(ui).then_some(action));
     if selection.is_some() {
         return selection;
     }

@@ -54,6 +54,25 @@ fn focus_tab(h: &mut Harness<'_, PcbApp>, id: usize) {
     h.run();
 }
 
+/// Select All belongs to the focused schematic pane rather than selecting across the
+/// project's other views, and selection never becomes a document/history edit.
+#[test]
+fn select_all_shortcut_targets_only_the_focused_schematic_pane() {
+    for focused in [0, 1] {
+        let mut h = split_harness();
+        for view in h.state_mut().views.all_mut() {
+            view.schematic.selection = Default::default();
+        }
+        focus_tab(&mut h, focused);
+        let before = h.state().session.inspect();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run();
+        assert_eq!(view(&h, focused as u64).schematic.selection.symbols.len(), 1);
+        assert!(view(&h, (1 - focused) as u64).schematic.selection.is_empty());
+        assert_eq!(h.state().session.inspect(), before);
+    }
+}
+
 /// Click a model point in the specified pane, allowing its first press to activate the view.
 fn click_point(h: &mut Harness<'_, PcbApp>, id: u64, point: Point) {
     let at = view(h, id).camera.screen(point, canvas(h, id));
