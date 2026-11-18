@@ -178,8 +178,9 @@ PCB Draw tools operate on the active visible layer: copper linework uses the
 validated conductive-segment path, while non-copper graphics preserve physical
 strokes through saves and clipboard operations. Silkscreen, mask and paste
 artwork is included in the matching fabrication layer; documentation-layer
-graphics remain native board content. For exported pads, Gerber retains C flashes for
-round pads. R/O flashes require individually quarter-turn library and placement rotations
+graphics remain native board content. [Gerber X2 copper exports](editor-guide.md#pcb-layout)
+include net and component ownership attributes and identify pins on outer copper.
+For exported pads, Gerber retains C flashes for round pads. R/O flashes require individually quarter-turn library and placement rotations
 and nondegenerate resolved axis rectangles; R also requires a midpoint at the integer pad
 center, and O requires matching width/height parity for integral capsule endpoints. Other
 rectangles retain resolved regions; other obrounds retain approximate round-ended strokes

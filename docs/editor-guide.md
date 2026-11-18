@@ -835,8 +835,19 @@ same shape and size. Pad regions carry a descriptive aperture attribute but are
 not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
 paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
 tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
-open artwork before sending the profile to fabrication. The attributes do not
-change plotted geometry or add net and pin information.
+open artwork before sending the profile to fabrication. The aperture attributes do
+not change plotted geometry.
+
+On copper, X2 `.N` identifies the intended net of pads, tracks and vias. Component pads
+carry `.C` (reference designator) and, on outer copper, `.P` (reference and physical pin
+number). A footprint land explicitly unmapped to a pin has an empty pin number.
+A short between intended nets or an unresolved via assignment leaves the affected
+tracks and vias without `.N`; individually assigned pads keep their intended net.
+Copper with no net has an empty `.N`. To avoid the reserved `N/C` marker, net names
+that equal `N/C` or begin with `N/C:` gain one `N/C:` prefix in Gerber only.
+These attributes change neither the plotted geometry nor the saved board. They describe
+intent, not verification of connectivity. Layer exports include the actual net and pin
+names; review what you are sharing before sending files to a fabricator.
 
 For pads exported on a layer, round pads use standard circular (`C`) flashes.
 Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations

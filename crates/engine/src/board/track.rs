@@ -535,6 +535,14 @@ impl IslandBuilder {
         self.node >= end
     }
 
+    /// Resolve export-only contact groups. Start a fresh builder's traversal at the first pad
+    /// so direct pad contacts count, using the same index and contact rules as ordinary copper.
+    pub(super) fn fabrication_roots(mut self) -> Vec<usize> {
+        self.node = 0;
+        while !self.step(usize::MAX) {}
+        (0..self.parent.len()).map(|i| find(&mut self.parent, i)).collect()
+    }
+
     /// Canonicalize completed roots to the existing pad/track/via identity maps.
     pub(super) fn finish(mut self, lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
         let parent = &mut self.parent;
