@@ -391,7 +391,10 @@ fn pin_remap_bulk_discard_releases_retained_review() {
     let token = app.preview_library_pin_remap(id, 0, vec![PinRemap { unit: "main".into(), object: 1, number: "1".into() }]).unwrap();
     assert_eq!(Arc::strong_count(&project), owners + 1);
     app.dialog = Dialog::LibraryClose(None);
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.dialogs(ui.ctx()), app);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1200.0, 900.0))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(|ui, app: &mut PcbApp| app.dialogs(ui.ctx()), app);
     h.run();
     crate::tests::click(&mut h, "Discard library edits");
     assert!(h.state().library_editors.documents.is_empty());
