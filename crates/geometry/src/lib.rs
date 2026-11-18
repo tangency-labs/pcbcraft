@@ -7,23 +7,25 @@
 //! [`GeometryError`], so the kernel can be replaced without touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
 //! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
-//! guard: a panic inside it becomes an error with the code [`ErrorCode::KernelInternal`] instead
-//! of ending the application, and the caller's own data is unchanged. Dropping a [`Body`] frees
-//! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`]) for MCP and CLI
-//! replies.
+//! guard. When panics unwind, the guard turns a panic into [`ErrorCode::KernelInternal`] and leaves
+//! the caller's own data unchanged. A panic that aborts cannot be caught. Dropping a [`Body`] frees
+//! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`])
+//! for MCP and CLI replies.
 //!
-//! The kernel is built for native targets only. On `wasm32` the same API compiles, no [`Body`]
-//! can be made, and every operation that reaches the kernel answers
-//! [`ErrorCode::KernelUnavailable`]; arguments refused before the kernel keep their own codes.
+//! Native builds always have the kernel. On `wasm32` it is left out unless the `wasm-kernel`
+//! feature is on, because a panic there aborts by default instead of unwinding, and the guard
+//! cannot catch it. Without the kernel the same API compiles, no [`Body`] can be made, and every
+//! operation that reaches the kernel answers [`ErrorCode::KernelUnavailable`]; arguments refused
+//! before the kernel keep their own codes.
 //!
 //! `docs/geometry-kernel.md` records the kernel choice, its qualification and its known limits.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod guard;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-kernel"))]
 mod kernel;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-kernel")))]
 #[path = "kernel_unavailable.rs"]
 mod kernel;
 
@@ -45,9 +47,10 @@ pub enum ErrorCode {
     /// The model uses an entity or construct the reader does not support yet
     /// (`model_unsupported_entity`).
     ModelUnsupportedEntity,
-    /// The kernel could not complete an operation on valid input (`operation_failed`).
+    /// The kernel could not complete an operation, or the crash test was refused because panics
+    /// abort (`operation_failed`).
     OperationFailed,
-    /// This build has no geometry kernel, as in the browser (`kernel_unavailable`).
+    /// This build has no geometry kernel (`kernel_unavailable`).
     KernelUnavailable,
     /// The kernel panicked; the panic was caught and nothing the caller owns changed
     /// (`kernel_internal`).
@@ -241,7 +244,7 @@ impl Body {
     /// # Errors
     ///
     /// [`ErrorCode::OperationFailed`] when the kernel has no finite box or it lies outside
-    /// [`MAX_LENGTH_NM`]; [`ErrorCode::KernelInternal`] when the kernel panics.
+    /// [`MAX_LENGTH_NM`]; [`ErrorCode::KernelInternal`] if a kernel panic unwinds.
     pub fn bounding_box(&self) -> Result<BoundingBox> {
         let (lo, hi) = kernel::bounds(&self.solid)?;
         Ok(BoundingBox { min_nm: point_nm(lo)?, max_nm: point_nm(hi)? })
@@ -356,7 +359,7 @@ impl StepRead {
 /// or its work budget of 1,000,000 + 1,000 × parsed entity count steps, counted before it runs), or a placement is not finite or
 /// moves a body more than [`MAX_LENGTH_NM`] from the origin;
 /// [`ErrorCode::KernelUnavailable`] without a kernel;
-/// [`ErrorCode::KernelInternal`] when the reader panics.
+/// [`ErrorCode::KernelInternal`] if a reader panic unwinds.
 pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
     let text = std::str::from_utf8(bytes).map_err(|e| GeometryError::new(ErrorCode::ModelUnreadable, format!("STEP text is not UTF-8: {e}")))?;
     let read = kernel::read(text)?;
@@ -387,7 +390,7 @@ pub fn read_step(bytes: &[u8]) -> Result<StepRead> {
 /// [`ErrorCode::InvalidParams`] when `bodies` is empty or the part name or a body name has an
 /// ASCII control character, which STEP strings cannot carry; [`ErrorCode::OperationFailed`] when the
 /// writer refuses a body; [`ErrorCode::KernelUnavailable`] without a kernel;
-/// [`ErrorCode::KernelInternal`] when the kernel panics.
+/// [`ErrorCode::KernelInternal`] if a kernel panic unwinds.
 pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
     if bodies.is_empty() {
         return Err(GeometryError::new(ErrorCode::InvalidParams, "there are no bodies to write"));
@@ -400,13 +403,13 @@ pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
     kernel::write(part_name, &named).map(String::into_bytes)
 }
 
-/// Makes the kernel panic inside one of its own calls and reports what the guard returns. It is
-/// the crash-report check for diagnostics, not a modelling operation, and changes no body.
+/// Exercises the kernel panic guard when panics unwind. This diagnostic changes no body.
 ///
 /// # Errors
 ///
-/// Always: [`ErrorCode::KernelInternal`] when the panic was caught as it should be, or
-/// [`ErrorCode::KernelUnavailable`] without a kernel.
+/// Always returns an error: [`ErrorCode::KernelInternal`] for a caught unwinding panic,
+/// [`ErrorCode::OperationFailed`] without invoking the kernel when panics abort (the default on
+/// `wasm32`), or [`ErrorCode::KernelUnavailable`] if this build has no kernel.
 pub fn kernel_crash_test() -> Result<()> {
     kernel::crash_test()
 }
@@ -457,5 +460,5 @@ fn point_nm(mm: [f64; 3]) -> Result<[i64; 3]> {
 #[cfg(not(target_arch = "wasm32"))]
 mod tests;
 #[cfg(test)]
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-kernel")))]
 mod wasm_tests;

@@ -4,6 +4,11 @@ PCBCraft offers an in-app Assistant and a live MCP connection on desktop.
 The CLI can also run a separate headless session. Project edits use the
 same engine commands and undo history within each session.
 
+`pcb.preview_board_setup` returns the [setup change review](board-materials.md#review-a-setup-edit)
+with affected object IDs, consent/refusal and a session-local token, even with
+`inspect: false`. `pcb.set_board_setup` optionally consumes that token;
+`pcb.cancel_board_setup_preview` revokes it without an authored edit.
+
 The built-in Assistant instructions and the server instructions sent to external
 MCP clients ask agents working in a live editor to keep the area they are editing
 visible, unless the user requests otherwise. Agents are asked to inspect the
