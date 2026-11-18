@@ -338,8 +338,9 @@ copper and the tolerance and basis of finished copper thickness, and the stackup
 declared finished board thickness, tolerance and minimum. It accepts a placement
 origin, assembly profile adoptions, board rules and every earlier physical field, and requires at least one of
 the new fields. Older headers, including 21, reject them. In the absence of these
-fields, the other authored data determines the board format. Setup profiles
-with these fields use `pcbcraft-setup-profile/2`. See
+fields, the other authored data determines the board format. Setup profiles use
+`pcbcraft-setup-profile/2` for stack extensions without material reports. With
+reports they use profile version 3, which can also carry the stack extensions. See
 [board-materials.md](board-materials.md#copper-strata-and-board-thickness).
 
 Board format `pcbcraft-board/24` adds optional scoped `net_assignment` objects to
@@ -726,9 +727,9 @@ bytes. A nonzero orientation requires `pcbcraft-board/4` or a later supported bo
 and legacy single-file encodings refuse it rather than lose orientation. Version
 4 permits an absent setup or the version-3 setup vocabulary, preserving layer,
 material and mapping identities. Without rotation, versions 1–3 apply only if no
-other field requires a later format. Legacy single-file export refuses rotation. Moving changes
-only the affected footprint record; rotating can additionally change the board
-format header. Every project has its sheet documents. A new schematic-only
+other field requires a later format. Legacy single-file export refuses rotation.
+Moving an isolated footprint changes its placement record; any track ends carried
+with the footprint also change. Rotation can additionally change the board header. Every project has its sheet documents. A new schematic-only
 project has no board document; an explicitly created PCB and legacy implicit-board
 projects have a physical board document even when no footprints are placed;
 its path follows the registration after folder adoption. The board registry

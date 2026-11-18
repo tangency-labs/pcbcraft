@@ -114,7 +114,9 @@ required by the remaining data takes precedence, including explicit via assignme
 (24), thermal or insulation material reports (25) and footprint locks (34); see the
 [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
 Removing the record restores built-in resolution and the format required by the
-remaining board data. A board without rules retains its current bytes. Request-local DRC
+remaining board data. Omitting rules does not itself require a new board format.
+Unchanged canonical codec bytes are stable; host Open and Save may apply the
+existing [storage migrations](native-project-storage.md). Request-local DRC
 limits may tighten authored constraints without modifying the saved record.
 
 [Class definitions and dimensional resolution](net-classes.md),

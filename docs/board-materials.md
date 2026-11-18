@@ -223,11 +223,13 @@ when it applies other edits but does not edit them yet.
 
 ## Persistence and limits
 
-Material-aware fields use `pcbcraft-board/3`. A project using only the original
-layer catalog, labels and thicknesses retains version 2 byte-for-byte on a no-op
-round trip. Opening version 2 does not infer materials, reports or construction.
-Version 3 embeds all selected definitions in `board.json`; it needs no source
-library to reopen. Each material revision and each dielectric gap has a stable
+The original layer catalog, labels and thicknesses use `pcbcraft-board/2`;
+material-aware setup needs at least `pcbcraft-board/3`. These formats apply when
+no other authored data needs a later format. A canonical version-2 document
+round-trips byte-for-byte through the codec and does not acquire inferred materials,
+reports or construction. Version 3 and compatible later formats embed all selected
+definitions in `board.json`, with no source library needed. Each material revision
+and each dielectric gap has a stable
 record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 

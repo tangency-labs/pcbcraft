@@ -209,7 +209,7 @@ fn configured_format_headers_require_their_own_content() {
 
 /// Null, nonbooleans and duplicates fail split decoding; a valid archive manifest does not mask a null flag.
 #[test]
-fn malformed_lock_flags_are_refused_before_project_construction() {
+fn malformed_footprint_lock_flags_fail_document_decode() {
     let project = track::tests::routed_fixture().snapshot().unwrap();
     let locked_id = project.board.footprints[1].id;
     let saved = encode_documents(with_placement_lock(&project, locked_id, true)).unwrap();
@@ -234,8 +234,32 @@ fn malformed_lock_flags_are_refused_before_project_construction() {
     assert!(error.contains(path.as_str()) && error.contains("invalid type: null") && error.contains("bool"), "{error}");
 }
 
-/// Format 34 retains earlier physical records with or without reports, but still rejects
-/// an invalid origin, malformed zones or copper on a layer outside the board setup.
+/// Format 34 requires a placement list and validates the shape and identity of its records.
+#[test]
+fn locked_board_requires_valid_placement_records() {
+    let project = ratsnest::tests::fixture().snapshot().unwrap();
+    let documents = encode_documents(with_placement_lock(&project, project.board.footprints[1].id, true)).unwrap();
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    let path = test_board_path(&documents);
+    let good: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    assert_eq!(good["format"], "pcbcraft-board/34");
+    assert!(good.get("setup").is_none() && good.get("tracks").is_none() && good.get("vias").is_none());
+
+    let mut invalid = good.clone();
+    invalid.as_object_mut().unwrap().remove("footprints");
+    assert_invalid_board_record(&documents, &invalid, "missing field `footprints`");
+    invalid["footprints"] = json!([]);
+    assert_invalid_board_record(&documents, &invalid, "requires an authored footprint lock");
+    invalid = good.clone();
+    let repeated = project.board.footprints[0].id;
+    invalid["footprints"][1]["id"] = json!(repeated);
+    assert_invalid_board_record(&documents, &invalid, &format!("invalid or duplicate object ID {repeated}"));
+    invalid = good;
+    invalid["footprints"][1]["unexpected_lock_field"] = json!(true);
+    assert_invalid_board_record(&documents, &invalid, "unknown field `unexpected_lock_field`");
+}
+
+/// Format 34 retains earlier physical records, but still validates origin, zones, rules and copper setup.
 #[test]
 fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     for reports in [false, true] {
@@ -298,6 +322,12 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
             invalid = expected.clone();
             invalid["tracks"][0]["layer"] = json!(uuid::Uuid::from_u128(9042));
             assert_invalid_board_record(&saved, &invalid, "tracks must stay on a copper layer of the board setup");
+            invalid = expected.clone();
+            invalid.as_object_mut().unwrap().remove("setup");
+            assert_invalid_board_record(&saved, &invalid, "tracks must stay on a copper layer of the board setup");
+            invalid = expected.clone();
+            invalid["rules"]["values"]["clearance_nm"] = json!(-1);
+            assert_invalid_board_record(&saved, &invalid, "Copper clearance must be from 0 to");
         }
     }
 }
@@ -326,7 +356,7 @@ fn add_material_report(session: &mut Session) {
 
 /// Every combination of published report, profile, stack and via-intent fields remains optional
 /// in format 34. Report-only stays 25 and active locks use 34; clearing the stored flag in
-/// the test fixture restores the original split and packed bytes. A missing pin still fails.
+/// the test fixture restores the original bytes. Invalid profile, report and via records still fail.
 #[test]
 fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     use assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -407,9 +437,24 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
                     let loaded = decode_documents(&saved).unwrap();
                     assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
                     if profiles && !reports && !stack && !via_intent {
-                        let mut invalid = expected;
+                        let mut invalid = expected.clone();
                         invalid["assembly_profiles"][0]["revision"] = json!(2);
                         assert_invalid_board_record(&saved, &invalid, "reference pinned content revisions");
+                    }
+                    if reports && via_intent && !profiles && !stack {
+                        let mut invalid = expected.clone();
+                        let report = invalid["setup"]["materials"]
+                            .as_array_mut()
+                            .unwrap()
+                            .iter_mut()
+                            .find(|material| material["thermal_conductivity"].is_array())
+                            .unwrap();
+                        assert!(report["thermal_conductivity"][0].as_object_mut().unwrap().remove("source").is_some());
+                        assert_invalid_board_record(&saved, &invalid, "missing field `source`");
+                        let mut invalid = expected;
+                        assert!(invalid["vias"][0]["net_assignment"]["net"].is_string());
+                        invalid["vias"][0]["net_assignment"]["net"] = json!(uuid::Uuid::nil());
+                        assert_invalid_board_record(&saved, &invalid, "a via needs a non-nil identity, a bounded position");
                     }
                     let packed = encode_packed(loaded.clone()).unwrap();
                     assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
