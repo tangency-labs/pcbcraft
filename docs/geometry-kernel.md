@@ -68,19 +68,22 @@ could later move into an engine module if that proves simpler.
   converted at the boundary, each coordinate rounded once to the nearest
   nanometre.
 - **Panic guard.** Every kernel operation the crate calls (make, measure, read,
-  write) runs under a guard that turns a panic into
-  the error `kernel_internal`, adapted from SolidCraft's kernel boundary. The
-  reader refuses only the solid whose conversion panicked and keeps the others
-  (no test reaches this: no valid input makes that conversion panic).
-  `kernel_crash_test()` lets a diagnostics command prove the guard works.
+  write) runs under a guard adapted from SolidCraft's kernel boundary. When
+  panics unwind, the guard turns a panic into `kernel_internal`; aborting panics
+  cannot be caught. With unwinding, the reader refuses only the solid whose
+  conversion panicked and keeps the others (no test reaches this: no valid input
+  makes that conversion panic). `kernel_crash_test()` exercises a caught panic
+  when unwinding, returns `operation_failed` without panicking when the kernel
+  is present and panics abort, and returns `kernel_unavailable` without a kernel.
   Dropping a body frees its kernel data outside the guard.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
   outside tests.
-- **Native only.** The kernel crates are target dependencies for
-  non-`wasm32` builds. On `wasm32` the crate compiles without them, no body can
-  be made, and every operation that reaches the kernel returns
-  `kernel_unavailable`; arguments refused before the kernel keep their codes. CI
-  runs these tests on `wasm32-wasip1`.
+- **Kernel availability.** Native builds always have the kernel. On `wasm32`
+  it is opt-in via `wasm-kernel`. Without it, no body can be made and every
+  operation that reaches the kernel returns `kernel_unavailable`; arguments
+  refused before the kernel keep their codes. CI runs these kernel-less tests on
+  `wasm32-wasip1`. Its separate `wasm32-unknown-unknown` checks are compile-only,
+  with and without the kernel.
 - **No kernel data in projects.** A stored 3D model is its original STEP bytes by
   content hash, as the [3D model storage](library-sources.md#3d-model-storage)
   design proposes, or the dimensions a simple body was built from. Bodies, boxes
@@ -115,7 +118,7 @@ Current operations:
 | `Body::transformed(transform)` | A moved copy; the body itself is unchanged |
 | `StepRead::placements` | Every use of a body in the file's world frame: one entry for each body placed by an assembly occurrence (a single-body part used twice is one body placed twice), and each otherwise-unplaced body placed once where it is |
 | `StepRead::placed_bodies()`, `StepRead::bounding_box()` | The placed bodies, and their box in the world frame, each body measured after it is moved |
-| `kernel_crash_test()` | `kernel_internal` from a deliberate kernel panic |
+| `kernel_crash_test()` | `kernel_internal` from a deliberate unwinding kernel panic; `operation_failed` without panicking when panics abort; `kernel_unavailable` without a kernel |
 
 Error codes are stable snake_case names that MCP and CLI replies can carry:
 
@@ -124,8 +127,8 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | `invalid_params` | An argument is invalid or is refused by the kernel, including a name with an ASCII control character, which a STEP string cannot carry |
 | `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 combined occurrence/mapping levels, or an expansion past 100,000 placed bodies or its input-scaled work budget), or a placement that is not finite or moves a body more than 1 km from the origin |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
-| `operation_failed` | The kernel could not complete an operation on valid input |
-| `kernel_unavailable` | This build has no kernel (the browser) |
+| `operation_failed` | The kernel could not complete an operation on valid input, or the crash test was refused because panics abort |
+| `kernel_unavailable` | This build has no kernel (`wasm32` without `wasm-kernel`) |
 | `kernel_internal` | The kernel panicked; the panic was caught |
 
 ## Qualification
@@ -150,7 +153,8 @@ or a browser runtime.
 | 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
 | Writing the same bodies twice | identical bytes, with an empty time stamp in the header |
 | The crate on `wasm32-wasip1` (no kernel) | making, reading and the crash test give `kernel_unavailable`; refused arguments keep `invalid_params` and `model_unreadable` |
-| Deliberate kernel panic, and a panic outside the kernel's own guard | `kernel_internal`; the kernel keeps working |
+| `cargo check --locked --profile ci -p pcbcraft-geometry --target wasm32-unknown-unknown --no-default-features`, repeated with `--features wasm-kernel` | both configurations pass the compile check; no linking or browser execution |
+| Deliberate kernel panic, and a panic outside the kernel's own guard, in an unwinding build | `kernel_internal`; the kernel keeps working |
 | A kernel failure while making a body's STEP record (injected: no valid body fails there) | a caught kernel panic stays `kernel_internal`; a record the kernel refuses is `operation_failed` |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
 | A solid whose surfaces use an unsupported entity, beside a valid solid | that solid refused with `model_unsupported_entity`, its own entity number and the surface's name; the other read and placed |
@@ -276,11 +280,18 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
 - **Qualification set.** The fixtures cover planes, cylinders, holes, assemblies
   and three units. Cones, spheres, tori, B-spline surfaces, mapped items and
   bodies with voids are read by the kernel but not in the set yet.
-- **Browser.** `solidcore` itself checks for `wasm32-unknown-unknown`, but
-  `solidcore-step` has not been built for it, and the kernel README asks for a
-  wasm stack larger than the default 1 MB. Until that is qualified, every operation
-  of the crate on `wasm32` that reaches the kernel returns `kernel_unavailable`,
-  and a browser 3D view would use meshes.
+- **Browser.** The `wasm32-unknown-unknown` checks do not link a browser module
+  or run it. `apps/pcbcraft-web` leaves `wasm-kernel` off. Before enabling it:
+  - Account for panics that abort. This is the default on `wasm32`; the guard
+    cannot turn an abort into a `GeometryError`. A panic in a wasm call traps
+    instead. With the kernel enabled and panics aborting, `kernel_crash_test()`
+    returns `operation_failed` without inducing a panic.
+  - Qualify the stack size. SolidCraft's web app at `73bdb6c` links with
+    `-zstack-size=8388608` (8 MiB) in `apps/solidcraft-web/build.rs`. This change
+    does not set that flag in PCBcraft.
+  - Run a kernel-backed STEP round trip in a wasm runtime and measure the size
+    the kernel adds to the linked web build. Neither is covered by the compile
+    checks or by the kernel-less WASI tests.
 - **Input size.** `read_step` takes the whole STEP text in memory and has no size
   limit; its bodies and refusals grow with the file. The caller (the later STEP
   import command) bounds the input.
