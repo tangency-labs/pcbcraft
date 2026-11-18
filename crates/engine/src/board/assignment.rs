@@ -100,14 +100,20 @@ impl Assignment {
                     .is_none_or(|f| f.key() == Some(self.key()) && f.mapping.as_ref() == Some(&self.mapping)))
     }
 
+    /// Whether this board-eligible choice differs from an initialized board's accepted package.
+    pub(crate) fn pending_update(&self, project: &Project) -> bool {
+        project.component_is_board_eligible(self.component)
+            && project.board.baseline.as_ref().is_some_and(|baseline| !baseline.validate_assignment(self))
+    }
+
     /// Publish stable identities with explicit placement status for GUI and MCP.
     pub(crate) fn inspect(&self, project: &Project) -> Value {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
         value["component"] = json!(format!("component-{}", self.component));
         value["board"] = json!(project.board_target().map(|target| target.board));
         value["placed"] = json!(project.board.by_component.contains_key(&self.component));
-        if let Some(baseline) = &project.board.baseline {
-            value["pending_update"] = json!(project.component_is_board_eligible(self.component) && !baseline.validate_assignment(self));
+        if project.board.baseline.is_some() {
+            value["pending_update"] = json!(self.pending_update(project));
         }
         if project.board.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&self.component))
             && !project.component_is_board_eligible(self.component)
