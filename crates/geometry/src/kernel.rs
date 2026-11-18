@@ -87,8 +87,8 @@ const BASE_EXPANSION_WORK: u64 = 10 * MAX_PLACEMENTS;
 const WORK_PER_ENTITY: u64 = 1_000;
 
 /// The named bodies of a STEP text, where its product structure places them, and the solid items
-/// refused. A panic while one solid is handed to the kernel refuses that solid only. A STEP item
-/// the reader lists more than once (a closed shell two surface models share) is one body.
+/// refused. An unwinding panic while one solid is handed to the kernel refuses that solid only.
+/// A STEP item the reader lists more than once (a closed shell two surface models share) is one body.
 pub(crate) fn read(text: &str) -> Result<Read> {
     guard("STEP read", || {
         let exchange = solidcore_step::p21::parse(text).map_err(|e| GeometryError::new(ErrorCode::ModelUnreadable, String::from(e)))?;
@@ -417,8 +417,12 @@ impl<'a> Expansion<'a> {
     }
 }
 
-/// A deliberate panic inside a solidcore call, as the kernel's session catches it.
+/// Exercises the kernel's session guard with a deliberate unwinding panic. Where a panic
+/// aborts, refuse the test instead of ending the program.
 pub(crate) fn crash_test() -> Result<()> {
+    if cfg!(panic = "abort") {
+        return Err(GeometryError::new(ErrorCode::OperationFailed, "crash test: a panic ends this build, so the guard cannot catch it"));
+    }
     guard("crash test", || solidcore_ops::session::crash_test().map_err(|e| ops_error("crash test", e)))
 }
 
