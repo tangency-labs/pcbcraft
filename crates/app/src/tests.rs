@@ -2351,6 +2351,8 @@ fn assert_equivalent_sessions(actual: &Session, expected: &Session) {
     let mut a = actual.inspect();
     let mut b = expected.inspect();
     for state in [&mut a, &mut b] {
+        assert_eq!(state["project"]["id"].as_str().unwrap().len(), 36);
+        state["project"]["id"] = Value::Null;
         for circuit_use in state["project"]["sheet_instances"]["circuit_uses"].as_array_mut().unwrap() {
             circuit_use["id"] = Value::Null;
         }

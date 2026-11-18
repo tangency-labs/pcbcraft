@@ -12,6 +12,7 @@ pub mod assignment;
 pub mod class_rules;
 pub mod clearance;
 pub mod clipboard;
+pub mod correspondence;
 pub mod definition;
 pub mod drawing;
 pub mod drc;

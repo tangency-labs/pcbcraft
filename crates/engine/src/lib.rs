@@ -3077,10 +3077,12 @@ impl Session {
     /// with per-property provenance; inspecting these fields never authors defaults.
     /// Each board's `placement_origin` reports the saved origin and the resolved one outputs
     /// use, or null when an outline-attached origin has no outline to attach to.
-    /// Project inspection includes pinned profiles; each board lists its exact adopted revisions.
+    /// Project inspection includes its UUID for qualified queries and pinned profiles;
+    /// each board lists its exact adopted revisions.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
+                "id": p.id(),
                 "name": p.name,
                 "assembly_profiles":p.assembly_profiles(),
                 "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
