@@ -35,7 +35,7 @@ an explicitly empty or malformed registry is rejected. The registry stores
 UUID-sorted records, each with one primary anchor, up to three ordered fallbacks,
 snapshot-qualified lineage and an active, ambiguous or retired state. It never
 stores a complete endpoint membership list. Retired records reserve their UUIDs.
-The registry is limited to 4,096 records, including ambiguous and retired IDs,
+The registry is limited to 8,192 records (4,096 in earlier releases), including ambiguous and retired IDs,
 and 8 MiB of serialized data. Exceeding either limit refuses the transaction.
 
 Live anchors use the current project and schematic/board scope. Named labels and

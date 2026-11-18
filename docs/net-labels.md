@@ -113,7 +113,7 @@ Both the live editor and headless MCP use these same schemas and transactions.
 
 ## Storage and limits
 
-Each sheet supports 256 text labels, with names of 1–200 characters without
+Each sheet supports 4,096 text labels, with names of 1–200 characters without
 surrounding whitespace or control characters. Named labels require at least sheet
 format 3. Symbol field layouts select format 4, including the defaults of a bundled
 GND symbol on the same sheet; an explicit label text layout selects format 5.

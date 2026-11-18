@@ -447,7 +447,10 @@ project-unique UUIDs and names unique without case. Names are trimmed, nonblank,
 control-free and at most 200 characters. Each sheet owns its symbols, junctions,
 wires and connectivity; wire endpoints cannot reference another sheet. Components,
 reference allocation and board placements remain shared project data. The existing
-project-wide object and geometry bounds apply across all sheets.
+project-wide object and geometry bounds apply across all sheets: a project holds
+at most 8,192 unit placements and 8,192 components, and 16,384 wires with up to
+twice as many junctions. Earlier releases allowed 4,096 symbols and 4,096 wires
+and refuse a project with more of either when opening it rather than truncating it.
 
 `sheet.create`, `sheet.rename` and `sheet.delete` are revision-checked project
 commands. Deletion removes the sheet’s components and associated board footprints
@@ -733,7 +736,7 @@ once to compact storage on a byte-limit overflow; the limits do not increase,
 and Save adds no precondition. Legacy files that fit retain their expanded
 representation; compact files retain their encoding choice after reopening.
 Unchanged saves preserve canonical encoder bytes in either representation;
-accepted noncanonical input may normalize. Both homes support all 4,096 part
+accepted noncanonical input may normalize. Both homes support all 8,192 part
 instances in all 256 groups.
 
 ### Named net records
@@ -744,7 +747,8 @@ per line in stable object-ID order. Each record contains a project-unique `id`,
 case-sensitive `name`, `style` (`local` or `global`), `at`
 point in integer nanometers and `rotation` (0, 90, 180 or 270 counterclockwise).
 Names contain 1–200 characters without surrounding whitespace or controls; each
-sheet permits at most 256 text labels. Power symbols are ordinary components and
+sheet permits at most 4,096 text labels (256 in earlier releases, which refuse a
+sheet with more). Power symbols are ordinary components and
 unit placements with pinned native definitions and terminal endpoints. The
 former `power`, `power_bar` and `ground` annotation styles are no longer accepted;
 the decoder rejects them without migrating or silently omitting records.

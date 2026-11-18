@@ -156,15 +156,19 @@ fn legacy_memberships_keep_their_bytes_above_four_thousand_records() {
     }
 }
 
-/// Dense accepted membership, including the full 4096-by-256 space, saves through both native
-/// homes under the existing byte limits. Canonical compact output is byte-identical after reopen.
+/// Dense membership at the symbol and group limits saves through both native homes under the
+/// existing byte limits. The placement grid is centered vertically to fit the sheet bounds.
+/// Canonical compact output is byte-identical after reopen.
 #[test]
 fn maximum_memberships_save_and_reload_in_both_storage_homes() {
     for board in [false, true] {
         let (mut s, _) = parts(0, board);
+        let spacing = 12 * crate::schematic::GRID_NM;
+        let half_rows = (crate::schematic::MAX_SYMBOLS.div_ceil(64) / 2) as i64;
+        assert!(63 * spacing <= crate::schematic::MAX_CENTER_NM);
+        assert!(half_rows * spacing <= crate::schematic::MAX_CENTER_NM);
         for index in 0..crate::schematic::MAX_SYMBOLS {
-            let spacing = 12 * crate::schematic::GRID_NM;
-            apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":(index % 64) as i64*spacing,"y_nm":(index / 64) as i64*spacing}));
+            apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":(index % 64) as i64*spacing,"y_nm":((index / 64) as i64-half_rows)*spacing}));
             if index % 64 == 63 {
                 s.open_snapshot(s.snapshot().unwrap());
             }
@@ -177,7 +181,7 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
             if index % 64 == 63 {
                 s.open_snapshot(s.snapshot().unwrap());
             }
-            if index == 1023 || index + 1 == ids.len() {
+            if index == 1023 || index == 4095 || index + 1 == ids.len() {
                 let expected = (index + 1) * MAX_GROUPS;
                 assert_eq!(s.project().unwrap().part_group_memberships().len(), expected);
                 let docs = round_trip(&s);
@@ -190,7 +194,12 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
                 let scope = if board { &value } else { &value["schematic_instances"] };
                 assert!(scope.get("part_group_memberships").is_none());
                 assert_eq!(scope["compact_part_group_memberships"]["part_instances"].as_array().unwrap().len(), index + 1);
-                assert!(serde_json::to_vec(&scope["compact_part_group_memberships"]).unwrap().len() < 4 * 1024 * 1024);
+                let compact_bytes = serde_json::to_vec(&scope["compact_part_group_memberships"]).unwrap().len();
+                if index < 4096 {
+                    assert!(compact_bytes < 4 * 1024 * 1024);
+                } else {
+                    assert!(compact_bytes < 8 * 1024 * 1024);
+                }
                 if board {
                     assert_eq!(value["format"], "pcbcraft-instances/7");
                 }
@@ -229,7 +238,13 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
         }
         assert_eq!(s.project().unwrap().part_group_memberships().len(), MAX_MEMBERSHIPS);
         let snapshot = s.snapshot().unwrap();
-        refuse(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}), CapExceeded, "already has 4096 symbols");
+        refuse(
+            &mut s,
+            crate::PLACE_RESISTOR,
+            json!({"x_nm":0,"y_nm":0}),
+            CapExceeded,
+            &format!("already has {} symbols", crate::schematic::MAX_SYMBOLS),
+        );
         assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     }
 }

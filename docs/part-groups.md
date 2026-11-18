@@ -115,15 +115,15 @@ the entry point to the version its other content needs.
 
 ### Dense membership
 
-Every supported part instance may belong to all 256 groups: up to 4,096 instances
-and 1,048,576 memberships. If the expanded representation exceeds the existing
+Every supported part instance may belong to all 256 groups: up to 8,192 instances
+and 2,097,152 memberships. If the expanded representation exceeds the existing
 16 MiB document or 48 MiB total-document bound, the disposable encoder restarts
 once with compact memberships. The entry selects project/39 if no other feature
 requires a higher format. Project/36, /45 and /51 keep their headers. A board-owned
 instance document uses instances/7 for compact memberships without pairs, or
 keeps instances/8 when pairs are present.
 This is a representation choice inside encoding, not a refused edit or a Save
-precondition. The model capacity and file-size limits do not change.
+precondition. Switching representation leaves the model capacity and file-size limits unchanged.
 
 The instance home then replaces `part_group_memberships` with
 `compact_part_group_memberships`: a sorted, unique, non-nil `groups` UUID
@@ -133,7 +133,8 @@ and a sorted, nonempty `groups` array of zero-based integer dictionary reference
 The dictionary contains exactly the UUIDs used by the rows. Positions
 are local compression references, not object identities or catalog positions;
 loading expands them back into ordinary UUID memberships before model validation.
-At the supported maximum the compact membership payload is below 4 MiB.
+At 4,096 fully grouped instances the compact membership payload is below 4 MiB;
+at the supported 8,192-instance maximum it is below 8 MiB.
 
 Both storage homes validate the dictionary, row ordering, uniqueness, integer
 reference range, bounded expansion and existing part/group identities. Compact
