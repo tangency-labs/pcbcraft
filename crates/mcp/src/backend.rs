@@ -50,14 +50,24 @@ pub trait Backend {
     }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
-    /// Discover commands and their serving backend's API metadata.
+    /// Discover commands and their serving backend's API metadata. The default retains the
+    /// legacy metadata; a backend must explicitly opt in to version checks or warnings.
     fn command_catalog(&mut self) -> Result<(Value, Value), Failure> {
-        self.call("engine.commands", json!({})).map(|commands| (commands, api_metadata(COMMAND_API_VERSION)))
+        self.call("engine.commands", json!({})).map(|commands| (commands, legacy_api_metadata()))
     }
     /// Execute a command, returning its ordinary result and any deprecation warnings separately.
+    /// The default only accepts unpinned requests, since a legacy handler may ignore a pin.
     fn execute(&mut self, request: Value) -> Result<(Value, Vec<Value>), Failure> {
+        if request.get("version").is_some() {
+            return Err(Failure::new(ErrorCode::InvalidRequest, "This backend does not support command API version pins"));
+        }
         self.call("engine.execute", request).map(|result| (result, Vec::new()))
     }
+}
+
+/// Discovery metadata before version pinning or deprecation warnings were supported.
+pub(crate) fn legacy_api_metadata() -> Value {
+    json!({"command_api_version": 1, "capabilities": ["command_api", "error_codes"]})
 }
 
 pub(crate) fn api_metadata(version: u32) -> Value {

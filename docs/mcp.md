@@ -283,18 +283,33 @@ every change to `command-contracts.json`.
 Pass optional `version` to `execute` to pin the `command_api_version` from
 `list_commands`. There is no per-command version. Omitting `version` runs
 against the session’s current API. The MCP tool accepts a positive JSON
-integer (for example `1`, not `1.0`, `"1"` or `null`). A raw live
-`engine.execute` request carries it beside `command` in the method’s `params`;
-there, omitted or `null` means unpinned, and a malformed version is
-`invalid_params` for a known command.
+integer (for example `1`, not `1.0`, `"1"` or `null`). Check the serving
+session’s `version_check` capability before pinning. Legacy MCP backends that
+do not implement pinning refuse a pin without dispatching; unpinned calls
+still work.
+
+The MCP bridge and raw live clients that need a guarantee across editor versions
+use `engine.execute_versioned` with a required non-null `params.version` beside
+`params.command`. For example:
+
+```json
+{"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}
+```
+
+A missing or null pin on that method is `invalid_request`; an older editor
+rejects the method rather than executing the command. Use plain `engine.execute`
+for unpinned requests. A current editor also checks a non-null `version` on
+plain `engine.execute` (omitted or `null` means unpinned), but a legacy editor
+ignores it and may execute the command. A malformed pin on a known command
+that reaches the version check returns `invalid_params` on the live endpoint.
 
 A known, routable project, window or `ui.` command with a different API version
 returns `version_mismatch` without running. Refresh the catalog and adapt the
-call. Unknown commands, a missing live editor and existing host policy refusals
-retain their outcomes. A pinned remote MCP call uses a distinct live wire method
-so an older editor refuses it instead of silently ignoring the pin. Check the
-serving session’s `version_check` capability before pinning; an editor without
-that capability still accepts unpinned requests.
+call. Unknown commands and a missing live editor keep their existing refusals.
+Outer admission checks still run first, including assistant approval, ordinary
+project/window editor refusal and deferred-job expiry, busy and editor refusal.
+The `ui.` handler's own checks, such as busy or native focus, run only after a
+matching or omitted pin.
 
 ### Deprecated commands and parameters
 

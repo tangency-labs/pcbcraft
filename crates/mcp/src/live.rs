@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     Failure,
-    backend::{Backend, api_metadata, call_session, command_id, describe_engine_commands, execute_warnings, is_window_command},
+    backend::{Backend, api_metadata, call_session, command_id, describe_engine_commands, execute_warnings, is_window_command, legacy_api_metadata},
 };
 
 /// Environment variable used by the desktop configuration and the MCP CLI.
@@ -96,12 +96,11 @@ impl Backend for Remote {
         let mut reply = self.request("engine.commands", json!({}))?;
         // Preserve the previous discovery metadata for an old endpoint, but don't promise
         // version checks or warnings it cannot provide.
-        let legacy = || json!({"command_api_version": 1, "capabilities": ["command_api", "error_codes"]});
         let metadata = reply["command_api"].take();
         let metadata = if metadata["command_api_version"].as_u64().is_some_and(|version| version > 0) && metadata["capabilities"].is_array() {
             metadata
         } else {
-            legacy()
+            legacy_api_metadata()
         };
         Ok((reply["result"].take(), metadata))
     }

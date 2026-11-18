@@ -3,6 +3,37 @@ use pcbcraft_engine::command_api::{COMMAND_API_VERSION, Deprecation};
 
 const FIXTURE: &[Deprecation] = &[Deprecation { command: "project.new", parameter: Some("create_board"), since: "0.2.0", replacement: None }];
 
+/// An implementation of only the legacy methods advertises no new flags and never sees a pin.
+#[test]
+fn legacy_backend_refuses_pins_without_dispatching_and_still_executes_unpinned() {
+    use crate::{Backend, Failure};
+    struct LegacyBackend;
+    impl Backend for LegacyBackend {
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+            match method {
+                "engine.commands" => Ok(json!([{"id": "project.new"}])),
+                "engine.execute" => {
+                    assert!(params.get("version").is_none(), "a pinned call reached the legacy handler");
+                    assert_eq!(params["command"], "project.new");
+                    Ok(json!({"revision": 1}))
+                }
+                _ => panic!("unexpected backend request: {method}"),
+            }
+        }
+        fn describe(&self) -> String {
+            "a legacy backend".into()
+        }
+    }
+    let mut s = Server::new(Box::new(LegacyBackend));
+    let listed = call(&mut s, "list_commands", json!({}));
+    assert_eq!(listed["structuredContent"]["capabilities"], json!(["command_api", "error_codes"]));
+    let pinned = call(&mut s, "execute", json!({"command": "project.new", "version": COMMAND_API_VERSION}));
+    assert_eq!(pinned["isError"], true);
+    assert_eq!(pinned["structuredContent"]["error"]["code"], "invalid_request");
+    let plain = call(&mut s, "execute", json!({"command": "project.new"}));
+    assert_eq!(plain, json!({"content": [{"type": "text", "text": "{\"revision\":1}"}]}));
+}
+
 /// Exercise the changed API fixture, discovery, nonexecution on mismatch, and warning shape.
 #[test]
 fn a_version_two_api_refuses_mismatches_and_warns_on_deprecated_use() {
