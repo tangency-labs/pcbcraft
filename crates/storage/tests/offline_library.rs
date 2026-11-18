@@ -152,13 +152,12 @@ fn pinned_library_folder_and_archive_remain_editable_without_registered_sources(
         edit(&mut session, SET_FOOTPRINT_TRANSFORM, json!({"footprint":original_pose.0,"x_nm":3_810_000,"y_nm":-2_540_000,"rotation":90}));
         let moved = pose(session.project().unwrap(), &part_id);
         assert_eq!(moved, (original_pose.0.clone(), Point { x_nm: 3_810_000, y_nm: -2_540_000 }, 90));
+        let before_field_edit = encode_documents(session.snapshot().unwrap()).unwrap();
         edit(&mut session, SET_SYMBOL_FIELDS, json!({"symbol":symbol_id,"reference":"R7","value":"4.7k"}));
         let edited = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_ne!(edited, original_documents);
         session.apply("edit.undo", &Value::Null).unwrap();
-        let project = session.project().unwrap();
-        assert_eq!(project.component(&project.symbols()[0]).unwrap().value(), "1k");
-        assert_eq!(pose(session.project().unwrap(), &part_id), moved);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_field_edit);
         session.apply("edit.redo", &Value::Null).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), edited);
         assert_eq!(pinned(&edited), copies);
