@@ -635,11 +635,13 @@ fn no_connect_marks_block_explicit_wiring_until_removed() {
         h.run();
         let before = h.state().session.snapshot().unwrap();
         let revision = h.state().session.revision();
-        // W at a marked endpoint arms the tool but must not capture it as a source.
+        // W only arms the tool; clicking a marked endpoint must not capture it as a source.
         h.hover_at(target_at);
         h.key_press(Key::W);
         h.run();
         assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+        assert!(h.state().message.is_none());
+        click_canvas_at(&mut h, target_at);
         assert!(h.state().message.as_ref().is_some_and(|m| m.contains("Remove the no-connect")));
         assert_eq!(h.state().session.revision(), revision);
         h.key_press(Key::Escape);
@@ -648,6 +650,7 @@ fn no_connect_marks_block_explicit_wiring_until_removed() {
         h.hover_at(from);
         h.key_press(Key::W);
         h.run();
+        click_canvas_at(&mut h, from);
         h.hover_at(target_at + egui::vec2(0., -10.));
         h.run_steps(1);
         assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::NotAllowed);
@@ -657,6 +660,8 @@ fn no_connect_marks_block_explicit_wiring_until_removed() {
         assert_same_content(&before, &h.state().session.snapshot().unwrap());
         h.key_press(Key::Escape);
         h.run();
+        h.key_press(Key::Escape);
+        h.run();
         marker_click(&mut h, target_at, Modifiers::NONE);
         h.key_press(Key::Delete);
         h.run();
@@ -664,6 +669,7 @@ fn no_connect_marks_block_explicit_wiring_until_removed() {
         h.hover_at(from);
         h.key_press(Key::W);
         h.run();
+        click_canvas_at(&mut h, from);
         click_canvas_at(&mut h, target_at);
         h.key_press(Key::Escape);
         h.run();

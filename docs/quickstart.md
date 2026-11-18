@@ -152,15 +152,15 @@ the same `VCC` net name, which can be changed before placement.
    header's **Expand** control returns to the large form with the same library,
    search and selection. The compact catalog stays open during placement and can
    be floated or docked at either edge from its **…** menu.
-3. Click an unconnected pin or free wire end to start directly, or hover a pin,
-   wire or grid point and press **W** to start there immediately. Connected nodes
-   use W or **Capture → Wire**, which waits for a first click. The green wire cursor
+3. Click an unconnected pin or free wire end to start directly, or press **W**
+   or choose **Capture → Wire** to activate the tool, then click a pin, wire or
+   grid point to choose the start. Connected nodes require the Wire tool. The green wire cursor
    rings an existing connection target. Hold **Ctrl** to draw off-grid; releasing it
    restores snapping, while pins and wires remain connection targets. Click corners
    and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end. The wire tool stays ready for a new route;
-   **Esc** exits it or cancels an unfinished wire.
+   **Esc** cancels an unfinished wire while keeping the tool ready; press it again to exit.
    Finish on an existing wire segment to create a connected branch. Dragging a
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
