@@ -111,6 +111,34 @@ fn unmarked_polarized_diode_raises_one_finding() {
     assert_eq!(findings(&mut s), found, "the report is repeatable");
 }
 
+/// A circular land and a rotated equal-dimension oval are indistinguishable in copper.
+#[test]
+fn equivalent_circular_lands_still_warn() {
+    let mut diode = package("resistor-0402", "circular-lands", Some(json!({"polarized":true})));
+    let pads = diode["pads"].as_array_mut().unwrap();
+    for (pad, (shape, rotation)) in pads.iter_mut().zip([("circle", 0), ("oval", 37)]) {
+        pad["shape"] = json!(shape);
+        pad["rotation"] = json!(rotation);
+        pad.as_object_mut().unwrap().remove("corner_radius_nm");
+    }
+    let mut s = fixture(&[diode]);
+    let found = findings(&mut s);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0]["package"]["id"], "circular-lands");
+}
+
+/// A valid, off-centre path with coincident endpoints has no ink and cannot clear the warning.
+#[test]
+fn zero_length_silkscreen_still_warns() {
+    let mut diode = package("resistor-0402", "empty-silk", Some(json!({"polarized":true})));
+    let p = json!({"x_nm":0,"y_nm":900_000});
+    diode["silkscreen"].as_array_mut().unwrap().push(json!({"points":[&p,&p],"closed":false}));
+    let mut s = fixture(&[diode]);
+    let found = findings(&mut s);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0]["package"]["id"], "empty-silk");
+}
+
 /// A stated zero orientation, a silkscreen polarity mark or no polarity at all clears it.
 #[test]
 fn stated_zero_marks_and_unpolarized_packages_raise_nothing() {

@@ -295,7 +295,9 @@ size, corner radius, copper binding and drill) and moves at least one pad onto a
 differently numbered one. For each such turn the silkscreen or fabrication drawing
 must differ from itself turned the same way. The check uses fixed silkscreen paths
 and rectangles and artwork on both layers, not courtyards or generated reference
-text. It compares authored primitives, position, size, stroke and fill at integer
+text. A circular land and an equal-dimension oval compare as the same contour, and
+zero-length silkscreen segments do not count. The check compares authored
+primitives, position, size, stroke and fill at integer
 nanometre precision; it does not compare rendered ink or verify that a mark names
 the correct pad. For example, the same line drawn as one segment on one side and
 two segments on the other can count as a mark. A cathode bar or pin 1 dot is a

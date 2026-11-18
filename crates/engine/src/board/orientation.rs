@@ -78,23 +78,26 @@ fn rectangle_form(width: i64, height: i64, rotation: u32) -> (i64, i64, u32) {
 type PadForm = (Doubled, u8, u8, Option<i64>, i64, (i64, i64, u32));
 
 /// Return every land of the definition turned by `q` quarter turns about the frame's pivot,
-/// sorted by form, with its pad number. Circles ignore rotation; other shapes add the turn.
+/// sorted by form, with its pad number. Circles and equal-dimension ovals share a contour
+/// and ignore rotation; other shapes add the turn.
 fn pad_forms<'d>(definition: &'d FootprintDefinition, frame: &Frame, q: u8) -> Vec<(PadForm, &'d str)> {
     let mut forms: Vec<_> = definition
         .pads
         .iter()
         .map(|pad| {
+            const CIRCULAR: u8 = 2;
             let shape = match pad.shape {
                 PadShape::Rectangle => 0,
                 PadShape::RoundedRectangle => 1,
-                PadShape::Circle => 2,
+                PadShape::Circle => CIRCULAR,
+                PadShape::Oval if pad.width_nm == pad.height_nm => CIRCULAR,
                 PadShape::Oval => 3,
             };
             let copper = match pad.copper {
                 CopperBinding::ComponentSide => 0,
                 CopperBinding::AllCopper => 1,
             };
-            let rotation = if pad.shape == PadShape::Circle { 0 } else { u32::from(pad.rotation) + 90 * u32::from(q) };
+            let rotation = if shape == CIRCULAR { 0 } else { u32::from(pad.rotation) + 90 * u32::from(q) };
             let form = (
                 turn(frame.point(pad.center.x_nm, pad.center.y_nm), q),
                 shape,
@@ -126,12 +129,15 @@ fn segment(a: Doubled, b: Doubled) -> Mark {
     if a <= b { Mark::Segment(a, b) } else { Mark::Segment(b, a) }
 }
 
-/// Append the segments of a polyline, plus the closing segment when it is closed and has at
-/// least three points.
+/// Append the nonzero segments of a polyline, including a closing edge when needed.
+/// Coincident endpoints draw no silkscreen ink and cannot mark an orientation.
 fn path(points: &[Doubled], closed: bool, marks: &mut Vec<Mark>) {
-    marks.extend(points.windows(2).map(|pair| segment(pair[0], pair[1])));
-    if closed && points.len() > 2 {
-        marks.push(segment(points[points.len() - 1], points[0]));
+    marks.extend(points.windows(2).filter(|pair| pair[0] != pair[1]).map(|pair| segment(pair[0], pair[1])));
+    if closed
+        && let [first, _, .., last] = points
+        && first != last
+    {
+        marks.push(segment(*last, *first));
     }
 }
 
