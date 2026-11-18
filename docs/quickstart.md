@@ -626,6 +626,14 @@ in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
 open GUI window or save back to the file.
 
+To read back a connectivity export, call `execute` with
+`{"command":"project.export_netlist","params":{}}`. Take the text from
+`netlist.files[0].contents` in the reply, then call `execute` with
+`command: "project.compare_netlist"` and that text as `params.netlist`.
+The comparison returns counts, connectivity differences and annotation notes
+without changing the revision or Undo history. See the [JSON netlist guide](netlist-format.md#comparing-a-file-with-the-design)
+for accepted-board files, net identity and input limits.
+
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
 footprints, initialize with any even `copper_layers` from 2 through 64 and the current

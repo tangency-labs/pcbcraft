@@ -519,6 +519,15 @@ returns the filename and findings without rendering the file text. If the full
 reply exceeds the live editor's 16 MiB frame limit, save the project and use the
 headless command for the full export.
 
+`project.compare_netlist` takes a netlist file's text as `netlist` and compares
+it with what the open project exports now, the project netlist or, for a board
+file, that board's accepted netlist, without editing anything. `execute` returns
+`comparison`: `matches`, `identical`, the counts on both sides, `differences`
+such as a terminal on another net (named with its net in the design and the
+file's net it is on), and `notes` for renamed nets and other changes that leave connectivity
+alone. Terminals are matched by part and terminal, never by net name or
+position; see [comparing a file with the design](netlist-format.md#comparing-a-file-with-the-design).
+
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
 or unlocks the whole selection in one undo step, with no geometry or connectivity

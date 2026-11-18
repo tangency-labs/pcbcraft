@@ -227,7 +227,11 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;
-                return if id == pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST { board_netlist_reply(result) } else { Ok(result) };
+                return match id {
+                    pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST => board_netlist_reply(result),
+                    pcbcraft_engine::netlist::COMPARE_NETLIST => comparison_netlist_reply(result),
+                    _ => Ok(result),
+                };
             }
             check_window_version(editor, id, &params["version"])?;
             editor.run_window_command(id, &params["params"])?;
@@ -237,9 +241,23 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
     }
 }
 
-/// Measure the exact escaped JSON payload of the live reply, including the `result` envelope.
-/// The framing newline is not counted by `Connection::receive`. No second buffer is allocated.
+/// Cap the live board export and retain its headless export and dry-run guidance.
 fn board_netlist_reply(result: Value) -> Result<Value, Failure> {
+    bounded_netlist_reply(
+        result,
+        "Board netlist reply exceeds the live editor's 16 MiB limit. Save the project and run pcb.export_netlist in a headless session for the full export, or use dry_run for findings only.",
+    )
+}
+
+/// Cap the live comparison reply using the same budget as a board export.
+fn comparison_netlist_reply(result: Value) -> Result<Value, Failure> {
+    bounded_netlist_reply(result, "Netlist comparison reply exceeds the live editor's 16 MiB limit.")
+}
+
+/// Measure the escaped payload including its `result` envelope, without allocating another
+/// buffer. The framing newline is not counted by `Connection::receive`. An oversized reply
+/// fails with `unavailable` and the caller's message.
+fn bounded_netlist_reply(result: Value, too_large: &str) -> Result<Value, Failure> {
     struct ReplyBudget(usize);
 
     impl io::Write for ReplyBudget {
@@ -253,9 +271,8 @@ fn board_netlist_reply(result: Value) -> Result<Value, Failure> {
         }
     }
 
-    serde_json::to_writer(ReplyBudget(MAX_REPLY_BYTES - b"{\"result\":}".len()), &result).map_err(|_| {
-        Failure::from("Board netlist reply exceeds the live editor's 16 MiB limit. Save the project and run pcb.export_netlist in a headless session for the full export, or use dry_run for findings only.")
-    })?;
+    serde_json::to_writer(ReplyBudget(MAX_REPLY_BYTES - b"{\"result\":}".len()), &result)
+        .map_err(|_| Failure::new(ErrorCode::Unavailable, too_large))?;
     Ok(result)
 }
 
@@ -279,5 +296,15 @@ mod tests {
         assert!(refused.message().contains("16 MiB") && refused.message().contains("headless"), "{refused}");
         let dry = json!({"revision":7,"netlist":{"files":[{"name":"netlist.json"}],"findings":[]}});
         assert_eq!(board_netlist_reply(dry.clone()).unwrap(), dry);
+    }
+
+    /// Compare replies use the same escaped frame budget but have their own diagnostic.
+    #[test]
+    fn live_netlist_comparison_reply_has_its_own_size_error() {
+        let small = json!({"revision":7,"comparison":{"matches":true}});
+        assert_eq!(comparison_netlist_reply(small.clone()).unwrap(), small);
+        let large = json!({"comparison":{"notes":[{"message":"\"".repeat(MAX_REPLY_BYTES / 2)}]}});
+        let error = comparison_netlist_reply(large).unwrap_err();
+        assert_eq!(error.to_json(), json!({"code":"unavailable","message":"Netlist comparison reply exceeds the live editor's 16 MiB limit.","details":{}}));
     }
 }
