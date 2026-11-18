@@ -214,7 +214,11 @@ fn reshapes_stay_within_the_bend_limit() {
     assert_eq!(route.len(), MAX_BENDS + 2);
     // Sliding the first leg away from its fixed start adds a leg, one too many.
     let first = Point { x_nm: GRID_NM / 2, y_nm: 0 };
-    let error = run(&mut session, crate::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": first, "to": {"x_nm": GRID_NM / 2, "y_nm": -GRID_NM}}));
-    assert!(matches!(error, Err(CommandError::Unavailable(_))), "{error:?}");
+    let before = session.inspect();
+    let error =
+        run(&mut session, crate::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": first, "to": {"x_nm": GRID_NM / 2, "y_nm": -GRID_NM}})).unwrap_err();
+    assert_eq!(error.code(), crate::error_codes::ErrorCode::CapExceeded);
+    assert!(error.to_string().contains(&format!("more than {MAX_BENDS} bends")), "{error}");
+    assert_eq!(session.inspect(), before);
     assert_eq!(routes(&session)[0], route);
 }

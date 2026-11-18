@@ -426,14 +426,22 @@ fn the_command_plans_without_editing_and_feeds_add_tracks() {
     let (bytes, revision) = (encode_documents(s.snapshot().unwrap()).unwrap(), s.revision());
     let params = json!({"from":head,"to":target,"layer":layer});
     let response = s.execute(PLAN_ROUTE, &params).unwrap();
-    assert_eq!((encode_documents(s.snapshot().unwrap()).unwrap(), s.revision()), (bytes, revision));
+    assert_eq!((&encode_documents(s.snapshot().unwrap()).unwrap(), s.revision()), (&bytes, revision));
     let planned = &response["route_plan"];
     assert_eq!((planned["outcome"]["kind"].as_str(), planned["width_nm"].as_i64()), (Some("reached"), Some(WIDTH)));
     assert_eq!(s.apply(PLAN_ROUTE, &params).unwrap(), revision);
     assert!(s.execute(PLAN_ROUTE, &json!({"from":head,"to":target,"layer":uuid::Uuid::from_u128(7)})).is_err());
     assert!(s.execute(PLAN_ROUTE, &json!({"from":head,"to":target,"layer":layer,"posture":"free"})).is_err());
-    let stale = s.execute(PLAN_ROUTE, &json!({"from":head,"to":target,"layer":layer,"expected_revision":revision - 1})).unwrap();
-    assert_eq!(stale["route_plan"]["outcome"]["kind"], "stale");
+    for expected in [revision - 1, revision + 1] {
+        let stale = json!({"from":head,"to":target,"layer":layer,"expected_revision":expected});
+        let response = s.execute(PLAN_ROUTE, &stale).unwrap();
+        assert_eq!(response["route_plan"]["outcome"]["kind"], "stale");
+        assert_eq!(s.apply(PLAN_ROUTE, &stale).unwrap(), revision);
+    }
+    let error = s.execute(PLAN_ROUTE, &json!({"from":head,"to":target,"layer":layer,"expected_revision":"old"})).unwrap_err();
+    assert_eq!(error.code(), crate::error_codes::ErrorCode::InvalidParams);
+    assert!(error.to_string().contains("`expected_revision`"), "{error}");
+    assert_eq!((&encode_documents(s.snapshot().unwrap()).unwrap(), s.revision()), (&bytes, revision));
     add(&mut s, ADD_TRACKS, json!({"layer":layer,"width_nm":planned["width_nm"],"points":planned["points"]}));
     assert_eq!(s.revision(), revision + 1, "one undo step");
 }

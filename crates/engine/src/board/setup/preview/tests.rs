@@ -327,14 +327,16 @@ fn occupied_drawings_and_zone_outlines_are_reviewed_before_apply() {
 /// At the authored track limit and 64 copper layers, one complete review stays bounded.
 /// The queued test's wall time includes command-generated fixture construction, not just review.
 #[test]
-fn maximum_track_layer_review_is_complete_and_bounded() {
+fn track_layer_review_within_report_budget_is_complete_and_bounded() {
+    // The original 4,096-track board still fits the unchanged review budget.
+    const REVIEWABLE_TRACKS: usize = 4096;
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     edit(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":64}));
     let inner = s.project().unwrap().board_setup().unwrap().copper_stack().nth(1).unwrap().layer;
     let mut count = 0;
-    while count < crate::board::track::MAX_TRACKS {
-        let n = (crate::board::track::MAX_TRACKS - count).min(crate::board::track::MAX_PATH_POINTS - 1);
+    while count < REVIEWABLE_TRACKS {
+        let n = (REVIEWABLE_TRACKS - count).min(crate::board::track::MAX_PATH_POINTS - 1);
         let points: Vec<_> = (count..=count + n).map(|i| json!({"x_nm":(i as i64)*20000,"y_nm":0})).collect();
         edit(&mut s, ADD_TRACKS, json!({"layer":inner,"width_nm":10000,"points":points}));
         count += n;
@@ -342,7 +344,7 @@ fn maximum_track_layer_review_is_complete_and_bounded() {
     let candidate = reduced(&s);
     let snapshot = s.snapshot().unwrap();
     let report = preview(&mut s, candidate.clone(), false);
-    assert_eq!(report["changes"]["affected_objects"].as_array().unwrap().len(), crate::board::track::MAX_TRACKS);
+    assert_eq!(report["changes"]["affected_objects"].as_array().unwrap().len(), REVIEWABLE_TRACKS);
     assert!(serde_json::to_vec(&report["changes"]).unwrap().len() <= MAX_CHANGES_BYTES);
     assert!(serde_json::to_vec(&report).unwrap().len() <= MAX_REPORT_BYTES);
     let error = s.apply(SET_BOARD_SETUP, &json!({"setup":candidate,"expected_revision":s.revision()})).unwrap_err();
@@ -353,6 +355,51 @@ fn maximum_track_layer_review_is_complete_and_bounded() {
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
 }
 
+/// A full track board fits the native document; an over-budget review refuses rather than
+/// truncating its changes or disturbing the prior authority, snapshot, revision, or history.
+#[test]
+fn maximum_track_layer_review_refuses_without_truncation() {
+    use crate::board::track::{MAX_TRACKS, Track};
+    use crate::schematic::Point;
+
+    let mut s = session();
+    let mut project = s.project().unwrap().clone();
+    let layer = project.board_setup().unwrap().copper_stack().nth(1).unwrap().layer;
+    let board = Arc::make_mut(&mut project.board);
+    board.tracks = (0..MAX_TRACKS)
+        .map(|i| {
+            // Independent two-point segments in a grid, inside the coordinate bounds at full capacity.
+            let start = Point { x_nm: (i % 256) as i64 * 40_000, y_nm: (i / 256) as i64 * 40_000 };
+            Track {
+                id: Uuid::from_u128(i as u128 + 1),
+                locked: false,
+                layer,
+                width_nm: 10_000,
+                start,
+                end: Point { x_nm: start.x_nm + 20_000, y_nm: start.y_nm },
+            }
+        })
+        .collect();
+    s.change(project).unwrap();
+    let snapshot = s.snapshot().unwrap();
+    assert_eq!(snapshot.board.tracks.len(), MAX_TRACKS);
+    let opening = preview(&mut s, json!(snapshot.board_setup().unwrap()), false);
+    let revision = s.revision();
+    let history = (s.undo.len(), s.redo.len());
+    let params = json!({"setup":reduced(&s),"expected_revision":revision});
+    let error = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap_err();
+    assert!(
+        matches!(&error, CommandError::Unavailable(message) if message.contains("complete board setup review exceeds its byte budget")),
+        "{error}"
+    );
+    let error = s.apply(SET_BOARD_SETUP, &params).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message == "tracks must stay on a copper layer of the board setup"), "{error}");
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+    assert_eq!(s.revision(), revision);
+    assert_eq!((s.undo.len(), s.redo.len()), history);
+    assert_eq!(s.board_setup_preview().unwrap().plan_token.to_string(), opening["plan_token"].as_str().unwrap());
+}
+
 /// Invalid addressing, revisions, candidate fields and token spellings fail before mutation.
 #[test]
 fn malformed_preview_inputs_preserve_current_authority_and_project() {
@@ -360,15 +407,14 @@ fn malformed_preview_inputs_preserve_current_authority_and_project() {
     let candidate = reduced(&s);
     let report = preview(&mut s, candidate.clone(), false);
     let snapshot = s.snapshot().unwrap();
-    for (params, reason, unavailable) in [
-        (json!({"setup":candidate,"expected_revision":s.revision()-1}), "project changed", true),
-        (json!({"setup":candidate,"expected_revision":s.revision(),"board":crate::fresh_id().unwrap()}), "unknown board ID", false),
-        (json!({"setup":{},"expected_revision":s.revision()}), "missing field `layers`", false),
-        (json!({"setup":candidate,"expected_revision":s.revision(),"extra":true}), "extra", false),
+    for (params, reason, code) in [
+        (json!({"setup":candidate,"expected_revision":s.revision()-1}), "project changed", "stale_revision"),
+        (json!({"setup":candidate,"expected_revision":s.revision(),"board":crate::fresh_id().unwrap()}), "unknown board ID", "not_found"),
+        (json!({"setup":{},"expected_revision":s.revision()}), "missing field `layers`", "invalid_params"),
+        (json!({"setup":candidate,"expected_revision":s.revision(),"extra":true}), "extra", "invalid_params"),
     ] {
         let error = s.apply(PREVIEW_BOARD_SETUP, &params).unwrap_err();
-        assert_eq!(matches!(error, CommandError::Unavailable(_)), unavailable, "{error:?}");
-        assert!(matches!(error, CommandError::InvalidParams(_) | CommandError::Unavailable(_)));
+        assert_eq!(error.code().as_str(), code, "{error:?}");
         assert!(error.to_string().contains(reason), "expected {reason}, got {error}");
         assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
         assert_eq!(s.board_setup_preview().unwrap().plan_token.to_string(), report["plan_token"].as_str().unwrap());

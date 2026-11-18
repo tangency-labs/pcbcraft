@@ -13,6 +13,7 @@ pub mod clipboard;
 pub mod clipboard_text;
 pub mod command_api;
 pub mod edits;
+pub mod error_codes;
 pub mod hierarchy;
 #[cfg(test)]
 mod identity_tests;
@@ -2531,13 +2532,48 @@ pub enum CommandError {
     InvalidParams(String),
     /// The command is real, but can't run in this state, like undo with nothing to undo.
     Unavailable(String),
+    /// The edit was prepared against a revision different from `current`.
+    StaleRevision {
+        current: u64,
+    },
+    /// An id names nothing in the project; some lookups report an id not of the expected form
+    /// this way too.
+    NotFound(String),
+    /// The edit would exceed a fixed limit.
+    CapExceeded(String),
+}
+
+impl CommandError {
+    /// The stable code clients branch on; see [`error_codes`].
+    pub fn code(&self) -> error_codes::ErrorCode {
+        use error_codes::ErrorCode;
+        match self {
+            Self::Unknown(_) => ErrorCode::UnknownCommand,
+            Self::InvalidParams(_) => ErrorCode::InvalidParams,
+            Self::Unavailable(_) => ErrorCode::Unavailable,
+            Self::StaleRevision { .. } => ErrorCode::StaleRevision,
+            Self::NotFound(_) => ErrorCode::NotFound,
+            Self::CapExceeded(_) => ErrorCode::CapExceeded,
+        }
+    }
+
+    /// Machine-readable facts about the failure, an empty object when there are none. Keys are
+    /// only ever added.
+    pub fn details(&self) -> Value {
+        match self {
+            Self::StaleRevision { current } => json!({"current_revision": current}),
+            _ => json!({}),
+        }
+    }
 }
 
 impl std::fmt::Display for CommandError {
+    /// The message for people; the stale message names the current revision.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
-            Self::InvalidParams(m) | Self::Unavailable(m) => f.write_str(m),
+            Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
+            Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
         }
     }
 }
@@ -3190,8 +3226,10 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Failed commands leave the project intact.
+    /// Failed commands leave the project intact; a stale `expected_revision` is reported first
+    /// unless the command returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        self.refuse_stale(id, params)?;
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
             return Ok(sheets::page::list_templates());
@@ -3273,11 +3311,13 @@ impl Session {
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
+    /// A stale `expected_revision` is reported before any other check, except for `pcb.plan_route`.
     /// A command that advances the revision is reported to the edit observer once it has
     /// been adopted; failures, no-ops and queries are not reported. Copper commands report
     /// from their prepared publication path, which also serves direct prepared commits.
     /// Board cut checks the encoded clipboard limit even though only the revision is returned.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.refuse_stale(id, params)?;
         if id == board::clipboard::CUT {
             self.cut_board(params)?;
             return Ok(self.revision);
@@ -3564,7 +3604,7 @@ impl Session {
                     .as_str()
                     .and_then(|id| schematic::wiring::parse_id(id, "component-"))
                     .and_then(|id| self.project.as_ref()?.components.get(&id))
-                    .ok_or_else(|| CommandError::InvalidParams("unknown part instance".into()))?;
+                    .ok_or_else(|| CommandError::NotFound("unknown part instance".into()))?;
                 self.place_symbol(component.definition.clone(), params)?;
             }
             PLACE_SYMBOL => {
@@ -3582,7 +3622,7 @@ impl Session {
                     Some(revision) => self.libraries.symbol(library, id, revision),
                     None => self.libraries.latest_symbol(library, id),
                 }
-                .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".into()))?;
+                .ok_or_else(|| CommandError::NotFound("unknown symbol definition".into()))?;
                 if !legacy
                     && params["definition_digest"].as_str()
                         != Some(library::sources::symbol_digest(&definition).map_err(CommandError::InvalidParams)?.as_str())
@@ -3687,7 +3727,7 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         if project.all_symbols().count() >= MAX_SYMBOLS {
-            return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
+            return Err(CommandError::CapExceeded(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
         // A project keeps one copy per library, ID and revision: reuse the one it already saves.
         let same = |saved: &&Arc<SymbolDefinition>| {
@@ -3708,7 +3748,7 @@ impl Session {
             .units
             .iter()
             .position(|drawing| drawing.unit_id() == unit)
-            .ok_or_else(|| CommandError::InvalidParams("unknown symbol unit".into()))?;
+            .ok_or_else(|| CommandError::NotFound("unknown symbol unit".into()))?;
         let defaults = definition.defaults.clone().unwrap_or_default();
         let ordinal = self.next_object_id()?;
         let existing = params.get("component").and_then(Value::as_str).and_then(|id| schematic::wiring::parse_id(id, "component-"));
@@ -3716,7 +3756,7 @@ impl Session {
             if project.units.contains_key(&(id, unit.clone())) {
                 return Err(CommandError::InvalidParams("part unit is already placed".into()));
             }
-            project.components.get(&id).ok_or_else(|| CommandError::InvalidParams("unknown part instance".into()))?.clone()
+            project.components.get(&id).ok_or_else(|| CommandError::NotFound("unknown part instance".into()))?.clone()
         } else {
             let mut reference_number = project
                 .components
@@ -3732,7 +3772,7 @@ impl Session {
                 reference_number += 1;
             }
             if reference_number > MAX_REFERENCE_NUMBER {
-                return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
+                return Err(CommandError::CapExceeded("no more reference numbers are available for this symbol type".to_owned()));
             }
             if let Some(value) = params.get("value") {
                 schematic::check_value(value.as_str().unwrap_or_default()).map_err(CommandError::InvalidParams)?;
@@ -3779,7 +3819,7 @@ impl Session {
             .as_str()
             .and_then(schematic::parse_symbol_id)
             .and_then(|id| project.symbol_index(id))
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
+            .ok_or_else(|| CommandError::NotFound("symbol does not exist".to_owned()))?;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let rotation = params["rotation"].as_u64().map(|degrees| (degrees / 90) as u8).unwrap_or(project.symbols[index].rotation);
         if project.symbols[index].position != position || project.symbols[index].rotation != rotation {
@@ -3803,7 +3843,7 @@ impl Session {
             .as_str()
             .and_then(schematic::parse_symbol_id)
             .and_then(|id| project.symbol_index(id))
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))
+            .ok_or_else(|| CommandError::NotFound("symbol does not exist".to_owned()))
     }
 
     /// Turn a symbol a quarter turn counterclockwise, retaining exact naming contacts.
@@ -4043,7 +4083,7 @@ impl Session {
             return Err(CommandError::InvalidParams("these terminals are already joined by a wire".to_owned()));
         }
         if project.wires.len() >= MAX_WIRES {
-            return Err(CommandError::Unavailable(format!("the schematic already has {MAX_WIRES} wires")));
+            return Err(CommandError::CapExceeded(format!("the schematic already has {MAX_WIRES} wires")));
         }
         let mut project = project.clone();
         Arc::make_mut(&mut project.sheet_mut().wires).push(Wire {
@@ -4063,15 +4103,30 @@ impl Session {
             .max(self.project.as_ref().map_or(0, |project| project.allocation_high_water()))
             .checked_add(1)
             .filter(|id| *id <= MAX_OBJECT_ID)
-            .ok_or_else(|| CommandError::Unavailable("project has exhausted its object IDs".to_owned()))
+            .ok_or_else(|| CommandError::CapExceeded("project has exhausted its object IDs".to_owned()))
     }
 
     /// Reject an edit prepared against a project state that has since changed.
     fn check_revision(&self, params: &Value) -> Result<(), CommandError> {
         if params["expected_revision"].as_u64() != Some(self.revision) {
-            return Err(CommandError::Unavailable(format!("project changed, inspect the current revision ({}) and retry", self.revision)));
+            return Err(CommandError::StaleRevision { current: self.revision });
         }
         Ok(())
+    }
+
+    /// Report a stale `expected_revision` before any other check of a command that takes one:
+    /// those checks would judge the parameters against a state the caller has not seen. A
+    /// missing or malformed revision is left to parameter validation. Route planning retains
+    /// its public stale plan outcome and its existing validation order.
+    fn refuse_stale(&self, id: &str, params: &Value) -> Result<(), CommandError> {
+        if id == board::route::PLAN_ROUTE {
+            return Ok(());
+        }
+        let takes_revision = command(id).is_some_and(|command| command.params.iter().any(|param| param.name == EXPECTED_REVISION.name));
+        match params.get(EXPECTED_REVISION.name).and_then(Value::as_u64) {
+            Some(expected) if takes_revision && expected != self.revision => Err(CommandError::StaleRevision { current: self.revision }),
+            _ => Ok(()),
+        }
     }
 
     /// Prepare an edit without publishing it. Locked copper, metadata, nets and zone ownership
@@ -4620,27 +4675,43 @@ mod tests {
     fn invalid_placement_leaves_the_project_and_history_unchanged() {
         let mut s = Session::default();
         assert!(!s.available(PLACE_RESISTOR));
+        let unavailable = s.execute(PLACE_RESISTOR, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": s.revision()})).unwrap_err();
+        assert_eq!(unavailable.code(), error_codes::ErrorCode::Unavailable);
+        assert!(unavailable.to_string().contains("no project is open"), "{unavailable}");
         let valid = json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1});
-        assert!(s.execute(PLACE_RESISTOR, &valid).is_err());
         s.execute("project.new", &json!({"name": "blinky"})).unwrap();
         let before = s.inspect();
-        for definition in [json!("unknown"), json!(1)] {
+        for (definition, code) in [(json!("unknown"), error_codes::ErrorCode::NotFound), (json!(1), error_codes::ErrorCode::InvalidParams)] {
             let params = json!({"definition": definition, "x_nm": 0, "y_nm": 0, "expected_revision": 1});
-            assert!(matches!(s.execute(PLACE_SYMBOL, &params), Err(CommandError::InvalidParams(_))));
+            let error = s.execute(PLACE_SYMBOL, &params).unwrap_err();
+            assert_eq!(error.code(), code, "{params}");
+            let reason = if definition.is_string() { "unknown symbol definition" } else { "`definition` must identify a native symbol" };
+            assert!(error.to_string().contains(reason), "{params}: {error}");
             assert_eq!(s.inspect(), before);
         }
-        assert!(matches!(s.execute(PLACE_SYMBOL, &valid), Err(CommandError::InvalidParams(_))));
-        for params in [
-            json!({"x_nm": 0, "y_nm": 0}),
-            json!({"x_nm": "0", "y_nm": 0, "expected_revision": 1}),
-            json!({"x_nm": 0.25, "y_nm": 0, "expected_revision": 1}),
-            json!({"x_nm": MAX_CENTER_NM + 1, "y_nm": 0, "expected_revision": 1}),
-            json!({"x_nm": 0, "y_nm": -MAX_CENTER_NM - 1, "expected_revision": 1}),
-            json!({"x_nm": 0, "y_nm": 0, "expected_revision": 0}),
-            json!({"x_nm": 0, "y_nm": 0, "expected_revision": -1}),
-            json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1, "extra": "pin"}),
+        let missing = s.execute(PLACE_SYMBOL, &valid).unwrap_err();
+        assert_eq!(missing.code(), error_codes::ErrorCode::InvalidParams);
+        assert!(missing.to_string().contains("needs `definition`"), "{missing}");
+        for (params, reason) in [
+            (json!({"x_nm": 0, "y_nm": 0}), "needs `expected_revision`"),
+            (json!({"x_nm": "0", "y_nm": 0, "expected_revision": 1}), "`x_nm` must be a whole number of nanometers within the schematic bounds"),
+            (json!({"x_nm": 0.25, "y_nm": 0, "expected_revision": 1}), "`x_nm` must be a whole number of nanometers within the schematic bounds"),
+            (
+                json!({"x_nm": MAX_CENTER_NM + 1, "y_nm": 0, "expected_revision": 1}),
+                "`x_nm` must be a whole number of nanometers within the schematic bounds",
+            ),
+            (
+                json!({"x_nm": 0, "y_nm": -MAX_CENTER_NM - 1, "expected_revision": 1}),
+                "`y_nm` must be a whole number of nanometers within the schematic bounds",
+            ),
+            (json!({"x_nm": 0, "y_nm": 0, "expected_revision": 0}), "project changed"),
+            (json!({"x_nm": 0, "y_nm": 0, "expected_revision": -1}), "`expected_revision` must be a nonnegative integer revision"),
+            (json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1, "extra": "pin"}), "has no parameter `extra`"),
         ] {
-            assert!(s.execute(PLACE_RESISTOR, &params).is_err(), "{params}");
+            let error = s.execute(PLACE_RESISTOR, &params).unwrap_err();
+            let code = if reason == "project changed" { error_codes::ErrorCode::StaleRevision } else { error_codes::ErrorCode::InvalidParams };
+            assert_eq!(error.code(), code, "{params}");
+            assert!(error.to_string().contains(reason), "{params}: {error}");
             assert_eq!(s.inspect(), before);
         }
         s.execute(PLACE_RESISTOR, &valid).unwrap();

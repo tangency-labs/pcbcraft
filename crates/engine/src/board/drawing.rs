@@ -251,8 +251,7 @@ impl Session {
             });
         } else {
             let id: Uuid = serde_json::from_value(params["drawing"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
-            let index =
-                data.items.iter().position(|item| item.id == id).ok_or_else(|| CommandError::InvalidParams("unknown board drawing".into()))?;
+            let index = data.items.iter().position(|item| item.id == id).ok_or_else(|| CommandError::NotFound("unknown board drawing".into()))?;
             if command == DELETE_DRAWING {
                 data.items.remove(index);
             } else {

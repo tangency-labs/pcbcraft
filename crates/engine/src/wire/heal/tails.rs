@@ -17,7 +17,7 @@ impl Edit {
             self.budget = self
                 .budget
                 .checked_sub(self.project.wires.len())
-                .ok_or_else(|| CommandError::Unavailable("wire healing exceeds this edit's comparison budget".into()))?;
+                .ok_or_else(|| CommandError::CapExceeded("wire healing exceeds this edit's comparison budget".into()))?;
             let mut degree = BTreeMap::new();
             for end in self.project.wires.iter().flat_map(|wire| wire.endpoints) {
                 *degree.entry(end).or_insert(0) += 1;
@@ -44,6 +44,6 @@ impl Edit {
             Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|wire| !remove.contains(&wire.ordinal));
             self.project.prune_junctions();
         }
-        Err(CommandError::Unavailable("too many folded transit corners to heal in one edit".into()))
+        Err(CommandError::CapExceeded("too many folded transit corners to heal in one edit".into()))
     }
 }

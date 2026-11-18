@@ -412,20 +412,23 @@ fn bad_requests_change_nothing() {
     invalid_because(pin(&mut s, Some(Uuid::from_u128(99)), Value::Null), "existing assembly profile");
     let params = json!({"expected_revision":s.revision()-1,"content":good});
     let stale = s.apply(SET_ASSEMBLY_PROFILE, &params);
-    assert!(matches!(&stale,Err(CommandError::Unavailable(message)) if message.contains("project changed")), "{stale:?}");
+    let stale = stale.unwrap_err();
+    assert!(matches!(&stale, CommandError::StaleRevision { current } if *current == s.revision()), "{stale:?}");
+    assert!(stale.to_string().contains("project changed"), "{stale}");
     invalid_because(s.apply(SET_ASSEMBLY_PROFILE, &json!({"expected_revision":s.revision()})), "needs `content`");
     let board = before.board_target().unwrap().board;
     invalid_because(
         s.execute(PREVIEW_ASSEMBLY_PROFILE, &json!({"expected_revision":s.revision(),"profile":Uuid::from_u128(8),"revision":1})),
         "needs `board`",
     );
-    invalid_because(
-        s.execute(
+    let missing_board = s
+        .execute(
             PREVIEW_ASSEMBLY_PROFILE,
             &json!({"board":Uuid::from_u128(5),"expected_revision":s.revision(),"profile":Uuid::from_u128(8),"revision":1}),
-        ),
-        "unknown board ID",
-    );
+        )
+        .unwrap_err();
+    assert_eq!(missing_board.code(), crate::error_codes::ErrorCode::NotFound);
+    assert_eq!(missing_board.to_string(), "unknown board ID");
     for revision in [json!(0), json!(-1), json!(1.5), json!(u32::MAX as u64 + 1)] {
         invalid_because(
             s.execute(
@@ -847,7 +850,9 @@ fn adoption_reviews_values_and_checks_revision_atomically() {
     place(&mut s, &ids[0], Point { x_nm: 41 * MM, y_nm: 45 * MM }, 30, "front");
     let moved = s.snapshot().unwrap();
     let stale = s.apply(ADOPT_ASSEMBLY_PROFILE, &params);
-    assert!(matches!(stale,Err(CommandError::Unavailable(ref m)) if m.contains("project changed")), "{stale:?}");
+    let stale = stale.unwrap_err();
+    assert!(matches!(&stale, CommandError::StaleRevision { current } if *current == s.revision()), "{stale:?}");
+    assert!(stale.to_string().contains("project changed"), "{stale}");
     assert!(Arc::ptr_eq(&moved, &s.snapshot().unwrap()));
     // Even replacing only the revision number cannot reuse an old acceptance token.
     params["expected_revision"] = json!(s.revision());

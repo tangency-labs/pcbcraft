@@ -175,11 +175,7 @@ fn token(params: &Value) -> Result<Uuid, CommandError> {
 
 /// Preserve command error categories in the review's serialized refusal.
 fn refusal(error: CommandError) -> SetupRefusal {
-    let kind = match &error {
-        CommandError::InvalidParams(_) => "invalid_params",
-        CommandError::Unavailable(_) => "unavailable",
-        CommandError::Unknown(_) => "unknown",
-    };
+    let kind = error.code().as_str();
     SetupRefusal { kind, message: error.to_string() }
 }
 

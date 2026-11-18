@@ -25,7 +25,7 @@ pub const COMMAND_API_VERSION: u32 = 1;
 
 /// The optional protocol features this build offers, so a client can check before relying on
 /// one. Features are only ever appended.
-pub const CAPABILITIES: &[&str] = &["command_api"];
+pub const CAPABILITIES: &[&str] = &["command_api", "error_codes"];
 
 /// A fingerprint of `described` commands as discovery returns them: hex SHA-256 of the list sorted
 /// by id, every object's keys sorted, prose included. Any change a client could have cached

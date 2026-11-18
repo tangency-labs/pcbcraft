@@ -4,10 +4,13 @@
 use std::time::Duration;
 
 use craft_control::loopback::{Connection, Token};
-use pcbcraft_engine::{Session, catalog};
+use pcbcraft_engine::{Session, catalog, error_codes::ErrorCode};
 use serde_json::{Value, json};
 
-use crate::backend::{Backend, call_session, is_window_command};
+use crate::{
+    Failure,
+    backend::{Backend, call_session, command_id, is_window_command},
+};
 
 /// Environment variable used by the desktop configuration and the MCP CLI.
 pub const TOKEN_ENV: &str = "PCBCRAFT_CONTROL_TOKEN";
@@ -58,20 +61,30 @@ impl Remote {
 
 impl Backend for Remote {
     /// Open one authenticated connection per call. Never retry a call after a lost reply.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    /// A connect or send failure reports `connection_failed`; a lost or unreadable reply
+    /// reports `no_reply`. Either can follow a delivered request, so inspect before retrying.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
         let request = json!({"method": method, "params": params});
-        let mut peer = Connection::connect(self.port, &self.token, request, self.wait)
-            .map_err(|error| format!("Could not send request to the PCBCraft editor on port {}: {error}", self.port))?;
-        let lost_reply = || "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit.".to_owned();
-        let reply = peer.receive(MAX_REPLY_BYTES).map_err(|error| format!("{} ({error})", lost_reply()))?.ok_or_else(lost_reply)?;
+        let mut peer = Connection::connect(self.port, &self.token, request, self.wait).map_err(|error| {
+            Failure::new(ErrorCode::ConnectionFailed, format!("Could not send request to the PCBCraft editor on port {}: {error}", self.port))
+        })?;
+        const LOST_REPLY: &str = "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit.";
+        let reply = peer
+            .receive(MAX_REPLY_BYTES)
+            .map_err(|error| Failure::new(ErrorCode::NoReply, format!("{LOST_REPLY} ({error})")))?
+            .ok_or_else(|| Failure::new(ErrorCode::NoReply, LOST_REPLY))?;
         match (reply.get("result"), reply.get("error").and_then(Value::as_str)) {
             (Some(value), None) => Ok(value.clone()),
-            (None, Some(error)) => Err(error.to_owned()),
-            _ => Err("Invalid reply from the PCBCraft editor".to_owned()),
+            (None, Some(error)) => Err(Failure::from_reply(&reply, error)),
+            _ => Err(Failure::new(ErrorCode::NoReply, "Invalid reply from the PCBCraft editor")),
         }
     }
 
     /// Name the selected local editor and what its commands reach during MCP initialization.
+    fn has_live_editor(&self) -> bool {
+        true
+    }
+
     fn describe(&self) -> String {
         format!(
             "the open PCBCraft editor on port {}. Project commands share the window's undo history; \
@@ -86,12 +99,13 @@ view., window., arrangement., app. and file. commands change its views, windows,
 pub trait Editor {
     /// Run opt-in UI automation through the live host, with native input lifecycle ownership.
     /// Implementations without input automation retain an explicit refusal.
-    fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, String> {
-        Err("This editor does not support UI input automation".into())
+    fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, Failure> {
+        Err(Failure::new(ErrorCode::Unavailable, "This editor does not support UI input automation"))
     }
     /// The editor's project session, which document commands edit directly.
     fn session(&mut self) -> &mut Session;
     /// Why `command` can't run now (a dialog or file operation, say), or `None` when it can.
+    /// A refusal fails with `unavailable`.
     /// Consulted before document and presentation commands. UI input uses the host's separate
     /// automation lifecycle so it can operate ordinary modal controls and focused fields.
     fn refusal(&self, command: &str) -> Option<String>;
@@ -101,7 +115,7 @@ pub trait Editor {
     fn inspect(&self) -> Value;
     /// Run one window command through the handlers the editor's own controls use. A failure
     /// leaves the windows as they were; success never changes the project or its history.
-    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), String>;
+    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), Failure>;
 }
 
 /// Serve one live request against the open editor, including callers that bypass the MCP CLI.
@@ -109,8 +123,8 @@ pub trait Editor {
 /// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
 /// inspection (or only the unchanged revision when `inspect` is false); document commands answer
 /// as in a headless session.
-pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, String> {
-    let method = request["method"].as_str().ok_or("missing control method")?;
+pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Failure> {
+    let method = request["method"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing control method"))?;
     let params = &request["params"];
     match method {
         "engine.commands" => {
@@ -121,12 +135,12 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, St
         "project.inspect" | "project.cross_probe" | "project.resolve_counterparts" => call_session(editor.session(), method, params),
         "editor.inspect" => Ok(editor.inspect()),
         "engine.execute" => {
-            let id = params["command"].as_str().ok_or("missing `command`")?;
+            let id = command_id(params)?;
             if id.starts_with("ui.") {
                 return editor.ui_command(id, &params["params"]);
             }
             if let Some(reason) = editor.refusal(id) {
-                return Err(reason);
+                return Err(Failure::new(ErrorCode::Unavailable, reason));
             }
             if !is_window_command(id) {
                 return call_session(editor.session(), method, params);
@@ -134,6 +148,6 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, St
             editor.run_window_command(id, &params["params"])?;
             if params["inspect"].as_bool() == Some(false) { Ok(json!({"revision": editor.session().revision()})) } else { Ok(editor.inspect()) }
         }
-        _ => Err(format!("Unknown live control method `{method}`")),
+        _ => Err(Failure::new(ErrorCode::InvalidRequest, format!("Unknown live control method `{method}`"))),
     }
 }
