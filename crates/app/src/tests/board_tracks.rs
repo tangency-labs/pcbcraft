@@ -9,6 +9,34 @@ use pcbcraft_engine::{
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+/// Sweeping into fixed copper keeps a visible legal ghost; exiting it restores a detour.
+#[test]
+fn walkaround_preview_does_not_disappear_inside_an_obstacle() {
+    let mut h = routable();
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS,&json!({"layer":layer,"width_nm":500_000,"points":[{"x_nm":4_000_000,"y_nm":-7_620_000},{"x_nm":4_000_000,"y_nm":-2_540_000}],"expected_revision":revision}));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, Point { x_nm: 1_270_000, y_nm: -5_080_000 });
+    let tint = pcbcraft_chrome::Tokens::get().board_front.lerp_to_gamma(egui::Color32::WHITE, 0.35);
+    for x_nm in [2_540_000, 3_810_000, 4_000_000, 4_190_000, 7_620_000, 4_000_000, 2_540_000] {
+        h.hover_at(at(&h, Point { x_nm, y_nm: -5_080_000 }));
+        h.run_steps(200);
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::LineSegment{stroke,..} if stroke.color==tint)),
+            "missing preview at x={x_nm}, status={:?}",
+            h.state().views.active.board.tracks.preparation_status()
+        );
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// The real route tool detours around fixed, locked copper and publishes one native transaction.
 #[test]
 fn interactive_walkaround_avoids_fixed_via_and_round_trips() {

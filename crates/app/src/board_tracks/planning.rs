@@ -27,6 +27,7 @@ struct Wanted {
     generation: u64,
     action: Option<Action>,
 }
+#[derive(Clone)]
 struct Ready {
     key: Key,
     plan: Plan,
@@ -38,7 +39,10 @@ pub(super) struct Planning {
     context: Option<PlanningContext>,
     queue: Queue<PlanningJob>,
     wanted: Option<Wanted>,
+    /// Latest completion owns placement eligibility, even when it contains no path.
     ready: Option<Ready>,
+    /// Last drawable legal path survives a blocked/exhausted replacement under the same source.
+    visible: Option<Ready>,
     generation: u64,
     submitted: bool,
     error: Option<String>,
@@ -56,6 +60,7 @@ impl Planning {
         self.queue.cancel();
         self.wanted = None;
         self.ready = None;
+        self.visible = None;
         self.submitted = false;
         self.error = None;
         self.retryable = false;
@@ -75,7 +80,7 @@ impl Planning {
         let mut key = Key { source: draft.source, board, request, prefix: draft.points.clone(), changes: draft.changes.clone(), sizes };
         // Hints are semantic continuity, not another input generation. Reuse them only from
         // this exact head/layer/size/posture and source, never across a vertex or via.
-        if let Some(ready) = &self.ready
+        if let Some(ready) = &self.visible
             && ready.key.source == key.source
             && ready.key.prefix == key.prefix
             && ready.key.changes == key.changes
@@ -134,7 +139,7 @@ impl Planning {
     /// Retain the previous legal geometry during longer solves only under its original prefix.
     pub(super) fn preview(&self, draft: &Draft, width: i64) -> Vec<Point> {
         let mut path = draft.points.clone();
-        if let Some(ready) = &self.ready
+        if let Some(ready) = &self.visible
             && ready.key.source == draft.source
             && ready.key.prefix == path
             && ready.key.changes == draft.changes
@@ -172,7 +177,13 @@ impl Planning {
             && completion.source.is_current(session)
         {
             match completion.report {
-                Ok(Some(plan)) => self.ready = Some(Ready { key: wanted.key.clone(), plan }),
+                Ok(Some(plan)) => {
+                    let ready = Ready { key: wanted.key.clone(), plan };
+                    if ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. }) {
+                        self.visible = Some(ready.clone());
+                    }
+                    self.ready = Some(ready);
+                }
                 Ok(None) => self.error = Some("Route canceled".into()),
                 Err(error) => {
                     self.error = Some(error);
@@ -371,5 +382,44 @@ mod tests {
         assert_eq!(failure, "Class conflict");
         assert!(!p.committing());
         assert!(s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().tracks().is_empty());
+    }
+
+    /// An exhausted real engine search cannot erase the last legal ghost or authorize a click.
+    #[test]
+    fn exhausted_search_preserves_visible_path_without_making_it_current() {
+        let (s, view, draft) = fixture();
+        let mut p = Planning::default();
+        let sizes = (250_000, 600_000, 300_000);
+        let good = Point { x_nm: 2_000_000, y_nm: 0 };
+        p.request(&draft, view.board.target.unwrap(), good, false, sizes, None);
+        for _ in 0..100 {
+            p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None);
+            if p.current_ready() {
+                break;
+            }
+        }
+        assert!(p.current_ready());
+        let visible = p.preview(&draft, sizes.0);
+        assert_eq!(visible.last(), Some(&good));
+        p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, None);
+        // Use an actual exhausted engine job; only its caller-supplied budget differs.
+        let wanted = p.wanted.as_ref().unwrap();
+        let job = s.prepare_route_plan(p.context.as_ref().unwrap(), wanted.key.request.clone(), 1).unwrap();
+        p.queue.submit(Queued { id: wanted.generation, job });
+        p.submitted = true;
+        for _ in 0..100 {
+            p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None);
+            if p.status().as_deref() == Some("Route search incomplete") {
+                break;
+            }
+        }
+        assert_eq!(p.status().as_deref(), Some("Route search incomplete"));
+        assert!(!p.current_ready());
+        assert_eq!(p.preview(&draft, sizes.0), visible, "a failed search must not erase legal geometry");
+        p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, Some(Action::Vertex { finish: true }));
+        assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().is_err());
+        assert!(s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().tracks().is_empty());
+        p.cancel();
+        assert_eq!(p.preview(&draft, sizes.0), draft.points);
     }
 }

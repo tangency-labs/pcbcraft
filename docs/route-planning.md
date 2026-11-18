@@ -83,7 +83,10 @@ editor forwards engine commands to its session like other read-only queries.
 
 X starts the existing route tool. Pointer requests capture the view, board, revision,
 layer, width, posture and fixed vertices. They coalesce into one current search;
-a previous legal path can stay visible while a replacement is being solved. Copper
+a previous legal path stays visible while a replacement is being solved. An exhausted
+or blocked result with no drawable leg keeps that preview; only the current reached
+result can authorize a vertex, so the retained path cannot be placed for a different
+target. Copper
 snapping has an 8-pixel pickup radius and a 12-pixel release radius, so nearby
 contacts do not alternate at the pickup boundary.
 
