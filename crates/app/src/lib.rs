@@ -11,6 +11,8 @@ mod app_workspace;
 mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+#[cfg(not(target_arch = "wasm32"))]
+mod autosave;
 mod board_appearance;
 mod board_canvas;
 mod board_clipboard;
@@ -358,6 +360,9 @@ pub struct PcbApp {
     leave_warning: Option<bool>,
     /// The palette and zoom last applied, so they are set only when they change.
     applied: Option<(bool, f32)>,
+    /// Recovery snapshots of unsaved work and the opt-in timed save to the project.
+    #[cfg(not(target_arch = "wasm32"))]
+    autosave: autosave::Autosave,
 }
 
 /// The Schematic workspace's ribbon tabs, in order.
@@ -499,7 +504,9 @@ impl PcbApp {
     /// Run a command through the shared session, then discard view state invalidated by it.
     /// A failure shows in the status bar and leaves the document and surviving view state intact.
     /// Commands that support automatic wire cleanup default to the person's current preference;
-    /// the explicit Heal command always cleans up, without changing that preference.
+    /// the explicit Heal command always cleans up, without changing that preference. On the
+    /// desktop, a command that changes the session and ran for a long time requests a recovery
+    /// snapshot on the next frame.
     fn run(&mut self, id: &str, params: &Value) {
         self.file_notice = None;
         let mut params = params.clone();
@@ -515,7 +522,13 @@ impl PcbApp {
         {
             object.insert("sheet".into(), json!(sheet.id()));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let (started, revision) = (std::time::Instant::now(), self.session.revision());
         self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.revision() != revision {
+            self.autosave.command_took(started.elapsed());
+        }
         self.views.sync(&self.session);
     }
 
@@ -2583,6 +2596,7 @@ impl PcbApp {
 
     /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
+    /// On the desktop it also takes any due recovery snapshot and starts a due timed save.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         // Apply source availability before restored readers capture their catalog generation.
@@ -2663,6 +2677,8 @@ impl PcbApp {
         if let Some(notice) = self.arrangements.notice.take() {
             self.message = Some(notice);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.autosave_frame(&ctx);
         if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp()) {
             self.repaint_editors(&ctx);
         }
@@ -2936,6 +2952,13 @@ impl eframe::App for PcbApp {
             storage.set_string(ASSISTANT_SETTINGS_KEY, self.assistant.settings_text());
             storage.set_string(ASSISTANT_LAYOUT_KEY, self.assistant.layout_setting());
         }
+    }
+
+    /// The window closed after any unsaved work was saved or dismissed: stop recording and
+    /// delete this run's recovery entry, which a crash would have left for the next start.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_exit(&mut self) {
+        self.autosave.finish(&mut self.session);
     }
 }
 

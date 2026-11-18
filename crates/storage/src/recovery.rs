@@ -21,6 +21,10 @@
 //! length, the payload and the payload's SHA-256. The first frame is a JSON header naming the
 //! snapshot it continues; every later frame is one edit. A frame cut short by a crash fails its
 //! length or hash check and ends the replay before it.
+//!
+//! A [`Schedule`] decides when the snapshot is replaced by the current state, which empties the
+//! journal. The same timer paces the opt-in save to the project, which goes through the
+//! ordinary save path and never through this module.
 
 use crate::open_lock_file;
 use pcbcraft_engine::{
@@ -41,7 +45,7 @@ use std::{
         mpsc,
     },
     thread::JoinHandle,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 /// First line of every journal. A reader refuses any other version rather than guess at it.
@@ -72,6 +76,84 @@ const REBASE_RATIO: u64 = 2;
 /// The least journal size that starts a new snapshot, so a small project is not snapshotted
 /// and flushed every few edits.
 const REBASE_FLOOR_BYTES: u64 = 1024 * 1024;
+
+/// How long editing must pause before a timed snapshot or save runs, so it does not land in
+/// the middle of a burst of edits. A burst never delays it beyond a second interval.
+pub const QUIET: Duration = Duration::from_secs(2);
+/// An edit that ran at least this long is followed by a snapshot whatever the interval, as
+/// SolidCraft does after a big operation.
+pub const LONG_OPERATION: Duration = Duration::from_millis(1500);
+
+/// When to take the next timed snapshot or save. Times are offsets on any steady clock the
+/// caller keeps, such as a frame clock, so tests can drive it without waiting.
+///
+/// Nothing is due until something changes. A change is due one interval after the first change
+/// since the last snapshot, once editing has been quiet for [`QUIET`], or after two intervals
+/// however busy editing is. An interval of Off takes snapshots only after a long operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Schedule {
+    interval: Option<Duration>,
+    /// The first and the latest change not yet taken.
+    pending: Option<(Duration, Duration)>,
+    /// A long operation asked for the next snapshot without waiting for the interval.
+    urgent: bool,
+}
+
+impl Schedule {
+    /// A schedule with an interval of `minutes`; 0 is Off. Nothing is pending.
+    pub fn new(minutes: u8) -> Self {
+        let mut schedule = Self::default();
+        schedule.set_minutes(minutes);
+        schedule
+    }
+
+    /// Change the interval. Pending changes stay pending and are measured against it.
+    pub fn set_minutes(&mut self, minutes: u8) {
+        self.interval = (minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60));
+    }
+
+    /// Whether a change is waiting to be taken.
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Note a change at `now`.
+    pub fn changed(&mut self, now: Duration) {
+        let first = self.pending.map_or(now, |(first, _)| first.min(now));
+        self.pending = Some((first, now));
+    }
+
+    /// Note a change made by an edit that took `took`; at least [`LONG_OPERATION`] makes the
+    /// next snapshot due at once.
+    pub fn long_operation(&mut self, took: Duration, now: Duration) {
+        self.changed(now);
+        self.urgent |= took >= LONG_OPERATION;
+    }
+
+    /// Whether a snapshot or save should run at `now`.
+    pub fn due(&self, now: Duration) -> bool {
+        self.wait(now) == Some(Duration::ZERO)
+    }
+
+    /// How long from `now` until the next one is due, zero when due, or `None` when nothing
+    /// is pending or the interval is Off without an urgent long-operation request. Callers
+    /// use it to wake in time.
+    pub fn wait(&self, now: Duration) -> Option<Duration> {
+        let (first, latest) = self.pending?;
+        if self.urgent {
+            return Some(Duration::ZERO);
+        }
+        let interval = self.interval?;
+        let quiet = latest.saturating_add(QUIET).min(first.saturating_add(interval.saturating_mul(2)));
+        Some(first.saturating_add(interval).max(quiet).saturating_sub(now))
+    }
+
+    /// The pending changes were taken, or the state is again the saved one: nothing is pending.
+    pub fn taken(&mut self) {
+        self.pending = None;
+        self.urgent = false;
+    }
+}
 
 /// The recovery folder: `PCBCRAFT_RECOVERY_DIR`, else `recovery` in the per-user data folder
 /// ([`data_dir`]). Tests of this crate use a folder of their own under the temporary folder.
@@ -423,6 +505,8 @@ pub struct EditJournal {
     removed: bool,
     documents: Documents,
     sha256: String,
+    /// Fingerprint of the snapshot documents.
+    base_sha256: String,
     /// Bytes in the journal file, header included.
     journal_bytes: u64,
     /// Journal size above which the next recorded edit starts a new snapshot.
@@ -436,7 +520,7 @@ impl EditJournal {
     /// an empty journal. Fails if the id is not a plain file stem, another writer holds the
     /// entry, or the folder cannot be written; nothing outside `dir` is touched.
     pub fn create(dir: &Path, id: &str, base: Documents) -> Result<Self, String> {
-        let mut journal = Self::lock(dir, id)?;
+        let mut journal = Self::lock(dir, id, false)?;
         journal.rebase(base)?;
         Ok(journal)
     }
@@ -444,11 +528,13 @@ impl EditJournal {
     /// Take the lock of entry `id` in `dir` (creating the folder) without writing a snapshot: no
     /// journal is open, so the first recorded state becomes the snapshot. The lock is held even
     /// while snapshots fail, so the entry is never taken for one left by a crashed session.
-    fn lock(dir: &Path, id: &str) -> Result<Self, String> {
+    /// Recorder workers can wait for the folder gate; the entry lock itself never waits.
+    fn lock(dir: &Path, id: &str, wait_for_gate: bool) -> Result<Self, String> {
         if !valid_id(id) {
             return Err(format!("`{id}` is not a recovery entry id."));
         }
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let _gate = entry_gate(dir, wait_for_gate).map_err(|e| e.to_string())?;
         let lock = open_lock_file(&entry_file(dir, id, "lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
         Ok(Self {
@@ -459,6 +545,7 @@ impl EditJournal {
             removed: false,
             documents: Documents::new(),
             sha256: String::new(),
+            base_sha256: String::new(),
             journal_bytes: 0,
             rebase_after: REBASE_FLOOR_BYTES,
             floor: REBASE_FLOOR_BYTES,
@@ -495,12 +582,24 @@ impl EditJournal {
         drop(self.file.take());
         self.documents = base;
         self.sha256 = header.base_sha256.clone();
+        self.base_sha256.clone_from(&self.sha256);
         drop(published?);
         let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &header)?;
         self.file = Some(file);
         self.journal_bytes = journal_bytes;
         self.rebase_after = rebase_limit(snapshot_bytes, self.floor);
         Ok(())
+    }
+
+    /// Take a recovery snapshot of `documents`: [`Self::rebase`] onto them, unless the journal
+    /// is open and both its recorded result and its base already equal the requested state.
+    /// Checking the recorded result matters if a notification failed to return the journal to
+    /// its base, for example when an undo could not be encoded. Returns whether it wrote.
+    pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
+        if self.file.is_some() && self.base_sha256 == self.sha256 && documents_sha256(&documents) == self.base_sha256 {
+            return Ok(false);
+        }
+        self.rebase(documents).map(|()| true)
     }
 
     /// Record that `edit` produced `documents`, and flush the record to disk before returning.
@@ -546,6 +645,7 @@ impl EditJournal {
 enum Message {
     Opened(Arc<Project>),
     Committed(CommittedEdit),
+    Snapshot(Arc<Project>),
     Sync(mpsc::SyncSender<Result<(), String>>),
 }
 
@@ -560,6 +660,8 @@ enum Message {
 /// the last complete state that was successfully recorded and remains readable.
 #[derive(Debug)]
 pub struct JournalRecorder {
+    dir: PathBuf,
+    id: String,
     sender: mpsc::Sender<Message>,
     worker: Option<JoinHandle<()>>,
 }
@@ -572,11 +674,30 @@ impl JournalRecorder {
             return Err(format!("`{id}` is not a recovery entry id."));
         }
         let (sender, receiver) = mpsc::channel();
+        let (worker_dir, worker_id) = (dir.clone(), id.clone());
         let worker = std::thread::Builder::new()
             .name("pcbcraft-recovery".to_owned())
-            .spawn(move || record(&dir, &id, &receiver))
+            .spawn(move || record(&worker_dir, &worker_id, &receiver))
             .map_err(|e| e.to_string())?;
-        Ok(Self { sender, worker: Some(worker) })
+        Ok(Self { dir, id, sender, worker: Some(worker) })
+    }
+
+    /// The recovery folder this recorder writes in.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The entry id, the stem of each of its files.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Queue a recovery snapshot of `project`, the session's current state; never blocks. The
+    /// worker skips a snapshot only when its open journal already recovers the requested base
+    /// (see [`EditJournal::snapshot`]); a closed journal requires a fresh snapshot attempt,
+    /// including after a publication failure. It creates the entry if nothing has been recorded yet.
+    pub fn snapshot(&self, project: Arc<Project>) {
+        let _ = self.sender.send(Message::Snapshot(project));
     }
 
     /// Wait until the worker has processed notifications reported so far. Returns the first error
@@ -593,12 +714,75 @@ impl JournalRecorder {
     /// stay for the caller to keep or discard.
     pub fn finish(self) -> Result<(), String> {
         let result = self.sync();
-        let Self { sender, worker } = self;
+        let Self { sender, worker, .. } = self;
         drop(sender);
         if let Some(worker) = worker {
             worker.join().map_err(|_| "The recovery journal stopped unexpectedly.".to_owned())?;
         }
         result
+    }
+
+    /// Stop the worker and delete the entry, for a session that ended with nothing left to
+    /// recover: its work was saved or the person chose not to keep it. Waits for the worker and
+    /// folder gate, so callers should keep this off the editing thread. Earlier recording errors
+    /// are not reported, since nothing written is kept.
+    pub fn discard(self) -> Result<(), String> {
+        let (dir, id) = (self.dir.clone(), self.id.clone());
+        let _ = self.finish();
+        remove_entry_with_gate(&dir, &id, true)
+    }
+}
+
+/// Reserve lock-path creation and removal within this folder. The gate file stays in place:
+/// closing an entry's lock before deleting it on Windows must not let another writer acquire
+/// that old lock and then lose its path. Only recorder opening and finished-entry cleanup wait.
+fn entry_gate(dir: &Path, wait: bool) -> std::io::Result<File> {
+    let gate = open_lock_file(&dir.join(".entries.lock"))?;
+    if wait {
+        gate.lock()?;
+    } else {
+        gate.try_lock().map_err(|_| std::io::Error::other("Recovery entries are being opened or removed."))?;
+    }
+    Ok(gate)
+}
+
+/// Delete entry `id` in `dir`: its snapshot, journal and lock. Missing files are not an error.
+/// The folder's `.entries.lock` gate stays. Refused, deleting nothing, when the id is invalid,
+/// a running session holds the entry, or another entry is being opened or removed.
+pub fn remove_entry(dir: &Path, id: &str) -> Result<(), String> {
+    remove_entry_with_gate(dir, id, false)
+}
+
+/// Remove an entry under the folder gate. Refuse an active entry regardless of how the folder
+/// gate was acquired, so no path holds the gate while waiting for an entry lock.
+fn remove_entry_with_gate(dir: &Path, id: &str, wait_for_gate: bool) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err(format!("`{id}` is not a recovery entry id."));
+    }
+    let _gate = match entry_gate(dir, wait_for_gate) {
+        Ok(gate) => gate,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let lock_path = entry_file(dir, id, "lock");
+    match open_lock_file(&lock_path) {
+        Ok(lock) => {
+            lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
+            for ext in ["pc", "journal"] {
+                remove_if_present(&entry_file(dir, id, ext))?;
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    }
+    remove_if_present(&lock_path)
+}
+
+/// Remove a file, treating one that is already gone as removed.
+fn remove_if_present(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() != ErrorKind::NotFound => Err(format!("{}: {error}", path.display())),
+        _ => Ok(()),
     }
 }
 
@@ -642,6 +826,10 @@ fn record(dir: &Path, id: &str, receiver: &mpsc::Receiver<Message>) {
             Message::Committed(edit) => {
                 encode_documents(edit.project.clone()).and_then(|documents| write(&mut journal, dir, id, Some(&edit), documents))
             }
+            Message::Snapshot(project) => encode_documents(project).and_then(|documents| match journal.as_mut() {
+                Some(journal) => journal.snapshot(documents).map(drop),
+                None => write(&mut journal, dir, id, None, documents),
+            }),
         };
         if let Err(failure) = result {
             error.get_or_insert(failure);
@@ -656,7 +844,7 @@ fn write(journal: &mut Option<EditJournal>, dir: &Path, id: &str, edit: Option<&
         (Some(journal), Some(edit)) => journal.append(edit, documents),
         (Some(journal), None) => journal.rebase(documents),
         // The lock is kept even if this first snapshot fails; the next state tries again.
-        (None, _) => journal.insert(EditJournal::lock(dir, id)?).rebase(documents),
+        (None, _) => journal.insert(EditJournal::lock(dir, id, true)?).rebase(documents),
     }
 }
 

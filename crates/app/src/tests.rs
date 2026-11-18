@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod autosave;
 // The browser build has no Assistant, which both tests expect.
 #[cfg(not(target_arch = "wasm32"))]
 mod app_bar_utilities;

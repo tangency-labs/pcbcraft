@@ -508,6 +508,193 @@ fn a_kill_between_the_new_snapshot_and_its_journal_recovers_the_snapshot() {
     assert!(recovered.commands.is_empty());
 }
 
+/// Seconds on the schedule's clock.
+fn secs(seconds: u64) -> std::time::Duration {
+    std::time::Duration::from_secs(seconds)
+}
+
+/// Nothing is due without a change. A change is due one interval after it once editing pauses,
+/// a burst of edits defers it at most to a second interval, and Off waits for a long operation.
+#[test]
+fn a_schedule_waits_for_a_change_an_interval_and_a_pause() {
+    let mut schedule = Schedule::new(1);
+    assert!(!schedule.due(secs(3600)));
+    assert_eq!(schedule.wait(secs(0)), None);
+
+    schedule.changed(secs(10));
+    assert!(!schedule.due(secs(69)));
+    assert_eq!(schedule.wait(secs(30)), Some(secs(40)));
+    assert!(schedule.due(secs(70)));
+    schedule.changed(secs(69));
+    assert!(!schedule.due(secs(70)), "an edit just now holds it for the quiet period");
+    assert!(schedule.due(secs(71)));
+    schedule.taken();
+    assert!(!schedule.due(secs(500)));
+
+    schedule.changed(secs(100));
+    for second in 101..160 {
+        schedule.changed(secs(second));
+    }
+    assert!(!schedule.due(secs(160)));
+    for second in 160..220 {
+        schedule.changed(secs(second));
+    }
+    assert!(schedule.due(secs(220)), "a burst never delays it past a second interval");
+
+    let mut off = Schedule::new(0);
+    off.changed(secs(0));
+    assert!(!off.due(secs(86_400)));
+    assert_eq!(off.wait(secs(5)), None);
+    off.long_operation(LONG_OPERATION - std::time::Duration::from_millis(1), secs(6));
+    assert!(!off.due(secs(86_400)));
+    off.long_operation(LONG_OPERATION, secs(7));
+    assert!(off.due(secs(7)));
+    assert_eq!(off.wait(secs(7)), Some(std::time::Duration::ZERO));
+    off.taken();
+    assert!(!off.due(secs(8)));
+    assert_eq!(off.wait(secs(8)), None);
+
+    let mut five = Schedule::new(5);
+    five.changed(secs(0));
+    assert!(!five.due(secs(299)) && five.due(secs(300)));
+    five.set_minutes(10);
+    assert!(!five.due(secs(300)) && five.due(secs(600)));
+}
+
+/// While the journal remains intact, a snapshot replaces the base and empties the journal
+/// when the state differs; asking again with the same state writes nothing.
+#[test]
+fn an_intact_journal_skips_an_unchanged_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut journal, states) = journal_with(dir.path(), 2);
+    assert!(journal.snapshot(states[2].clone()).unwrap(), "the journal contains edits absent from the snapshot");
+    let snapshot = fs::read(entry_file(dir.path(), "entry", "pc")).unwrap();
+    assert_eq!(decode_snapshot(&snapshot).unwrap().1, states[2]);
+    let written = tree(dir.path());
+    assert!(!journal.snapshot(states[2].clone()).unwrap());
+    assert_eq!(tree(dir.path()), written, "an unchanged snapshot writes nothing");
+    drop(journal);
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!((recovered.documents, recovered.stop), (states[2].clone(), None));
+}
+
+/// An intact journal is not grounds to skip a snapshot if it records a different result,
+/// such as when an intervening undo to the base was not journaled.
+#[test]
+fn a_snapshot_can_restore_the_base_when_the_journal_records_later_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut journal, states) = journal_with(dir.path(), 2);
+    assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[2]);
+    assert!(journal.snapshot(states[0].clone()).unwrap());
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.documents, states[0]);
+    assert!(recovered.commands.is_empty());
+    assert_eq!(recovered.stop, None);
+}
+
+/// A recorder's snapshot holds the session's current state with an empty journal after it, the
+/// saved project is untouched, and discarding the recorder deletes the entry.
+#[test]
+fn a_recorder_snapshot_holds_the_current_state() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("recovery");
+    let recorder = Arc::new(JournalRecorder::start(dir.clone(), "entry".to_owned()).unwrap());
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Saved"})).unwrap();
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    crate::save(&work.path().join("project"), None, &saved, &mut |_| Ok(())).unwrap();
+    let saved_files = tree(&work.path().join("project"));
+    session.observe_edits(Some(recorder.clone()));
+    ten_edits(&mut session);
+    recorder.snapshot(session.snapshot().unwrap());
+    recorder.sync().unwrap();
+    let current = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(decode_snapshot(&fs::read(entry_file(&dir, "entry", "pc")).unwrap()).unwrap().1, current);
+    let recovered = recover(&dir, "entry").unwrap();
+    assert!(recovered.commands.is_empty());
+    assert_eq!((recovered.documents, recovered.stop), (current, None));
+
+    let written = tree(&dir);
+    recorder.snapshot(session.snapshot().unwrap());
+    recorder.sync().unwrap();
+    assert_eq!(tree(&dir), written, "nothing changed since the last snapshot");
+    assert_eq!(tree(&work.path().join("project")), saved_files);
+
+    session.observe_edits(None);
+    assert!(remove_entry(&dir, "entry").unwrap_err().contains("in use"), "a running session's entry stays");
+    Arc::into_inner(recorder).unwrap().discard().unwrap();
+    let left: Vec<_> = fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert_eq!(left, vec![std::ffi::OsString::from(".entries.lock")], "only the folder gate stays after discarding");
+    assert!(remove_entry(&dir, "entry").is_ok());
+    assert!(remove_entry(&dir, "../entry").unwrap_err().contains("is not a recovery entry id"));
+}
+
+/// Entry creation and removal both respect the folder gate, so neither can open an old entry
+/// lock while another operation closes and removes its path. Releasing the gate permits both.
+#[test]
+fn the_folder_gate_excludes_opening_and_discarding_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, states) = journal_with(dir.path(), 0);
+    let before = tree(dir.path());
+    let gate = entry_gate(dir.path(), false).unwrap();
+    assert_eq!(EditJournal::create(dir.path(), "entry", states[0].clone()).unwrap_err(), "Recovery entries are being opened or removed.");
+    assert_eq!(remove_entry(dir.path(), "entry").unwrap_err(), "Recovery entries are being opened or removed.");
+    assert_eq!(tree(dir.path()), before);
+    drop(gate);
+    let journal = EditJournal::create(dir.path(), "entry", states[0].clone()).unwrap();
+    assert!(remove_entry(dir.path(), "entry").unwrap_err().contains("in use by another session"));
+    drop(journal);
+    remove_entry(dir.path(), "entry").unwrap();
+    let journal = EditJournal::create(dir.path(), "entry", states[0].clone()).unwrap();
+    assert!(EditJournal::create(dir.path(), "entry", states[0].clone()).unwrap_err().contains("in use by another session"));
+    drop(journal);
+    remove_entry(dir.path(), "entry").unwrap();
+}
+
+/// A timed snapshot's post-rename flush error retains the published state and is not mistaken
+/// for a successful no-op on retry, whether the snapshot or journal flush failed.
+#[test]
+fn a_timed_snapshot_retries_after_a_post_rename_flush_failure() {
+    for nth in [1, 2] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut journal, states) = journal_with(dir.path(), 2);
+        faults::arm(dir.path(), Fault::Flush, nth);
+        assert!(journal.snapshot(states[2].clone()).unwrap_err().contains("could not be flushed"));
+        assert!(journal.file.is_none());
+        assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[2]);
+        assert!(journal.snapshot(states[2].clone()).unwrap());
+        let recovered = recover(dir.path(), "entry").unwrap();
+        assert_eq!((recovered.documents, recovered.stop, recovered.commands), (states[2].clone(), None, vec![]));
+        assert!(!journal.snapshot(states[2].clone()).unwrap());
+    }
+}
+
+/// On Unix, a periodic snapshot cannot reactivate an entry that an append found removed.
+#[cfg(unix)]
+#[test]
+fn a_timed_snapshot_keeps_a_detected_removed_entry_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(dir.path(), u64::MAX / 2);
+    fs::remove_file(entry_file(dir.path(), "entry", "journal")).unwrap();
+    let (_, result) = place_and_append(&mut session, &mut journal);
+    assert_eq!(result.unwrap_err(), REMOVED_ENTRY);
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(journal.snapshot(documents).unwrap_err(), REMOVED_ENTRY);
+    assert!(!entry_file(dir.path(), "entry", "journal").exists());
+}
+
+/// The first snapshot of a recorder that has seen nothing yet creates the entry.
+#[test]
+fn a_first_snapshot_creates_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = JournalRecorder::start(dir.path().to_path_buf(), "entry".to_owned()).unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Fresh"})).unwrap();
+    recorder.snapshot(session.snapshot().unwrap());
+    recorder.finish().unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap().project.name, "Fresh");
+}
+
 /// A folder flush that fails after the new snapshot was renamed into place adopts that
 /// snapshot: the old journal, which recovery would now ignore, is closed, and the next edit
 /// starts another snapshot instead of appending edits recovery could not see.

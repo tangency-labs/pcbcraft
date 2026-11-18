@@ -224,7 +224,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
-| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation, recovery snapshot and save-to-project intervals) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
 | `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing file or project folder, while an empty folder becomes the project folder; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: keep the `file.operation.id` the reply reports and follow `inspect_editor` until `file.last.id` is at least that ID. Read `file.last.status` only when the IDs are equal; a greater `file.last.id` means a later job replaced the result, so report it as unavailable rather than taking that job's outcome as yours. A failed or abandoned job keeps the current design, unsaved state and history. An unavailable result says nothing about the outcome: the earlier job may have saved or opened, and that is not undone, so inspect the project and `file.location` before going on |
 | `file.abandon` | **Stop waiting** in the Close Project wait: releases the editor from a running open, such as one stalled on an unresponsive disk. Pass the observed `file.operation.id` as `operation`; a different running job is left alone. Other commands wait while a file job runs, but this one does not. The late result is discarded, the current project is unchanged and `file.last` reports `abandoned`. Saves are refused because they may still be writing; the editor's Close Project wait always offers **Close without waiting**, which warns that unsaved edits are lost and that a first save may leave nothing on disk. At most four abandoned opens may still be running before abandoning is refused |
@@ -237,6 +237,36 @@ keyboard, text and wheel input through `execute`. See [UI automation](ui-automat
 for named targets, window-local coordinates, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
+
+### Preferences and external updates
+
+`app.set_preferences` changes personal editor settings, not project documents,
+board outlines or project Undo. Its optional `autosave_minutes` and
+`save_to_project_minutes` parameters use the same settings as Preferences →
+Saving; they do not introduce an exchange format or domain update command.
+
+The existing [native document identities](native-project-storage.md#document-ownership)
+remain authoritative: project, board and sheet UUIDs and the objects' own IDs,
+not display names, file paths or recovery entry names. Object allocation remains
+scoped to its [saved lineage](multiboard-storage.md#numeric-id-allocation).
+Pinned library content revisions describe authored content; the live session's
+`revision` and `expected_revision` instead guard edits to the currently inspected
+session and are not durable cross-application source identities. The
+[historical capture contract](multiboard-storage.md#unsaved-snapshots-and-historical-references)
+separately describes source captures; the recovery entry name is not such a
+capture identity.
+
+Future SolidCraft/FieldCraft or plugin adapters must submit domain changes
+through the same validated, revision-checked engine transactions as GUI and MCP,
+with explicit project/document/object targets, pinned source content, units and
+transforms. PCBcraft retains its electronics documents, native files, history and
+save lifecycle, including [board-owned outlines](pcb-representation.md#ownership).
+The [extension boundary](../AGENTS.md#extension-and-cross-application-boundaries)
+and [geometry integration boundary](geometry-kernel.md#later-integrations)
+remain the contracts for that future work. These preferences and recovery timers
+implement no live simulation exchange, external parametric evaluator or automatic
+outline synchronization. No such exchange or ABI compatibility has been tested
+here; shared Craft dependencies alone do not establish it.
 
 ## Command API version
 

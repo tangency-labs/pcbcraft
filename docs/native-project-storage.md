@@ -1236,8 +1236,9 @@ The save transaction above protects saved files. `pcbcraft_storage::recovery`
 provides an API for recording unsaved edits, with a per-user recovery store
 as its default. Callers can choose another directory; the API does not check
 whether it is outside a project. Hosts should keep recovery separate from
-project files, the `.pcbcraft-save` transaction and the save lock. Desktop sessions do not yet attach a recorder; that integration is a
-follow-up, so recovery is not yet available in the app.
+project files, the `.pcbcraft-save` transaction and the save lock. The desktop
+attaches a recorder to its open project; the CLI and headless MCP do not yet
+attach one. Offering recovery entries on start is not implemented.
 The API's default store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
 `%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
 `$XDG_DATA_HOME/pcbcraft` (`~/.local/share/pcbcraft`). The browser has no store.
@@ -1251,6 +1252,7 @@ share it:
 | `<id>.pc` | Versioned recovery envelope around a packed project snapshot |
 | `<id>.journal` | Successfully recorded changes since that snapshot |
 | `<id>.lock` | Held locked by the writing session while it runs |
+| `.entries.lock` | Folder gate for opening and removing entry locks; kept after entries are deleted |
 
 [`Session::observe_edits`](../crates/engine/src/lib.rs) reports every edit
 committed through the shared command path, from the GUI, CLI or MCP, including
@@ -1326,9 +1328,50 @@ edits unrecorded until a snapshot succeeds; recovery returns the last recorded
 state. A recorder keeps the entry lock even if its first snapshot fails.
 
 Each recorded edit encodes the whole project and fingerprints the complete
-document set, on the writer thread. Nothing yet removes the entry of a session
-that has ended: its snapshot, journal and lock file stay in the store. Removing
-them belongs to the recovery offer on start, which is not built yet.
+document set, on the writer thread. The desktop app attempts to delete its entry
+on a clean exit (below); cleanup failures are logged. An entry left by a crash
+stays in the store until the recovery offer on start, which is not built yet,
+deals with it.
+
+### Recovery snapshots and timed saves
+
+The desktop app attempts to record its open project when a recovery folder is
+available. Encoding and I/O failures have the limits described above; the timer
+does not guarantee persistence. A successful recovery snapshot replaces
+`<id>.pc` with the current state and starts an empty journal. **Preferences → Saving → Recovery snapshots**
+(`autosave_minutes`) takes one every 1, 5 (the default) or 10 minutes after
+the first change since the last one. A snapshot waits until editing has paused
+for 2 seconds, but never more than a second interval. Off (0) still requests one
+on the next frame after a synchronous GUI edit timed by `PcbApp::run` takes
+1.5 seconds or longer. That duration hook does not cover live/Assistant dispatch,
+direct session edits or asynchronous work; those routes do not trigger this
+exception to Off. The recorder attempts to journal committed edits whatever the
+setting. A snapshot is skipped only when its journal is open and the state
+matches both the last snapshot and the last recorded state.
+On a clean exit, the app stops recording and attempts to delete its entry after
+the close prompt has dealt with unsaved work; deletion failures are logged.
+A folder gate serializes entry-lock creation and deletion, including the
+close-before-delete needed on Windows. Desktop recorder workers and cleanup
+can wait for the gate off the editor frame; an active entry is never waited on.
+Direct create and remove calls refuse gate contention. The empty `.entries.lock`
+file stays in the recovery folder; it contains no project data.
+A crash can leave an entry for a future recovery offer; that offer is not built.
+
+**Save to project** (`save_to_project_minutes`) is Off (0) by default. Set to
+1, 5 or 10 minutes, it runs the ordinary Save on the same timer, once the
+project has unsaved changes and already has a folder or `.pc` file. An Untitled
+project is never saved on its own. A timed save waits while a dialog or another
+file operation is open, or a project action is waiting to run. Like Save, it is
+refused when the project changed on disk; the project stays unsaved and the
+next try comes one interval later. Recovery encoding and disk I/O run on a
+separate worker rather than making Save wait for them. A
+timed save is an ordinary save, so **Save** is unavailable while it runs, as
+during any save. Both settings are personal preferences, also set by
+`app.set_preferences`, and are never stored in the project. The CLI and
+headless MCP do not record unsaved work yet. These preferences neither author
+board outlines nor create a cross-application update path; see the
+[live preference and extension boundary](mcp.md#preferences-and-external-updates)
+for identity, revision and native ownership.
 
 ## Compatibility and fixtures
 

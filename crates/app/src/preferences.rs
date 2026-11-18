@@ -157,6 +157,15 @@ pub struct Preferences {
     /// the window edge and each other. Cards placed over the canvas always float, and each view
     /// retains its own dock side and floating positions.
     pub panel_style: PanelStyle,
+    /// Minutes between recovery snapshots of unsaved work, one of
+    /// [`INTERVAL_MINUTES`]. They go to the recovery recorder, not the ordinary project save.
+    /// 0 still requests one after a synchronous GUI edit timed by `PcbApp::run` takes at least
+    /// 1.5 s; live/Assistant, direct session and asynchronous edits are not timed by that hook.
+    pub autosave_minutes: u8,
+    /// Minutes between automatic saves of a project that already has a folder or `.pc` file,
+    /// through the ordinary save; one of [`INTERVAL_MINUTES`]. 0, the default, never saves on
+    /// its own.
+    pub save_to_project_minutes: u8,
 }
 
 impl Default for Preferences {
@@ -182,8 +191,20 @@ impl Default for Preferences {
             selection_follow: SelectionFollow::default(),
             units: Unit::default(),
             panel_style: PanelStyle::default(),
+            autosave_minutes: DEFAULT_SNAPSHOT_MINUTES,
+            save_to_project_minutes: 0,
         }
     }
+}
+
+/// The intervals, in minutes, a person may choose for timed snapshots or saves. 0 is Off.
+pub(crate) const INTERVAL_MINUTES: [u8; 4] = [0, 1, 5, 10];
+/// Recovery snapshots are on by default every five minutes, as in SolidCraft.
+const DEFAULT_SNAPSHOT_MINUTES: u8 = 5;
+
+/// Whether `minutes` is one of the intervals Preferences offers for snapshots and saves.
+pub(crate) fn valid_interval(minutes: u8) -> bool {
+    INTERVAL_MINUTES.contains(&minutes)
 }
 
 impl Preferences {
@@ -245,7 +266,8 @@ impl Preferences {
 
     /// Read saved settings. Anything unreadable falls back to the defaults rather than stopping the
     /// app from starting, a scale or zoom speed off its range or step goes back to 100%, and a
-    /// grid opacity above 100% or a grid spacing outside its range goes back to the default.
+    /// grid opacity above 100%, a grid spacing outside its range or a snapshot or save interval
+    /// that Preferences does not offer goes back to the default.
     pub fn parse(text: &str) -> Self {
         let mut preferences: Self = serde_json::from_str(text).unwrap_or_else(|e| {
             log::warn!("preferences: ignoring what was saved: {e}");
@@ -266,6 +288,13 @@ impl Preferences {
         }
         if !grid::SPACING_RANGE_NM.contains(&preferences.board_grid_nm) {
             preferences.board_grid_nm = grid::BOARD_SPACING_DEFAULT_NM;
+        }
+        let defaults = Self::default();
+        if !valid_interval(preferences.autosave_minutes) {
+            preferences.autosave_minutes = defaults.autosave_minutes;
+        }
+        if !valid_interval(preferences.save_to_project_minutes) {
+            preferences.save_to_project_minutes = defaults.save_to_project_minutes;
         }
         preferences
     }
@@ -316,9 +345,13 @@ const VIEWS: usize = 2;
 const SCHEMATIC: usize = 3;
 const LIBRARIES: usize = 4;
 const SHORTCUTS: usize = 5;
-/// The AI page follows Shortcuts, as SolidCraft's Assistant page does. Desktop only.
+/// Recovery snapshots and timed saves to the project folder. Desktop only: the browser keeps
+/// no recovery store and saves by download.
 #[cfg(not(target_arch = "wasm32"))]
-const AI: usize = 6;
+const SAVING: usize = 6;
+/// The AI page follows Shortcuts and Saving, as SolidCraft's Assistant page does. Desktop only.
+#[cfg(not(target_arch = "wasm32"))]
+const AI: usize = 7;
 
 /// The settings a page draws, and the shortcut list the read-only Shortcuts page shows.
 pub(crate) struct PageData<'a> {
@@ -384,10 +417,16 @@ impl PreferencesWindow {
             Page { icon: MenuIcon::Keyboard, label: "Shortcuts", draw: shortcuts_page },
         ];
         #[cfg(not(target_arch = "wasm32"))]
+        pages.push(Page { icon: MenuIcon::Settings, label: "Saving", draw: saving });
+        #[cfg(not(target_arch = "wasm32"))]
         pages.push(Page { icon: MenuIcon::Assistant, label: "AI", draw: ai_page });
+        #[cfg(not(target_arch = "wasm32"))]
+        let saving_page = self.state.page == SAVING;
+        #[cfg(target_arch = "wasm32")]
+        let saving_page = false;
         // Search results span pages, so there is no single page whose defaults to restore.
-        let defaults_enabled =
-            matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS | SCHEMATIC | LIBRARIES) && !settings::searching(&self.state.query);
+        let defaults_enabled = (matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS | SCHEMATIC | LIBRARIES) || saving_page)
+            && !settings::searching(&self.state.query);
         let footer = Footer { apply_enabled: *preferences != self.kept || libraries.dirty(), defaults_enabled };
         let mut data = PageData {
             preferences,
@@ -468,8 +507,42 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
         NAVIGATION => preferences.navigation = defaults.navigation,
         VIEWS => preferences.selection_follow = defaults.selection_follow,
         SCHEMATIC => preferences.auto_heal_wires = defaults.auto_heal_wires,
+        #[cfg(not(target_arch = "wasm32"))]
+        SAVING => {
+            preferences.autosave_minutes = defaults.autosave_minutes;
+            preferences.save_to_project_minutes = defaults.save_to_project_minutes;
+        }
         _ => {}
     }
+}
+
+/// The interval choices for a snapshot or save setting, Off first.
+#[cfg(not(target_arch = "wasm32"))]
+const INTERVAL_CHOICES: [(u8, &str); 4] = [(0, "Off"), (1, "1 min"), (5, "5 min"), (10, "10 min")];
+
+/// Recovery snapshots of unsaved work, and the opt-in timed save to the project folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn saving(ui: &mut Ui, data: &mut PageData<'_>) {
+    settings::heading(ui, "Saving", "How PCBCraft keeps unsaved work safe.");
+    let preferences = &mut *data.preferences;
+    settings::section(ui, "Recovery", |ui| {
+        settings::row_with_keywords(ui, "Recovery snapshots", &["autosave", "crash", "recover", "backup", "interval"], |ui| {
+            settings::segmented(ui, &mut preferences.autosave_minutes, &INTERVAL_CHOICES);
+        });
+        settings::hint(
+            ui,
+            "Records unsaved work in the recovery folder. Off still requests snapshots after slow synchronous editor commands, but not live/Assistant or background edits. Opening recovery entries after a crash is not available yet.",
+        );
+    });
+    settings::section(ui, "Project", |ui| {
+        settings::row_with_keywords(ui, "Save to project", &["autosave", "automatic", "save", "interval"], |ui| {
+            settings::segmented(ui, &mut preferences.save_to_project_minutes, &INTERVAL_CHOICES);
+        });
+        settings::hint(
+            ui,
+            "Saves a project that already has a folder or .pc file after it has been changed, the same way Save does. A project changed by another program is not overwritten.",
+        );
+    });
 }
 
 /// Automatic wire cleanup shares the Modify menu's saved preference. Disabling it preserves
@@ -733,6 +806,7 @@ mod tests {
         assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
     }
 
+    /// Personal preferences, including the two save cadences, survive a settings round trip.
     #[test]
     fn saved_settings_come_back() {
         let preferences = Preferences {
@@ -763,6 +837,8 @@ mod tests {
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
             units: Unit::Mm,
             panel_style: PanelStyle::Compact,
+            autosave_minutes: 10,
+            save_to_project_minutes: 1,
         };
         for style in [grid::Style::Off, grid::Style::Dots, grid::Style::Lines] {
             let preferences = Preferences { board_grid_style: style, ..preferences };
@@ -854,6 +930,29 @@ mod tests {
         }
     }
 
+    /// Unoffered u8 intervals reset only that setting; unreadable types reset the whole file.
+    /// Settings saved before these fields existed get snapshots every 5 minutes and no timed
+    /// save.
+    #[test]
+    fn saving_intervals_keep_only_the_offered_values() {
+        let older = Preferences::parse("{\"grid_opacity_percent\":40}");
+        assert_eq!((older.autosave_minutes, older.save_to_project_minutes), (5, 0));
+        for minutes in [0u8, 1, 5, 10] {
+            let parsed = Preferences::parse(&format!("{{\"autosave_minutes\":{minutes},\"save_to_project_minutes\":{minutes}}}"));
+            assert_eq!((parsed.autosave_minutes, parsed.save_to_project_minutes), (minutes, minutes));
+        }
+        for bad in [2u8, 4, 6, 11, 255] {
+            let parsed = Preferences::parse(&format!("{{\"autosave_minutes\":{bad},\"grid_opacity_percent\":40}}"));
+            assert_eq!((parsed.autosave_minutes, parsed.grid_opacity_percent), (5, 40), "{bad}");
+            let parsed = Preferences::parse(&format!("{{\"save_to_project_minutes\":{bad},\"grid_opacity_percent\":40}}"));
+            assert_eq!((parsed.save_to_project_minutes, parsed.grid_opacity_percent), (0, 40), "{bad}");
+        }
+        // A value the stored type cannot hold makes the whole file unreadable, as for grid spacing.
+        for bad in ["-1", "256", "1.5", "\"5\"", "null"] {
+            assert_eq!(Preferences::parse(&format!("{{\"autosave_minutes\":{bad},\"grid_opacity_percent\":40}}")), Preferences::default(), "{bad}");
+        }
+    }
+
     #[test]
     fn the_system_theme_is_followed_only_when_asked() {
         let of = |theme| Preferences { theme, ..Preferences::default() };
@@ -863,6 +962,7 @@ mod tests {
         assert!(!of(ThemeChoice::Light).is_dark(Some(egui::Theme::Dark)));
     }
 
+    /// Restoring a page resets its settings and preserves settings owned by other pages.
     #[test]
     fn page_defaults_reset_only_that_page() {
         let mut preferences = Preferences {
@@ -886,7 +986,15 @@ mod tests {
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,
             panel_style: PanelStyle::Compact,
+            autosave_minutes: 0,
+            save_to_project_minutes: 10,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            restore_page_defaults(&mut preferences, SAVING);
+            assert_eq!((preferences.autosave_minutes, preferences.save_to_project_minutes), (5, 0));
+            assert_eq!(preferences.theme, ThemeChoice::Light, "the Saving reset leaves other pages alone");
+        }
         restore_page_defaults(&mut preferences, NAVIGATION);
         // Grid spacing is chosen in the views, not on a page, so no page reset touches it.
         assert_eq!(preferences.schematic_grid_nm, 10 * grid::NM_PER_MIL);
