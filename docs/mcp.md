@@ -149,8 +149,12 @@ means a later job replaced its result.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its
-revision or undo history; `file.save` and `file.save_as` change the unsaved
-state, and `file.open` replaces the project. The separate
+revision or undo history. `file.save` and `file.save_as` change the unsaved
+state, and a completed save can also adopt project metadata without advancing the
+revision: the first Save As of an Untitled project takes the destination's name,
+and the session and its undo history adopt that name, the storage layout and sheet
+occurrence IDs. Inspect the project again after every successful save, even when
+the revision is unchanged. `file.open` replaces the project. The separate
 `ui.` input commands described below can invoke authored edits. Call `inspect_editor` for the window,
 view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
 
