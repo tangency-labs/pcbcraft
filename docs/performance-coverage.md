@@ -74,7 +74,19 @@ four-direction bounds, the measured whole-case times in seconds were:
 | 32,768 | 0.032 | >60 | 0.064 | 59.42 | 0.064 | 56.21 |
 | 65,536 | 0.064 | >60 | 0.114 | >60 | 0.114 | >60 |
 
-Each cell is one process. `>60` is a timed-out case, not a measured finish.
+`>60` is a timed-out case, not a measured finish. With the four-direction bounds
+(revision `6c0e1127`), all 18 cases completed on the same host and release profile:
+
+| Tracks | Islands sparse | Islands overlap | Sync sweep sparse | Sync sweep overlap | Incremental sweep sparse | Incremental sweep overlap |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,384 | 0.032 | 0.015 | 0.031 | 0.064 | 0.032 | 0.164 |
+| 32,768 | 0.064 | 0.032 | 0.064 | 0.114 | 0.064 | 0.264 |
+| 65,536 | 0.114 | 0.064 | 0.114 | 0.214 | 0.114 | 0.514 |
+
+Each cell is one process, including fixture setup. The corrected 65,536-track overlap run
+kept all tracks isolated, and both clearance paths counted all 917,399 expected findings.
+The corrected sparse phases took several to 29 ms longer inside the harness timer. These
+observations from two fixed layouts do not bound check times on other boards.
 
 ## Recorded platforms
 
