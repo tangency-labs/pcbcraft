@@ -27,7 +27,7 @@ before treating an older plan as implemented behavior.
 
 | Topic | Guides |
 | --- | --- |
-| Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) |
+| Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) · [Schematic keyboard shortcuts](keyboard-shortcuts.md) |
 | Net names, labels and power symbols | [Named nets and power symbols](net-labels.md) |
 | Sheet hierarchy and interfaces | [Hierarchical sheets](hierarchical-sheets.md) |
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
@@ -62,6 +62,9 @@ supported versions and deferred work before extending a format or consumer.
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |
 
 ## Architecture and plans
+
+[Continuous integration](continuous-integration.md) describes quick PR feedback,
+approval and affected native checks, deferred platform coverage and build caches.
 
 These documents explain design decisions and staged work. Several combine
 delivered foundations with proposed extensions; they do not establish feature

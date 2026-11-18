@@ -51,6 +51,19 @@ opt-level = "s"
 lto = "thin"
 codegen-units = 16
 
+# Routine verification keeps assertion/overflow checks, without full debugger metadata or LTO.
+[profile.ci]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+incremental = false
+
+[profile.ci.package."*"]
+opt-level = 2
+debug = false
+
 # Local native-root lifetime fix; source and patch boundary are recorded in vendor/eframe/PATCH.md.
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }

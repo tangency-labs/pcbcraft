@@ -68,7 +68,8 @@ An authored board-default record has `format: "pcbcraft-rules/1"`, an independen
 UUID `id`, and the typed `values` object. It lives in `board.json` under board
 format 19 or later: 20 with zone outlines, 21 with a placement origin, 22 with assembly profile adoptions, or 23 when the
 setup uses copper roles, base copper, copper thickness qualifiers or finished board
-thickness.
+thickness. Assigned vias select format 24, and thermal/insulation material
+reports select format 25.
 Each accepts the earlier physical fields including locks. Format 19
 requires a valid rule record, and older board headers reject it. Null, missing
 or contradictory stored records fail before adoption. Removing the record
