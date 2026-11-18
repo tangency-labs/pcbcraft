@@ -13,10 +13,14 @@ const STACK_FORMAT: &str = "pcbcraft-setup-profile/2";
 /// Adds thermal conductivity, thermal expansion, dielectric strength and tracking reports and
 /// may carry every version 2 field.
 const REPORT_FORMAT: &str = "pcbcraft-setup-profile/3";
+/// Authored layer groups; derived physical and role groups remain computed.
+const GROUP_FORMAT: &str = "pcbcraft-setup-profile/5";
 
 /// The lowest profile version that holds this setup, so older readers keep opening the rest.
 fn format_for(setup: &BoardSetup) -> &'static str {
-    if setup.requires_report_format() {
+    if setup.requires_group_format() {
+        GROUP_FORMAT
+    } else if setup.requires_report_format() {
         REPORT_FORMAT
     } else if setup.requires_stack_format() {
         STACK_FORMAT
@@ -51,6 +55,10 @@ impl SetupProfile {
             return Err("Setup profile exceeds 1 MiB.".into());
         }
         let profile: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let raw: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if profile.format != GROUP_FORMAT && raw["setup"]["stackup"].get("layer_groups").is_some() {
+            return Err("The layer_groups field requires setup profile version 5.".into());
+        }
         profile.validate()?;
         Ok(profile)
     }
@@ -66,13 +74,16 @@ impl SetupProfile {
     }
     /// In-memory construction receives the same validation as a decoded profile. Version 1 cannot
     /// carry the stack fields, and version 2 is written only for a setup that uses them. Version 3
-    /// is written only for a setup whose materials carry thermal or insulation reports.
+    /// is written only for a setup whose materials carry thermal or insulation reports. Version 5
+    /// requires saved user groups and can carry every earlier field.
     fn validate(&self) -> Result<(), String> {
-        if ![FORMAT, STACK_FORMAT, REPORT_FORMAT].contains(&self.format.as_str()) || self.id.is_nil() || self.revision == 0 {
+        if ![FORMAT, STACK_FORMAT, REPORT_FORMAT, GROUP_FORMAT].contains(&self.format.as_str()) || self.id.is_nil() || self.revision == 0 {
             return Err("Unsupported or invalid setup profile identity/version.".into());
         }
         if self.format != format_for(&self.setup) {
-            return Err(if self.setup.requires_report_format() || self.format == REPORT_FORMAT {
+            return Err(if self.setup.requires_group_format() || self.format == GROUP_FORMAT {
+                "User layer groups require setup profile version 5, which requires at least one group."
+            } else if self.setup.requires_report_format() || self.format == REPORT_FORMAT {
                 "Thermal conductivity, thermal expansion, dielectric strength and tracking reports require setup profile version 3, which requires at least one of them."
             } else {
                 "Copper roles, base copper, copper thickness qualifiers and finished board thickness require setup profile version 2, which requires at least one of them."
@@ -147,7 +158,12 @@ impl BoardSetup {
                 materials.push(material.clone());
             }
         }
-        let stackup = Stackup { id: target.stackup.id, strata, ..incoming.stackup.clone() };
+        let mut stackup = Stackup { id: target.stackup.id, strata, ..incoming.stackup.clone() };
+        for group in &mut stackup.layer_groups {
+            for layer in &mut group.layers {
+                *layer = ids.get(layer).copied().unwrap_or(*layer);
+            }
+        }
         Self::try_from(SetupRecords { materials, layers, stackup }).map_err(CommandError::InvalidParams)
     }
 }

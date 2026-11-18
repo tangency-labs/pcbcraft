@@ -634,6 +634,13 @@ fn board_setup_preview_is_shared_by_live_and_headless_mcp() {
     let mut editor = OpenEditor(live);
     let before = editor.0.inspect();
     let revision = editor.0.revision();
+    let query = json!({"command":pcbcraft_engine::INSPECT_LAYER_GROUPS,"params":{},"inspect":false});
+    let headless_groups = headless.call("engine.execute", query.clone()).unwrap();
+    let live_groups = call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(headless_groups, live_groups);
+    assert_eq!(live_groups["layer_groups"]["outer"].as_array().unwrap().len(), 2);
+    assert_eq!(live_groups["layer_groups"]["inner"].as_array().unwrap().len(), 2);
+    assert_eq!(editor.0.inspect(), before);
     let params = json!({"command":PREVIEW_BOARD_SETUP,"params":{"setup":candidate,"expected_revision":revision},"inspect":false});
     let a = headless.call("engine.execute", params.clone()).unwrap()["board_setup_preview"].clone();
     let b = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap()["board_setup_preview"].clone();

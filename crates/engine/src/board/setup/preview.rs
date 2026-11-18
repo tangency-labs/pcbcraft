@@ -26,6 +26,7 @@ pub struct SetupChanges {
     pub added_layers: Vec<Layer>,
     pub renumbered_layers: Vec<LayerPosition>,
     pub affected_objects: Vec<AffectedObject>,
+    pub affected_groups: Vec<super::groups::UserLayerGroup>,
 }
 
 /// A surviving copper layer whose one-based physical position changes.
@@ -93,7 +94,7 @@ impl Session {
     /// capability. A refusal is review data; malformed candidates and stale revisions are errors.
     pub(crate) fn preview_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
-        let request = setup_request(params)?;
+        let request = setup_request(self.open_project()?, params)?;
         let setup: BoardSetup = serde_json::from_value(request["setup"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let before = snapshot.board_setup().ok_or_else(|| CommandError::Unavailable("initialize board setup first".into()))?;
@@ -135,7 +136,7 @@ impl Session {
         if !preview.matches(self) {
             return Err(CommandError::Unavailable("board setup preview is stale; preview again".into()));
         }
-        if preview.request != setup_request(params)? {
+        if preview.request != setup_request(self.open_project()?, params)? {
             return Err(CommandError::InvalidParams("board setup preview does not match the candidate, consent or silkscreen settings".into()));
         }
         Ok(())
@@ -153,8 +154,8 @@ impl Session {
 }
 
 /// Canonical candidate data excludes transport addressing, revisions and the capability itself.
-fn setup_request(params: &Value) -> Result<Value, CommandError> {
-    let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+fn setup_request(project: &Project, params: &Value) -> Result<Value, CommandError> {
+    let setup = super::groups::candidate(project, &params["setup"])?;
     let mut request = json!({"setup":setup,"resolve_existing_footprints":params["resolve_existing_footprints"].as_bool() == Some(true)});
     if let Some(silk) = params.get("silkscreen") {
         let silk: crate::board::silkscreen::Settings =
@@ -229,6 +230,7 @@ fn changes(project: &Project, before: &BoardSetup, after: &BoardSetup) -> Result
             })
             .collect(),
         affected_objects: Vec::new(),
+        affected_groups: before.stackup.layer_groups.iter().filter(|group| !after.stackup.layer_groups.contains(group)).cloned().collect(),
     };
     let mut budget = ReportSize::new(MAX_CHANGES_BYTES);
     serde_json::to_writer(&mut budget, &report).map_err(report_budget)?;

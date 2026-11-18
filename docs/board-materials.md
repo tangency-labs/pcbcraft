@@ -283,6 +283,32 @@ manufacturing qualification, rule requirements, flex regions or an impedance
 solver. Extending those capabilities will use typed records and explicit format
 versions rather than an unchecked property bag.
 
+## Layer groups
+
+`pcb.inspect_layer_groups` returns current layer IDs and names without changing the
+revision, dirty state or history. Outer means the first and last copper strata;
+inner means the remaining copper, in physical order. Plane and signal follow the
+copper role. Mixed copper belongs to both; an unspecified role belongs to neither.
+These derived groups are computed, never saved as a second source of stack data.
+
+User groups live in `stackup.layer_groups`: stable group UUID, name and copper-layer
+UUIDs. Up to 64 groups with 64 distinct members each are supported. Names contain
+1–80 characters without padding/control characters and are unique ignoring case.
+Membership is normalized to physical order, independent of layer renames. Empty
+memberships are valid. Removing a copper layer lists its groups in setup Preview
+and drops the deleted member on Apply; Undo restores both stack and groups.
+Invented or otherwise foreign layer IDs are refused rather than silently dropped.
+
+The Physical stackup page stages the selected copper's role and named group
+memberships with every other setup field; `pcb.set_board_setup` remains the only
+stack mutation command. Saved user groups require `pcbcraft-board/33` and portable
+profile `/5`, both accepting earlier stack/report fields. Older headers refuse the
+new field, even an explicit empty array. Boards without user groups retain their
+earlier bytes; clearing the final group returns to the required earlier format.
+Layer UUIDs and revision-checked candidates are the boundary for future external
+parametric/simulation adapters, not a live SolidCraft or FieldCraft connection.
+No rule-scope selector consumes these groups yet.
+
 ## Silkscreen and portable setup profiles
 
 Silkscreen separates text/graphic dimensions from copper-pad clearance and previews
@@ -299,7 +325,8 @@ bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
 Profiles imports/exports a named `.pcsetup.json` file with format
 `pcbcraft-setup-profile/1`, `/2` when the setup uses the copper and board
 thickness fields above, or `/3` when a material carries a thermal conductivity,
-thermal expansion, dielectric strength or CTI report, an independent UUID and positive revision, a complete
+thermal expansion, dielectric strength or CTI report, or `/5` with user layer groups.
+Each profile has an independent UUID and positive revision, a complete
 validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
 material definitions, reports and references are embedded. The bounded, strict decoder
 rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.

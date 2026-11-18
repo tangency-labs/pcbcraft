@@ -51,6 +51,41 @@ fn replace(h: &mut Harness<'_, PcbApp>, label: &str, text: &str) {
     h.run();
 }
 
+/// Physical-stack role and group controls stage one shared edit and one Undo restores both.
+#[test]
+fn layer_group_controls_apply_and_undo_one_complete_candidate() {
+    let mut h = harness(1200.);
+    click(&mut h, "Board setup");
+    click(&mut h, "Apply board setup");
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Board setup");
+    page(&mut h, "Physical stackup");
+    h.get_by_role_and_label(egui::Role::TextInput, "Top thickness").click();
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Copper role").scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Copper role").click();
+    h.run();
+    click(&mut h, "Plane");
+    h.get_by_label("Add group").scroll_to_me();
+    h.run();
+    click(&mut h, "Add group");
+    replace(&mut h, "Group name", "Return layers");
+    h.get_by_role_and_label(egui::Role::CheckBox, "Top").scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(egui::Role::CheckBox, "Top").click();
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Apply board setup");
+    let setup = h.state().session.project().unwrap().board_setup().unwrap();
+    let top = setup.copper_stack().next().unwrap();
+    assert_eq!(top.role, Some(CopperRole::Plane));
+    assert_eq!(setup.stackup().layer_groups[0].name, "Return layers");
+    assert_eq!(setup.stackup().layer_groups[0].layers, vec![top.layer]);
+    click(&mut h, "Undo");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Setup choices use the available value column; the prompt and standard preset names must
 /// remain readable on both page layouts instead of clipping inside a default-width combo.
 #[test]
