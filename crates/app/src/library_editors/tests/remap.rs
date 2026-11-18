@@ -281,6 +281,31 @@ fn pin_remap_matching_token_without_form_owner_is_refused() {
     }
 }
 
+/// Visible refresh preserves all explicitly supplied mappings, including untouched numbers.
+#[test]
+fn pin_remap_form_refresh_preserves_explicit_unchanged_rows() {
+    for first_number in ["1", "7"] {
+        let (mut app, id) = fixture();
+        app.run_window_command(
+            &Context::default(),
+            "app.library_pin_remap",
+            &json!({"document":id.to_string(),"expected_revision":"0","phase":"preview","pins":[
+                {"unit":"main","object":"1","number":first_number}, {"unit":"main","object":"3","number":"2"}
+            ]}),
+        )
+        .unwrap();
+        let before = app.library_editors.inspect()["pin_remap"].clone();
+        assert_eq!(before["report"]["changes"].as_array().unwrap().len(), 2);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        crate::tests::click(&mut h, "Preview current nets");
+        let refreshed = &h.state().library_editors.inspect()["pin_remap"];
+        assert_ne!(refreshed["token"], before["token"]);
+        assert_eq!(refreshed["report"], before["report"]);
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), 0);
+    }
+}
+
 /// Failed visible refresh keeps ownership of a live unchanged-map review. Both Cancel and
 /// Escape retire that exact token; no authored bytes or history change at any stage.
 #[test]
@@ -299,10 +324,11 @@ fn pin_remap_form_failed_refresh_cancel_and_dismiss_retire_live_review() {
         let bytes = app.library_editors.documents[&id].session.snapshot().encode().unwrap();
         let project = app.session.inspect();
         let review = app.library_editors.inspect()["pin_remap"].clone();
+        app.library_editors.next_remap = u64::MAX;
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
         crate::tests::click(&mut h, "Preview current nets");
-        h.get_by_label("Change at least one pin number before previewing.");
+        h.get_by_label("Pin remap review ID limit reached.");
         assert_eq!(h.state().library_editors.inspect()["pin_remap"], review);
         assert!(matches!(h.state().dialog, Dialog::LibraryPinRemap(_)));
         if dismiss {

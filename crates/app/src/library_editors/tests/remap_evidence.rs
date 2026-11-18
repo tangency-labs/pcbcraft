@@ -109,10 +109,13 @@ fn pin_remap_display_separates_unconnected_and_unknown_association() {
         }
         let reply = live(&mut app, id, 0, "preview", json!([{"unit":"main","object":"1","number":"1"}])).unwrap();
         let report = &reply["library_editors"]["pin_remap"]["report"];
-        for instance in report["instances"].as_array().unwrap() {
+        let instances = report["instances"].as_array().unwrap();
+        assert_eq!(instances.len(), 2);
+        for instance in instances {
             assert_eq!(instance["pins"][0]["current_nets"], json!([]));
         }
         let rows = super::super::remap::report_rows(report, 0);
+        assert_eq!(rows.len(), 2);
         for row in rows {
             assert_eq!(row.cells[3], if associated { "IN" } else { "Unknown" });
             assert_eq!(row.cells[4], if associated { "Unconnected" } else { "Unknown: no matching pinned revision" });

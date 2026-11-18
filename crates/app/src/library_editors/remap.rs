@@ -20,6 +20,11 @@ pub(super) struct Review {
     report: Value,
 }
 impl Review {
+    /// A form can display and reuse only its own exact capture.
+    fn owns(&self, draft: &Draft) -> bool {
+        self.document == draft.document && self.revision == draft.revision && Some(self.token) == draft.token
+    }
+
     /// Inspection exposes the exact report that Apply accepts, not a recomputed guess.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
@@ -346,7 +351,7 @@ impl PcbApp {
                     changed |= properties::text(ui, &format!("Pin {}", row.before), &mut row.pin.number).changed();
                 });
             }
-            if !changed && let Some(review) = self.library_editors.pin_remap.as_ref().filter(|review| Some(review.token) == draft.token) {
+            if !changed && let Some(review) = self.library_editors.pin_remap.as_ref().filter(|review| review.owns(&draft)) {
                 ui.separator();
                 ui.label("Before → after · current placed nets (not predicted reconnection)");
                 ui.label("Pin names are unchanged by renumbering.");
@@ -393,7 +398,12 @@ impl PcbApp {
             return;
         }
         if preview {
-            let pins = draft.pins();
+            let pins = self
+                .library_editors
+                .pin_remap
+                .as_ref()
+                .filter(|review| review.owns(&draft))
+                .map_or_else(|| draft.pins(), |review| review.pins.clone());
             let result = if pins.is_empty() {
                 Err("Change at least one pin number before previewing.".into())
             } else {
@@ -409,8 +419,8 @@ impl PcbApp {
                     draft.error = Some(error);
                 }
             }
-        }
-        if apply && let Some(token) = draft.token {
+        } else if apply && let Some(token) = draft.token {
+            // A refresh takes precedence; the replacement report must be displayed before Apply.
             match self.apply_library_pin_remap(draft.document, draft.revision, token) {
                 Ok(()) => {
                     self.repaint_editors(ctx);
