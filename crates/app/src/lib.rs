@@ -1524,6 +1524,10 @@ impl PcbApp {
                 }
             },
             |ui| {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(notice) = self.autosave.notice() {
+                    ui.label("Recovery warning").on_hover_text(notice);
+                }
                 // Right to left: units, then grid, then the pointer's coordinates. With no
                 // schematic showing there is nothing to measure, so none of them appear.
                 if grid_view.is_some() {
@@ -2594,36 +2598,19 @@ impl PcbApp {
         self.repaint_editors(ctx);
     }
 
-    /// Poll project and library file owners once through the framework root, even after its native
-    /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
-    /// On the desktop it also takes any due recovery snapshot and starts a due timed save.
+    /// Drive a complete frame for embedded/test hosts that don't call eframe's logic hook.
     pub fn frame(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        // Apply source availability before restored readers capture their catalog generation.
-        self.sync_library_preferences();
-        self.poll_library_sources(&ctx);
-        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
-        self.sync_style(&ctx);
-        let _language_scope = pcbcraft_chrome::i18n::scope(self.preferences.language);
-        self.checkpoint_arrangements();
-        self.handle_close_request(&ctx);
-        self.library_editors.poll();
-        self.poll_library_publication(&ctx);
-        self.adopt_opened_library(&ctx);
-        self.sync_library_bindings();
-        match self.fabrication_exports.poll() {
-            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication ZIP".into()),
-            #[cfg(any(test, target_arch = "wasm32"))]
-            Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
-                self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
-            }
-            Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
-            Some(Err(error)) => self.message = Some(error),
-        }
+        self.frame_inner(ui, false);
+    }
+
+    /// Adopt project file results and handle Close before considering a timed Save, even in
+    /// a logic-only native pass. Repaint hosts when adoption or finishing a job changes them.
+    fn project_file_tick(&mut self, ctx: &egui::Context) {
+        self.handle_close_request(ctx);
         // The desktop command line's open starts once, before this frame's poll can report it.
         #[cfg(not(target_arch = "wasm32"))]
-        self.begin_startup_open(&ctx);
-        let update = self.files.poll(&mut self.session, &ctx);
+        self.begin_startup_open(ctx);
+        let update = self.files.poll(&mut self.session, ctx);
         // A command-line startup open that failed also prints its error once to the launching
         // terminal, the same line the status bar shows; result-free frames leave the arming
         // intact. Only begin_startup_open arms it, so picker and recents opens never print.
@@ -2644,8 +2631,44 @@ impl PcbApp {
                 project_files::Update::Message(text) => self.file_notice = Some(text),
                 project_files::Update::Error(error) => self.message = Some(error),
             }
+            self.repaint_editors(ctx);
         }
-        self.finish_waiting(&ctx);
+        self.finish_waiting(ctx);
+    }
+
+    /// Native timers must run even when the window has no paint pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_project_tick(&mut self, ctx: &egui::Context, now: std::time::Duration) {
+        self.project_file_tick(ctx);
+        self.autosave_tick(ctx, now);
+    }
+
+    /// Native framework frames already ran project-file and timer logic in `App::logic`.
+    fn frame_inner(&mut self, ui: &mut Ui, logic_ran: bool) {
+        let ctx = ui.ctx().clone();
+        // Apply source availability before restored readers capture their catalog generation.
+        self.sync_library_preferences();
+        self.poll_library_sources(&ctx);
+        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
+        self.sync_style(&ctx);
+        let _language_scope = pcbcraft_chrome::i18n::scope(self.preferences.language);
+        self.checkpoint_arrangements();
+        self.library_editors.poll();
+        self.poll_library_publication(&ctx);
+        self.adopt_opened_library(&ctx);
+        self.sync_library_bindings();
+        match self.fabrication_exports.poll() {
+            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication ZIP".into()),
+            #[cfg(any(test, target_arch = "wasm32"))]
+            Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
+                self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
+            }
+            Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
+            Some(Err(error)) => self.message = Some(error),
+        }
+        if !logic_ran {
+            self.project_file_tick(&ctx);
+        }
         #[cfg(target_arch = "wasm32")]
         self.warn_before_leaving();
         self.views.sync(&self.session);
@@ -2678,7 +2701,9 @@ impl PcbApp {
             self.message = Some(notice);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.autosave_frame(&ctx);
+        if !logic_ran {
+            self.autosave_tick(&ctx, std::time::Duration::from_secs_f64(ctx.input(|input| input.time).max(0.0)));
+        }
         if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp()) {
             self.repaint_editors(&ctx);
         }
@@ -2899,12 +2924,19 @@ impl eframe::App for PcbApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         self.automation_input(ctx, input);
     }
-    /// Run shared project logic and visible hosts, then release a dismissed native root and
+    /// Run project file lifecycle and autosave on visible and logic-only native passes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
+        let now = self.autosave.now();
+        self.native_project_tick(ctx, now);
+    }
+
+    /// Draw visible hosts, then release a dismissed native root and
     /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
         let before = self.preferences;
         let previous_libraries = self.library_preferences.clone();
-        self.frame(ui);
+        self.frame_inner(ui, !IN_BROWSER);
         #[cfg(not(target_arch = "wasm32"))]
         if !self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             // Release the native surface after the frame; surviving host/window IDs stay put.
@@ -2954,11 +2986,11 @@ impl eframe::App for PcbApp {
         }
     }
 
-    /// The window closed after any unsaved work was saved or dismissed: stop recording and
-    /// delete this run's recovery entry, which a crash would have left for the next start.
+    /// Always stop recording. An error or framework exit that bypasses the project's close
+    /// decision must leave the current recovery entry behind.
     #[cfg(not(target_arch = "wasm32"))]
     fn on_exit(&mut self) {
-        self.autosave.finish(&mut self.session);
+        self.autosave.finish(&mut self.session, self.close_allowed);
     }
 }
 

@@ -40,12 +40,11 @@ use std::{
     io::{BufReader, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
-    thread::JoinHandle,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// First line of every journal. A reader refuses any other version rather than guess at it.
@@ -528,14 +527,22 @@ impl EditJournal {
     /// Take the lock of entry `id` in `dir` (creating the folder) without writing a snapshot: no
     /// journal is open, so the first recorded state becomes the snapshot. The lock is held even
     /// while snapshots fail, so the entry is never taken for one left by a crashed session.
-    /// Recorder workers can wait for the folder gate; the entry lock itself never waits.
-    fn lock(dir: &Path, id: &str, wait_for_gate: bool) -> Result<Self, String> {
+    /// The folder gate and entry lock are tried without waiting. A new recorder reserves a
+    /// fresh name instead of adopting an entry saved by another run.
+    fn lock(dir: &Path, id: &str, fresh: bool) -> Result<Self, String> {
         if !valid_id(id) {
             return Err(format!("`{id}` is not a recovery entry id."));
         }
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        let _gate = entry_gate(dir, wait_for_gate).map_err(|e| e.to_string())?;
-        let lock = open_lock_file(&entry_file(dir, id, "lock")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(dir).map_err(|e| format!("Could not create the recovery folder: {e}"))?;
+        let _gate = entry_gate(dir).map_err(|e| e.to_string())?;
+        if fresh {
+            for ext in ["pc", "journal"] {
+                if entry_file(dir, id, ext).try_exists().map_err(|e| e.to_string())? {
+                    return Err(format!("Recovery entry `{id}` already exists."));
+                }
+            }
+        }
+        let lock = open_entry_lock(&entry_file(dir, id, "lock"), fresh).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -649,6 +656,112 @@ enum Message {
     Sync(mpsc::SyncSender<Result<(), String>>),
 }
 
+/// Max queued state notifications between barriers. A burst beyond this limit is represented
+/// by a new history root for its latest complete state, not an unbounded list of edits.
+const PENDING_LIMIT: usize = 32;
+
+#[derive(Default)]
+struct Pending {
+    queue: std::collections::VecDeque<Message>,
+    /// `Some(None)` drains and preserves; `Some(Some(..))` may also discard before the deadline.
+    stop: Option<Option<Instant>>,
+    exited: bool,
+    fault: Option<RecordingFault>,
+}
+
+#[derive(Default)]
+struct Mailbox {
+    state: Mutex<Pending>,
+    ready: Condvar,
+}
+
+/// The current recovery failure, retained until a successful snapshot repairs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordingFault {
+    pub message: String,
+    /// Detected removal invalidates the recorder's entry lock and disables it until replaced.
+    pub removed: bool,
+}
+
+/// Mark a panicked or stopped worker unavailable and release every queued barrier sender.
+struct MarkExited(Arc<Mailbox>);
+
+impl Drop for MarkExited {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.exited = true;
+        state.queue.clear();
+        if std::thread::panicking() {
+            state.fault = Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true });
+        }
+    }
+}
+
+impl Mailbox {
+    /// Enqueue a state without waiting for disk. Only the worker performs encoding and writes.
+    fn push(&self, message: Message) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.exited {
+            return;
+        }
+        let tail = state.queue.iter().rev().take_while(|m| !matches!(m, Message::Sync(_))).count();
+        let message = if tail >= PENDING_LIMIT {
+            match message {
+                Message::Opened(project) | Message::Snapshot(project) => Message::Opened(project),
+                Message::Committed(edit) => Message::Opened(edit.project),
+                Message::Sync(_) => {
+                    state.queue.push_back(message);
+                    self.ready.notify_one();
+                    return;
+                }
+            }
+        } else {
+            state.queue.push_back(message);
+            self.ready.notify_one();
+            return;
+        };
+        let retained = state.queue.len() - tail;
+        state.queue.truncate(retained);
+        state.queue.push_back(message);
+        self.ready.notify_one();
+    }
+
+    /// Drain queued notifications first and then return the shutdown decision.
+    fn next(&self) -> Result<Message, Option<Instant>> {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state =
+            self.ready.wait_while(state, |state| state.queue.is_empty() && state.stop.is_none()).unwrap_or_else(std::sync::PoisonError::into_inner);
+        let message = state.queue.pop_front();
+        message.ok_or(state.stop.flatten())
+    }
+
+    /// Stop accepting notifications after the owner releases its last handle.
+    fn close(&self, deadline: Option<Instant>) {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).stop.get_or_insert(deadline);
+        self.ready.notify_one();
+    }
+}
+
+/// Completion of a retiring recorder. Waiting here is optional; dropping it does not cancel writes.
+#[derive(Debug)]
+pub struct RecorderExit(Mutex<mpsc::Receiver<Result<(), String>>>);
+
+impl RecorderExit {
+    /// Wait no longer than `timeout`; an expired discard deadline prevents cleanup from starting.
+    pub fn wait(self, timeout: Duration) -> Result<(), String> {
+        self.0.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner).recv_timeout(timeout).map_err(|e| e.to_string())?
+    }
+
+    /// Report a completed worker without waiting for it.
+    pub fn poll(&self) -> Option<Result<(), String>> {
+        match self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err("The recovery worker stopped unexpectedly.".into())),
+        }
+    }
+}
+
 /// An [`EditObserver`] that journals a session's edits on a worker thread, so neither editing
 /// nor saving waits for encoding or disk. Attach it with
 /// [`pcbcraft_engine::Session::observe_edits`]. The entry is created from the first state it
@@ -658,28 +771,54 @@ enum Message {
 /// can lose queued or in-flight edits. Earlier notifications need not have been recorded either:
 /// encoding or disk writes can fail, and a detected removed entry stays disabled. Recovery returns
 /// the last complete state that was successfully recorded and remains readable.
-#[derive(Debug)]
 pub struct JournalRecorder {
     dir: PathBuf,
     id: String,
-    sender: mpsc::Sender<Message>,
-    worker: Option<JoinHandle<()>>,
+    mailbox: Arc<Mailbox>,
+    /// Only one barrier is outstanding at a time. Editor notifications never take this lock.
+    sync_guard: Mutex<()>,
+    exit: Option<RecorderExit>,
+}
+
+impl std::fmt::Debug for JournalRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JournalRecorder").field("dir", &self.dir).field("id", &self.id).finish_non_exhaustive()
+    }
+}
+
+impl Drop for JournalRecorder {
+    fn drop(&mut self) {
+        self.mailbox.close(None);
+    }
 }
 
 impl JournalRecorder {
     /// Start the worker for entry `id` in `dir`. Nothing is written until the session reports
     /// its first state. Fails only if the id is invalid or the thread cannot start.
     pub fn start(dir: PathBuf, id: String) -> Result<Self, String> {
+        Self::start_notifying(dir, id, || {})
+    }
+
+    /// Start recording, waking the host when recovery health changes or the worker stops.
+    /// The callback runs off the editor thread and must not wait for it.
+    pub fn start_notifying(dir: PathBuf, id: String, wake: impl Fn() + Send + 'static) -> Result<Self, String> {
         if !valid_id(&id) {
             return Err(format!("`{id}` is not a recovery entry id."));
         }
-        let (sender, receiver) = mpsc::channel();
-        let (worker_dir, worker_id) = (dir.clone(), id.clone());
-        let worker = std::thread::Builder::new()
+        let mailbox = Arc::new(Mailbox::default());
+        let (worker_dir, worker_id, worker_mailbox) = (dir.clone(), id.clone(), Arc::clone(&mailbox));
+        let (done, exit) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
             .name("pcbcraft-recovery".to_owned())
-            .spawn(move || record(&worker_dir, &worker_id, &receiver))
+            .spawn(move || {
+                let exited = MarkExited(Arc::clone(&worker_mailbox));
+                let result = record(&worker_dir, &worker_id, &worker_mailbox, &wake);
+                drop(exited);
+                let _ = done.send(result);
+                wake();
+            })
             .map_err(|e| e.to_string())?;
-        Ok(Self { dir, id, sender, worker: Some(worker) })
+        Ok(Self { dir, id, mailbox, sync_guard: Mutex::new(()), exit: Some(RecorderExit(Mutex::new(exit))) })
     }
 
     /// The recovery folder this recorder writes in.
@@ -697,7 +836,12 @@ impl JournalRecorder {
     /// (see [`EditJournal::snapshot`]); a closed journal requires a fresh snapshot attempt,
     /// including after a publication failure. It creates the entry if nothing has been recorded yet.
     pub fn snapshot(&self, project: Arc<Project>) {
-        let _ = self.sender.send(Message::Snapshot(project));
+        self.mailbox.push(Message::Snapshot(project));
+    }
+
+    /// Read the worker's current health without waiting for any I/O.
+    pub fn fault(&self) -> Option<RecordingFault> {
+        self.mailbox.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fault.clone()
     }
 
     /// Wait until the worker has processed notifications reported so far. Returns the first error
@@ -705,8 +849,9 @@ impl JournalRecorder {
     /// Recording failures can leave edits unrecorded until a snapshot succeeds; a detected removed
     /// entry stays disabled. A later successful snapshot can include earlier unrecorded changes.
     pub fn sync(&self) -> Result<(), String> {
+        let _guard = self.sync_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (reply, done) = mpsc::sync_channel(1);
-        self.sender.send(Message::Sync(reply)).map_err(|_| "The recovery journal has stopped.".to_owned())?;
+        self.mailbox.push(Message::Sync(reply));
         done.recv().map_err(|_| "The recovery journal has stopped.".to_owned())?
     }
 
@@ -714,58 +859,94 @@ impl JournalRecorder {
     /// stay for the caller to keep or discard.
     pub fn finish(self) -> Result<(), String> {
         let result = self.sync();
-        let Self { sender, worker, .. } = self;
-        drop(sender);
-        if let Some(worker) = worker {
-            worker.join().map_err(|_| "The recovery journal stopped unexpectedly.".to_owned())?;
-        }
+        self.retire(None).0.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner).recv().map_err(|e| e.to_string())??;
         result
     }
 
-    /// Stop the worker and delete the entry, for a session that ended with nothing left to
-    /// recover: its work was saved or the person chose not to keep it. Waits for the worker and
-    /// folder gate, so callers should keep this off the editing thread. Earlier recording errors
-    /// are not reported, since nothing written is kept.
+    /// Drain the recorder and try to delete only its owned entry. Unowned entries are untouched;
+    /// folder-gate contention or an expired deadline leaves the entry for later recovery.
     pub fn discard(self) -> Result<(), String> {
-        let (dir, id) = (self.dir.clone(), self.id.clone());
-        let _ = self.finish();
-        remove_entry_with_gate(&dir, &id, true)
+        let timeout = Duration::from_secs(2);
+        self.retire(Some(Instant::now() + timeout)).wait(timeout)
+    }
+
+    /// Request a drain without blocking. `None` always preserves the entry. With a deadline,
+    /// the worker may discard its entry only if drain and gate acquisition finish in time.
+    pub fn retire(mut self, discard_before: Option<Instant>) -> RecorderExit {
+        self.mailbox.close(discard_before);
+        self.exit.take().unwrap_or_else(|| RecorderExit(Mutex::new(mpsc::channel().1)))
     }
 }
 
 /// Reserve lock-path creation and removal within this folder. The gate file stays in place:
 /// closing an entry's lock before deleting it on Windows must not let another writer acquire
-/// that old lock and then lose its path. Only recorder opening and finished-entry cleanup wait.
-fn entry_gate(dir: &Path, wait: bool) -> std::io::Result<File> {
+/// that old lock and then lose its path. Contention is refused without waiting.
+fn entry_gate(dir: &Path) -> std::io::Result<File> {
     let gate = open_lock_file(&dir.join(".entries.lock"))?;
-    if wait {
-        gate.lock()?;
-    } else {
-        gate.try_lock().map_err(|_| std::io::Error::other("Recovery entries are being opened or removed."))?;
-    }
+    gate.try_lock().map_err(|_| std::io::Error::other("Recovery entries are being opened or removed."))?;
     Ok(gate)
+}
+
+/// On Windows an owned entry lock cannot be unlinked underneath its recorder; when deleting,
+/// close that handle first while still holding the folder gate.
+fn open_entry_lock(path: &Path, fresh: bool) -> std::io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false).create_new(fresh);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0x1 | 0x2).attributes(crate::FILE_ATTRIBUTE_HIDDEN);
+    }
+    options.open(path)
+}
+
+/// Delete only a lock path still owned by this recorder. Unix allows an outside process to
+/// unlink an open file, so check identity before deleting anything. An overdue drain only exits.
+fn discard_owned(mut journal: EditJournal, deadline: Instant) -> Result<(), String> {
+    if journal.removed || Instant::now() >= deadline {
+        return Ok(());
+    }
+    let dir = journal.dir.clone();
+    let id = journal.id.clone();
+    let gate = entry_gate(&dir).map_err(|e| e.to_string())?;
+    let lock_path = entry_file(&dir, &id, "lock");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let actual = fs::metadata(&lock_path).map_err(|e| e.to_string())?;
+        let held = journal._lock.metadata().map_err(|e| e.to_string())?;
+        if (actual.dev(), actual.ino()) != (held.dev(), held.ino()) {
+            return Err("The recovery entry lock was replaced; leaving the entry alone.".into());
+        }
+    }
+    if Instant::now() >= deadline {
+        return Ok(());
+    }
+    // Unpublish the snapshot first. Keeping the gate across close/unlink prevents another
+    // cooperating writer from opening the old entry lock path during Windows' handoff.
+    drop(journal.file.take());
+    remove_if_present(&entry_file(&dir, &id, "pc"))?;
+    remove_if_present(&entry_file(&dir, &id, "journal"))?;
+    drop(journal);
+    let result = remove_if_present(&lock_path);
+    drop(gate);
+    result
 }
 
 /// Delete entry `id` in `dir`: its snapshot, journal and lock. Missing files are not an error.
 /// The folder's `.entries.lock` gate stays. Refused, deleting nothing, when the id is invalid,
 /// a running session holds the entry, or another entry is being opened or removed.
 pub fn remove_entry(dir: &Path, id: &str) -> Result<(), String> {
-    remove_entry_with_gate(dir, id, false)
-}
-
-/// Remove an entry under the folder gate. Refuse an active entry regardless of how the folder
-/// gate was acquired, so no path holds the gate while waiting for an entry lock.
-fn remove_entry_with_gate(dir: &Path, id: &str, wait_for_gate: bool) -> Result<(), String> {
     if !valid_id(id) {
         return Err(format!("`{id}` is not a recovery entry id."));
     }
-    let _gate = match entry_gate(dir, wait_for_gate) {
+    let _gate = match entry_gate(dir) {
         Ok(gate) => gate,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.to_string()),
     };
     let lock_path = entry_file(dir, id, "lock");
-    match open_lock_file(&lock_path) {
+    match open_entry_lock(&lock_path, false) {
         Ok(lock) => {
             lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
             for ext in ["pc", "journal"] {
@@ -789,23 +970,27 @@ fn remove_if_present(path: &Path) -> Result<(), String> {
 impl EditObserver for JournalRecorder {
     /// Queue a new history root; never blocks.
     fn opened(&self, project: Arc<Project>) {
-        // A stopped worker has already kept its error for `sync`.
-        let _ = self.sender.send(Message::Opened(project));
+        self.mailbox.push(Message::Opened(project));
     }
 
     /// Queue a committed edit; never blocks.
     fn committed(&self, edit: CommittedEdit) {
-        let _ = self.sender.send(Message::Committed(edit));
+        self.mailbox.push(Message::Committed(edit));
     }
 }
 
 /// The worker: encode each reported state and write it to the entry, until the recorder is gone.
 /// Errors are kept for the next `sync`. A state that cannot be encoded is skipped; the next
 /// recorded edit carries its changes, or a new snapshot follows a root that failed.
-fn record(dir: &Path, id: &str, receiver: &mpsc::Receiver<Message>) {
+fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn()) -> Result<(), String> {
     let mut journal: Option<EditJournal> = None;
     let mut error: Option<String> = None;
-    while let Ok(message) = receiver.recv() {
+    let discard_before = loop {
+        let message = match mailbox.next() {
+            Ok(message) => message,
+            Err(stop) => break stop,
+        };
+        let full = matches!(&message, Message::Opened(_) | Message::Snapshot(_));
         let result = match message {
             Message::Sync(reply) => {
                 let _ = reply.send(error.take().map_or(Ok(()), Err));
@@ -831,10 +1016,26 @@ fn record(dir: &Path, id: &str, receiver: &mpsc::Receiver<Message>) {
                 None => write(&mut journal, dir, id, None, documents),
             }),
         };
-        if let Err(failure) = result {
-            error.get_or_insert(failure);
+        let mut pending = mailbox.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = pending.fault.clone();
+        match result {
+            Err(message) => {
+                error.get_or_insert_with(|| message.clone());
+                pending.fault = Some(RecordingFault { removed: journal.as_ref().is_some_and(|journal| journal.removed), message });
+            }
+            Ok(()) if full => pending.fault = None,
+            Ok(()) => {}
         }
+        let changed = pending.fault != before;
+        drop(pending);
+        if changed {
+            wake();
+        }
+    };
+    if let (Some(journal), Some(deadline)) = (journal, discard_before) {
+        discard_owned(journal, deadline)?;
     }
+    Ok(())
 }
 
 /// Record `documents` as the result of `edit`, or as a new snapshot when there is no edit. The

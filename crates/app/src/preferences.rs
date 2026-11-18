@@ -323,6 +323,9 @@ pub(crate) struct PreferencesWindow {
     state: WindowState,
     /// What Cancel restores: the settings when the window opened, or at the last Apply.
     kept: Preferences,
+    /// Saving values are inert until Apply or OK; a close can replace this dialog.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) saving: Option<(u8, u8)>,
     /// The slider's displayed value while a pointer gesture still owns it.
     pending_scale: Option<u16>,
     libraries: Option<crate::placement_filters::Editor>,
@@ -359,6 +362,8 @@ pub(crate) struct PageData<'a> {
     libraries: &'a mut crate::placement_filters::Editor,
     pub shortcuts: &'a [(&'static str, &'static str, String)],
     pending_scale: &'a mut Option<u16>,
+    #[cfg(not(target_arch = "wasm32"))]
+    saving: &'a mut Option<(u8, u8)>,
     /// The Assistant draws the AI page and may ask to add an agent from it.
     #[cfg(not(target_arch = "wasm32"))]
     pub assistant: &'a mut crate::assistant::Assistant,
@@ -369,7 +374,15 @@ pub(crate) struct PageData<'a> {
 impl PreferencesWindow {
     /// Open on Appearance, remembering the current settings for Cancel.
     pub(crate) fn new(preferences: Preferences) -> Self {
-        Self { state: WindowState::default(), kept: preferences, pending_scale: None, libraries: None, return_to_catalog: false }
+        Self {
+            state: WindowState::default(),
+            kept: preferences,
+            #[cfg(not(target_arch = "wasm32"))]
+            saving: None,
+            pending_scale: None,
+            libraries: None,
+            return_to_catalog: false,
+        }
     }
 
     /// Open placement discovery settings while retaining the originating catalog's browsing state.
@@ -427,12 +440,18 @@ impl PreferencesWindow {
         // Search results span pages, so there is no single page whose defaults to restore.
         let defaults_enabled = (matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS | SCHEMATIC | LIBRARIES) || saving_page)
             && !settings::searching(&self.state.query);
-        let footer = Footer { apply_enabled: *preferences != self.kept || libraries.dirty(), defaults_enabled };
+        #[cfg(not(target_arch = "wasm32"))]
+        let saving_dirty = self.saving.is_some_and(|draft| draft != (preferences.autosave_minutes, preferences.save_to_project_minutes));
+        #[cfg(target_arch = "wasm32")]
+        let saving_dirty = false;
+        let footer = Footer { apply_enabled: *preferences != self.kept || libraries.dirty() || saving_dirty, defaults_enabled };
         let mut data = PageData {
             preferences,
             libraries,
             shortcuts,
             pending_scale: &mut self.pending_scale,
+            #[cfg(not(target_arch = "wasm32"))]
+            saving: &mut self.saving,
             #[cfg(not(target_arch = "wasm32"))]
             assistant,
             #[cfg(not(target_arch = "wasm32"))]
@@ -454,6 +473,11 @@ impl PreferencesWindow {
                 Ok(value) => {
                     *library_preferences = value.clone();
                     data.libraries.applied(value);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some((snapshots, project)) = data.saving.take() {
+                        data.preferences.autosave_minutes = snapshots;
+                        data.preferences.save_to_project_minutes = project;
+                    }
                 }
                 Err(error) => {
                     data.libraries.error = Some(error);
@@ -469,12 +493,24 @@ impl PreferencesWindow {
                 Outcome::Open
             }
             settings::Action::Cancel => {
-                *data.preferences = self.kept;
+                // Explicit live preference changes must survive Cancel, too.
+                *data.preferences = Preferences {
+                    autosave_minutes: data.preferences.autosave_minutes,
+                    save_to_project_minutes: data.preferences.save_to_project_minutes,
+                    ..self.kept
+                };
                 Outcome::Closed
             }
             settings::Action::Defaults => {
                 if self.state.page == LIBRARIES {
                     data.libraries.defaults();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if saving_page {
+                    let mut defaults = *data.preferences;
+                    restore_page_defaults(&mut defaults, SAVING);
+                    *data.saving = Some((defaults.autosave_minutes, defaults.save_to_project_minutes));
+                    return Outcome::Open;
                 }
                 restore_page_defaults(data.preferences, self.state.page);
                 Outcome::Open
@@ -524,10 +560,11 @@ const INTERVAL_CHOICES: [(u8, &str); 4] = [(0, "Off"), (1, "1 min"), (5, "5 min"
 #[cfg(not(target_arch = "wasm32"))]
 fn saving(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Saving", "How PCBCraft keeps unsaved work safe.");
-    let preferences = &mut *data.preferences;
+    let effective = (data.preferences.autosave_minutes, data.preferences.save_to_project_minutes);
+    let mut draft = data.saving.unwrap_or(effective);
     settings::section(ui, "Recovery", |ui| {
         settings::row_with_keywords(ui, "Recovery snapshots", &["autosave", "crash", "recover", "backup", "interval"], |ui| {
-            settings::segmented(ui, &mut preferences.autosave_minutes, &INTERVAL_CHOICES);
+            settings::segmented(ui, &mut draft.0, &INTERVAL_CHOICES);
         });
         settings::hint(
             ui,
@@ -536,13 +573,14 @@ fn saving(ui: &mut Ui, data: &mut PageData<'_>) {
     });
     settings::section(ui, "Project", |ui| {
         settings::row_with_keywords(ui, "Save to project", &["autosave", "automatic", "save", "interval"], |ui| {
-            settings::segmented(ui, &mut preferences.save_to_project_minutes, &INTERVAL_CHOICES);
+            settings::segmented(ui, &mut draft.1, &INTERVAL_CHOICES);
         });
         settings::hint(
             ui,
             "Saves a project that already has a folder or .pc file after it has been changed, the same way Save does. A project changed by another program is not overwritten.",
         );
     });
+    *data.saving = (draft != effective).then_some(draft);
 }
 
 /// Automatic wire cleanup shares the Modify menu's saved preference. Disabling it preserves

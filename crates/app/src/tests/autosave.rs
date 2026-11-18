@@ -91,7 +91,7 @@ fn snapshots_never_touch_the_project_and_the_timed_save_is_opt_in() {
     let edited = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     run_at(&mut h, 150.0);
     assert_eq!(snapshot_documents(&h), opened, "not yet a minute since the edit");
-    run_at(&mut h, 162.0);
+    h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(162));
     assert_eq!(snapshot_documents(&h), edited);
     assert_eq!(tree(&root), saved, "a snapshot never writes in the project");
     assert!(!recovery.starts_with(&root));
@@ -110,7 +110,8 @@ fn snapshots_never_touch_the_project_and_the_timed_save_is_opt_in() {
     run_at(&mut h, 1001.0);
     run_at(&mut h, 1050.0);
     assert!(!h.state().files.busy(), "not yet a minute since saving was turned on");
-    run_at(&mut h, 1062.0);
+    h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(1062));
+    assert!(h.state().files.busy(), "timed Save starts without a paint pass");
     finish_file_job(&mut h);
     assert_eq!(h.state().message, None);
     assert!(!h.state().files.dirty(&h.state().session));
@@ -134,9 +135,11 @@ fn snapshots_never_touch_the_project_and_the_timed_save_is_opt_in() {
     assert!(h.state().files.dirty(&h.state().session));
     assert_eq!(std::fs::read(document).unwrap(), b"external");
 
-    // A clean exit removes this run's recovery entry.
-    let PcbApp { autosave, session, .. } = h.state_mut();
-    autosave.finish(session);
+    // Don't Save approval removes this run's entry, even though the project is dirty.
+    h.state_mut().waiting = Some(crate::unsaved::Waiting::Discarding(crate::unsaved::Then::Close));
+    h.state_mut().finish_waiting(&ctx);
+    assert!(h.state().close_allowed);
+    eframe::App::on_exit(h.state_mut());
     let left: Vec<_> = std::fs::read_dir(&recovery).unwrap().map(|entry| entry.unwrap().file_name()).collect();
     assert_eq!(left, vec![std::ffi::OsString::from(".entries.lock")]);
 }
@@ -181,7 +184,7 @@ fn a_dialog_and_a_running_save_hold_back_the_timed_save() {
     let ctx = h.ctx.clone();
     h.state_mut().save_project_file(None, &ctx);
     assert!(h.state().files.busy());
-    h.state_mut().autosave_frame(&ctx);
+    h.state_mut().autosave_tick(&ctx, std::time::Duration::from_secs(64));
     assert_eq!(h.state().message, None, "no second file request was refused as already running");
     finish_file_job(&mut h);
     assert!(!h.state().files.dirty(&h.state().session));
@@ -207,6 +210,7 @@ fn a_long_operation_takes_a_snapshot_when_snapshots_are_off() {
     h.state_mut().autosave.command_took(pcbcraft_storage::recovery::LONG_OPERATION);
     run_at(&mut h, 10_001.0);
     assert_eq!(snapshot_documents(&h), encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    eframe::App::on_exit(h.state_mut());
 }
 
 /// Time spent in a frame with no change does not make the next edit count as a long operation.
@@ -224,6 +228,7 @@ fn a_long_operation_without_a_change_does_not_make_a_later_edit_urgent() {
     place(&mut h, 0);
     run_at(&mut h, 3.0);
     assert_eq!(snapshot_documents(&h), created);
+    eframe::App::on_exit(h.state_mut());
 }
 
 /// Replacing the open project starts a new entry and removes the old one off the frame.
@@ -235,19 +240,120 @@ fn replacing_the_project_removes_its_entry_in_the_background() {
     h.state_mut().start_new_project();
     run_at(&mut h, 1.0);
     let (_, old) = h.state().recovery_entry().unwrap();
-    h.state_mut().start_new_project();
-    run_at(&mut h, 2.0);
+    let original = h.state().session.snapshot().unwrap();
+    // Opening a same-UUID copy is a new history root. It and its edits must not reach the
+    // outgoing recorder, even before the next logic pass fences off the running worker.
+    let mut copy = pcbcraft_engine::Project::clone(&original);
+    copy.name = "Same UUID copy".into();
+    let copy = std::sync::Arc::new(copy);
+    h.state_mut().session.open_snapshot(copy);
+    place(&mut h, 30);
+    h.state().sync_recovery().unwrap();
+    let old_entry = pcbcraft_storage::recovery::recover(work.path(), &old).unwrap();
+    assert_eq!(old_entry.documents, encode_documents(original).unwrap());
+    let ctx = h.ctx.clone();
+    h.state_mut().autosave_tick(&ctx, std::time::Duration::from_secs(2));
+    if let Some(finished) = h.state_mut().wait_for_recovery_retirement() {
+        finished.unwrap();
+    }
+    h.state_mut().autosave_tick(&ctx, std::time::Duration::from_secs(3));
     let (_, new) = h.state().recovery_entry().unwrap();
     assert_ne!(old, new);
-    // The replacement's recorder and the previous entry's cleanup may contend for the gate.
-    // Both must complete before inspecting the files, regardless of who goes first.
     h.state().sync_recovery().unwrap();
-    assert_eq!(h.state_mut().wait_for_recovery_discards(), vec![Ok(())]);
+    assert_eq!(pcbcraft_storage::recovery::recover(work.path(), &new).unwrap().project.name, "Same UUID copy");
     let left: Vec<_> = std::fs::read_dir(work.path()).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert!(!left.iter().any(|name| name.starts_with(&old)), "{left:?}");
     assert!(work.path().join(format!("{new}.lock")).exists());
-    let PcbApp { autosave, session, .. } = h.state_mut();
-    autosave.finish(session);
+    eframe::App::on_exit(h.state_mut());
+}
+
+/// An unapproved framework exit preserves dirty recovery; closing after an ordinary
+/// successful Save removes the owned entry through the approved close continuation.
+#[test]
+fn only_an_approved_exit_discards_recovery() {
+    use crate::unsaved::{Then, Waiting};
+    for approved in [false, true] {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("project");
+        let dir = work.path().join("recovery");
+        let mut source = Session::default();
+        source.apply("project.new", &json!({"name":"Close"})).unwrap();
+        pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+        let mut h = harness();
+        h.state_mut().autosave.dir = Some(dir.clone());
+        let rev = h.state().session.revision();
+        h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
+        run_at(&mut h, 1.0);
+        place(&mut h, 0);
+        let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let (_, entry) = h.state().recovery_entry().unwrap();
+        if approved {
+            let ctx = h.ctx.clone();
+            h.state_mut().save_project_file(None, &ctx);
+            h.state_mut().waiting = Some(Waiting::ForSave(Then::Close));
+            finish_file_job(&mut h);
+        }
+        assert_eq!(h.state().close_allowed, approved);
+        eframe::App::on_exit(h.state_mut());
+        if approved {
+            assert!(!dir.join(format!("{entry}.pc")).exists());
+        } else {
+            assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
+        }
+    }
+}
+
+/// Interrupting Preferences with a dirty-project close cannot activate a staged timed Save.
+#[test]
+fn interrupted_preferences_do_not_enable_timed_save() {
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("project");
+    let mut source = Session::default();
+    source.apply("project.new", &json!({"name":"Preferences"})).unwrap();
+    pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+    let mut h = harness();
+    let rev = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
+    run_at(&mut h, 1.0);
+    place(&mut h, 0);
+    let mut preferences = crate::preferences::PreferencesWindow::new(h.state().preferences);
+    preferences.saving = Some((5, 1));
+    h.state_mut().dialog = Dialog::Preferences(preferences);
+    let ctx = h.ctx.clone();
+    h.state_mut().begin_project_close(&ctx);
+    assert!(matches!(h.state().dialog, Dialog::SaveChanges(crate::unsaved::Then::Close)));
+    h.state_mut().dialog = Dialog::None; // Cancel the close and continue editing.
+    run_at(&mut h, 2.0);
+    run_at(&mut h, 1000.0);
+    assert_eq!(h.state().preferences.save_to_project_minutes, 0);
+    assert!(h.state().files.dirty(&h.state().session));
+    assert!(!h.state().files.busy());
+}
+
+/// A transient recorder fault is visible and repaired by a logic-only retry without more edits.
+#[test]
+fn a_logic_only_pass_retries_recovery_without_another_edit() {
+    use std::time::Duration;
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("blocked");
+    std::fs::write(&dir, b"not a directory").unwrap();
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(dir.clone());
+    h.state_mut().preferences.autosave_minutes = 0;
+    h.state_mut().start_new_project();
+    let ctx = h.ctx.clone();
+    h.state_mut().native_project_tick(&ctx, Duration::ZERO);
+    assert!(h.state().sync_recovery().unwrap_err().contains("Could not create the recovery folder"));
+    h.state_mut().native_project_tick(&ctx, Duration::from_secs(1));
+    assert!(h.state().autosave.notice().is_some());
+    std::fs::remove_file(&dir).unwrap();
+    h.state_mut().native_project_tick(&ctx, Duration::from_secs(7));
+    h.state().sync_recovery().unwrap();
+    h.state_mut().native_project_tick(&ctx, Duration::from_secs(8));
+    assert!(h.state().autosave.notice().is_none());
+    let (_, id) = h.state().recovery_entry().unwrap();
+    assert!(pcbcraft_storage::recovery::recover(&dir, &id).is_ok());
+    eframe::App::on_exit(h.state_mut());
 }
 
 /// `app.set_preferences` takes exactly the intervals Preferences offers, publishes the same

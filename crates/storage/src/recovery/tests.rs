@@ -636,7 +636,7 @@ fn the_folder_gate_excludes_opening_and_discarding_entries() {
     let dir = tempfile::tempdir().unwrap();
     let (_, states) = journal_with(dir.path(), 0);
     let before = tree(dir.path());
-    let gate = entry_gate(dir.path(), false).unwrap();
+    let gate = entry_gate(dir.path()).unwrap();
     assert_eq!(EditJournal::create(dir.path(), "entry", states[0].clone()).unwrap_err(), "Recovery entries are being opened or removed.");
     assert_eq!(remove_entry(dir.path(), "entry").unwrap_err(), "Recovery entries are being opened or removed.");
     assert_eq!(tree(dir.path()), before);
@@ -649,6 +649,57 @@ fn the_folder_gate_excludes_opening_and_discarding_entries() {
     assert!(EditJournal::create(dir.path(), "entry", states[0].clone()).unwrap_err().contains("in use by another session"));
     drop(journal);
     remove_entry(dir.path(), "entry").unwrap();
+}
+
+/// A recorder with no successful claim must not remove an entry from an earlier run, even
+/// when it attempted to acquire the name while that entry's owner was live.
+#[test]
+fn discarding_without_ownership_preserves_an_existing_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (owner, states) = journal_with(dir.path(), 1);
+    let unstarted = JournalRecorder::start(dir.path().to_path_buf(), "entry".into()).unwrap();
+    unstarted.discard().unwrap();
+    let contender = JournalRecorder::start(dir.path().to_path_buf(), "entry".into()).unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Contender"})).unwrap();
+    contender.snapshot(session.snapshot().unwrap());
+    assert!(contender.sync().unwrap_err().contains("already exists"));
+    drop(owner);
+    contender.discard().unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[1]);
+}
+
+/// After the drain deadline, cleanup cannot start. Expired retirement leaves readable data.
+#[test]
+fn expired_retirement_preserves_the_owned_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = JournalRecorder::start(dir.path().to_path_buf(), "entry".into()).unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Keep"})).unwrap();
+    recorder.snapshot(session.snapshot().unwrap());
+    recorder.retire(Some(Instant::now())).wait(Duration::from_secs(2)).unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap().project.name, "Keep");
+}
+
+/// A stalled consumer retains bounded work, but the newest state and queued barrier survive.
+#[test]
+fn the_mailbox_coalesces_a_burst_behind_a_barrier() {
+    let mailbox = Mailbox::default();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"First"})).unwrap();
+    let first = session.snapshot().unwrap();
+    mailbox.push(Message::Opened(first));
+    let (barrier, _done) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(barrier));
+    for _ in 0..(PENDING_LIMIT * 3) {
+        mailbox.push(Message::Snapshot(session.snapshot().unwrap()));
+    }
+    session.apply("project.rename", &json!({"name":"Latest"})).unwrap();
+    mailbox.push(Message::Snapshot(session.snapshot().unwrap()));
+    let pending = mailbox.state.lock().unwrap();
+    assert!(pending.queue.len() <= PENDING_LIMIT + 2);
+    assert!(matches!(pending.queue.get(1), Some(Message::Sync(_))));
+    assert!(matches!(pending.queue.back(), Some(Message::Snapshot(project) | Message::Opened(project)) if project.name == "Latest"));
 }
 
 /// A timed snapshot's post-rename flush error retains the published state and is not mistaken

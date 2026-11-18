@@ -31,6 +31,12 @@ pub trait EditObserver: Send + Sync + std::fmt::Debug {
     /// A file or recovered snapshot replaced the history root; later edits build on `project`.
     fn opened(&self, project: Arc<Project>);
 
+    /// A file open installed a new history root, even if its project ID matches the last one.
+    /// By default it is recorded just like attachment or save metadata adoption.
+    fn replaced(&self, project: Arc<Project>) {
+        self.opened(project);
+    }
+
     /// A command changed the project. No-op commands and queries are not reported.
     fn committed(&self, edit: CommittedEdit);
 }

@@ -1348,13 +1348,25 @@ direct session edits or asynchronous work; those routes do not trigger this
 exception to Off. The recorder attempts to journal committed edits whatever the
 setting. A snapshot is skipped only when its journal is open and the state
 matches both the last snapshot and the last recorded state.
-On a clean exit, the app stops recording and attempts to delete its entry after
-the close prompt has dealt with unsaved work; deletion failures are logged.
-A folder gate serializes entry-lock creation and deletion, including the
-close-before-delete needed on Windows. Desktop recorder workers and cleanup
-can wait for the gate off the editor frame; an active entry is never waited on.
-Direct create and remove calls refuse gate contention. The empty `.entries.lock`
-file stays in the recovery folder; it contains no project data.
+Native timer logic does not require the window to paint. If recording fails,
+the editor shows a recovery warning and retries a snapshot after five seconds,
+even with no new edits. Detected removal disables that entry until the project
+is replaced or reopened.
+
+Only an approved project close attempts to delete the current entry. An
+unexpected framework exit drains what it can and leaves the entry. On a project
+replacement or reopen, the outgoing recorder does not receive the next project's
+state. At most one recorder is active or retiring; if retirement stalls, the
+replacement starts recording from its latest state once the old worker stops.
+Pending notifications are bounded; a burst beyond that bound is condensed into
+a fresh snapshot of the newest queued state.
+
+Quit waits up to two seconds for recovery. If drain or gate acquisition misses
+its deadline, deletion does not start and the entry stays. After deletion
+begins, filesystem calls cannot be cancelled; failures may leave partial files
+and are logged. The folder gate protects lock-path creation and close/unlink on
+Windows. Cleanup never removes an unowned entry and does not wait on gate
+contention. The empty `.entries.lock` gate file contains no project data.
 A crash can leave an entry for a future recovery offer; that offer is not built.
 
 **Save to project** (`save_to_project_minutes`) is Off (0) by default. Set to
@@ -1366,8 +1378,9 @@ refused when the project changed on disk; the project stays unsaved and the
 next try comes one interval later. Recovery encoding and disk I/O run on a
 separate worker rather than making Save wait for them. A
 timed save is an ordinary save, so **Save** is unavailable while it runs, as
-during any save. Both settings are personal preferences, also set by
-`app.set_preferences`, and are never stored in the project. The CLI and
+during any save. The Saving page activates its changes only on **Apply** or **OK**.
+Both settings are personal preferences, also set by `app.set_preferences`, and
+are never stored in the project. The CLI and
 headless MCP do not record unsaved work yet. These preferences neither author
 board outlines nor create a cross-application update path; see the
 [live preference and extension boundary](mcp.md#preferences-and-external-updates)

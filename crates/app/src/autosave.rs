@@ -1,117 +1,125 @@
-//! Timed recovery snapshots of unsaved work, and the opt-in timed save to the project folder.
-//!
-//! The recorder attempts to journal committed edits on its worker thread. A snapshot on the
-//! Preferences interval replaces the journal with the current state. Encoding or I/O failures
-//! can leave notifications unrecorded; a detected removed entry stays disabled. Timed project
-//! saves use File › Save's path, including its refusal when the project changed on disk.
+//! Desktop recovery of unsaved work and opt-in ordinary timed Save. The editor owns scheduling
+//! and project identity; the recorder worker owns encoding, I/O and entry locks.
 
-use std::{path::PathBuf, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
-use pcbcraft_storage::recovery::{self, JournalRecorder, Schedule};
+use pcbcraft_engine::{
+    Project, Session,
+    edits::{CommittedEdit, EditObserver},
+};
+use pcbcraft_storage::recovery::{self, JournalRecorder, RecorderExit, Schedule};
 
 use crate::{Dialog, PcbApp};
 
-/// Never wake more often than this for a timed save that is due but held back by an open
-/// dialog or a running file operation; those end on input or a repaint of their own.
 const HELD_RECHECK: Duration = Duration::from_millis(500);
+const RETRY: Duration = Duration::from_secs(5);
+const EXIT_BUDGET: Duration = Duration::from_secs(2);
 
-/// The recovery recorder for the open project and the timers for snapshots and saves.
+/// A recorder sees only its attached project. File opens invalidate it synchronously, including
+/// same-UUID opens; cross-project edits or Undo/Redo also invalidate it before anything is queued.
+#[derive(Debug)]
+struct ProjectRecorder {
+    id: uuid::Uuid,
+    root: u64,
+    obsolete: AtomicBool,
+    writer: JournalRecorder,
+}
+
+impl ProjectRecorder {
+    /// Fence the outgoing entry on the first notification from a different project.
+    fn accepts(&self, project: &Project) -> bool {
+        if project.id() != self.id {
+            self.obsolete.store(true, Ordering::Relaxed);
+        }
+        !self.obsolete.load(Ordering::Relaxed)
+    }
+}
+
+impl EditObserver for ProjectRecorder {
+    /// Attachment and save metadata adoption both describe the same project.
+    fn opened(&self, project: Arc<Project>) {
+        if self.accepts(&project) {
+            self.writer.opened(project);
+        }
+    }
+
+    /// A new history root is never sent to the outgoing recorder.
+    fn replaced(&self, _project: Arc<Project>) {
+        self.obsolete.store(true, Ordering::Relaxed);
+    }
+
+    /// Queue only edits that still belong to this entry's project and history root.
+    fn committed(&self, edit: CommittedEdit) {
+        if self.accepts(&edit.project) {
+            self.writer.committed(edit);
+        }
+    }
+}
+
+/// Recovery state for one editor. At most one recorder (active or retiring) exists at a time.
 #[derive(Debug, Default)]
 pub(crate) struct Autosave {
-    /// Where entries are written. `None` keeps recovery off, as in tests that do not set one.
     pub(crate) dir: Option<PathBuf>,
-    /// Set once the folder has been looked up, so it is looked up only once.
     resolved: bool,
-    /// The recorder attached to the session, and the project it records.
-    recorder: Option<(Arc<JournalRecorder>, uuid::Uuid)>,
+    recorder: Option<Arc<ProjectRecorder>>,
+    retiring: Option<RecorderExit>,
     snapshots: Schedule,
     saves: Schedule,
-    /// The session revision at the last frame; a different one is a change.
     revision: u64,
-    /// The longest command that ran since the last frame.
     took: Duration,
-    /// The project a recorder could not be started for, so it is tried and logged once.
-    failed: Option<uuid::Uuid>,
-    /// Recorders of replaced projects being stopped and deleted off the frame; a clean exit
-    /// waits for them.
-    discarding: Vec<JoinHandle<Result<(), String>>>,
+    epoch: Option<Instant>,
+    retry_at: Option<Duration>,
+    notice: Option<String>,
 }
 
 impl Autosave {
-    /// Note how long a command took; one of at least [`recovery::LONG_OPERATION`] asks for a
-    /// snapshot at the next frame whatever the interval.
+    /// Accumulate the longest synchronous revision-changing GUI command since the last tick.
     pub(crate) fn command_took(&mut self, took: Duration) {
         self.took = self.took.max(took);
     }
 
-    /// Stop recording and attempt to delete this run's entry, for a clean exit: unsaved work
-    /// was already saved or dismissed at the close prompt. Cleanup failures are logged.
-    pub(crate) fn finish(&mut self, session: &mut pcbcraft_engine::Session) {
+    /// Control the timer with a monotonic clock independent of egui's latest painted input.
+    pub(crate) fn now(&mut self) -> Duration {
+        self.epoch.get_or_insert_with(Instant::now).elapsed()
+    }
+
+    pub(crate) fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    /// Detach notifications, then drain the owned recorder. Only an approved close can request
+    /// deletion. Quit waits at most one budget; a worker still draining keeps its recovery entry.
+    pub(crate) fn finish(&mut self, session: &mut Session, approved: bool) {
+        let deadline = Instant::now() + EXIT_BUDGET;
         session.observe_edits(None);
-        if let Some((recorder, _)) = self.recorder.take() {
-            log_discard(discard(recorder));
+        if let Some(recorder) = self.recorder.take().and_then(Arc::into_inner) {
+            self.retiring = Some(recorder.writer.retire(approved.then_some(deadline)));
         }
-        for result in self.wait_for_discards() {
-            log_discard(result);
+        if let Some(retiring) = self.retiring.take() {
+            log_retire(retiring.wait(deadline.saturating_duration_since(Instant::now())));
         }
-    }
-
-    /// Attempt to stop `recorder` and delete its entry off the frame. A stalled worker can
-    /// keep this cleanup thread and its handle alive; repeated replacements have no cap.
-    /// Finished handles are joined on replacement. Spawn or cleanup failures are logged.
-    fn discard_in_background(&mut self, recorder: Arc<JournalRecorder>) {
-        let mut pending = Vec::new();
-        for handle in self.discarding.drain(..) {
-            if handle.is_finished() {
-                log_discard(handle.join().unwrap_or_else(|_| Err("The recovery discard stopped unexpectedly.".to_owned())));
-            } else {
-                pending.push(handle);
-            }
-        }
-        self.discarding = pending;
-        match std::thread::Builder::new().name("recovery-discard".into()).spawn(move || discard(recorder)) {
-            Ok(handle) => self.discarding.push(handle),
-            Err(error) => log::warn!("recovery: could not remove a replaced project's entry: {error}"),
-        }
-    }
-
-    /// Wait for every background discard and return their results.
-    fn wait_for_discards(&mut self) -> Vec<Result<(), String>> {
-        self.discarding
-            .drain(..)
-            .map(|handle| handle.join().unwrap_or_else(|_| Err("The recovery discard stopped unexpectedly.".to_owned())))
-            .collect()
     }
 }
 
-/// Stop a recorder that is no longer attached to the session and delete its entry. A recorder
-/// something else still holds keeps writing and is left alone.
-fn discard(recorder: Arc<JournalRecorder>) -> Result<(), String> {
-    match Arc::into_inner(recorder) {
-        Some(recorder) => recorder.discard(),
-        None => Ok(()),
-    }
-}
-
-/// Log a failed discard; the entry may remain wholly or partly in the store.
-fn log_discard(result: Result<(), String>) {
+/// Errors in retired entries are not errors in the current project's Save operation.
+fn log_retire(result: Result<(), String>) {
     if let Err(error) = result {
-        log::warn!("recovery: could not remove a finished entry: {error}");
+        log::warn!("recovery: could not finish a recovery entry: {error}");
     }
-}
-
-/// The per-user recovery folder. Tests leave it unset unless they give one, so they never write
-/// in the person's own folder.
-fn default_dir() -> Option<PathBuf> {
-    if cfg!(test) { None } else { recovery::default_dir() }
 }
 
 impl PcbApp {
-    /// Once a frame: keep the recorder on the open project, take a snapshot or start a save when
-    /// one is due, and ask to be woken in time for the next.
-    pub(crate) fn autosave_frame(&mut self, ctx: &egui::Context) {
-        let now = Duration::from_secs_f64(ctx.input(|input| input.time).max(0.0));
-        self.follow_project();
+    /// Drive both timers from native logic, not from a painted view. The test harness can supply
+    /// a deterministic clock without sleeping for a whole interval.
+    pub(crate) fn autosave_tick(&mut self, ctx: &egui::Context, now: Duration) {
+        self.follow_project(ctx, now);
         let autosave = &mut self.autosave;
         autosave.snapshots.set_minutes(self.preferences.autosave_minutes);
         autosave.saves.set_minutes(self.preferences.save_to_project_minutes);
@@ -122,26 +130,45 @@ impl PcbApp {
             autosave.snapshots.long_operation(took, now);
             autosave.saves.changed(now);
         }
-        if autosave.snapshots.due(now) {
-            if let (Some((recorder, _)), Some(project)) = (&autosave.recorder, self.session.snapshot()) {
-                recorder.snapshot(project);
+        if let Some(recorder) = &autosave.recorder {
+            let fault = recorder.writer.fault();
+            autosave.notice = fault.as_ref().map(|fault| format!("Recovery unavailable: {}", fault.message));
+            let removed = fault.as_ref().is_some_and(|fault| fault.removed);
+            if removed {
+                autosave.retry_at = None;
+                autosave.snapshots.taken();
+            } else {
+                if fault.is_some() {
+                    autosave.retry_at.get_or_insert(now.saturating_add(RETRY));
+                } else {
+                    autosave.retry_at = None;
+                }
+                let due = autosave.retry_at.map_or_else(|| autosave.snapshots.due(now), |retry| now >= retry);
+                if due && let Some(project) = self.session.snapshot() {
+                    recorder.writer.snapshot(project);
+                    autosave.snapshots.taken();
+                    if autosave.retry_at.is_some() {
+                        autosave.retry_at = Some(now.saturating_add(RETRY));
+                    }
+                }
             }
-            autosave.snapshots.taken();
         }
         let save_wait = self.timed_save(ctx, now);
-        let wait = [self.autosave.snapshots.wait(now), save_wait].into_iter().flatten().min();
-        if let Some(wait) = wait {
+        let autosave = &self.autosave;
+        let snapshot_wait = autosave
+            .retry_at
+            .map(|retry| retry.saturating_sub(now))
+            .or_else(|| autosave.recorder.as_ref().and_then(|_| autosave.snapshots.wait(now)));
+        if let Some(wait) = [snapshot_wait, save_wait].into_iter().flatten().min() {
             ctx.request_repaint_after(wait.max(HELD_RECHECK));
         }
     }
 
-    /// Start the timed save when it is on and due and nothing else is in the way; return how
-    /// long until it is due. A project that is saved, Untitled, or not to be saved automatically
-    /// has nothing pending. A refused save leaves the project dirty, and the next try comes one
-    /// interval later.
+    /// Run the ordinary Save only for a located dirty project with no other project action.
+    /// Recheck once a file operation settles, including after ordinary stale-file refusal.
     fn timed_save(&mut self, ctx: &egui::Context, now: Duration) -> Option<Duration> {
         let wanted = self.preferences.save_to_project_minutes > 0 && self.files.dirty(&self.session) && self.files.has_location(&self.session);
-        let free = !self.files.busy() && matches!(self.dialog, Dialog::None) && !self.project_action_pending();
+        let free = !self.close_allowed && !self.files.busy() && matches!(self.dialog, Dialog::None) && !self.project_action_pending();
         let saves = &mut self.autosave.saves;
         if !wanted {
             saves.taken();
@@ -153,62 +180,76 @@ impl PcbApp {
         if free && saves.due(now) {
             saves.taken();
             self.save_project_file(None, ctx);
-            return None;
+            return Some(HELD_RECHECK);
         }
         saves.wait(now)
     }
 
-    /// Attach a recorder to the open project, replacing the one for a project that was replaced.
-    /// Attempt to delete the old entry off the frame after the unsaved-work prompt. Spawn or
-    /// cleanup failures can leave the entry in the store and are logged.
-    fn follow_project(&mut self) {
+    /// Detach an outgoing observer before retiring it. If retirement stalls we don't multiply
+    /// workers; when it completes, attach to the newest state, not to an obsolete intermediate
+    /// project. A failed worker spawn is retried even without a new edit.
+    fn follow_project(&mut self, ctx: &egui::Context, now: Duration) {
         let autosave = &mut self.autosave;
         if !autosave.resolved {
             autosave.resolved = true;
-            if autosave.dir.is_none() {
-                autosave.dir = default_dir();
+            if autosave.dir.is_none() && !cfg!(test) {
+                autosave.dir = recovery::default_dir();
             }
         }
-        let Some(project) = self.session.project() else { return };
-        let id = project.id();
-        if autosave.recorder.as_ref().is_some_and(|(_, recorded)| *recorded == id) || autosave.failed == Some(id) {
+        let target = self.session.project().map(|project| (project.id(), self.session.history_root_revision()));
+        if let Some(recorder) = &autosave.recorder {
+            if target == Some((recorder.id, recorder.root)) && !recorder.obsolete.load(Ordering::Relaxed) {
+                return;
+            }
+            self.session.observe_edits(None);
+            if let Some(recorder) = autosave.recorder.take().and_then(Arc::into_inner) {
+                autosave.retiring = Some(recorder.writer.retire(Some(Instant::now() + EXIT_BUDGET)));
+            }
+            autosave.snapshots.taken();
+            autosave.saves.taken();
+            autosave.retry_at = None;
+        }
+        if let Some(retiring) = &autosave.retiring {
+            let Some(result) = retiring.poll() else {
+                autosave.notice = Some("Recovery waiting for the previous project’s recorder".into());
+                return;
+            };
+            log_retire(result);
+            autosave.retiring = None;
+        }
+        let (Some(project), Some((id, root)), Some(dir)) = (self.session.project(), target, autosave.dir.clone()) else { return };
+        if autosave.retry_at.is_some_and(|retry| now < retry) || self.close_allowed {
             return;
         }
-        let Some(dir) = autosave.dir.clone() else { return };
         let entry = recovery::new_entry_id(project);
-        self.session.observe_edits(None);
-        if let Some((old, _)) = autosave.recorder.take() {
-            autosave.discard_in_background(old);
-        }
-        match JournalRecorder::start(dir, entry) {
-            Ok(recorder) => {
-                let recorder = Arc::new(recorder);
+        let wake = ctx.clone();
+        match JournalRecorder::start_notifying(dir, entry, move || wake.request_repaint_of(egui::ViewportId::ROOT)) {
+            Ok(writer) => {
+                let recorder = Arc::new(ProjectRecorder { id, root, obsolete: AtomicBool::new(false), writer });
                 self.session.observe_edits(Some(recorder.clone()));
-                autosave.recorder = Some((recorder, id));
-                autosave.failed = None;
+                autosave.recorder = Some(recorder);
+                autosave.retry_at = None;
+                autosave.notice = None;
             }
             Err(error) => {
-                log::warn!("recovery: unsaved work is not being recorded: {error}");
-                autosave.failed = Some(id);
+                autosave.notice = Some(format!("Recovery unavailable: {error}"));
+                autosave.retry_at = Some(now.saturating_add(RETRY));
             }
         }
     }
 
-    /// The recovery entry recording the open project, for tests.
     #[cfg(test)]
     pub(crate) fn recovery_entry(&self) -> Option<(PathBuf, String)> {
-        self.autosave.recorder.as_ref().map(|(recorder, _)| (recorder.dir().to_path_buf(), recorder.id().to_owned()))
+        self.autosave.recorder.as_ref().map(|recorder| (recorder.writer.dir().to_path_buf(), recorder.writer.id().to_owned()))
     }
 
-    /// Wait for the background discards of replaced projects, for tests.
     #[cfg(test)]
-    pub(crate) fn wait_for_recovery_discards(&mut self) -> Vec<Result<(), String>> {
-        self.autosave.wait_for_discards()
+    pub(crate) fn wait_for_recovery_retirement(&mut self) -> Option<Result<(), String>> {
+        self.autosave.retiring.take().map(|retiring| retiring.wait(EXIT_BUDGET))
     }
 
-    /// Wait until the recorder has written everything queued so far, for tests.
     #[cfg(test)]
     pub(crate) fn sync_recovery(&self) -> Result<(), String> {
-        self.autosave.recorder.as_ref().map_or(Ok(()), |(recorder, _)| recorder.sync())
+        self.autosave.recorder.as_ref().map_or(Ok(()), |recorder| recorder.writer.sync())
     }
 }

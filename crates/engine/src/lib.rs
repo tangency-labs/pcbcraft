@@ -3122,7 +3122,9 @@ impl Session {
         self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
-        self.report_opened();
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.replaced(project.clone());
+        }
     }
 
     pub fn revision(&self) -> u64 {
