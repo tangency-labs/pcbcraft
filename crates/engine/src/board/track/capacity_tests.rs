@@ -2,10 +2,11 @@
 //! filled to the track and via limits through the ordinary route command.
 use super::*;
 use crate::{
-    ADD_DRAWING, ADD_TRACKS, ADD_VIA, CHECK_DESIGN, INITIALIZE_BOARD_SETUP,
+    ADD_DRAWING, ADD_TRACKS, ADD_VIA, CHECK_DESIGN, INITIALIZE_BOARD_SETUP, SET_VIA_NET,
     board::{
+        clearance::FORBID_SYNCHRONOUS_GEOMETRY,
         clipboard::{COPY, CUT, DELETE},
-        track::tests::{copper_layers, view},
+        track::tests::{copper_layers, routed_fixture, view},
     },
     edits::{CommittedEdit, EditObserver},
     persistence::{MAX_DOCUMENT_BYTES, decode_documents, encode_documents},
@@ -392,6 +393,14 @@ fn board_at_the_track_and_via_limits_saves_reloads_and_checks_clean() {
         assert_eq!((s.undo.len(), s.redo.len()), history);
         assert!(log.0.lock().unwrap().is_empty());
     }
+    let first = s.project().unwrap().board.tracks[0].id;
+    check_atomic_refusals(
+        &mut s,
+        &[
+            (DELETE_TRACKS, json!({"tracks":[first, first]}), "unique".into()),
+            (DELETE_TRACKS, json!({"tracks":[first, Uuid::from_u128(u128::MAX)]}), "existing board items".into()),
+        ],
+    );
     s.apply(DELETE, &selection).unwrap();
     let board = &s.project().unwrap().board;
     assert_eq!((board.tracks.len(), board.vias.len()), (0, 0));
@@ -409,6 +418,127 @@ fn board_at_the_track_and_via_limits_saves_reloads_and_checks_clean() {
     loaded.open_snapshot(reopened);
     let result = loaded.execute(CHECK_DESIGN, &json!({})).unwrap();
     assert_eq!(result["design_check"]["total"], 0, "{:#}", result["design_check"]["counts"]);
+}
+
+/// A real class and assigned via activate source-contact defaults. The far-away synthetic copper
+/// stays sparse, uses fixed-width coordinates, and goes through the ordinary native decoder.
+fn classified_capacity_board(track_count: usize) -> (Project, Value, Point, [Uuid; 2]) {
+    let mut s = routed_fixture();
+    let registry = s.project().unwrap().inspect_net_registry().unwrap();
+    let target = json!({"kind":"derived","anchor":registry["nets"][0]["anchor"]});
+    s.apply(
+        crate::net_classes::CREATE,
+        &json!({"name":"Capacity test", "rules":{"preferred_via_diameter_nm":900_000}, "expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let class = s.project().unwrap().net_classes().definitions.last().unwrap().id;
+    s.apply(crate::nets::SET_CLASSES, &json!({"target":target,"classes":[class],"expected_revision":s.revision()})).unwrap();
+    let source = at(-30 * MM, -30 * MM);
+    s.apply(ADD_VIA, &json!({"at":source,"target":target,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(view(&s).route_rules_at(source, None).unwrap().unwrap().via_sizes(None, None).unwrap().0, 900_000);
+    let [front, back] = copper_layers(&s).try_into().unwrap();
+    let mut project = s.project().unwrap().clone();
+    let board = Arc::make_mut(&mut project.board);
+    let sparse_point = |i: usize, y: i64| at((-600 + (i % 256) as i64) * MM, (y + (i / 256) as i64) * MM);
+    board.tracks.extend((0..track_count).map(|i| {
+        let start = sparse_point(i, -800);
+        Track { id: Uuid::from_u128(i as u128 + 1), locked: false, layer: front, width_nm: 200_000, start, end: at(start.x_nm + 200_000, start.y_nm) }
+    }));
+    board.vias.extend((0..MAX_VIAS - 1).map(|i| Via {
+        id: Uuid::from_u128((MAX_TRACKS + i + 1) as u128),
+        locked: false,
+        at: sparse_point(i, -500),
+        diameter_nm: DEFAULT_VIA_DIAMETER_NM,
+        drill_nm: DEFAULT_VIA_DRILL_NM,
+        net_assignment: None,
+    }));
+    board.vias.sort_by_key(|via| via.id);
+    (project, target, source, [front, back])
+}
+
+/// Refusals must not replace Arc identity, push history, raise revision or publish a committed edit.
+fn check_atomic_refusals(s: &mut Session, commands: &[(&str, Value, String)]) {
+    let snapshot = s.snapshot().unwrap();
+    let revision = s.revision();
+    let history = (s.undo.len(), s.redo.len());
+    let log = Arc::new(EditLog::default());
+    s.observe_edits(Some(log.clone()));
+    for (command, params, expected) in commands {
+        let mut params = params.clone();
+        params["expected_revision"] = json!(revision);
+        let error = s.apply(command, &params).unwrap_err();
+        assert!(matches!(&error, crate::CommandError::InvalidParams(reason) if reason.contains(expected.as_str())), "{command}: {error:?}");
+        assert_eq!(s.revision(), revision);
+        assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &snapshot));
+        assert_eq!((s.undo.len(), s.redo.len()), history);
+        assert!(log.0.lock().unwrap().is_empty());
+    }
+}
+
+/// Count a final-vertex via as well as a standalone via, and skip source geometry on both the
+/// via and track limits, even though an assigned net would supply default dimensions.
+#[test]
+fn count_overflows_refuse_before_classified_source_geometry() {
+    let (project, _, source, [front, back]) = classified_capacity_board(MAX_TRACKS - 1);
+    let mut s = Session::default();
+    let saved = encode_documents(Arc::new(project.clone())).unwrap();
+    s.open_snapshot(decode_documents(&saved).unwrap());
+    let extra = [source, at(source.x_nm + MM, source.y_nm)];
+    let via_limit = format!("a board can hold at most {MAX_VIAS} vias");
+    FORBID_SYNCHRONOUS_GEOMETRY.set(true);
+    check_atomic_refusals(
+        &mut s,
+        &[
+            (ADD_VIA, json!({"at":extra[1]}), via_limit.clone()),
+            (ADD_TRACKS, json!({"layer":front,"points":extra,"layer_changes":[{"at":1,"layer":back}]}), via_limit),
+            (
+                ADD_TRACKS,
+                json!({"layer":front,"points":[extra[0],extra[1],at(source.x_nm + 2 * MM, source.y_nm)]}),
+                format!("a board can hold at most {MAX_TRACKS} track segments"),
+            ),
+        ],
+    );
+    FORBID_SYNCHRONOUS_GEOMETRY.set(false);
+}
+
+/// Fill to within one track record of the native board document ceiling. Three edits that fit
+/// the count limits would exhaust the remaining bytes; none can publish an unsaveable board.
+#[test]
+fn board_document_budget_refuses_addition_locking_and_via_assignment_atomically() {
+    let (mut project, target, _, [front, _]) = classified_capacity_board(MAX_TRACKS - 1);
+    let path = project.board_document_path().unwrap();
+    let bytes = encode_documents(Arc::new(project.clone())).unwrap()[&path].len();
+    let sample = &project.board.tracks[0];
+    let locked = Track { locked: true, ..sample.clone() };
+    let lock_growth = serde_json::to_vec(&locked).unwrap().len() - serde_json::to_vec(sample).unwrap().len();
+    let locks = (MAX_DOCUMENT_BYTES - bytes - 32) / lock_growth;
+    let board = Arc::make_mut(&mut project.board);
+    assert!(locks + 8 < board.tracks.len());
+    for track in &mut board.tracks[..locks] {
+        track.locked = true;
+    }
+    let saved = encode_documents(Arc::new(project)).unwrap();
+    assert_eq!(saved[&path].len(), bytes + locks * lock_growth);
+    assert!((32..32 + lock_growth).contains(&(MAX_DOCUMENT_BYTES - saved[&path].len())));
+    let mut s = Session::default();
+    s.open_snapshot(decode_documents(&saved).unwrap());
+    let board = view(&s);
+    let track_ids: Vec<_> = board.tracks()[locks..locks + 8].iter().map(|track| track.id).collect();
+    let via_ids: Vec<_> = board.vias().iter().filter(|via| via.net_assignment.is_none()).take(8).map(|via| via.id).collect();
+    let board = board.target.board;
+    s.apply(SET_COPPER_LOCKED, &json!({"board":board,"tracks":[track_ids[0]],"locked":true,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap()[&path].len(), saved[&path].len() + lock_growth);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    let byte_limit = "board document exceeds the 16 MiB limit".to_owned();
+    check_atomic_refusals(
+        &mut s,
+        &[
+            (ADD_TRACKS, json!({"layer":front,"points":[at(-700 * MM,-900 * MM),at(-699 * MM,-900 * MM)],"width_nm":200_000}), byte_limit.clone()),
+            (SET_COPPER_LOCKED, json!({"board":board,"tracks":track_ids,"locked":true}), byte_limit.clone()),
+            (SET_VIA_NET, json!({"board":board,"vias":via_ids,"target":target}), byte_limit),
+        ],
+    );
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
 
 /// Track `k` of `n` parallel minimum-width diagonals 20 um apart along both axes, so 14 um apart

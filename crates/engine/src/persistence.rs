@@ -18,6 +18,7 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
+pub(crate) use documents::check_board_document_size;
 pub mod layout;
 mod part_group_storage;
 pub use documents::{

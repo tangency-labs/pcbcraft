@@ -1935,7 +1935,7 @@ impl DocumentsEncoder {
                         self.cursor = id;
                     } else {
                         if !self.project.board.assignments.is_empty() {
-                            self.bytes.extend_from_slice(b"  ],\n  \"footprints\": [\n");
+                            self.bytes.extend_from_slice(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS);
                         }
                         self.next();
                     }
@@ -2134,7 +2134,7 @@ impl DocumentsEncoder {
 
     /// Close the last array and object and retain the exact bytes under the document's path.
     fn finish_document(&mut self, path: String) -> Result<(), String> {
-        self.bytes.extend_from_slice(b"  ]\n}\n");
+        self.bytes.extend_from_slice(DOCUMENT_END);
         if self.bytes.len() > MAX_DOCUMENT_BYTES {
             self.size_limit_exceeded = true;
             return Err(format!("{path}: encoded document exceeds its size limit"));
@@ -2142,6 +2142,48 @@ impl DocumentsEncoder {
         self.documents.insert(path, std::mem::take(&mut self.bytes));
         Ok(())
     }
+}
+
+const BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS: &[u8] = b"  ],\n  \"footprints\": [\n";
+const DOCUMENT_END: &[u8] = b"  ]\n}\n";
+
+/// Count native board bytes without retaining the output. Stop at the same cap as Save.
+#[derive(Default)]
+struct BoardByteCounter(usize);
+
+impl Write for BoardByteCounter {
+    /// Refuse the first excess byte; never return a partial successful write.
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > MAX_DOCUMENT_BYTES - self.0 {
+            return Err(std::io::Error::other("board document exceeds the 16 MiB limit"));
+        }
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    /// No output is buffered.
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Check the native board document before adopting an edited copper-bearing board. Use the
+/// native writer's header, record framing, serialized fields and closing bytes.
+pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
+    let mut bytes = BoardByteCounter::default();
+    board_header(&mut bytes, project)?;
+    let mut first = true;
+    for assignment in project.board.assignments.values() {
+        record(&mut bytes, &mut first, assignment)?;
+    }
+    if !project.board.assignments.is_empty() {
+        bytes.write_all(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS).map_err(|error| error.to_string())?;
+        first = true;
+    }
+    for footprint in project.board.footprints() {
+        record(&mut bytes, &mut first, footprint)?;
+    }
+    bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
 }
 
 /// Keep legacy bytes until authored content requires a newer format. Select the highest
@@ -2157,7 +2199,7 @@ impl DocumentsEncoder {
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
-fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
+fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     crate::board::zones::validate(project)?;
     let board = &project.board;
     let setup = board.setup.as_ref();
@@ -2227,16 +2269,16 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         } else {
             CONFIGURED_BOARD_FORMAT
         };
-        bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes());
+        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
         if !setup.materials().is_empty() {
-            bytes.extend_from_slice(b"    \"materials\": [\n");
+            bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
             let mut first = true;
             for material in setup.materials() {
                 record(bytes, &mut first, material)?;
             }
-            bytes.extend_from_slice(b"    ],\n");
+            bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
         }
-        bytes.extend_from_slice(b"    \"layers\": [\n");
+        bytes.write_all(b"    \"layers\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for layer in setup.layers() {
             record(bytes, &mut first, layer)?;
@@ -2246,7 +2288,7 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         for stratum in &setup.stackup().strata {
             record(bytes, &mut first, stratum)?;
         }
-        bytes.extend_from_slice(b"      ]");
+        bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
         let stackup = setup.stackup();
         for (field, value) in [
             ("finished_thickness_nm", stackup.finished_thickness_nm),
@@ -2257,7 +2299,7 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
                 write!(bytes, ",\n      \"{field}\": {value}").map_err(|e| e.to_string())?;
             }
         }
-        bytes.extend_from_slice(b"\n    }\n  },\n");
+        bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     } else {
         let format = if board.vias.iter().any(|via| via.net_assignment.is_some()) {
             ASSIGNED_VIA_BOARD_FORMAT
@@ -2302,18 +2344,18 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         } else {
             BOARD_FORMAT
         };
-        bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n").as_bytes());
+        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
     if let Some(baseline) = &board.baseline {
         let encoded = baseline.encode()?;
-        bytes.extend_from_slice(b"  \"baseline\": ");
+        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
         for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
             if index != 0 {
-                bytes.extend_from_slice(b"\n  ");
+                bytes.write_all(b"\n  ").map_err(|error| error.to_string())?;
             }
-            bytes.extend_from_slice(line);
+            bytes.write_all(line).map_err(|error| error.to_string())?;
         }
-        bytes.extend_from_slice(b",\n");
+        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
     }
     if let Some(rules) = &board.rules {
         rules.validate()?;
@@ -2334,56 +2376,55 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     if let Some(graphics) = &board.drawings {
-        bytes.extend_from_slice(b"  \"graphics\": {\n    \"layers\": [\n");
+        bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for layer in &graphics.layers {
             record(bytes, &mut first, layer)?;
         }
-        bytes.extend_from_slice(b"    ],\n    \"items\": [\n");
+        bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
         first = true;
         for item in &graphics.items {
             record(bytes, &mut first, item)?;
         }
-        bytes.extend_from_slice(b"    ]\n  },\n");
+        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
     }
     if !board.zones.is_empty() {
-        bytes.extend_from_slice(b"  \"zones\": [\n");
+        bytes.write_all(b"  \"zones\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for zone in &board.zones {
             record(bytes, &mut first, zone)?;
         }
-        bytes.extend_from_slice(b"  ],\n");
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
     if !board.tracks.is_empty() {
-        bytes.extend_from_slice(b"  \"tracks\": [\n");
+        bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for track in &board.tracks {
             record(bytes, &mut first, track)?;
         }
-        bytes.extend_from_slice(b"  ],\n");
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
     if !board.vias.is_empty() {
-        bytes.extend_from_slice(b"  \"vias\": [\n");
+        bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for via in &board.vias {
             record(bytes, &mut first, via)?;
         }
-        bytes.extend_from_slice(b"  ],\n");
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
-    bytes.extend_from_slice(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" });
+    bytes.write_all(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" }).map_err(|error| error.to_string())?;
     Ok(())
 }
 
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
-fn record(bytes: &mut Vec<u8>, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
     if !*first {
-        bytes.extend_from_slice(b"\n    ,\n");
+        bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
     }
     *first = false;
-    bytes.extend_from_slice(b"    ");
+    bytes.write_all(b"    ").map_err(|error| error.to_string())?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
-    bytes.push(b'\n');
-    Ok(())
+    bytes.write_all(b"\n").map_err(|error| error.to_string())
 }
 
 /// Serialize a small header field without introducing unstable object ordering.

@@ -329,6 +329,13 @@ pub(super) struct BoardGeometry {
     index: OnceLock<Arc<index::Index>>,
 }
 
+// Used by the capacity regression to fail immediately if a doomed command starts
+// synchronous connectivity work. The guard applies only to that test thread.
+#[cfg(test)]
+thread_local! {
+    pub(in crate::board) static FORBID_SYNCHRONOUS_GEOMETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl BoardGeometry {
     /// Publish a lazily built immutable index without making another query wait for a builder.
     /// Concurrent first queries may duplicate a bounded build; subsequent queries share one tree.
@@ -343,6 +350,8 @@ impl BoardGeometry {
     /// Resolve supported contours and the complete intended membership of every routed island.
     /// Keep legacy clearance islands separate from direct-pad contact traversal used for shorts.
     pub(crate) fn new(view: BoardView<'_>) -> Self {
+        #[cfg(test)]
+        assert!(!FORBID_SYNCHRONOUS_GEOMETRY.get(), "an over-capacity command started synchronous board geometry");
         let lands = lands(view);
         let (copper, members) = islands(&lands, view.tracks(), view.vias());
         Self::from_islands(view, lands, copper, members)

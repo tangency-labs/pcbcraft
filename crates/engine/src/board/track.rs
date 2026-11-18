@@ -147,24 +147,27 @@ impl Via {
     }
 }
 
-/// Validate every segment and via of a candidate board, then sort each by ID for diff-stable
-/// saves. Each track layer must be a copper layer of the board's setup; an unconfigured board
-/// has none. Vias need at least two copper layers to pass between.
-pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]) -> Result<(), String> {
-    if tracks.len() > MAX_TRACKS {
+/// Refuse an over-capacity board before inspecting records or deriving geometry.
+fn validate_counts(tracks: usize, vias: usize) -> Result<(), String> {
+    if tracks > MAX_TRACKS {
         return Err(format!("a board can hold at most {MAX_TRACKS} track segments"));
     }
-    if vias.len() > MAX_VIAS {
+    if vias > MAX_VIAS {
         return Err(format!("a board can hold at most {MAX_VIAS} vias"));
     }
-    let copper: BTreeSet<_> = project
-        .board
-        .setup
-        .iter()
-        .flat_map(|setup| setup.layers())
-        .filter(|layer| layer.purpose == LayerPurpose::Copper)
-        .map(|layer| layer.id)
-        .collect();
+    Ok(())
+}
+
+/// Copper-layer identities from the current board setup; empty on an unconfigured board.
+fn copper_layer_ids(project: &Project) -> BTreeSet<Uuid> {
+    project.board.setup.iter().flat_map(|setup| setup.layers()).filter(|layer| layer.purpose == LayerPurpose::Copper).map(|layer| layer.id).collect()
+}
+
+/// Validate every segment and via of a candidate board, then sort each by ID for diff-stable
+/// saves and bulk command lookups. Vias need at least two copper layers to pass between.
+pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]) -> Result<(), String> {
+    validate_counts(tracks.len(), vias.len())?;
+    let copper = copper_layer_ids(project);
     let mut ids = BTreeSet::new();
     for track in tracks.iter() {
         track.validate()?;
@@ -777,10 +780,61 @@ impl Session {
     }
 }
 
-/// Construct and validate authored copper records without connectivity traversal or publication.
-/// Edit a private candidate; omitted creation sizes use source-contact class preferences or
-/// board defaults. Preparation validates final membership and explicit hard limits before publication.
+/// Count-checked route input, still without sizes or allocated board item identities.
+struct RouteAddition {
+    layer: Uuid,
+    points: Vec<Point>,
+    changes: Vec<LayerChange>,
+}
+
+/// Parse a route's ordered points and layer changes, counting even a final-vertex via
+/// before defaults or source geometry are queried.
+fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, CommandError> {
+    let layer = param(params, "layer")?;
+    let points: Vec<Point> = param(params, "points")?;
+    if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
+    }
+    let changes: Vec<LayerChange> = if params.get("layer_changes").is_some() { param(params, "layer_changes")? } else { Vec::new() };
+    let copper = copper_layer_ids(project);
+    if !copper.contains(&layer) {
+        return Err(CommandError::InvalidParams("tracks must stay on a copper layer of the board setup".into()));
+    }
+    let (mut previous, mut current) = (0, layer);
+    for change in &changes {
+        if change.at <= previous || change.at >= points.len() {
+            return Err(CommandError::InvalidParams("layer changes need strictly increasing vertex indices after the first".into()));
+        }
+        if !copper.contains(&change.layer) {
+            return Err(CommandError::InvalidParams("a layer change must move to a copper layer of the board setup".into()));
+        }
+        if change.layer == current {
+            return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
+        }
+        (previous, current) = (change.at, change.layer);
+    }
+    validate_counts(project.board.tracks.len() + points.len() - 1, project.board.vias.len() + changes.len()).map_err(CommandError::InvalidParams)?;
+    Ok(RouteAddition { layer, points, changes })
+}
+
+/// Edit a private candidate without publishing. Refuse inevitable count overflow before
+/// resolving source-contact defaults (which may build connectivity) or allocating identities.
+/// Preparation validates final membership and explicit hard limits before publication.
 fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+    let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
+    let via_at = if command == ADD_VIA {
+        let at: Point = param(params, "at")?;
+        if !crate::wire::valid_point(&at) {
+            return Err(CommandError::InvalidParams("the via position is out of range".into()));
+        }
+        validate_counts(project.board.tracks.len(), project.board.vias.len() + 1).map_err(CommandError::InvalidParams)?;
+        if project.board.vias.iter().any(|via| via.at == at) {
+            return Err(CommandError::InvalidParams("a via already sits at this position".into()));
+        }
+        Some(at)
+    } else {
+        None
+    };
     let promoted = if command == ADD_VIA && params.get("target").is_some() { Some(project.with_via_target(&params["target"])?) } else { None };
     let original = project;
     let project = promoted.as_ref().map_or(project, |(p, _)| p);
@@ -800,11 +854,10 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         let view = project
             .board_view(project.resolve_board(params.get("board").and_then(Value::as_str))?)
             .ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
-        let (at, layer) = if command == ADD_TRACKS {
-            let points: Vec<Point> = param(params, "points")?;
-            (*points.first().ok_or_else(|| CommandError::InvalidParams("A route needs a starting point.".into()))?, Some(param(params, "layer")?))
+        let (at, layer) = if let Some(route) = &route {
+            (route.points[0], Some(route.layer))
         } else {
-            (param(params, "at")?, None)
+            (via_at.ok_or_else(|| CommandError::InvalidParams("A via needs a position.".into()))?, None)
         };
         if let Some((_, address)) = &promoted {
             let resolved = project.resolve_net_assignment(*address)?;
@@ -819,36 +872,12 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
     let mut tracks = project.board.tracks.clone();
     let mut vias = project.board.vias.clone();
     let mut added = BTreeSet::new();
-    if command == ADD_TRACKS {
-        let mut layer: Uuid = param(params, "layer")?;
+    if let Some(RouteAddition { mut layer, points, changes }) = route {
         let explicit_width = params.get("width_nm").map(|_| param(params, "width_nm")).transpose()?;
         let width_nm = match &policy {
             Some(policy) => policy.track_width(explicit_width)?,
             None => explicit_width.unwrap_or(effective.preferred_track_width_nm),
         };
-        let points: Vec<Point> = param(params, "points")?;
-        if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
-        }
-        let changes: Vec<LayerChange> = if params.get("layer_changes").is_some() { param(params, "layer_changes")? } else { Vec::new() };
-        let copper: BTreeSet<_> = project
-            .board
-            .setup
-            .iter()
-            .flat_map(|setup| setup.layers())
-            .filter(|record| record.purpose == LayerPurpose::Copper)
-            .map(|record| record.id)
-            .collect();
-        let mut previous = 0;
-        for change in &changes {
-            if change.at <= previous || change.at >= points.len() {
-                return Err(CommandError::InvalidParams("layer changes need strictly increasing vertex indices after the first".into()));
-            }
-            if !copper.contains(&change.layer) {
-                return Err(CommandError::InvalidParams("a layer change must move to a copper layer of the board setup".into()));
-            }
-            previous = change.at;
-        }
         let size = |name| -> Result<i64, CommandError> {
             if params.get(name).is_none() {
                 Ok(match name {
@@ -872,9 +901,6 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         let mut changes = changes.iter().peekable();
         for (index, pair) in points.windows(2).enumerate() {
             if let Some(change) = changes.next_if(|change| change.at == index) {
-                if change.layer == layer {
-                    return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
-                }
                 layer = change.layer;
                 let id = crate::fresh_id()?;
                 added.insert(id);
@@ -886,21 +912,11 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         // A change at the final vertex ends the route on a via, ready to continue on that layer.
         if let Some(change) = changes.next() {
-            if change.layer == layer {
-                return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
-            }
             let id = crate::fresh_id()?;
             added.insert(id);
             vias.push(Via { id, net_assignment: None, locked: false, at: points[change.at], diameter_nm, drill_nm });
         }
-    } else if command == ADD_VIA {
-        let at: Point = param(params, "at")?;
-        if !crate::wire::valid_point(&at) {
-            return Err(CommandError::InvalidParams("the via position is out of range".into()));
-        }
-        if vias.iter().any(|via| via.at == at) {
-            return Err(CommandError::InvalidParams("a via already sits at this position".into()));
-        }
+    } else if let Some(at) = via_at {
         let id = crate::fresh_id()?;
         added.insert(id);
         let explicit_diameter = params.get("via_diameter_nm").map(|_| param(params, "via_diameter_nm")).transpose()?;
@@ -911,7 +927,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         };
         vias.push(Via { id, net_assignment: promoted.as_ref().map(|(_, a)| *a), locked: false, at, diameter_nm, drill_nm });
     } else if command == super::via_nets::SET_VIA_NET {
-        let changed = ids(params, "vias", |id| vias.iter().any(|v| v.id == *id))?;
+        let changed = ids(params, "vias", |id| vias.binary_search_by_key(id, |v| v.id).is_ok())?;
         if changed.is_empty()
             || (params.get("target").is_some() && params.get("automatic").is_some())
             || params.get("target").is_some() == (params.get("automatic") == Some(&json!(true)))
@@ -924,20 +940,21 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         } else {
             (project.clone(), None)
         };
-        for via in vias.iter_mut().filter(|v| changed.contains(&v.id)) {
+        let mut assigned = BTreeSet::new();
+        for via in vias.iter_mut().filter(|v| changed.contains(&v.id) && v.net_assignment != assignment) {
             via.net_assignment = assignment;
+            assigned.insert(via.id);
+        }
+        if assigned.is_empty() {
+            return Ok((None, assigned));
         }
         let mut next = next;
         std::sync::Arc::make_mut(&mut next.board).vias = vias;
         protect_locked(original, &next)?;
-        let changed = changed
-            .into_iter()
-            .filter(|id| original.board.vias.iter().find(|v| v.id == *id) != next.board.vias.iter().find(|v| v.id == *id))
-            .collect::<BTreeSet<_>>();
-        return Ok(((!changed.is_empty()).then_some(next), changed));
+        return Ok((Some(next), assigned));
     } else if command == MOVE_TRACKS {
-        let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-        let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let moved_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
+        let moved_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         let (dx, dy): (i64, i64) = (param(params, "dx_nm")?, param(params, "dy_nm")?);
         if moved_tracks.is_empty() && moved_vias.is_empty() {
             return Err(CommandError::InvalidParams("name at least one track or via to move".into()));
@@ -970,7 +987,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         added.extend(unique);
     } else if command == SET_TRACK_WIDTH {
-        let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+        let changed = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
         if changed.is_empty() {
             return Err(CommandError::InvalidParams("name at least one track".into()));
         }
@@ -980,7 +997,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         added.extend(changed);
     } else if command == SET_VIA_SIZE {
-        let changed = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let changed = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         if changed.is_empty() {
             return Err(CommandError::InvalidParams("name at least one via".into()));
         }
@@ -990,8 +1007,8 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         added.extend(changed);
     } else {
-        let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-        let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let gone_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
+        let gone_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         if gone_tracks.is_empty() && gone_vias.is_empty() {
             return Err(CommandError::InvalidParams("name at least one track or via to delete".into()));
         }

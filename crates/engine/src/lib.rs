@@ -4093,7 +4093,15 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
-        board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        // A copper-bearing board must still fit the native board file after a physical edit.
+        // Do this before replacing the snapshot, changing history or notifying observers.
+        if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
+            && self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        {
+            persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
+        } else {
+            board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        }
         let project = self.retain_allocation_watermark(Arc::new(project));
         self.update_plan = None;
         self.undo.push(self.project.replace(project));
