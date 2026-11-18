@@ -18,7 +18,8 @@ pub(super) struct Finished {
 
 impl ProjectFiles {
     /// Report the open project's location and format, the running file operation and how the
-    /// last one ended, so live clients can follow a save or open to completion.
+    /// last one ended, so live clients can follow a save or open to completion. A client keeps
+    /// the `operation.id` it started; a `last.id` beyond it means a later job replaced its result.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn inspect(&self, session: &Session) -> Value {
         #[cfg(not(target_arch = "wasm32"))]
@@ -34,8 +35,8 @@ impl ProjectFiles {
         };
         json!({
             "location": location,
-            "operation": self.job.as_ref().map(|job| json!({"kind": job.operation, "destination": job.destination})),
-            "last": self.last.as_ref().map(|last| json!({"operation": last.operation, "status": last.status, "path": last.path, "error": last.error})),
+            "operation": self.job.as_ref().map(|job| json!({"id": self.completed + 1, "kind": job.operation, "destination": job.destination})),
+            "last": self.last.as_ref().map(|last| json!({"id": self.completed, "operation": last.operation, "status": last.status, "path": last.path, "error": last.error})),
         })
     }
 }

@@ -142,8 +142,10 @@ command waits while an inline text edit, dialog or file operation is open.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
 clients can identify the state holding command input. Its `file` object gives
 the open project's `location` (`path` and `format`, or null while Untitled), the
-running `operation` (`kind` and known `destination`) and the `last` result
-(`operation`, `status` `succeeded`/`failed`/`cancelled`, `path`, `error`).
+running `operation` (`id`, `kind` and known `destination`) and the `last`
+result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`, `path`,
+`error`). Jobs run one at a time; a `last.id` beyond the one a client started
+means a later job replaced its result.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its
@@ -172,7 +174,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
 | `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
-| `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing destination; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: follow `inspect_editor`'s `file` until `operation` is null, then read `last`. A failed or superseded job keeps the current design, unsaved state and history |
+| `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing file or project folder, while an empty folder becomes the project folder; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: keep the `file.operation.id` the reply reports and follow `inspect_editor` until `file.last.id` reaches it. A failed or superseded job keeps the current design, unsaved state and history |
 
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.

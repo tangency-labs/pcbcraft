@@ -1046,7 +1046,7 @@ mod live {
         WindowCommand {
             id: "file.save_as",
             title: "Save As",
-            summary: "Save the project to a new folder or .pc archive, as File › Save As does without the picker. The destination must not exist yet; an Untitled project takes its name. inspect_editor's file.operation and file.last report progress and the result.",
+            summary: "Save the project to a new folder or .pc archive, as File › Save As does without the picker. An existing file or project folder is refused; an empty folder is used as the project folder. An Untitled project takes the destination's name. Follow inspect_editor's file.operation until file.last has its id.",
             params: &[
                 Param {
                     name: "path",
@@ -1065,7 +1065,7 @@ mod live {
         WindowCommand {
             id: "file.open",
             title: "Open",
-            summary: "Open a project folder, its entry point or a .pc archive in place of the current project, as File › Open does without the picker. Refused while the current project has unsaved changes. inspect_editor's file.operation and file.last report progress and the result.",
+            summary: "Open a project folder, its entry point or a .pc archive in place of the current project, as File › Open does without the picker. Refused while the current project has unsaved changes. Follow inspect_editor's file.operation until file.last has its id.",
             params: &[Param {
                 name: "path",
                 summary: "Absolute path of the project folder, entry point or archive",

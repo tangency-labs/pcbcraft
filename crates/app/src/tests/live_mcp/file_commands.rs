@@ -30,9 +30,11 @@ fn live_save_as_and_open_round_trip_folders_and_archives() {
     let archive = root.join("board-copy.pc");
 
     let started = window(&mut h, connection, "file.save_as", json!({"path": folder, "format": "folder"}));
-    assert_eq!(started["file"]["operation"], json!({"kind": "save", "destination": folder.display().to_string()}));
+    assert_eq!(started["file"]["operation"], json!({"id": 1, "kind": "save", "destination": folder.display().to_string()}));
     finish_file(&mut h);
     let inspected = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+    assert_eq!(inspected["file"]["last"]["id"], 1);
+    assert_eq!(inspected["file"]["operation"], Value::Null);
     assert_eq!(inspected["unsaved"], false);
     assert_eq!(inspected["file"]["location"], json!({"path": folder.display().to_string(), "format": "folder"}));
     assert_eq!(inspected["file"]["last"]["status"], "succeeded");
@@ -47,12 +49,15 @@ fn live_save_as_and_open_round_trip_folders_and_archives() {
 
     for (path, format) in [(&folder, "folder"), (&archive, "archive")] {
         let before = h.state().session().snapshot().unwrap();
-        window(&mut h, connection, "file.open", json!({"path": path}));
+        let id = window(&mut h, connection, "file.open", json!({"path": path}))["file"]["operation"]["id"].clone();
         finish_file(&mut h);
         assert!(!Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()), "{format} was read back from disk");
         let inspected = payload(tool(&mut h, connection, "inspect_editor", json!({})));
         assert_eq!(inspected["file"]["location"], json!({"path": path.display().to_string(), "format": format}));
-        assert_eq!(inspected["file"]["last"], json!({"operation": "open", "status": "succeeded", "path": path.display().to_string(), "error": null}));
+        assert_eq!(
+            inspected["file"]["last"],
+            json!({"id": id, "operation": "open", "status": "succeeded", "path": path.display().to_string(), "error": null})
+        );
         assert_eq!(inspected["unsaved"], false);
         assert_eq!(authored(&h), saved, "{format}");
     }
