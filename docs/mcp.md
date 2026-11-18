@@ -140,11 +140,24 @@ editor and the agent share one undo history and the status bar names each edit
 project's unsaved changes are saved or discarded in the editor, and every
 command waits while an inline text edit, dialog or file operation is open.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
-clients can identify the state holding command input.
+clients can identify the state holding command input. Its `file` object gives
+the open project's saved `location` (`path` and `format`), the
+running `operation` (`id`, `kind` and known `destination`) and the `last`
+result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`/`abandoned`, `path`,
+`error`). Jobs run one at a time; a `last.id` beyond the one a client started
+means a later job replaced its result. `location` is null until the project has been
+opened from or saved to a location, whatever its name: a renamed project that was
+never saved has none, while a saved `Untitled.pc` has one. Use `file.save` when
+`location` is present and `file.save_as` when it is null.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its
-revision or undo history; `file.save` changes the unsaved state. The separate
+revision or undo history. `file.save` and `file.save_as` change the unsaved
+state, and a completed save can also adopt project metadata without advancing the
+revision: the first Save As of an Untitled project takes the destination's name,
+and the session and its undo history adopt that name, the storage layout and sheet
+occurrence IDs. Inspect the project again after every successful save, even when
+the revision is unchanged. `file.open` replaces the project. The separate
 `ui.` input commands described below can invoke authored edits. Call `inspect_editor` for the window,
 view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
 
@@ -168,10 +181,11 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
 | `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
+| `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing file or project folder, while an empty folder becomes the project folder; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: keep the `file.operation.id` the reply reports and follow `inspect_editor` until `file.last.id` is at least that ID. Read `file.last.status` only when the IDs are equal; a greater `file.last.id` means a later job replaced the result, so report it as unavailable rather than taking that job's outcome as yours. A failed or abandoned job keeps the current design, unsaved state and history. An unavailable result says nothing about the outcome: the earlier job may have saved or opened, and that is not undone, so inspect the project and `file.location` before going on |
+| `file.abandon` | **Stop waiting** in the Close Project wait: releases the editor from a running open, such as one stalled on an unresponsive disk. Pass the observed `file.operation.id` as `operation`; a different running job is left alone. Other commands wait while a file job runs, but this one does not. The late result is discarded, the current project is unchanged and `file.last` reports `abandoned`. Saves are refused because they may still be writing; the editor's Close Project wait always offers **Close without waiting**, which warns that unsaved edits are lost and that a first save may leave nothing on disk. At most four abandoned opens may still be running before abandoning is refused |
 
-Closing the last window and choosing where to save an Untitled project stay in
-the editor, which asks about unsaved changes. Headless sessions refuse window
-commands with a reason.
+Closing the last window stays in the editor, which asks about unsaved changes.
+Headless sessions refuse window commands with a reason.
 
 The native live connection also exposes `ui.handles`, `ui.at` and queued pointer,
 keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
@@ -462,8 +476,9 @@ the finding by bounds, its message says the comparison is conservative.
 `pcb.export_fabrication` generates the addressed board's fabrication files without
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
 and `fabrication.origin`, the placement origin every coordinate is measured from:
-Gerber X2 copper per layer, mask and paste top and bottom, top silkscreen and the outline,
-and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
+Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
+plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
+resolvable placement origin.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. One
 `execute` request generates the file contents once; `apply` still validates

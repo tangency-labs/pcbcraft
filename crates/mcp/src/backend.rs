@@ -184,6 +184,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::board::clipboard::CUT
                         | pcbcraft_engine::clipboard_text::LABELS
                         | pcbcraft_engine::clipboard_text::OUTLINE
+                        | pcbcraft_engine::library::sources::AVAILABLE_REVISIONS
                         | pcbcraft_engine::library::sources::RESOLVE_PART
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION

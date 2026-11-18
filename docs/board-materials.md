@@ -223,20 +223,24 @@ when it applies other edits but does not edit them yet.
 
 ## Persistence and limits
 
-Material-aware fields use `pcbcraft-board/3`. A project using only the original
-layer catalog, labels and thicknesses retains version 2 byte-for-byte on a no-op
-round trip. Opening version 2 does not infer materials, reports or construction.
-Version 3 embeds all selected definitions in `board.json`; it needs no source
-library to reopen. Each material revision and each dielectric gap has a stable
+The original layer catalog, labels and thicknesses use `pcbcraft-board/2`;
+material-aware setup needs at least `pcbcraft-board/3`. These formats apply when
+no other authored data needs a later format. A canonical version-2 document
+round-trips byte-for-byte through the codec and does not acquire inferred materials,
+reports or construction. Version 3 and compatible later formats embed all selected
+definitions in `board.json`, with no source library needed. Each material revision
+and each dielectric gap has a stable
 record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
-thickness need at least `pcbcraft-board/23` when one of them is present. Thermal
-conductivity, thermal expansion, dielectric strength and CTI reports use
-`pcbcraft-board/25`, chosen only when one of them is present; it may also carry
-every format 23 field. Older headers refuse these reports, and a board without
-them keeps its earlier format and bytes.
+thickness require at least `pcbcraft-board/23` when one of them is present.
+Explicit via assignments require board/24. Thermal conductivity, thermal expansion,
+dielectric strength and CTI reports require at least board/25. Compatible earlier
+extensions can coexist with reports and keep their usual prerequisites. Footprint
+locks require board/34, which also accepts reports when present. The highest
+applicable format takes precedence; older headers refuse these extensions.
+Canonical boards without these extensions retain their earlier format and bytes.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance

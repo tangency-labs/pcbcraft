@@ -1,0 +1,189 @@
+//! `file.save_as` and `file.open` give a live client Save As and Open without the native picker,
+//! through the editor's own file workers, checks and completion path (#409).
+
+use super::*;
+use crate::tests::recent_projects::finish_file;
+use pcbcraft_engine::{PLACE_SYMBOL, persistence::encode_documents};
+
+/// A display-safe canonical temporary root, as native file jobs record their paths.
+fn project_directory() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = pcbcraft_storage::plain_path_if_equivalent(dir.path().canonicalize().unwrap());
+    (dir, root)
+}
+
+/// The authored documents of the open project, in their saved form.
+fn authored(h: &Harness<'_, PcbApp>) -> pcbcraft_engine::persistence::Documents {
+    encode_documents(h.state().session().snapshot().unwrap()).unwrap()
+}
+
+/// An Untitled design saved over MCP to a new folder and a `.pc` archive reopens from each with
+/// identical authored content; inspection reports each destination and result.
+#[test]
+fn live_save_as_and_open_round_trip_folders_and_archives() {
+    let (_dir, root) = project_directory();
+    let mut h = harness();
+    wiring_project(&mut h);
+    let (port, token) = connect(&mut h);
+    let connection = (port, token.as_str());
+    let folder = root.join("board");
+    let archive = root.join("board-copy.pc");
+
+    let started = window(&mut h, connection, "file.save_as", json!({"path": folder, "format": "folder"}));
+    assert_eq!(started["file"]["operation"], json!({"id": 1, "kind": "save", "destination": folder.display().to_string()}));
+    finish_file(&mut h);
+    let inspected = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+    assert_eq!(inspected["file"]["last"]["id"], 1);
+    assert_eq!(inspected["file"]["operation"], Value::Null);
+    assert_eq!(inspected["unsaved"], false);
+    assert_eq!(inspected["file"]["location"], json!({"path": folder.display().to_string(), "format": "folder"}));
+    assert_eq!(inspected["file"]["last"]["status"], "succeeded");
+    assert_eq!(h.state().session().project().unwrap().name, "board", "an Untitled project takes the folder's name");
+    let saved = authored(&h);
+
+    let started = window(&mut h, connection, "file.save_as", json!({"path": root.join("board-copy"), "format": "archive"}));
+    assert_eq!(started["file"]["operation"]["destination"], archive.display().to_string(), "reports the .pc name it writes");
+    finish_file(&mut h);
+    let inspected = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+    assert_eq!(inspected["file"]["location"], json!({"path": archive.display().to_string(), "format": "archive"}));
+    assert_eq!(inspected["unsaved"], false);
+
+    for (path, format) in [(&folder, "folder"), (&archive, "archive")] {
+        let before = h.state().session().snapshot().unwrap();
+        let id = window(&mut h, connection, "file.open", json!({"path": path}))["file"]["operation"]["id"].clone();
+        finish_file(&mut h);
+        assert!(!Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()), "{format} was read back from disk");
+        let inspected = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+        assert_eq!(inspected["file"]["location"], json!({"path": path.display().to_string(), "format": format}));
+        assert_eq!(
+            inspected["file"]["last"],
+            json!({"id": id, "operation": "open", "status": "succeeded", "path": path.display().to_string(), "error": null})
+        );
+        assert_eq!(inspected["unsaved"], false);
+        assert_eq!(authored(&h), saved, "{format}");
+    }
+}
+
+/// Refused, failed and superseded operations keep the current design, its unsaved state and its
+/// undo history, and inspection reports each failure.
+#[test]
+fn failed_live_file_commands_preserve_the_design() {
+    let (_dir, root) = project_directory();
+    let mut h = harness();
+    wiring_project(&mut h);
+    let ctx = h.ctx.clone();
+    let folder = root.join("board");
+    let unchanged = |h: &Harness<'_, PcbApp>, snapshot: &Arc<pcbcraft_engine::Project>| {
+        assert!(Arc::ptr_eq(snapshot, &h.state().session().snapshot().unwrap()));
+        assert!(h.state().session().available("edit.undo"));
+    };
+
+    let relative = h.state_mut().run_window_command(&ctx, "file.save_as", &json!({"path": "board", "format": "folder"})).unwrap_err();
+    assert!(relative.contains("absolute"), "{relative}");
+    let dirty = h.state_mut().run_window_command(&ctx, "file.open", &json!({"path": folder})).unwrap_err();
+    assert!(dirty.contains("unsaved changes"), "{dirty}");
+    assert!(!h.state().files.busy());
+
+    // An occupied destination fails in the worker and changes nothing.
+    std::fs::write(root.join("taken.pc"), "x").unwrap();
+    let before = h.state().session().snapshot().unwrap();
+    h.state_mut().run_window_command(&ctx, "file.save_as", &json!({"path": root.join("taken"), "format": "archive"})).unwrap();
+    finish_file(&mut h);
+    let file = &window_commands::inspect_editor(h.state())["file"];
+    assert_eq!(file["last"]["status"], "failed", "{file}");
+    assert!(file["last"]["error"].as_str().unwrap().contains("already exists"), "{file}");
+    assert_eq!(file["location"], Value::Null);
+    unchanged(&h, &before);
+    assert!(h.state().files.dirty(h.state().session()));
+
+    // Saved elsewhere, then edited: a destination changed on disk refuses the in-place save.
+    let folder = root.join("saved");
+    h.state_mut().run_window_command(&ctx, "file.save_as", &json!({"path": folder, "format": "folder"})).unwrap();
+    finish_file(&mut h);
+    let revision = h.state().session().revision();
+    h.state_mut().run(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 25_400_000, "y_nm": 0, "expected_revision": revision}));
+    h.run();
+    let entry = folder.join(pcbcraft_engine::persistence::ENTRY_POINT);
+    let mut changed = std::fs::read_to_string(&entry).unwrap();
+    changed.push('\n');
+    std::fs::write(&entry, changed).unwrap();
+    let before = h.state().session().snapshot().unwrap();
+    h.state_mut().run_window_command(&ctx, "file.save", &json!({})).unwrap();
+    finish_file(&mut h);
+    let file = &window_commands::inspect_editor(h.state())["file"];
+    assert!(file["last"]["error"].as_str().unwrap().contains("changed on disk"), "{file}");
+    unchanged(&h, &before);
+    assert!(h.state().files.dirty(h.state().session()));
+
+    // An open that fails, or whose project is edited while it reads, keeps the current design.
+    h.state_mut().run_window_command(&ctx, "file.save_as", &json!({"path": root.join("clean"), "format": "folder"})).unwrap();
+    finish_file(&mut h);
+    let before = h.state().session().snapshot().unwrap();
+    h.state_mut().run_window_command(&ctx, "file.open", &json!({"path": root.join("missing")})).unwrap();
+    finish_file(&mut h);
+    assert_eq!(window_commands::inspect_editor(h.state())["file"]["last"]["status"], "failed");
+    assert!(Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()));
+    h.state_mut().run_window_command(&ctx, "file.open", &json!({"path": root.join("clean")})).unwrap();
+    let revision = h.state().session().revision();
+    h.state_mut().run(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": revision}));
+    let before = h.state().session().snapshot().unwrap();
+    finish_file(&mut h);
+    let file = &window_commands::inspect_editor(h.state())["file"];
+    assert!(file["last"]["error"].as_str().unwrap().contains("Project changed while opening"), "{file}");
+    unchanged(&h, &before);
+}
+
+/// An open stalled on an unresponsive disk holds live commands until a client stops waiting for
+/// it; its late result reaches nobody and the design stays as it was. A save can't be abandoned,
+/// and abandoned workers still running are bounded.
+#[test]
+fn stopping_a_stalled_open_releases_the_editor() {
+    let mut h = harness();
+    wiring_project(&mut h);
+    let (port, token) = connect(&mut h);
+    let connection = (port, token.as_str());
+    let revision = h.state().session().revision();
+    let before = h.state().session().snapshot().unwrap();
+    let late = h.state_mut().files.stall("open", Some("/stalled/board"), revision);
+    let blocked = tool(&mut h, connection, "execute", json!({"command": "view.fit", "params": {"view": 0}}));
+    assert!(blocked["content"][0]["text"].as_str().unwrap().contains("file operation"), "{blocked}");
+
+    let id = payload(tool(&mut h, connection, "inspect_editor", json!({})))["file"]["operation"]["id"].as_u64().unwrap();
+    let stale = tool(&mut h, connection, "execute", json!({"command": "file.abandon", "params": {"operation": id + 1}}));
+    assert!(stale["content"][0]["text"].as_str().unwrap().contains("no longer running"), "{stale}");
+    let inspected = window(&mut h, connection, "file.abandon", json!({"operation": id}));
+    assert_eq!(inspected["file"]["operation"], Value::Null);
+    assert_eq!(inspected["file"]["last"]["status"], "abandoned");
+    let other = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led.pc");
+    assert!(late(Some(&other)), "the stalled worker's successful open is received");
+    h.run();
+    assert!(!h.state().files.holds_stalled(), "and dropped on the next frame");
+    assert!(Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()), "the late project is not adopted");
+    let file = &payload(tool(&mut h, connection, "inspect_editor", json!({})))["file"];
+    assert_eq!(file["last"]["id"], id);
+    assert_eq!(file["last"]["status"], "abandoned");
+    window(&mut h, connection, "view.fit", json!({"view": 0}));
+
+    let _save = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
+    let refused = tool(&mut h, connection, "execute", json!({"command": "file.abandon", "params": {"operation": id + 1}}));
+    assert!(refused["content"][0]["text"].as_str().unwrap().contains("may still be writing"), "{refused}");
+    assert!(h.state().files.busy());
+}
+
+/// Abandoned opens whose workers keep running are bounded, from a live client or the Close
+/// Project wait alike, and one that ends frees its place.
+#[test]
+fn abandoned_open_workers_are_bounded() {
+    let mut app = PcbApp::default();
+    let mut late = Vec::new();
+    for id in 1..=4 {
+        late.push(app.files.stall("open", Some("/stalled"), 0));
+        app.files.abandon(Some(id)).unwrap();
+    }
+    let _fifth = app.files.stall("open", Some("/stalled"), 0);
+    assert!(app.files.abandon(Some(5)).unwrap_err().contains("Too many"));
+    assert!(late.pop().unwrap()(None), "one stalled worker ends");
+    app.files.abandon(Some(5)).unwrap();
+    let _sixth = app.files.stall("open", Some("/stalled"), 0);
+    assert!(app.files.abandon(None).unwrap_err().contains("Too many"), "the Close Project wait obeys the limit too");
+}
