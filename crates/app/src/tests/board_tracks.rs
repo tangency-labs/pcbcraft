@@ -2503,3 +2503,42 @@ fn unresolved_via_defaults_block_layer_changes_until_explicitly_resolved() {
     assert!(vias(&h).iter().all(|via| via.diameter_nm == 800000 && via.drill_nm == 400000));
     assert_eq!(h.state().session.revision(), revision + 1);
 }
+
+/// A Ctrl+PgDn via uses the preview's latched track end through the release band, then
+/// follows the unsnapped pointer beyond it. Publication and Undo retain the exact point.
+#[test]
+fn review408_via_uses_latched_preview_target_until_release() {
+    for offset in [10., 13.] {
+        let mut h = routable();
+        let line = airwires(&h)[0].clone();
+        let endpoint = Point { x_nm: 5_080_000, y_nm: -2_540_000 };
+        let revision = h.state().session.revision();
+        let layer = layer_named(&h, "Top");
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"width_nm":250000,"points":[line.from.position,Point {x_nm:line.from.position.x_nm,y_nm:endpoint.y_nm},endpoint],"expected_revision":revision}));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, line.to.position);
+        let contact = at(&h, endpoint);
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        h.hover_at(contact);
+        h.run_steps(30);
+        let pointer = contact + egui::vec2(offset, 0.);
+        let free = h.state().views.active.camera.unsnapped(pointer, h.get_by_label("PCB canvas").rect());
+        let expected = if offset <= 12. { endpoint } else { free };
+        h.hover_at(pointer);
+        h.run_steps(30);
+        assert!(preview_ends_at(&h, pcbcraft_chrome::Tokens::get().board_front, at(&h, expected)));
+        h.key_press_modifiers(Modifiers::CTRL, Key::PageDown);
+        h.run_steps(30);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(layer_named(&h, "Bottom").as_str()));
+        h.key_press_modifiers(Modifiers::CTRL, Key::Enter);
+        h.run_steps(30);
+        assert_eq!(h.state().message, None);
+        assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), vec![expected], "offset {offset}: committed via differs from preview");
+        h.state_mut().run("edit.undo", &json!({}));
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}

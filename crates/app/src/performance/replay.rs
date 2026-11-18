@@ -148,6 +148,13 @@ fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usiz
     timed(samples, &format!("replay.{id}.tessellate"), || std::hint::black_box(ctx.tessellate(output.shapes, output.pixels_per_point)));
 }
 
+/// Physical contacts and publication baseline, captured only for contact-dependent traces.
+struct Contacts {
+    points: [Point; 2],
+    airwires: usize,
+    original_tracks: std::collections::BTreeSet<uuid::Uuid>,
+}
+
 /// Shared trace driver for CPU replay and actual native/browser windows. Every input
 /// has the same production state assertions, regardless of the rendering integration.
 pub(super) struct Driver {
@@ -156,13 +163,12 @@ pub(super) struct Driver {
     edits: u64,
     track: uuid::Uuid,
     top: String,
-    contacts: [Point; 2],
-    airwires: usize,
-    original_tracks: std::collections::BTreeSet<uuid::Uuid>,
+    contacts: Option<Contacts>,
 }
 
 impl Driver {
     /// Restore canonical bytes and the addressed board, without restoring user preferences.
+    /// Resolve airwires only for contact-dependent actions; other traces need no connection.
     pub(super) fn prepare(artifact: &Artifact) -> Result<(PcbApp, Self)> {
         let mut app = PcbApp::default();
         app.session.open_snapshot(decode_packed(&artifact.project)?.project);
@@ -180,20 +186,27 @@ impl Driver {
         app.views.active.board.active_layer = Some(top.clone());
         app.views.active.filters_open = false;
         app.views.active.camera.center_on(Point { x_nm: 10_160_000, y_nm: 0 });
-        let lines = board.ratsnest().ok_or("missing replay airwires")?.lines;
-        // Legacy center-only pad markers are not conductive copper. Choose the first saved
-        // airwire with supported physical copper at both ends, without consulting solve results.
-        let physical: Vec<_> = board.footprints().flat_map(|f| f.pads).filter(|p| p.copper.is_some()).map(|p| p.center).collect();
-        let first = lines
-            .iter()
-            .find(|line| physical.contains(&line.from.position) && physical.contains(&line.to.position))
-            .ok_or("missing supported replay connection")?;
-        let contacts = [first.from.position, first.to.position];
-        let original_tracks = board.tracks().iter().map(|track| track.id).collect();
-        let airwires = lines.len();
+        let contacts =
+            if artifact.trace.iter().any(|step| matches!(step.action, Action::Contact { .. } | Action::ContactPreview | Action::HistoryCheck)) {
+                let lines = board.ratsnest().ok_or("missing replay airwires")?.lines;
+                // Legacy center-only pad markers are not conductive copper. Choose the first saved
+                // airwire with physical copper at both ends, without consulting solve results.
+                let physical: Vec<_> = board.footprints().flat_map(|f| f.pads).filter(|p| p.copper.is_some()).map(|p| p.center).collect();
+                let first = lines
+                    .iter()
+                    .find(|line| physical.contains(&line.from.position) && physical.contains(&line.to.position))
+                    .ok_or("missing supported replay connection")?;
+                Some(Contacts {
+                    points: [first.from.position, first.to.position],
+                    airwires: lines.len(),
+                    original_tracks: board.tracks().iter().map(|track| track.id).collect(),
+                })
+            } else {
+                None
+            };
         let original = encode_packed(source)?;
         let revision = app.session.revision();
-        Ok((app, Self { original, revision, edits: 0, track, top, contacts, airwires, original_tracks }))
+        Ok((app, Self { original, revision, edits: 0, track, top, contacts }))
     }
 
     /// Translate one addressed trace action; shared edits use the revision-checked command path.
@@ -212,21 +225,23 @@ impl Driver {
             }
             Action::Pointer { at, pressed } => events = Self::pointer(app, *at, *pressed)?,
             Action::Contact { target, pressed } => {
-                events = Self::pointer(app, self.contacts[usize::from(*target)], *pressed)?;
+                let contacts = self.contacts.as_ref().ok_or("contact input has no captured connection")?;
+                events = Self::pointer(app, contacts.points[usize::from(*target)], *pressed)?;
                 if *target && *pressed == Some(false) {
                     self.edits += 1;
                 }
             }
             Action::ContactPreview => {
-                let [from, to] = self.contacts;
+                let [from, to] = self.contacts.as_ref().ok_or("contact preview has no captured connection")?.points;
                 events = Self::pointer(app, Point { x_nm: (from.x_nm + to.x_nm) / 2, y_nm: (from.y_nm + to.y_nm) / 2 - 1_270_000 }, None)?;
             }
             Action::HistoryCheck => {
+                let contacts = self.contacts.as_ref().ok_or("contact history has no captured connection")?;
                 let source = app.session.snapshot().ok_or("missing committed project")?;
                 let board = source.board_view(artifact.board).ok_or("missing committed board")?;
                 let added: std::collections::BTreeSet<_> =
-                    board.tracks().iter().filter(|t| !self.original_tracks.contains(&t.id)).map(|t| t.id.to_string()).collect();
-                if added.is_empty() || board.ratsnest().ok_or("missing routed airwires")?.lines.len() >= self.airwires {
+                    board.tracks().iter().filter(|t| !contacts.original_tracks.contains(&t.id)).map(|t| t.id.to_string()).collect();
+                if added.is_empty() || board.ratsnest().ok_or("missing routed airwires")?.lines.len() >= contacts.airwires {
                     return Err("commit did not connect the saved airwire".into());
                 }
                 let report = board.check_design(board.effective_rules().values);
@@ -410,6 +425,47 @@ pub(super) fn run(artifact: &Artifact, samples: &mut BTreeMap<String, Vec<f64>>)
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// No-contact replays need only front copper and an editable track. The fixture's
+    /// native bytes come from commands; contact traces still reject its absent airwires.
+    #[test]
+    fn review408_noncontact_traces_do_not_require_airwires() {
+        let mut session = pcbcraft_engine::Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        let target = session.project().unwrap().board_target().unwrap();
+        fixture::apply(&mut session, pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"board":target.board,"copper_layers":2})).unwrap();
+        let layer = session
+            .project()
+            .unwrap()
+            .board_view(target)
+            .unwrap()
+            .layers()
+            .into_iter()
+            .find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Front))
+            .unwrap()
+            .id;
+        fixture::apply(
+            &mut session,
+            pcbcraft_engine::ADD_TRACKS,
+            json!({"board":target.board,"layer":layer,"width_nm":250000,"points":[{"x_nm":50000000,"y_nm":0},{"x_nm":51000000,"y_nm":0}]}),
+        )
+        .unwrap();
+        assert!(session.project().unwrap().board_view(target).unwrap().ratsnest().is_none_or(|r| r.lines.is_empty()));
+        let mut artifact = super::super::load_artifact(include_str!("../../../../tools/performance/fixtures/reference-v1.json")).unwrap();
+        artifact.board = target;
+        artifact.project = encode_packed(session.snapshot().unwrap()).unwrap();
+        artifact.project_sha256 = super::super::digest(&artifact.project);
+        run(&artifact, &mut BTreeMap::new()).unwrap();
+        artifact.trace_id = "custom-idle-v1".into();
+        artifact.trace = vec![Step {
+            id: "idle".into(),
+            action: Action::Pointer { at: Point { x_nm: 0, y_nm: -5_080_000 }, pressed: None },
+            routing_after: false,
+        }];
+        run(&artifact, &mut BTreeMap::new()).unwrap();
+        artifact.trace = Step::commit();
+        assert!(Driver::prepare(&artifact).is_err(), "contact replay still needs a supported connection");
+    }
 
     /// Real renderers can take longer than a click threshold between passes. Deliver paired
     /// press/release events together and still require route, layer, cancel and shared-edit checks.

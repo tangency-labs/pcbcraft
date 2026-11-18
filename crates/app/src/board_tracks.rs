@@ -883,11 +883,14 @@ pub(super) fn interact(
         }
         if (via || via_side.is_some() || action == Some(RouteAction::Via))
             && let Some(pointer) = pointer
-            && let Some(draft) = &mut state.draft
+            && let Some(draft) = &state.draft
             && let Some(next) = via_side.map_or_else(|| paired_layer(view, &draft.layer, hidden), |side| side_layer(view, side, hidden))
             && next != draft.layer
         {
-            let (at, _) = route_target(pointer, camera, rect, view, &draft.layer, snap_to_grid, false);
+            let layer = draft.layer.clone();
+            let candidate = route_target(pointer, camera, rect, view, &layer, snap_to_grid, false);
+            let (at, _) = state.snap_target(candidate, pointer, camera, rect, &layer);
+            let Some(draft) = &mut state.draft else { return out };
             if let Some(policy) = &draft.via_rules {
                 match policy.via_sizes(state.via_diameter_override, state.via_drill_override) {
                     Ok((diameter, drill)) => {

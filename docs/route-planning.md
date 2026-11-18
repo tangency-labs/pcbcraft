@@ -155,6 +155,11 @@ records bounded previous hints and obstacle avoidance when reusing a plan.
 capture, maximum individual preparation/search batches, complete validation,
 atomic publication, pointer replacement and cancellation acknowledgement costs.
 Every batched plan must equal the synchronous result, and the existing exhaustive
-copper oracle checks new geometry outside timed intervals. The browser diagnostic
-exports `run_walkaround_jobs` with the same inputs. These service measurements and
-rendered replay readbacks do not certify physical input-to-visible preview latency.
+copper oracle checks new geometry outside timed intervals.
+
+The browser export is `run_walkaround_jobs(artifact_json, environment_json, iterations)`.
+Its first two arguments are JSON contents, rather than the native command's file
+paths; `iterations` is the unsigned 32-bit iteration count, from 1 through 1,000.
+The synchronous export returns the report as a JSON string and
+does not accept or write a `REPORT` path. These service measurements and rendered
+replay readbacks do not certify physical input-to-visible preview latency.
