@@ -17,7 +17,8 @@ and Ctrl+, opened Preferences in all three workspaces. The clipboard-chord gap
 described below was verified by exercising both the swallowed and the passing
 modifier combinations. macOS and Windows have not been tested; for command
 chords, macOS uses **⌘** where **Ctrl** is shown. The browser build differs in
-one row (Ctrl+S) as noted; it has not been separately verified.
+three rows — **Ctrl+S** uses the save/export path, and **Ctrl+Q** and
+**Ctrl+Shift+A** are desktop-only — and has not been separately verified.
 
 ## How keys reach these workspaces
 
@@ -30,8 +31,8 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
 - Schematic and board bindings (W, A, S, H, X, D, Ctrl+A on schematic,
   layer keys, net labels) are **not dispatched at all** in these workspaces —
   they do not fire dormant schematic handlers.
-- Application file keys other than the five handled chords do not reach the
-  library workspaces: **Ctrl+N**, **Ctrl+O**, **Ctrl+Shift+S**, **Ctrl+U** and
+- Application file keys other than the handled chords do not reach the
+  library workspaces: **Ctrl+N**, **Ctrl+O**, **Ctrl+U** and
   **N**/**Shift+N** are dead here. Opening another library document uses the
   Library tab instead.
 - Losing window focus resets the canvas tool to Select; switching the active
@@ -44,15 +45,15 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
 | Keys | Action |
 | --- | --- |
 | **Ctrl+,** | Opens Preferences. Runs even while the Assistant owns input. |
-| **Ctrl+S** | Publishes the active document — opens the Publish dialog (desktop). In the browser build it triggers the save/export path instead. |
+| **Ctrl+S** | Publishes the active document — opens the Publish dialog (desktop). In the browser build it triggers the save/export path instead. Modifier matching ignores extra Shift, so **Ctrl+Shift+S** reaches the same binding. |
 | **Ctrl+Z** | Undoes the active document's last committed edit — the library document's own history, not the project's. |
 | **Ctrl+Y** | Redoes the active document's edit. |
 | **Ctrl+Q** | Closes the project — offers to review or discard unsaved library edits first (desktop only). |
-| **Ctrl+Shift+A** | Toggles the Assistant panel, same as other workspaces (desktop only). |
+| **Ctrl+Shift+A** | Toggles the Assistant panel (desktop only). Unlike the other rows it is handled before the frame's `enabled` gate — it still fires while a file or publish operation is busy — but only in the main host, not in a detached library window, and only when no dialog is open and the Assistant is enabled. |
 
-These run regardless of pointer position but require the editor frame to be
-enabled: no modal dialog or file/publish operation in progress, and no text
-field owning input.
+Except for **Ctrl+Shift+A**, these run regardless of pointer position but
+require the editor frame to be enabled: no modal dialog or file/publish
+operation in progress, and no text field owning input.
 
 ## Canvas keys
 
@@ -110,18 +111,18 @@ so canvas keys do not fire while a field is focused.
 | Row | Consumer | Focused test |
 | --- | --- | --- |
 | Ctrl+, | `PcbApp::library_frame` → `open_preferences` | — |
-| Ctrl+S | `library_frame` → `Intent::Publish` / `Intent::Save` → `begin_library_publish` / `library_editors.save` | `library_editors/tests.rs` `completed_save_releases_close_without_reusing_a_cancelled_decision` |
+| Ctrl+S | `library_frame` → `Intent::Publish` / `Intent::Save` → `begin_library_publish` / `library_editors.save` | — (`completed_save_releases_close_without_reusing_a_cancelled_decision` covers the save path, not the chord) |
 | Ctrl+Z / Ctrl+Y | `library_frame` → `Intent::Undo/Redo` → `Editors::edit(Action::Undo/Redo)` | `live_library_commands_share_the_gui_documents` (undo/redo via `app.library_edit`), `canvas_selection_move_and_cancel_use_library_history` (Undo Library Edit) |
 | Ctrl+Q | `library_frame` → `begin_project_close` | `native_library_close_preserves_unsaved_authoring` (close path) |
 | Ctrl+Shift+A | `library_frame` → `assistant_shortcuts` → `toggle_assistant` | `assistant.rs` toggle tests |
 | Esc | `canvas` → `Tool::Select` | `canvas_selection_move_and_cancel_use_library_history` (draw-tool cancel), `unfocused_host_does_not_cancel_another_windows_definition_tool` (focus scoping) |
-| P / L / T | `canvas` → `start_tool(Place::Pin|Pad|Line|Text)` | — (ribbon clicks exercise `start_tool`) |
+| P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | — (ribbon clicks exercise `start_tool`) |
 | M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path) |
-| R / Shift+R | `canvas` → `rotate_by(-1|+1)` → preview/prototype/`transform_selection` | — |
+| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | — |
 | E | `canvas` → `details_requested` (single selection) | — |
 | Delete | `canvas` → `delete` → `Action::Delete` | — |
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
-| Ctrl+A | `canvas` → `select_many(all)` | `library_editors/tests.rs` (Ctrl+A selections in several tests) |
+| Ctrl+A | `canvas` → `select_many(all)` | — (the Ctrl+A presses in `library_editors/tests.rs` are field-scoped select-all, not canvas) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | — |
 | Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` — unreachable on desktop via the plain chord; reachable via Ctrl+Shift | — |
 | Workspace boundary | `PcbApp::shortcuts` not invoked; `library_frame` key block | `home_has_no_editor_shortcuts_and_selected_copy_enters_the_workspace` |
