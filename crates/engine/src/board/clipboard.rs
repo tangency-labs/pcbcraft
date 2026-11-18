@@ -5,6 +5,7 @@ use super::{
     drawing::{Drawing, Drawings},
     setup::{Layer, LayerPurpose},
     track::{Track, Via},
+    view::BoardTarget,
 };
 use crate::{
     CommandError, Project, Session,
@@ -847,27 +848,40 @@ impl BoardFragment {
 }
 
 impl Session {
-    /// Export a revision-bound, explicitly addressed physical selection through GUI/MCP commands.
-    pub(crate) fn copy_board(&self, params: &Value, cut: bool) -> Result<String, CommandError> {
-        crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
-        self.check_revision(params)?;
-        let project = self.open_project()?;
-        project.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let selection = BoardSelection::parse(&params["items"]).ok_or_else(|| invalid("invalid board selection"))?;
-        BoardFragment::capture(project, &selection, cut)?.to_text()
-    }
-    /// Remove a mixed physical selection atomically, leaving its logical components and accepted
-    /// package history available for relocation. Inner command histories are never published.
-    pub(crate) fn delete_board_items(&mut self, params: &Value, cut: bool) -> Result<(), CommandError> {
+    /// Read the addressed physical selection only at the requested session revision.
+    fn board_clipboard_selection(&self, params: &Value) -> Result<(&Project, BoardTarget, BoardSelection), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let selection = BoardSelection::parse(&params["items"]).ok_or_else(|| invalid("invalid board selection"))?;
+        Ok((project, target, selection))
+    }
+    /// Export a revision-bound, explicitly addressed physical selection without an edit.
+    pub(crate) fn copy_board(&self, params: &Value) -> Result<String, CommandError> {
+        crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
+        let (project, _, selection) = self.board_clipboard_selection(params)?;
+        BoardFragment::capture(project, &selection, false)?.to_text()
+    }
+    /// Encode and check the clipboard text before deleting anything, even for callers that only
+    /// ask for the revision. Report the single edit only after the deletion is adopted.
+    pub(crate) fn cut_board(&mut self, params: &Value) -> Result<String, CommandError> {
+        self.validate_project_command(CUT, params)?;
+        let (project, target, selection) = self.board_clipboard_selection(params)?;
+        let text = BoardFragment::capture(project, &selection, true)?.to_text()?;
+        self.publish_board_deletion(target, selection)?;
+        self.report_committed(CUT, params);
+        Ok(text)
+    }
+    /// Remove a selection without producing clipboard text or applying the clipboard byte limit.
+    pub(crate) fn delete_board_items(&mut self, params: &Value) -> Result<(), CommandError> {
+        let (_, target, selection) = self.board_clipboard_selection(params)?;
+        self.publish_board_deletion(target, selection)
+    }
+    /// Remove a nonempty physical selection atomically, leaving its logical components and
+    /// accepted package history available for relocation. Inner command histories stay private.
+    fn publish_board_deletion(&mut self, target: BoardTarget, selection: BoardSelection) -> Result<(), CommandError> {
         if selection.is_empty() {
             return Err(invalid("select physical objects to delete"));
-        }
-        if cut {
-            BoardFragment::capture(project, &selection, true)?;
         }
         let mut transaction = Self {
             libraries: self.libraries.clone(),

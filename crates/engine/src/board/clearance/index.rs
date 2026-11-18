@@ -2,7 +2,8 @@
 use geo_index::rtree::{RTree, RTreeBuilder, RTreeIndex, sort::HilbertSort};
 
 /// Small boards retain a contiguous scan; larger boards use packed Hilbert ordering.
-enum Tree {
+/// Copper connectivity shares it to find candidate touching pairs.
+pub(in crate::board) enum Tree {
     Linear(Vec<[f64; 4]>),
     Packed(RTree<f64>),
 }
@@ -10,7 +11,7 @@ enum Tree {
 impl Tree {
     /// Build from already validated finite native envelopes. The 128-object crossover is a
     /// conservative tuning choice between the measured 72- and 578-object workloads.
-    fn new(bounds: Vec<[f64; 4]>) -> Self {
+    pub(in crate::board) fn new(bounds: Vec<[f64; 4]>) -> Self {
         let Ok(count) = u32::try_from(bounds.len()) else { return Self::Linear(bounds) };
         if count < 128 {
             return Self::Linear(bounds);
@@ -24,7 +25,7 @@ impl Tree {
 
     /// Inclusive clearance-expanded lookup with stable source order, including tangency.
     /// Native coordinates/radii and the allowed clearance remain exactly representable here.
-    fn candidates(&self, bounds: [f64; 4], clearance: f64) -> Vec<usize> {
+    pub(in crate::board) fn candidates(&self, bounds: [f64; 4], clearance: f64) -> Vec<usize> {
         match self {
             Self::Linear(items) => items.iter().enumerate().filter_map(|(i, b)| super::near_bounds(bounds, *b, clearance).then_some(i)).collect(),
             Self::Packed(tree) => {

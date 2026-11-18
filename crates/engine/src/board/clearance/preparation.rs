@@ -39,8 +39,9 @@ impl Preparation {
             failed: None,
         }
     }
-    /// Project at most 32 footprints or `budget` contact pairs; yield between phase changes.
-    /// Final contour/class/index construction has the same supported model bounds as inspection.
+    /// Project at most 32 footprints or advance `budget` island work units; yield between phases.
+    /// A neighbor lookup can scan and sort results for the whole board in one unit. Projection
+    /// completion and final contour/class/index construction are input-sized, not time budgets.
     pub(crate) fn step(&mut self, budget: usize) -> Result<Option<Arc<ClearanceQuery>>, CommandError> {
         if let Some(error) = &self.failed {
             return Err(CommandError::Unavailable(error.clone()));

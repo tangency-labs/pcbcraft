@@ -9,6 +9,7 @@
 #[cfg(test)]
 use super::geometry::{inside, segment_distance};
 use super::{
+    clearance::BoundsTree,
     definition::PadShape,
     geometry::Contour as PadContour,
     setup::LayerPurpose,
@@ -41,6 +42,8 @@ mod locks;
 pub mod preparation;
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
+mod capacity_tests;
+#[cfg(test)]
 mod lock_tests;
 
 /// The width the PCB route tool starts with, 0.25 mm.
@@ -51,10 +54,11 @@ pub const MIN_WIDTH_NM: i64 = 10_000;
 pub const MAX_WIDTH_NM: i64 = 10_000_000;
 /// Vertices accepted for one routed path.
 pub const MAX_PATH_POINTS: usize = 256;
-/// Segments accepted on one board, bounding saved size and connectivity work.
-pub const MAX_TRACKS: usize = 4096;
+/// Track segments accepted on one board and in a command's track list. Clipboard text and
+/// routing work have separate limits; this count does not bound island-check latency.
+pub const MAX_TRACKS: usize = 65_536;
 /// Vias accepted on one board.
-pub const MAX_VIAS: usize = 2048;
+pub const MAX_VIAS: usize = 16_384;
 /// The via pad diameter the route tool starts with, 0.6 mm.
 pub const DEFAULT_VIA_DIAMETER_NM: i64 = 600_000;
 /// The via drill the route tool starts with, 0.3 mm.
@@ -375,14 +379,46 @@ fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs:
     builder.finish(lands, tracks, vias)
 }
 
-/// Resumable pair enumeration for the existing copper-island predicates. Each work unit
-/// considers one pair; pad-to-pad contacts stay separate from legacy clearance islands.
+/// Copper items (pads, tracks and vias together) below which island contact phases enumerate
+/// neighbors directly instead of building a bounds index. Release board benchmarks put the crossover
+/// between the 76-item reference board, where the index made clearance preparation, the design
+/// check and track moves 7-20% slower by minimum, and the 1,376-item dense board, where it made
+/// them 13-21% faster in three runs. The clearance index switches at the same 128 items for
+/// the same reason.
+pub(super) const PAIRWISE_BELOW: usize = 128;
+
+/// Whether island contact phases enumerate lower-numbered neighbors directly for `items`
+/// copper items instead of using a bounds index. Both paths apply the same layer and contact tests.
+fn compares_every_pair(items: usize) -> bool {
+    items < PAIRWISE_BELOW
+}
+
+/// Resumable pair enumeration for the existing copper-island predicates. Small boards enumerate
+/// lower-numbered neighbors directly; larger ones use a packed bounds index. If every item's bounds
+/// overlap, every eligible pair is still tested. Work units include neighbor setup, pair tests
+/// and advancing exhausted nodes; one lookup can scan and sort the whole board before yielding.
+/// Pad-to-pad contacts stay separate from legacy clearance islands.
 pub(super) struct IslandBuilder {
     parent: Vec<usize>,
     contours: Vec<PadContour>,
     bounds: Vec<[f64; 4]>,
     layers: Vec<Vec<Uuid>>,
-    pair: (usize, usize),
+    /// None when lower-numbered neighbors are enumerated directly.
+    index: Option<BoundsTree>,
+    /// The node being joined to its lower-numbered neighbors.
+    node: usize,
+    /// That node's remaining neighbors to test.
+    nearby: Nearby,
+}
+
+/// The lower-numbered nodes still to test against the current node.
+enum Nearby {
+    /// Not looked up yet.
+    Lookup,
+    /// Every node below this one, tested from the highest down.
+    Below(usize),
+    /// The index's candidates, tested from the end.
+    Found(Vec<usize>),
 }
 
 impl IslandBuilder {
@@ -394,9 +430,25 @@ impl IslandBuilder {
             .chain(tracks.iter().map(|t| PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.)))
             .chain(vias.iter().map(|v| PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.)))
             .collect();
-        let bounds = contours.iter().map(PadContour::bounds).collect();
+        let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
         let layers: Vec<_> = lands.iter().map(|l| l.layers.clone()).chain(tracks.iter().map(|t| vec![t.layer])).collect();
-        Self { parent: (0..contours.len()).collect(), contours, bounds, layers, pair: (lands.len(), 0) }
+        let pairwise = compares_every_pair(contours.len());
+        Self::with_path(lands.len(), contours, bounds, layers, pairwise)
+    }
+
+    /// Build on the chosen path; tests compare both paths on the same board.
+    fn with_path(lands: usize, contours: Vec<PadContour>, bounds: Vec<[f64; 4]>, layers: Vec<Vec<Uuid>>, pairwise: bool) -> Self {
+        let index = (!pairwise).then(|| BoundsTree::new(bounds.clone()));
+        Self { parent: (0..contours.len()).collect(), contours, bounds, layers, index, node: lands, nearby: Nearby::Lookup }
+    }
+
+    /// The same builder forced onto one path, to check that both give the same islands.
+    #[cfg(test)]
+    pub(super) fn on_path(self, pairwise: bool) -> Self {
+        let node = self.node;
+        let mut builder = Self::with_path(0, self.contours, self.bounds, self.layers, pairwise);
+        (builder.parent, builder.node) = (self.parent, node);
+        builder
     }
 
     /// Resume direct pad contacts from legacy roots, preserving the separate clearance map.
@@ -409,49 +461,52 @@ impl IslandBuilder {
                 }
             }
         }
-        builder.pair = (0, 0);
+        builder.node = 0;
+        builder.nearby = Nearby::Lookup;
         builder
     }
 
-    /// Evaluate at most `budget` direct pad pairs, without rechecking track/via contacts.
+    /// Evaluate at most `budget` work units of direct pad pairs, without rechecking track/via
+    /// contacts. Only pads, the first `pads` nodes, are joined.
     pub(super) fn step_pads(&mut self, pads: usize, budget: usize) -> bool {
-        for _ in 0..budget {
-            let (i, j) = self.pair;
-            if i >= pads {
-                return true;
-            }
-            if j >= i {
-                self.pair = (i + 1, 0);
-                continue;
-            }
-            self.pair.1 += 1;
-            let (a, b) = (self.bounds[i], self.bounds[j]);
-            if self.layers[i].iter().any(|layer| self.layers[j].contains(layer))
-                && a[0] <= b[2]
-                && b[0] <= a[2]
-                && a[1] <= b[3]
-                && b[1] <= a[3]
-                && self.contours[i].touches(&self.contours[j])
-            {
-                join(&mut self.parent, i, j);
-            }
-        }
-        self.pair.0 >= pads
+        self.advance(pads, budget)
     }
 
-    /// Evaluate at most `budget` pairs. Vias span the configured copper stack, as in
+    /// Evaluate at most `budget` work units. Vias span the configured copper stack, as in
     /// ordinary connectivity. A zero budget does no work and never claims completion early.
     pub(super) fn step(&mut self, budget: usize) -> bool {
+        self.advance(self.parent.len(), budget)
+    }
+
+    /// Join each remaining node before `end` to every lower-numbered node whose copper touches it on a
+    /// shared layer. Each pair is decided once, from its higher node, by the same predicate
+    /// whatever the index returns, so the islands do not depend on the lookup strategy.
+    fn advance(&mut self, end: usize, budget: usize) -> bool {
         for _ in 0..budget {
-            let (i, j) = self.pair;
-            if i >= self.parent.len() {
+            let i = self.node;
+            if i >= end {
                 return true;
             }
-            if j >= i {
-                self.pair = (i + 1, 0);
+            let next = match &mut self.nearby {
+                Nearby::Lookup => {
+                    self.nearby = match &self.index {
+                        None => Nearby::Below(i),
+                        Some(index) => {
+                            let mut found = index.candidates(self.bounds[i], 0.);
+                            found.retain(|&j| j < i);
+                            Nearby::Found(found)
+                        }
+                    };
+                    continue;
+                }
+                Nearby::Below(below) => below.checked_sub(1).inspect(|&j| *below = j),
+                Nearby::Found(found) => found.pop(),
+            };
+            let Some(j) = next else {
+                self.node += 1;
+                self.nearby = Nearby::Lookup;
                 continue;
-            }
-            self.pair.1 += 1;
+            };
             let layers = match (self.layers.get(i), self.layers.get(j)) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
                 (None, Some(b)) => !b.is_empty(),
@@ -462,7 +517,7 @@ impl IslandBuilder {
                 join(&mut self.parent, i, j);
             }
         }
-        self.pair.0 >= self.parent.len()
+        self.node >= end
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.

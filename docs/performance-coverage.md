@@ -20,7 +20,7 @@ to collect matched evidence for a change.
 | Requirement | Implemented and exercised | Limit or follow-on owner |
 | --- | --- | --- |
 | Reproducible inputs | Original native-command/encoder artifacts, recipe/seed/revision, exact project/envelope hashes, versioned pointer/key trace | Production commands allocate UUIDs; reuse the saved bytes instead of regenerating comparison inputs |
-| Current supported limits | Exactly 4,096 tracks / 2,048 vias; 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | Full board-limit run is a smoke sample, not a tail baseline |
+| Supported limits | Exactly 4,096 tracks / 2,048 vias (the board limits when measured); 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | The recorded board-limit run is a smoke sample, not a tail baseline. A separate test saves, reloads and checks a board at the new 65,536-track / 16,384-via limits. |
 | Dense/crowded geometry | Existing dense diagonals/mixed pad widths, plus parallel narrow rails and attached branches; oracle-checked channel probe | High-pin-count BGA cases belong with #251–#253; radius/outline/offset traces with #259–#262 |
 | Cold versus steady | Fresh model decode and lazy sheet connectivity separated from repeated access, preparation, queries, validated command publication and warmed replay | Whole-project first/repeat projection is not labeled as a cache hit; process/module startup is outside timings |
 | Cancel/layer/reversal | Actual app assertions before each captured frame; cancellation preserves authored bytes; layer transition and inactive final tool required | Serialized screenshots pace inputs; this is not an uninterrupted OS event-stream benchmark |
@@ -37,6 +37,27 @@ for physical presentation. Actual input-to-visible-preview latency remains
 unmeasured. Presentation qualification under #237 is separate from completion of
 the reusable measurement infrastructure; closing the tooling work does not turn
 this unmeasured boundary into a pass.
+
+### Copper at the board limits
+
+The track and via limits bound stored counts, not how long a check takes. For copper edits
+that require connectivity validation, the synchronous island check runs to completion.
+Walkaround obstacle preparation, track-move preparation and the design check can advance
+island work in steps, but a single index lookup may still scan and sort a board's worth of
+candidates. Walkaround's probe budget limits the route search, not its obstacle preparation.
+The design check's later clearance sweep is separate from the island check.
+
+Parallel minimum-width tracks on one layer can have overlapping bounds for every pair
+without touching. `overlapping_copper_reaches_every_pair_and_reports_its_island_time`
+checks the all-pairs candidate count and that all tracks stay isolated, then reports the
+island-check time on native targets.
+
+In a historical unoptimised WSL run with a temporary fourth test size, the island check took
+1.0 s, 4.4 s, 13.4 s and 46.4 s at 1,024, 2,048, 4,096 and 8,192 tracks. A quadratic fit
+to the three smaller sizes predicts 48 s for the fourth. Extrapolating the fit to all four
+points gives about 43 minutes at 65,536 tracks. This is not a measurement at the track limit,
+a bound on mixed layouts, or a prediction for an optimised build. This change does not cap
+work over overlapping pairs.
 
 ## Recorded platforms
 

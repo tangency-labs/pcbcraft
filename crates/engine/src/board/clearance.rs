@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 mod index;
 mod overlay;
+pub(super) use index::Tree as BoundsTree;
 pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
 
