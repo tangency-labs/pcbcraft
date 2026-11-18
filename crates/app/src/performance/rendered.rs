@@ -107,6 +107,7 @@ pub struct RenderedApp {
     deadline_ms: f64,
     samples: BTreeMap<String, Vec<f64>>,
     active: Option<f64>,
+    active_ui_ms: f64,
     pending_input: Vec<egui::Event>,
     capture: Option<Receiver<Capture>>,
     completion: Option<SyncSender<Completion>>,
@@ -148,7 +149,7 @@ impl RenderedApp {
             return Err("iterations must be 1..=10000 and screenshot timeout 1..=120 seconds".into());
         }
         let loaded = load_artifact(artifact)?;
-        if loaded.trace_id != super::replay::STANDARD_TRACE_ID {
+        if !matches!(loaded.trace_id.as_str(), super::replay::STANDARD_TRACE_ID | super::replay::COMMIT_TRACE_ID) {
             return Err("rendered replay requires the versioned standard trace".into());
         }
         if !loaded.trace.last().is_some_and(|step| step.capture_after()) {
@@ -176,6 +177,7 @@ impl RenderedApp {
             deadline_ms: timeout.as_secs_f64() * 1000.0,
             samples: BTreeMap::new(),
             active: None,
+            active_ui_ms: 0.,
             pending_input: Vec::new(),
             capture: None,
             completion: Some(completion),
@@ -364,7 +366,14 @@ impl RenderedApp {
                     project_sha256: self.artifact.project_sha256.clone(),
                     recipe: self.artifact.recipe.clone(),
                     trace_id: self.artifact.trace_id.clone(),
-                    input_policy: "atomic press/release pairs; retained until UI acceptance; at most 60 Hz; real framework clock".into(),
+                    input_policy:
+                        "atomic press/release pairs; retained until UI acceptance; validated layer completion; at most 60 Hz; real framework clock"
+                            .to_owned()
+                            + if self.artifact.trace_id == super::replay::COMMIT_TRACE_ID {
+                                "; validated preview and changed-target route publication; history/reopen checks outside commit interval"
+                            } else {
+                                ""
+                            },
                     iterations: self.iterations,
                     warmup_frames: WARMUP,
                     idle_between_iterations_ms: self.idle_between_iterations_ms,
@@ -527,8 +536,18 @@ impl eframe::App for RenderedApp {
             self.warmup -= 1;
         } else if let Some(start) = self.active.take() {
             self.pending_input.clear();
+            self.active_ui_ms += after - before;
+            if self.driver.pending(&self.app, &self.artifact, self.step) {
+                if after - start > self.deadline_ms {
+                    self.complete(&ctx, Err("route validation did not complete before deadline".into()));
+                } else {
+                    self.active = Some(start);
+                    ctx.request_repaint();
+                }
+                return;
+            }
             let id = &self.artifact.trace[self.step].id;
-            self.samples.entry(format!("rendered.{id}.ui")).or_default().push(after - before);
+            self.samples.entry(format!("rendered.{id}.ui")).or_default().push(std::mem::take(&mut self.active_ui_ms));
             self.samples.entry(format!("rendered.{id}.input_to_ui")).or_default().push(after - start);
             log::info!(
                 "at_ms={} after {}: tool={}, routing={}, pointer={:?}",

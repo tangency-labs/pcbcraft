@@ -1755,3 +1755,16 @@ toolkit component. Both forms share typed chooser data with zones.
 No custom-drawn control, external EDA source,
 artwork, library data or dependency was added. Physical island construction,
 accepted-board review, the net registry and native codecs retain their ownership.
+
+The interactive walkaround continuation, bounded captured-query projection, view-owned
+request adoption and magnetic target hysteresis are original PCBcraft work under
+MIT OR Apache-2.0. They compose the existing solver and snapshot/copper scheduler;
+the Sparksmith attribution above still applies to the underlying search. Existing
+Craft copper, clearance, cursor, status and context-menu presentation is reused.
+No new generic control, external source, asset, dependency or native format was added.
+
+The responsiveness follow-up consumes read-only completions before paint and advances
+a bounded warm-query search before queuing its continuation. The separate starting
+contact used for same-net exemptions follows @travle1's unconnected-pad report;
+whole-path contact unions retain their short/class role. These are original PCBcraft
+changes with no new dependency, asset, external source or persisted format.

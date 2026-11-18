@@ -2520,6 +2520,7 @@ impl PcbApp {
             self.poll_remote_copper(&ctx);
             self.poll_live_control(&ctx);
         }
+        self.poll_route_previews();
         if self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             self.editor_host_frame(ui, self.integrated_titlebar);
         }
