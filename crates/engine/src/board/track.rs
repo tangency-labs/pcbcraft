@@ -497,9 +497,9 @@ impl IslandBuilder {
             if i >= end {
                 return true;
             }
-            let next = match &mut self.nearby {
-                Nearby::Lookup => {
-                    self.nearby = match &self.index {
+            let next = match (&mut self.nearby, &self.index) {
+                (Nearby::Lookup, index) => {
+                    self.nearby = match index {
                         None => Nearby::Below(i),
                         Some(index) => {
                             index.begin(&mut self.search, 0.);
@@ -508,12 +508,13 @@ impl IslandBuilder {
                     };
                     continue;
                 }
-                Nearby::Below(below) => below.checked_sub(1).inspect(|&j| *below = j),
-                Nearby::Indexed => match self.index.as_ref().unwrap().next(i, &mut self.search) {
+                (Nearby::Below(below), _) => below.checked_sub(1).inspect(|&j| *below = j),
+                (Nearby::Indexed, Some(index)) => match index.next(i, &mut self.search) {
                     Hit::Pending => continue,
                     Hit::Candidate(candidate) => Some(candidate),
                     Hit::Done => None,
                 },
+                (Nearby::Indexed, None) => unreachable!("only an indexed builder starts an indexed search"),
             };
             let Some(j) = next else {
                 self.node += 1;

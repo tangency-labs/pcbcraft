@@ -20,13 +20,20 @@ impl Bounds {
     /// Enclose the integer core and its round expansion in all four directions.
     fn new(contour: &Contour) -> Self {
         let xy = contour.bounds();
-        let plus = contour.core.map(|p| p.x_nm + p.y_nm);
-        let minus = contour.core.map(|p| p.x_nm - p.y_nm);
-        let r = diagonal_margin(contour.radius);
-        Self {
-            min: [xy[0], xy[1], *plus.iter().min().unwrap() as f64 - r, *minus.iter().min().unwrap() as f64 - r],
-            max: [xy[2], xy[3], *plus.iter().max().unwrap() as f64 + r, *minus.iter().max().unwrap() as f64 + r],
+        let [first, rest @ ..] = contour.core;
+        let plus = first.x_nm + first.y_nm;
+        let minus = first.x_nm - first.y_nm;
+        let [mut low_plus, mut high_plus, mut low_minus, mut high_minus] = [plus, plus, minus, minus];
+        for point in rest {
+            let plus = point.x_nm + point.y_nm;
+            let minus = point.x_nm - point.y_nm;
+            low_plus = low_plus.min(plus);
+            high_plus = high_plus.max(plus);
+            low_minus = low_minus.min(minus);
+            high_minus = high_minus.max(minus);
         }
+        let r = diagonal_margin(contour.radius);
+        Self { min: [xy[0], xy[1], low_plus as f64 - r, low_minus as f64 - r], max: [xy[2], xy[3], high_plus as f64 + r, high_minus as f64 + r] }
     }
 
     /// Enclose both child bounds.
@@ -113,7 +120,7 @@ impl PairIndex {
             Contents::Leaf(offset..offset + order.len())
         } else {
             let spread = |axis: usize| (hi[axis] - lo[axis]) * if axis < 2 { 1. } else { std::f64::consts::FRAC_1_SQRT_2 };
-            let axis = (0..4).max_by(|&a, &b| spread(a).total_cmp(&spread(b))).unwrap();
+            let axis = (1..4).fold(0, |best, axis| if spread(axis) >= spread(best) { axis } else { best });
             let pivot = order.len() / 2;
             order.select_nth_unstable_by(pivot, |&a, &b| bounds[a].center(axis).total_cmp(&bounds[b].center(axis)).then(a.cmp(&b)));
             let (left, right) = order.split_at_mut(pivot);

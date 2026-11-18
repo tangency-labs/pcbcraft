@@ -2,6 +2,7 @@
 use super::*;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used, reason = "opt-in diagnostic fails on invalid fixture setup; preserve the matched measurement source")]
 #[path = "release_board_checks.rs"]
 mod release_board_checks;
 use crate::board::{
