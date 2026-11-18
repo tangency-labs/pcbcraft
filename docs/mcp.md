@@ -143,7 +143,7 @@ command waits while an inline text edit, dialog or file operation is open.
 clients can identify the state holding command input. Its `file` object gives
 the open project's saved `location` (`path` and `format`), the
 running `operation` (`id`, `kind` and known `destination`) and the `last`
-result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`, `path`,
+result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`/`abandoned`, `path`,
 `error`). Jobs run one at a time; a `last.id` beyond the one a client started
 means a later job replaced its result. `location` is null until the project has been
 opened from or saved to a location, whatever its name: a renamed project that was

@@ -154,10 +154,14 @@ fn stopping_a_stalled_open_releases_the_editor() {
     let inspected = window(&mut h, connection, "file.abandon", json!({"operation": id}));
     assert_eq!(inspected["file"]["operation"], Value::Null);
     assert_eq!(inspected["file"]["last"]["status"], "abandoned");
-    assert!(late(), "the stalled worker's result is received");
+    let other = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led.pc");
+    assert!(late(Some(&other)), "the stalled worker's successful open is received");
     h.run();
     assert!(!h.state().files.holds_stalled(), "and dropped on the next frame");
-    assert!(Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()));
+    assert!(Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()), "the late project is not adopted");
+    let file = &payload(tool(&mut h, connection, "inspect_editor", json!({})))["file"];
+    assert_eq!(file["last"]["id"], id);
+    assert_eq!(file["last"]["status"], "abandoned");
     window(&mut h, connection, "view.fit", json!({"view": 0}));
 
     let _save = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
@@ -178,7 +182,7 @@ fn abandoned_open_workers_are_bounded() {
     }
     let _fifth = app.files.stall("open", Some("/stalled"), 0);
     assert!(app.files.abandon(Some(5)).unwrap_err().contains("Too many"));
-    assert!(late.pop().unwrap()(), "one stalled worker ends");
+    assert!(late.pop().unwrap()(None), "one stalled worker ends");
     app.files.abandon(Some(5)).unwrap();
     let _sixth = app.files.stall("open", Some("/stalled"), 0);
     assert!(app.files.abandon(None).unwrap_err().contains("Too many"), "the Close Project wait obeys the limit too");

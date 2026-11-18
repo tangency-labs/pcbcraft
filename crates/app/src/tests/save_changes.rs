@@ -256,6 +256,9 @@ fn closing_can_stop_waiting_for_a_stalled_file_job() {
             assert!(click_closes(&mut h, "Don't Save"));
         } else {
             assert!(click_closes(&mut h, button));
+            assert!(h.state().files.busy(), "the job is left to end with the process");
+            assert!(h.state().waiting.is_none());
+            assert!(matches!(h.state().dialog, Dialog::None), "no close decision remains");
         }
     }
 }
