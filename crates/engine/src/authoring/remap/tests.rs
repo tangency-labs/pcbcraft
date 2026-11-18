@@ -155,7 +155,9 @@ fn add_ballast(project: &mut crate::Session, sheet: crate::SheetTarget, target: 
             break;
         }
         let ids: Vec<_> = sheet_project.symbols().iter().take((target - count).min(count)).map(|symbol| symbol.id()).collect();
-        let clipboard = project.execute(crate::clipboard::COPY, &json!({"sheet":sheet.id(),"items":{"symbols":ids,"wires":[]}})).unwrap();
+        let clipboard = project
+            .execute(crate::clipboard::COPY, &json!({"sheet":sheet.id(),"expected_revision":project.revision(),"items":{"symbols":ids,"wires":[]}}))
+            .unwrap();
         edit(project, crate::clipboard::PASTE, json!({"sheet":sheet.id(),"text":clipboard["clipboard"],"x_nm":0,"y_nm":0}));
     }
 }
@@ -185,13 +187,15 @@ fn graph_marker_fixture(project: &Project, target: crate::SheetTarget, at: crate
 /// The actual command must refuse before warming graph caches and must leave publication, history,
 /// revision and encoded project bytes unchanged. Successful cold and warm results must be equal.
 fn check_graph_command(project: &mut crate::Session, item: &Item, snapshot: Project, refusal: Option<&str>) {
+    // Encoding a numbered project validates its net registry, which may warm the named graph.
+    // Take the byte baseline first, then give the command a fresh cache on the same authored state.
+    let bytes = persistence::encode_documents(Arc::new(snapshot.clone())).unwrap();
     let mut snapshot = snapshot;
     snapshot.named_graph = Arc::default();
     project.project = Some(Arc::new(snapshot));
     let before = project.snapshot().unwrap();
     let revision = project.revision();
     let (undo, redo) = (project.undo.len(), project.redo.len());
-    let bytes = persistence::encode_documents(before.clone()).unwrap();
     let request = json!({"item":item,"pins":swap(item),"base_revision":"1"});
     assert!(before.named_graph.get().is_none());
     let first = project.execute(sources::PREVIEW_PIN_REMAP, &request);
