@@ -153,7 +153,7 @@ or a browser runtime.
 | 1 mm blocks touching each end of the coordinate range (±`MAX_LENGTH_NM`) | accepted, box read back exactly; one nanometre past either end refused |
 | Writing the same bodies twice | identical bytes, with an empty time stamp in the header |
 | The crate on `wasm32-wasip1` (no kernel) | making, reading and the crash test give `kernel_unavailable`; refused arguments keep `invalid_params` and `model_unreadable` |
-| `cargo check --locked --profile ci -p pcbcraft-geometry --target wasm32-unknown-unknown --no-default-features`, repeated with `--features wasm-kernel` | both configurations pass the compile check; no linking or browser execution |
+| Browser-target `cargo check` of `pcbcraft-geometry`, without default features and repeated with `--features wasm-kernel` | The conditional `web` job requires both checks to pass when it runs. This is a requirement, not a recorded result; neither check links or executes a browser module. |
 | Deliberate kernel panic, and a panic outside the kernel's own guard, in an unwinding build | `kernel_internal`; the kernel keeps working |
 | A kernel failure while making a body's STEP record (injected: no valid body fails there) | a caught kernel panic stays `kernel_internal`; a record the kernel refuses is `operation_failed` |
 | Non-UTF-8 bytes, text that is not STEP, an empty file | `model_unreadable` |
