@@ -3,7 +3,7 @@
 The engine resolves every placed symbol appearance and physical pad belonging to
 one logical terminal from a single immutable project snapshot. This is the
 resolver foundation for [#396](https://github.com/tangency-labs/pcbcraft/issues/396).
-Individual pin/pad selection and cross-view highlighting remain in #397 and #398.
+[Individual pin/pad inspection selection](pin-pad-selection.md) is view-owned; complete cross-view highlighting remains in #398.
 
 `Project::resolve_counterparts` takes a typed `board::correspondence::Source`:
 a `TerminalTarget` with an explicit project/sheet and terminal address, or a

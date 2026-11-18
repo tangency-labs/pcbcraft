@@ -34,6 +34,8 @@ enum Node {
     Boards,
     Board(BoardTarget),
     Footprints(BoardTarget),
+    Pins(SheetTarget, u64),
+    Pads(BoardTarget, u64),
 }
 
 impl Node {
@@ -42,7 +44,7 @@ impl Node {
         match self {
             Self::Sheet(sheet) => active == DocumentTarget::Sheet(sheet),
             Self::Board(board) => active == DocumentTarget::Board(board),
-            Self::Symbols(_) | Self::Nets(_) => false,
+            Self::Symbols(_) | Self::Nets(_) | Self::Pins(..) | Self::Pads(..) => false,
             _ => true,
         }
     }
@@ -52,6 +54,10 @@ impl Node {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Action {
     OpenDocument(DocumentTarget),
+    Inspection {
+        source: pcbcraft_engine::board::correspondence::Source,
+        modifiers: egui::Modifiers,
+    },
     Schematic {
         sheet: SheetTarget,
         pick: Pick,
@@ -85,6 +91,8 @@ impl Action {
         match self {
             Self::OpenDocument(DocumentTarget::Sheet(_)) => Some("Open in Schematic"),
             Self::OpenDocument(DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_)) => Some("Open in PCB layout"),
+            Self::Inspection { source: pcbcraft_engine::board::correspondence::Source::Terminal(_), .. } => Some("Show in Schematic"),
+            Self::Inspection { .. } => Some("Show in PCB layout"),
             Self::Schematic { .. } => Some("Show in Schematic"),
             Self::Footprint { .. } => Some("Show in PCB layout"),
             Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
@@ -95,6 +103,10 @@ impl Action {
     pub(super) fn target(&self) -> Option<DocumentTarget> {
         match self {
             Self::OpenDocument(target) => Some(*target),
+            Self::Inspection { source: pcbcraft_engine::board::correspondence::Source::Terminal(target), .. } => {
+                Some(DocumentTarget::Sheet(target.sheet))
+            }
+            Self::Inspection { source: pcbcraft_engine::board::correspondence::Source::Pad(target), .. } => Some(DocumentTarget::Board(target.board)),
             Self::Schematic { sheet, .. } => Some(DocumentTarget::Sheet(*sheet)),
             Self::Footprint { board, .. } => Some(DocumentTarget::Board(*board)),
             Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
@@ -303,6 +315,7 @@ impl ProjectBrowser {
 
     /// Float the common project tree over the schematic canvas without changing its geometry.
     /// Board hosts use the same contents in their bounded Browser area above Layers.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn show(
         &mut self,
         ui: &Ui,
@@ -311,6 +324,9 @@ impl ProjectBrowser {
         active: DocumentTarget,
         selected: &Selection,
         footprints: &BTreeSet<String>,
+        filters: crate::selection_filters::Filters,
+        inspection: &[pcbcraft_engine::board::correspondence::Source],
+        hidden: &BTreeSet<String>,
     ) -> Option<Action> {
         self.rect = Rect::NOTHING;
         if !self.open {
@@ -319,7 +335,7 @@ impl ProjectBrowser {
         let snapshot = session.snapshot()?;
         let mut action = None;
         let (card, toggle) = workspace::floating_card(ui, "project_browser", "Browser", canvas, self.collapsed, |ui| {
-            action = self.tree(ui, snapshot, active, selected, footprints);
+            action = self.tree(ui, snapshot, active, selected, footprints, filters, inspection, hidden);
         });
         if toggle {
             self.collapsed = !self.collapsed;
@@ -332,6 +348,7 @@ impl ProjectBrowser {
     /// edits; a different project resets folding. Item selection belongs only to the active
     /// document. Ordinary clicks stay in the current workspace; context
     /// menu actions explicitly open a document or object in another workspace.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn tree(
         &mut self,
         ui: &mut Ui,
@@ -339,6 +356,9 @@ impl ProjectBrowser {
         active: DocumentTarget,
         selected: &Selection,
         footprints: &BTreeSet<String>,
+        filters: crate::selection_filters::Filters,
+        inspection: &[pcbcraft_engine::board::correspondence::Source],
+        hidden: &BTreeSet<String>,
     ) -> Option<Action> {
         if !self.lists.as_ref().is_some_and(|lists| Arc::ptr_eq(&lists.project, &snapshot)) {
             if self.lists.as_ref().is_some_and(|lists| lists.project.sheet_target() != snapshot.sheet_target()) {
@@ -404,6 +424,32 @@ impl ProjectBrowser {
                                     response,
                                     Action::Schematic { sheet, pick: Pick { id: id.clone(), wire: matches!(node, Node::Nets(_)), at: *at } },
                                 );
+
+                                if filters.pins
+                                    && matches!(node, Node::Symbols(_))
+                                    && let Some(number) = id.strip_prefix("symbol-").and_then(|id| id.parse::<u64>().ok())
+                                    && tree.branch(ui, Node::Pins(sheet, number), 5 + depth, TreeIcon::Folder, "Pins", false, None)
+                                    && let Some(project) = lists.project.for_sheet(sheet)
+                                    && let Some(symbol) = project.symbols().iter().find(|symbol| symbol.id() == *id)
+                                {
+                                    for terminal in symbol.terminals() {
+                                        let source = pcbcraft_engine::board::correspondence::Source::Terminal(
+                                            pcbcraft_engine::board::correspondence::TerminalTarget { sheet, terminal },
+                                        );
+                                        let label = format!("Pin {}.{}", project.reference(symbol), terminal.number());
+                                        let row = TreeRow {
+                                            depth: 6 + depth,
+                                            fold: None,
+                                            icon: None,
+                                            label: &label,
+                                            accessibility_label: Some(&label),
+                                            tip: "",
+                                            selected: inspection.contains(&source),
+                                        };
+                                        let response = workspace::tree_row(ui, ui.make_persistent_id((node, id, terminal.number())), &row);
+                                        tree.item(response, Action::Inspection { source, modifiers: ui.input(|input| input.modifiers) });
+                                    }
+                                }
                             }
                         }
                     }
@@ -445,6 +491,35 @@ impl ProjectBrowser {
                         };
                         let response = workspace::tree_row(ui, ui.make_persistent_id((node, id)), &row);
                         tree.item(response, Action::Footprint { board: board.target, id: id.clone(), at: *at });
+                        if filters.pads
+                            && let Some(number) = id.strip_prefix("footprint-").and_then(|id| id.parse::<u64>().ok())
+                            && tree.branch(ui, Node::Pads(board.target, number), 5, TreeIcon::Folder, "Pads", false, None)
+                            && let Some(view) = lists.project.board_view(board.target)
+                            && let Some(footprint) = view.footprints().find(|footprint| footprint.id == *id)
+                        {
+                            for pad in footprint.pads {
+                                if !crate::board_canvas::pad_visible(&pad, view, hidden) {
+                                    continue;
+                                }
+                                let Some(pad) = pcbcraft_engine::board::Pad::parse(id, &pad.number) else { continue };
+                                let source = pcbcraft_engine::board::correspondence::Source::Pad(pcbcraft_engine::board::correspondence::PadTarget {
+                                    board: board.target,
+                                    pad: pad.on_board(board.target.board),
+                                });
+                                let label = format!("Pad {}.{}", footprint.reference, pad.inspect()["pad"].as_str().unwrap_or_default());
+                                let row = TreeRow {
+                                    depth: 6,
+                                    fold: None,
+                                    icon: None,
+                                    label: &label,
+                                    accessibility_label: Some(&label),
+                                    tip: "",
+                                    selected: inspection.contains(&source),
+                                };
+                                let response = workspace::tree_row(ui, ui.make_persistent_id((node, id, label.as_str())), &row);
+                                tree.item(response, Action::Inspection { source, modifiers: ui.input(|input| input.modifiers) });
+                            }
+                        }
                     }
                 }
             }

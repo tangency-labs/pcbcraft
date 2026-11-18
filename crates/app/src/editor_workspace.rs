@@ -476,6 +476,7 @@ impl EditorViews {
         if self.active.workspace != Workspace::Schematic {
             return;
         }
+        self.active.inspection.clear();
         self.active.schematic.selected_sheet_symbol = None;
         self.active.schematic.selection = selection;
         self.selection_changed(session, policy);
@@ -486,6 +487,7 @@ impl EditorViews {
         if self.active.workspace != Workspace::Board {
             return;
         }
+        self.active.inspection.clear();
         self.active.board.reference = Default::default();
         if !selection.is_empty() {
             self.active.board.drawing.cancel();
@@ -504,6 +506,7 @@ impl EditorViews {
         if self.active.workspace != Workspace::Board || !self.active.filters.footprints {
             return;
         }
+        self.active.inspection.clear();
         self.active.board.selection.clear();
         self.active.board.drawing.cancel();
         self.active.board.zones.cancel();
@@ -1140,6 +1143,7 @@ impl PcbApp {
                                     view.schematic.whole_wire_drag,
                                     view.schematic.selected_sheet_symbol,
                                     &highlight,
+                                    &view.inspection,
                                     view.filters,
                                     false,
                                     false,
@@ -1221,6 +1225,9 @@ impl PcbApp {
             self.views.active.target()?,
             &self.views.active.schematic.selection,
             &self.views.active.board.selection,
+            self.views.active.filters,
+            &self.views.active.inspection,
+            &self.views.active.board.hidden_layers,
         );
         // Panels belong to individual hosts; apply personal criteria to each bound chooser.
         self.parts.set_filter(self.library_preferences.filter.clone());

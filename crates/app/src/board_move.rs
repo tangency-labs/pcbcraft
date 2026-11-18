@@ -196,6 +196,7 @@ impl PcbApp {
             self.preferences.board_grid_style,
             label,
             &[],
+            &[],
             self.preferences.units,
         );
         view.board.rotate_requested = 0;

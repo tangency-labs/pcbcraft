@@ -17,6 +17,7 @@ impl PcbApp {
         };
         let view_id = self.views.active.id();
         let input = self.views.active.input(&self.session);
+        let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
         let state = &mut self.views.active.board;
         let browser_selection = state.probe_footprints();
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
@@ -37,6 +38,9 @@ impl PcbApp {
                     crate::editor_view::DocumentTarget::Board(target.target),
                     &self.views.active.schematic.selection,
                     &browser_selection,
+                    self.views.active.filters,
+                    &self.views.active.inspection,
+                    &state.hidden_layers,
                 );
             })
         } else {
@@ -178,6 +182,14 @@ impl PcbApp {
                             Some(properties::CopperAction::ChooseViaNet(ids)) => via_net_pick = Some((ids, state.tracks.selected.clone())),
                             None => {}
                         }
+                    }
+                    [] if !inspection_labels.is_empty() => {
+                        if let [label] = inspection_labels.as_slice() {
+                            ui.label(label);
+                        } else {
+                            ui.label(format!("{} pads selected", inspection_labels.len()));
+                        }
+                        ui.end_row();
                     }
                     [] => {
                         property(ui, "Board", target.name());

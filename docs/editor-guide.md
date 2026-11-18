@@ -351,7 +351,8 @@ local cleanup does not route around obstacles or resolve conflicting net names
 ## Symbol properties and selection
 
 The **Selection filters** card sits below Properties in schematic and PCB views.
-Its checkboxes control symbols (including power/ground), wires, no-connect
+[Pins and Pads](pin-pad-selection.md) enable individual inspection selection and start off to preserve existing picking defaults.
+Its checkboxes also control symbols (including power/ground), wires, no-connect
 markers, local/global and hierarchical labels, and sheets in the schematic, and footprints and board graphics in PCB layout. **All items** toggles
 the supported categories together; **Reset** enables them all. Categories without
 individual selection support are disabled. Filtering does not hide geometry or
