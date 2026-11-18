@@ -200,7 +200,35 @@ pub(super) struct Interaction {
     pub(super) error: Option<String>,
 }
 
+/// Track commands queued by shortcuts for one canvas frame, even when input is disabled.
+pub(super) struct KeyRequests {
+    delete: bool,
+    posture: bool,
+    backspace: bool,
+    finish: bool,
+    via: bool,
+    via_side: Option<Side>,
+    move_copper: bool,
+    select_connected: bool,
+    drag_segment: bool,
+}
+
 impl State {
+    /// Take this frame's shortcut requests without changing the active tool or selection.
+    pub(super) fn take_key_requests(&mut self) -> KeyRequests {
+        KeyRequests {
+            delete: std::mem::take(&mut self.delete_requested),
+            posture: std::mem::take(&mut self.posture_requested),
+            backspace: std::mem::take(&mut self.backspace_requested),
+            finish: std::mem::take(&mut self.finish_requested),
+            via: std::mem::take(&mut self.via_requested),
+            via_side: self.via_side_requested.take(),
+            move_copper: std::mem::take(&mut self.move_requested),
+            select_connected: std::mem::take(&mut self.connected_requested),
+            drag_segment: std::mem::take(&mut self.drag_segment_requested),
+        }
+    }
+
     /// Retain an explicit ribbon width across pickups until board/default-rule replacement.
     pub(super) fn select_width(&mut self, width: i64) {
         self.width_nm = width;
@@ -307,16 +335,8 @@ impl State {
         self.via_target = None;
         self.via_choices = None;
         self.draft = None;
-        self.delete_requested = false;
-        self.finish_requested = false;
-        self.backspace_requested = false;
-        self.posture_requested = false;
-        self.via_requested = false;
-        self.via_side_requested = None;
-        self.move_requested = false;
-        self.connected_requested = false;
+        self.take_key_requests();
         self.moving = None;
-        self.drag_segment_requested = false;
         self.segment = None;
     }
     /// Escape drops an unfinished route first, then exits the tool, then clears the selection.
@@ -761,15 +781,7 @@ pub(super) fn interact(
     }
     // Key requests apply to this frame only. Taking them before the disabled-input return keeps
     // a Delete pressed while another gesture owned input from deleting on a later frame.
-    let delete = std::mem::take(&mut state.delete_requested);
-    let posture = std::mem::take(&mut state.posture_requested);
-    let backspace = std::mem::take(&mut state.backspace_requested);
-    let finish = std::mem::take(&mut state.finish_requested);
-    let via = std::mem::take(&mut state.via_requested);
-    let via_side = state.via_side_requested.take();
-    let move_copper = std::mem::take(&mut state.move_requested);
-    let select_connected = std::mem::take(&mut state.connected_requested);
-    let drag_segment = std::mem::take(&mut state.drag_segment_requested);
+    let KeyRequests { delete, posture, backspace, finish, via, via_side, move_copper, select_connected, drag_segment } = state.take_key_requests();
     if state.preparation.committing() || state.planning.committing() {
         if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
             state.escape();

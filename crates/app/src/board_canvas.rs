@@ -155,6 +155,7 @@ pub(super) fn show(
     unit: pcbcraft_chrome::units::Unit,
 ) -> Interaction {
     if let Err(error) = project.require_linear_copper() {
+        state.tracks.take_key_requests();
         ui.label(error);
         ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
         return Interaction::default();

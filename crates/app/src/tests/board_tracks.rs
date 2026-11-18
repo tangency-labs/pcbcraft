@@ -707,6 +707,39 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
     assert!(h.state().views.active.board.tracks.selected.is_empty(), "clicking empty space clears the track selection");
 }
 
+/// An unsupported-copper frame discards a queued Delete instead of replaying it once arcs are removed.
+#[test]
+fn unsupported_copper_discards_pending_track_delete() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":2_540_000},{"x_nm":7_620_000,"y_nm":2_540_000}],"expected_revision":revision}),
+    );
+    let id = tracks(&h)[0].id;
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[{
+        "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+        "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+    h.run();
+    assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    let state = &mut h.state_mut().views.active.board.tracks;
+    state.selected.insert(id);
+    state.delete_requested = true; // Already queued by input dispatch, before canvas interaction.
+    h.run();
+    assert!(!h.state().views.active.board.tracks.delete_requested);
+    assert_eq!(tracks(&h)[0].id, id);
+
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[],"expected_revision":revision}));
+    h.state_mut().views.active.board.tracks.selected.insert(id);
+    h.run();
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().arc_tracks().is_empty());
+    assert_eq!(tracks(&h)[0].id, id);
+}
+
 /// The route tool is only available on visible copper: X does nothing on Board Outline, and hiding
 /// the routing layer drops the tool and any unfinished route.
 #[test]
