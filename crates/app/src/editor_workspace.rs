@@ -560,13 +560,11 @@ impl EditorViews {
         Some((source, workspace))
     }
 
-    /// Project through component identity when crossing workspaces; literal wire selections
-    /// remain local to schematic views. The result never changes edit selection or focus.
-    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
-        let Some((source, workspace)) = self.probe_source(id, session) else {
-            return Selection::default();
-        };
-        let mut selection = match workspace {
+    /// Resolve a schematic projection before filtering to the receiving sheet. Board placements
+    /// map through component identity; literal wires remain local to their schematic sheet.
+    fn schematic_probe(&self, id: ViewId, session: &Session) -> Option<(Workspace, Selection)> {
+        let (source, workspace) = self.probe_source(id, session)?;
+        let selection = match workspace {
             Workspace::Schematic => {
                 if source.workspace == Workspace::Schematic && !self.view(id).is_some_and(|target| source.shares_sheet(target, session)) {
                     Selection::default()
@@ -579,11 +577,18 @@ impl EditorViews {
                 .and_then(|p| p.board_view(source.board.target?))
                 .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.probe_footprints())),
         };
-        if let Some(project) = self.view(id).and_then(|view| view.snapshot(session)) {
-            selection.retain(&project);
-        } else {
-            selection = Selection::default();
-        }
+        Some((workspace, selection))
+    }
+
+    /// Filter counterparts to the displayed sheet without moving the view or editing selection.
+    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
+        let Some((_, mut selection)) = self.schematic_probe(id, session) else {
+            return Selection::default();
+        };
+        let Some(project) = self.view(id).and_then(|view| view.snapshot(session)) else {
+            return Selection::default();
+        };
+        selection.retain(&project);
         selection
     }
 
@@ -604,9 +609,9 @@ impl EditorViews {
 
     /// Consume a reveal once, after the target host supplies geometry. Stale inputs, changed
     /// policies and closed hosts discard it, and each target uses its own coordinate system.
-    fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) {
+    fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) -> bool {
         let Some(pending) = self.pending_reveal.remove(&id) else {
-            return;
+            return false;
         };
         if pending.policy != policy
             || self.owner(id).is_none()
@@ -614,27 +619,65 @@ impl EditorViews {
             || !self.view(pending.source.view()).is_some_and(|view| view.accepts(pending.source, session))
             || !self.view(id).is_some_and(|view| view.accepts(pending.target, session))
         {
-            return;
+            return false;
         }
-        self.reveal_highlight(id, session);
+        self.reveal_highlight(id, session)
     }
 
-    /// Explicit Reveal and optional following use the same correspondence, without selection.
-    pub(super) fn reveal_highlight(&mut self, id: ViewId, session: &Session) {
-        let schematic = self.highlight_for(id, session);
-        let board = self.board_highlight_for(id, session);
-        if let Some(view) = self.view_mut(id)
-            && let Some(project) = view.snapshot(session)
-        {
-            match view.workspace {
-                Workspace::Schematic => view.camera.reveal_selection(&project, &schematic),
-                Workspace::Board => {
-                    if let Some(target) = view.board.target.and_then(|target| project.board_view(target)) {
-                        view.camera.reveal_board(target, &board);
-                    }
+    /// Reveal the counterpart without selecting it. Only a board source can retarget a schematic
+    /// pane. Report a sheet change so the host refreshes headings painted earlier in the frame.
+    pub(super) fn reveal_highlight(&mut self, id: ViewId, session: &Session) -> bool {
+        match self.view(id).map(|view| view.workspace) {
+            Some(Workspace::Schematic) => self.reveal_schematic(id, session),
+            Some(Workspace::Board) => {
+                let highlight = self.board_highlight_for(id, session);
+                if let Some(view) = self.view_mut(id)
+                    && let Some(project) = view.snapshot(session)
+                    && let Some(target) = view.board.target.and_then(|target| project.board_view(target))
+                {
+                    view.camera.reveal_board(target, &highlight);
                 }
+                false
             }
+            None => false,
         }
+    }
+
+    /// Keep a sheet that already contains a match; otherwise use the first matching sheet in
+    /// project order. Match the resolved unit IDs, never a reference, sheet name or definition.
+    fn reveal_schematic(&mut self, id: ViewId, session: &Session) -> bool {
+        let Some((source, all)) = self.schematic_probe(id, session) else {
+            return false;
+        };
+        let Some(view) = self.view_mut(id) else {
+            return false;
+        };
+        let Some(current) = view.snapshot(session) else {
+            return false;
+        };
+        let mut shown = all.clone();
+        shown.retain(&current);
+        if !shown.is_empty() {
+            view.camera.reveal_selection(&current, &shown);
+            return false;
+        }
+        if source != Workspace::Board || all.symbols.is_empty() {
+            return false;
+        }
+        let Some(target) =
+            current.sheets().map(|sheet| sheet.target).filter(|&target| target != current.sheet_target()).find(|&target| {
+                current.for_sheet(target).is_some_and(|project| project.symbols().iter().any(|unit| all.symbols.contains(&unit.id())))
+            })
+        else {
+            return false;
+        };
+        let Some(project) = view.reveal_sheet(target, session) else {
+            return false;
+        };
+        shown = all;
+        shown.retain(&project);
+        view.camera.reveal_selection(&project, &shown);
+        true
     }
 
     /// Change one target without moving its host or rewriting another view's camera.
@@ -1100,8 +1143,8 @@ impl PcbApp {
                     if self.views.active.camera.set_uncovered(canvas, uncovered) {
                         ui.ctx().request_repaint();
                     }
-                    if matches!(self.dialog, Dialog::None) {
-                        self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
+                    if matches!(self.dialog, Dialog::None) && self.views.reveal_for(id, &self.session, self.preferences.selection_follow) {
+                        ui.ctx().request_repaint();
                     }
                     if let Some((source, pick)) = pick.take()
                         && self.views.active.accepts(source, &self.session)
@@ -1116,8 +1159,8 @@ impl PcbApp {
                         ui.ctx().request_repaint();
                     }
                     // A context-menu action in the earlier pane can open a modal this frame.
-                    if matches!(self.dialog, Dialog::None) {
-                        self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
+                    if matches!(self.dialog, Dialog::None) && self.views.reveal_for(id, &self.session, self.preferences.selection_follow) {
+                        ui.ctx().request_repaint();
                     }
                     let highlight = self.views.highlight_for(id, &self.session);
                     let label = format!("Schematic canvas {}", id.0 + 1);

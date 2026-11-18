@@ -250,6 +250,87 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
 }
 
+/// Selecting U3 on the board reveals its child sheet only when the schematic is allowed to
+/// follow. Old-sheet edit selection never carries across, and follow does not recur on idle.
+#[test]
+fn board_selection_reveals_the_owning_child_sheet_once() {
+    use crate::editor_view::DocumentTarget;
+    use pcbcraft_engine::{PLACE_FOOTPRINT, SET_SYMBOL_FIELDS, hierarchy::CREATE_CHILD};
+
+    for policy in [SelectionFollow::Off, SelectionFollow::Both] {
+        let mut h = harness();
+        h.set_size(egui::vec2(1400., 900.));
+        resistor_with_board_at_origin(&mut h);
+        let at = Point { x_nm: 127_000_000, y_nm: 63_500_000 };
+        let (main, child, symbol, footprint) = {
+            let app = h.state_mut();
+            app.browser.open = false;
+            let main = app.session.project().unwrap().sheet_target();
+            let mut edit = |command, mut params: Value| {
+                params["expected_revision"] = json!(app.session.revision());
+                app.session.apply(command, &params).unwrap();
+                app.session.snapshot().unwrap()
+            };
+            let project = edit(CREATE_CHILD, json!({"sheet":main.id(),"name":"Power","x_nm":12_700_000,"y_nm":12_700_000}));
+            let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
+            let project = edit(PLACE_SYMBOL, json!({"sheet":child.id(),"definition":"resistor","x_nm":at.x_nm,"y_nm":at.y_nm}));
+            let symbol = project.for_sheet(child).unwrap().symbols()[0].id();
+            edit(SET_SYMBOL_FIELDS, json!({"sheet":child.id(),"symbol":symbol,"reference":"U3","value":"R"}));
+            let project = edit(
+                PLACE_FOOTPRINT,
+                json!({"sheet":child.id(),"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0}),
+            );
+            let footprint = project.board_view(project.board_target().unwrap()).unwrap().footprints().next().unwrap().id;
+            (main, child, symbol, footprint)
+        };
+        h.run();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB Layout beside current view");
+        let schematic = ViewId(0);
+        let pcb = ViewId(2);
+        let rect = h.get_by_label("Schematic canvas 1").rect();
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        let origin_on_screen = h.state().views.view(schematic).unwrap().camera.screen(origin, rect);
+        click_canvas_at(&mut h, origin_on_screen);
+        let board_point = h.state().views.view(pcb).unwrap().camera.screen(origin, h.get_by_label("PCB canvas 3").rect());
+        h.state_mut().preferences.selection_follow = policy;
+        let view = h.state().views.view(schematic).unwrap();
+        assert_eq!(view.schematic.selection.single_symbol(), Some("symbol-2"));
+        let zoom = view.camera.zoom();
+        assert!(!rect.contains(view.camera.screen(at, rect)));
+        let before = h.state().session.inspect();
+        let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+
+        click_canvas_at(&mut h, board_point);
+        h.run();
+        let app = h.state();
+        let view = app.views.view(schematic).unwrap();
+        let highlight = app.views.highlight_for(schematic, &app.session);
+        assert_eq!(app.views.active.id(), pcb);
+        assert!(app.views.active.board.selection.contains(&footprint));
+        assert_eq!(view.camera.zoom(), zoom);
+        if policy == SelectionFollow::Both {
+            assert_eq!(view.target(), Some(DocumentTarget::Sheet(child)));
+            assert_eq!(highlight.single_symbol(), Some(symbol.as_str()));
+            assert!(view.schematic.selection.is_empty());
+            assert!(rect.contains(view.camera.screen(at, rect)));
+            assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "U3" && rect.contains(text.pos) && text.fallback_color == Tokens::get().schematic_highlight)));
+        } else {
+            assert_eq!(view.target(), Some(DocumentTarget::Sheet(main)));
+            assert_eq!(view.schematic.selection.single_symbol(), Some("symbol-2"));
+            assert!(highlight.is_empty());
+            assert!(!rect.contains(view.camera.screen(at, rect)));
+        }
+        assert_eq!(app.session.inspect(), before);
+        assert_eq!(encode_documents(app.session.snapshot().unwrap()).unwrap(), bytes);
+        let camera = &mut h.state_mut().views.view_mut(schematic).unwrap().camera;
+        camera.center_on(origin);
+        let panned = camera.screen(at, rect);
+        h.run();
+        assert_eq!(h.state().views.view(schematic).unwrap().camera.screen(at, rect), panned);
+    }
+}
+
 /// Following a schematic selection pans using board coordinates and preserves zoom. The default
 /// leaves the board camera alone, and a consumed reveal does not undo subsequent manual navigation.
 #[test]
