@@ -6,61 +6,149 @@ fn capture(text: &str) -> Result<Archive, String> {
     Archive::new(&[pcbcraft_engine::board::fabrication::Output { name: "board.gbr".into(), contents: text.into() }])
 }
 
-/// Both artifacts are published from the capture, with the exact save-dialog filename in JSON.
-/// Replacing them does not leave staging files, even when a previous pair already exists.
+/// The companion binds the selected ZIP filename. Moving an old companion out of the way
+/// permits an intentional ZIP replacement without losing the old manifest.
 #[test]
-fn publish_package_binds_the_selected_filename_and_replaces_both_files() {
+fn publish_package_binds_the_selected_filename_and_allows_deliberate_reexport() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("chosen.zip");
     let sidecar = dir.path().join("chosen.zip.manifest.json");
-    for text in ["first\n", "replacement\n"] {
-        let archive = capture(text).unwrap();
-        publish_package(&path, &archive).unwrap();
-        assert_eq!(fs::read(&path).unwrap(), archive.bytes());
-        assert_eq!(fs::read(&sidecar).unwrap(), archive.manifest_json("chosen.zip").unwrap());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-    }
+    let backup = dir.path().join("previous-manifest.json");
+    let first = capture("first\n").unwrap();
+    publish_package(&path, &first).unwrap();
+    let old_manifest = first.manifest_json("chosen.zip").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), first.bytes());
+    assert_eq!(fs::read(&sidecar).unwrap(), old_manifest);
+    let replacement = capture("replacement\n").unwrap();
+    let error = publish_package(&path, &replacement).unwrap_err();
+    assert!(error.contains("will not be replaced"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), first.bytes());
+    assert_eq!(fs::read(&sidecar).unwrap(), old_manifest);
+    fs::rename(&sidecar, &backup).unwrap();
+    publish_package(&path, &replacement).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), replacement.bytes());
+    assert_eq!(fs::read(&sidecar).unwrap(), replacement.manifest_json("chosen.zip").unwrap());
+    assert_eq!(fs::read(&backup).unwrap(), old_manifest);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
 }
 
-/// A sidecar failure is an error even after the ZIP is replaced; a stale sidecar does not
-/// describe that ZIP. The failure leaves no staging files, and retrying recovers the pair.
+/// An unselected unrelated file is preserved, and a companion directory blocks even an
+/// otherwise valid ZIP replacement before either output is touched.
 #[test]
-fn sidecar_failure_reports_partial_publication_and_stale_digest_mismatch() {
+fn existing_companion_refuses_before_creating_or_replacing_zip() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.zip");
     let sidecar = dir.path().join("board.zip.manifest.json");
-    let old = capture("old\n").unwrap();
-    publish_package(&path, &old).unwrap();
-    let old_manifest = fs::read(&sidecar).unwrap();
-    // A non-file companion destination reliably fails on every native test platform.
+    let archive = capture("new").unwrap();
+    fs::write(&sidecar, b"unrelated data").unwrap();
+    let error = publish_package(&path, &archive).unwrap_err();
+    assert!(error.contains("board.zip.manifest.json") && error.contains("will not be replaced"), "{error}");
+    assert!(!path.exists());
+    assert_eq!(fs::read(&sidecar).unwrap(), b"unrelated data");
     fs::remove_file(&sidecar).unwrap();
     fs::create_dir(&sidecar).unwrap();
-    let replacement = capture("replacement\n").unwrap();
-    let error = publish_package(&path, &replacement).unwrap_err();
-    assert!(error.contains("ZIP published") && error.contains("manifest failed") && error.contains("not a regular file"), "{error}");
-    assert_eq!(fs::read(&path).unwrap(), replacement.bytes());
+    fs::write(&path, b"prior ZIP").unwrap();
+    let error = publish_package(&path, &archive).unwrap_err();
+    assert!(error.contains("board.zip.manifest.json") && error.contains("will not be replaced"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), b"prior ZIP");
+    assert!(sidecar.is_dir());
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-    fs::remove_dir(&sidecar).unwrap();
-    fs::write(&sidecar, &old_manifest).unwrap();
-    let stale: serde_json::Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
-    assert_ne!(stale["archive"]["sha256"], replacement.manifest("board.zip").archive.sha256);
-    assert_eq!(stale, serde_json::to_value(old.manifest("board.zip")).unwrap());
-    publish_package(&path, &replacement).unwrap();
-    assert_eq!(fs::read(&sidecar).unwrap(), replacement.manifest_json("board.zip").unwrap());
 }
 
-/// An archive destination failure does not update the sidecar or report a complete pair.
+/// A dangling symlink is an occupied companion path even though its target does not exist.
+#[cfg(unix)]
 #[test]
-fn archive_failure_keeps_the_existing_sidecar() {
+fn dangling_companion_symlink_is_left_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("board.zip");
+    let sidecar = dir.path().join("board.zip.manifest.json");
+    let missing = dir.path().join("not-created");
+    std::os::unix::fs::symlink(&missing, &sidecar).unwrap();
+    let error = publish_package(&path, &capture("new").unwrap()).unwrap_err();
+    assert!(error.contains("will not be replaced"), "{error}");
+    assert!(!path.exists() && !missing.exists());
+    assert_eq!(fs::read_link(&sidecar).unwrap(), missing);
+}
+
+/// On Linux's usual 255-byte-component test filesystem, check the last good and first bad
+/// companion names while both ZIP names themselves fit.
+#[cfg(target_os = "linux")]
+#[test]
+fn long_companion_name_fails_without_replacing_zip() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = capture("new").unwrap();
+    let good = format!("{}.zip", "a".repeat(237));
+    let bad = format!("{}.zip", "b".repeat(238));
+    publish_package(&dir.path().join(&good), &archive).unwrap();
+    assert_eq!(fs::read(dir.path().join(format!("{good}.manifest.json"))).unwrap(), archive.manifest_json(&good).unwrap());
+    let path = dir.path().join(&bad);
+    fs::write(&path, b"prior ZIP").unwrap();
+    let error = publish_package(&path, &archive).unwrap_err();
+    assert!(error.contains(&format!("{bad}.manifest.json")) && error.contains("Choose a shorter"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), b"prior ZIP");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+}
+
+/// A companion arriving after preflight is not overwritten. The real second install fails
+/// after the new ZIP is installed and drops the staged manifest.
+#[test]
+fn racing_companion_is_not_clobbered_after_zip_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("board.zip");
+    let sidecar = dir.path().join("board.zip.manifest.json");
+    let archive = capture("new").unwrap();
+    let error = publish_package_with_sync(&path, &archive, |_| {
+        assert_eq!(fs::read(&path).unwrap(), archive.bytes());
+        fs::write(&sidecar, b"newly arrived data")
+    })
+    .unwrap_err();
+    assert!(error.contains("ZIP published, but its manifest failed to install"), "{error}");
+    assert_eq!(fs::read(&sidecar).unwrap(), b"newly arrived data");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+}
+
+/// Refusal at the selected ZIP does not install the prepared companion or leak staging files.
+#[test]
+fn invalid_archive_destination_does_not_install_companion() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.zip");
     let sidecar = dir.path().join("board.zip.manifest.json");
     fs::create_dir(&path).unwrap();
-    fs::write(&sidecar, b"old manifest").unwrap();
     let error = publish_package(&path, &capture("new").unwrap()).unwrap_err();
-    assert!(error.contains("Sidecar not updated") && error.contains("not a regular file"), "{error}");
-    assert_eq!(fs::read(&sidecar).unwrap(), b"old manifest");
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    assert!(error.contains("Manifest not installed") && error.contains("not a regular file"), "{error}");
+    assert!(!sidecar.exists() && path.is_dir());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+/// At either injected directory-sync error, the corresponding install has already happened.
+/// The first failure stops before companion installation; the second leaves both new files.
+#[test]
+fn package_reports_each_post_install_sync_failure() {
+    for fail_at in [1, 2] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("board.zip");
+        let sidecar = dir.path().join("board.zip.manifest.json");
+        fs::write(&path, b"prior ZIP").unwrap();
+        let archive = capture("new").unwrap();
+        let mut calls = 0;
+        let error = publish_package_with_sync(&path, &archive, |parent| {
+            assert_eq!(parent, dir.path());
+            calls += 1;
+            if calls == fail_at { Err(std::io::Error::other("injected directory sync failure")) } else { Ok(()) }
+        })
+        .unwrap_err();
+        assert_eq!(calls, fail_at);
+        assert!(error.contains("injected directory sync failure"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), archive.bytes());
+        if fail_at == 1 {
+            assert!(error.contains("Manifest not installed") && error.contains("Archive published"), "{error}");
+            assert!(!sidecar.exists());
+        } else {
+            assert!(error.contains("ZIP and manifest installed") && error.contains("durability is unconfirmed"), "{error}");
+            assert_eq!(fs::read(&sidecar).unwrap(), archive.manifest_json("board.zip").unwrap());
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), fail_at);
+    }
 }
 
 /// An unrepresentable filename is refused before either destination is touched, not recorded
@@ -124,7 +212,7 @@ fn publish_reports_post_rename_sync_errors_and_preserves_invalid_destinations() 
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     let folder = dir.path().join("folder.zip");
     fs::create_dir(&folder).unwrap();
-    assert!(publish_archive(&folder, b"refused").unwrap_err().contains("not a regular file"));
+    assert!(publish_archive_with_sync(&folder, b"refused", sync_directory).unwrap_err().contains("not a regular file"));
     assert!(folder.is_dir());
     assert_eq!(fs::read(&path).unwrap(), b"complete replacement");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
@@ -169,10 +257,10 @@ fn archive_permission_probe() {
     let ordinary = root.join("ordinary.zip");
     fs::write(&ordinary, b"ordinary").unwrap();
     let archive = root.join("fabrication.zip");
-    publish_archive(&archive, b"new archive").unwrap();
+    publish_archive_with_sync(&archive, b"new archive", sync_directory).unwrap();
     assert_eq!(fs::metadata(&archive).unwrap().permissions().mode() & 0o777, fs::metadata(&ordinary).unwrap().permissions().mode() & 0o777);
     fs::set_permissions(&archive, fs::Permissions::from_mode(0o664)).unwrap();
-    publish_archive(&archive, b"replacement").unwrap();
+    publish_archive_with_sync(&archive, b"replacement", sync_directory).unwrap();
     assert_eq!(fs::metadata(&archive).unwrap().permissions().mode() & 0o777, 0o664);
     assert_eq!(fs::read(&archive).unwrap(), b"replacement");
 }

@@ -480,9 +480,9 @@ impl PcbApp {
             .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
     }
 
-    /// Capture the focused board's Gerber/drill archive and integrity sidecar, saving off the
-    /// editor loop. A missing setup or outline, or an export already running, is reported in the
-    /// status bar. A targeted attempt clears the previous file notice; nothing in the project changes.
+    /// Capture the focused board's ZIP and member records on the editor loop. The native worker
+    /// binds the chosen filename and writes both files; the browser path requests downloads.
+    /// Missing setup or outline and a busy export slot are reported without editing the project.
     pub(super) fn export_fabrication(&mut self, ctx: &egui::Context) {
         let Some(target) = self.views.active.board.target else { return };
         self.file_notice = None;

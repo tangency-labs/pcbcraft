@@ -251,9 +251,9 @@ fn manifest_counts_bytes_not_characters_or_lines() {
     assert_ne!(record.sha256, format!("{:x}", Sha256::digest("é\nλ\n".as_bytes())));
 }
 
-/// The command, GUI capture helper and compatibility output API describe the same bytes,
-/// without changing native documents, revision or either history stack. Adding the tested route
-/// changes the output bytes and their digest, while leaving the earlier capture unchanged.
+/// The command result and archive capture agree on the manifest. Encoded documents, revision
+/// and history stack lengths stay unchanged. Adding the tested route changes the new capture's
+/// digest and member records, while leaving the earlier capture unchanged.
 #[test]
 fn manifest_is_read_only_and_stays_bound_to_its_capture() {
     use crate::persistence::encode_documents;

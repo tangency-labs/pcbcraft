@@ -343,22 +343,25 @@ the finding by bounds, its message says the comparison is conservative.
 `pcb.export_fabrication` generates the addressed board's fabrication files without
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
 and `fabrication.origin`, the placement origin every coordinate is measured from:
-Gerber X2 copper per layer, mask and paste top and bottom, top silkscreen and the outline,
+Gerber X2 copper per layer, top and bottom mask, paste and silkscreen, the outline,
 and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
 File names are deterministic and unique after portable-name sanitization,
-including case-insensitive collisions with fixed-purpose output names. One
-`execute` request generates the file contents once; `apply` still validates
-exportability without changing the project or revision. The additive
-`fabrication.manifest` describes the same captured files and the existing
-deterministic ZIP: `generator_version`, an `archive` record and ordered `files`
-records, each with `name`, `size_bytes` and lowercase hexadecimal `sha256`.
-ZIP size/digest cover compressed archive bytes; member records cover exact
+including case-insensitive collisions with fixed-purpose output names. `apply`
+validates board and file generation, not ZIP construction; `execute` generates the
+file contents once and builds the ZIP to derive the additional `fabrication.manifest`.
+Neither operation writes files or changes the project or revision; `execute` does
+not return ZIP bytes.
+
+The manifest contains `generator_version`, an `archive` record and ordered `files`
+records with `name`, `size_bytes` and lowercase hexadecimal `sha256`. The archive
+record covers the exact ZIP bytes from the engine's encoder; member records cover
 uncompressed UTF-8 bytes. The archive name is the suggested portable
-`<project>-fabrication.zip`; a client saving under another name must rebind that
-name in the sidecar. The engine's `Archive` helper builds the same ZIP and JSON
-from captured outputs without reading the live design again. This record provides
-byte integrity only, not source identity, configuration or check freshness.
-See [desktop/browser publication limits](editor-guide.md).
+`<project>-fabrication.zip`. An archive check requires the original ZIP bytes or a
+byte-identical ZIP from the same encoder; repacking file text into an arbitrary ZIP
+need not reproduce the archive digest. A client saving a byte-identical ZIP under
+another name must use that name in its sidecar. The metadata supports byte checks,
+not source identity, configuration or check freshness. See
+[desktop/browser publication limits](editor-guide.md).
 
 `project.export_netlist` generates the project's netlist without editing it;
 `execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the

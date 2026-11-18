@@ -2,13 +2,15 @@
 //!
 //! The UI thread captures deterministic ZIP bytes and member records. A native worker selects
 //! the destination, serializes the filename-bound sidecar and writes the files; browser builds
-//! request downloads instead. One export runs at a time. Dropping the application never joins
-//! the worker, and a worker that stops reports a disconnect instead of leaving the slot busy.
+//! request downloads instead. The editor allows one active export request; it does not lock
+//! destinations or track browser downloads. Dropping the application never joins the worker,
+//! and a worker that stops reports a disconnect instead of leaving the slot busy.
 use pcbcraft_engine::board::fabrication::Archive;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-/// How an export finished. Tests capture the archive instead of saving, and browser downloads
-/// cannot be cancelled, so those builds never construct every variant.
+/// How an export request ended. On desktop `Saved` means both writes completed, not that the
+/// files were checked as a matching pair. The browser path receives no completion or
+/// cancellation signal from the browser, and UI tests inject the outcome.
 #[derive(Debug)]
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 pub(super) enum Outcome {
@@ -47,8 +49,8 @@ impl Exports {
         Some(result)
     }
 
-    /// Save the captured archive and sidecar. Refuses while another export runs; neither
-    /// serialization nor publication rereads the live design.
+    /// Start desktop publication or request browser downloads from the capture. Refuses while
+    /// this editor's export slot is busy; neither path rereads the design.
     pub(super) fn start(&mut self, ctx: &egui::Context, name: String, archive: Archive) -> Result<(), String> {
         if self.busy() {
             return Err("Finish the current fabrication export first.".into());
@@ -101,62 +103,93 @@ fn native(name: &str, archive: &Archive) -> Result<Outcome, String> {
     Ok(Outcome::Saved)
 }
 
-/// Write the ZIP, then its `<archive filename>.manifest.json` companion. Each replacement
-/// is atomic individually. A sidecar failure can leave a new ZIP beside an old/missing sidecar;
-/// callers must report failure and consumers must compare the archive's size and digest.
+/// Check and stage the unselected companion before replacing the selected ZIP. Never replace
+/// a companion, even if it appears after the check; use a fresh destination for a new pair.
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_package(path: &std::path::Path, archive: &Archive) -> Result<(), String> {
-    let name = path.file_name().and_then(|name| name.to_str()).ok_or("The archive filename must be valid UTF-8 for its manifest.")?;
-    let manifest = archive.manifest_json(name)?;
-    let mut sidecar = path.as_os_str().to_os_string();
-    sidecar.push(".manifest.json");
-    publish_archive(path, archive.bytes())
-        .map_err(|error| format!("Sidecar not updated; archive publication failed (it may already be replaced): {error}"))?;
-    publish_archive(std::path::Path::new(&sidecar), &manifest).map_err(|error| {
-        format!("ZIP published, but its manifest failed; the pair is not confirmed complete. Retry the export or use a new destination: {error}")
-    })
+    publish_package_with_sync(path, archive, sync_directory)
 }
 
-/// Publish complete bytes with ordinary umask-filtered creation permissions on Unix, retaining
-/// an existing file's permissions on replacement. Sync failures after rename report that the
-/// new archive is already present but its directory entry's durability is unconfirmed.
+/// Publish the staged ZIP followed by a no-clobber companion. Directory sync runs after each
+/// installation. Errors distinguish a failed companion install from an installed but unconfirmed
+/// durable entry. There is no rollback or coordination with other writers of the ZIP.
 #[cfg(not(target_arch = "wasm32"))]
-fn publish_archive(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    publish_archive_with_sync(path, bytes, sync_directory)
+fn publish_package_with_sync(
+    path: &std::path::Path,
+    archive: &Archive,
+    mut sync: impl FnMut(&std::path::Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    use std::{fs, io::ErrorKind};
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or("The archive filename must be valid UTF-8 for its manifest.")?;
+    let companion_name = format!("{name}.manifest.json");
+    let sidecar = path.with_file_name(&companion_name);
+    let refusal = |reason: &str| {
+        format!("Cannot write manifest {}: {reason}. Choose a shorter or unused ZIP filename, or move the existing companion.", sidecar.display())
+    };
+    // Bound the Windows basename explicitly; path lookup can report an oversized name as absent.
+    #[cfg(windows)]
+    if companion_name.encode_utf16().count() > 255 {
+        return Err(refusal("the companion filename exceeds 255 UTF-16 code units"));
+    }
+    match fs::symlink_metadata(&sidecar) {
+        Ok(_) => return Err(refusal("the companion path already exists and will not be replaced")),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(refusal(&error.to_string())),
+    }
+    let manifest = archive.manifest_json(name)?;
+    let parent = output_directory(path);
+    let staged = stage_output(parent, &manifest, None).map_err(|error| refusal(&error.to_string()))?;
+    publish_archive_with_sync(path, archive.bytes(), &mut sync)
+        .map_err(|error| format!("Manifest not installed; archive publication failed (the ZIP may already be replaced): {error}"))?;
+    staged
+        .persist_noclobber(&sidecar)
+        .map_err(|error| format!("ZIP published, but its manifest failed to install: {}", refusal(&error.error.to_string())))?;
+    sync(parent).map_err(|error| format!("ZIP and manifest installed, but syncing the manifest directory failed; durability is unconfirmed: {error}"))
 }
 
 /// Stage, flush and rename before invoking the directory-sync boundary. Any earlier failure
 /// drops the staging file and leaves the destination intact; a later sync failure is propagated.
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_archive_with_sync(path: &std::path::Path, bytes: &[u8], sync: impl FnOnce(&std::path::Path) -> std::io::Result<()>) -> Result<(), String> {
-    use std::{fs, io::Write};
-    let permissions = match fs::metadata(path) {
+    let permissions = match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
         Ok(_) => return Err("The archive destination is not a regular file.".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.to_string()),
     };
-    let parent = path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    let parent = output_directory(path);
+    stage_output(parent, bytes, permissions).map_err(|error| error.to_string())?.persist(path).map_err(|error| error.error.to_string())?;
+    sync(parent).map_err(|error| format!("Archive published, but syncing its directory failed: {error}"))
+}
+
+/// Use the destination directory for staging, including the current directory for a bare name.
+#[cfg(not(target_arch = "wasm32"))]
+fn output_directory(path: &std::path::Path) -> &std::path::Path {
+    path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."))
+}
+
+/// Stage and sync complete bytes without changing the destination. New files use ordinary
+/// umask-filtered permissions on Unix; replacements stage privately and inherit existing modes.
+#[cfg(not(target_arch = "wasm32"))]
+fn stage_output(parent: &std::path::Path, bytes: &[u8], permissions: Option<std::fs::Permissions>) -> std::io::Result<tempfile::NamedTempFile> {
+    use std::io::Write;
     #[cfg(unix)]
     let mut file = {
-        use std::os::unix::fs::PermissionsExt;
+        use std::{fs::Permissions, os::unix::fs::PermissionsExt};
         if permissions.is_some() {
-            // Do not expose a private overwritten file through a wider staging mode.
             tempfile::NamedTempFile::new_in(parent)
         } else {
-            tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o666)).tempfile_in(parent)
+            tempfile::Builder::new().permissions(Permissions::from_mode(0o666)).tempfile_in(parent)
         }
-    }
-    .map_err(|error| error.to_string())?;
+    }?;
     #[cfg(not(unix))]
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
-    file.write_all(bytes).map_err(|error| error.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(bytes)?;
     if let Some(permissions) = permissions {
-        file.as_file().set_permissions(permissions).map_err(|error| error.to_string())?;
+        file.as_file().set_permissions(permissions)?;
     }
-    file.as_file().sync_all().map_err(|error| error.to_string())?;
-    file.persist(path).map_err(|error| error.error.to_string())?;
-    sync(parent).map_err(|error| format!("Archive published, but syncing its directory failed: {error}"))
+    file.as_file().sync_all()?;
+    Ok(file)
 }
 
 /// Flush the rename's directory entry on Unix. Other platforms retain their existing native

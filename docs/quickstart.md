@@ -767,12 +767,12 @@ non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
 With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
-saves a fabrication ZIP and a neighboring `<archive filename>.manifest.json`
-integrity sidecar without editing the design. The sidecar hashes the exact ZIP
-and every member. Desktop writes are sequential, not an atomic pair; errors can
-leave an old sidecar beside a new ZIP, so compare the ZIP's name, size and SHA-256
-before using it. In the browser, allow and check both downloads. Output names
-remain unique when layer names collide after sanitization; the
+saves a ZIP and a new neighboring `<archive filename>.manifest.json` on desktop,
+without editing the design. Choose a fresh name if the companion already exists;
+Outputs won't replace it. Writes are sequential. Avoid concurrent writers and
+always compare the ZIP's name, size and SHA-256 to the sidecar after saving.
+In the browser, Outputs requests both downloads; allow and check them. Output
+names remain unique when layer names collide after sanitization; the
 [editor guide](editor-guide.md) describes the files and recovery behavior.
 
 ### Browse libraries

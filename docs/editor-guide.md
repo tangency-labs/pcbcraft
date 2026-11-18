@@ -809,8 +809,9 @@ These rule values are fixed defaults until net classes and board rules arrive (#
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
 not a manufacturing sign-off.
 
-**Manufacture → Fabrication → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
-files for each copper layer, the top and bottom solder mask, paste and silkscreen,
+**Manufacture → Fabrication → Outputs** generates a ZIP (suggested name
+`<project>-fabrication.zip`) with Gerber X2 files for each copper layer, the top
+and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
@@ -819,8 +820,8 @@ are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves g
 so both shift exactly when the origin moves by a whole micrometre. Mask
 and paste openings match the pads exactly, leaving any expansion to the fabricator, and
 vias are tented. It needs a board setup and a closed Board Outline, says so otherwise,
-and never edits the project; the same board always produces the same archive. Run DRC
-first: outputs do not check the design.
+and never edits the project. The same generated files under the same generator
+build produce the same ZIP bytes. Run DRC first: outputs do not check the design.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,
@@ -830,8 +831,8 @@ umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
 
-Outputs also writes `<archive filename>.manifest.json` beside the ZIP, without
-adding members to or changing the existing archive. Its `generator_version`,
+On desktop, Outputs saves a new `<archive filename>.manifest.json` beside the ZIP
+without adding a member to the archive. Its `generator_version`,
 `archive` record and ordered `files` list describe this capture. Each artifact
 record contains `name`, `size_bytes` and lowercase hexadecimal `sha256` of the
 exact bytes; member sizes refer to uncompressed UTF-8 content, including line
@@ -841,15 +842,21 @@ the same capture and archive name give identical JSON. It is an integrity sideca
 release manifest: it does not establish source identity, configuration or DRC/ERC
 freshness and cannot authorize a synchronized release.
 
-Desktop publication replaces the ZIP first, then the sidecar, atomically per
-file but **not as a pair**. A sidecar error is reported as failure even if the ZIP
-is already present. An interruption or failed replacement can leave an old or
-missing sidecar beside a new ZIP. Compare the ZIP's filename, byte length and
-SHA-256 before relying on the sidecar; retry the export or choose a new
-destination to recover. Cancellation in the save dialog writes neither file.
-The browser requests two downloads and cannot confirm that either reached disk;
-allow multiple downloads and check that both arrived. Browser renaming may
-require keeping the original ZIP filename to match the sidecar.
+Desktop checks the companion path and stages both files before installing the
+ZIP followed by the companion. It never replaces an existing
+companion. If the path is occupied or invalid, try a shorter or unused ZIP name;
+to reuse a name with an existing companion, move that companion out of the way
+first. Cancelling the desktop save dialog writes neither file.
+
+The two installs are not atomic as a pair. A late error or interruption can
+leave a new ZIP without its new companion. On Unix, a directory sync error can
+leave installed files visible with durability unconfirmed. One editor limits its
+own active export requests, not other writers to the destination. Avoid writing
+concurrently to the same destination and always compare the ZIP's filename,
+byte length and SHA-256 with the companion, even after both writes complete.
+The browser only requests two downloads; it cannot confirm completion or
+cancellation. Allow multiple downloads and check both files, including whether
+the browser changed the ZIP filename.
 
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
 pads, tracks and vias on that net brighten in their own colors while the rest

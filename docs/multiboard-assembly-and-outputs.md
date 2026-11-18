@@ -152,12 +152,14 @@ views. A definition used on two boards contributes separate physical parts;
 project totals should identify each board and its quantity. Build variants can
 filter assembly population, but must not duplicate board identities.
 
-The current Gerber/drill export has a bounded integrity sidecar next to its
-unchanged ZIP (see [Outputs](editor-guide.md)). It records generator version and
-exact archive/member names, byte sizes and SHA-256, but not the source identity,
-configuration or freshness required below. Desktop writes the ZIP then sidecar;
-the pair is not atomic. This does not implement export-history discovery,
-validated release packaging or the synchronized-release contract.
+The current desktop Gerber/drill export saves a new integrity sidecar beside
+its ZIP (see [Outputs](editor-guide.md)). It records generator version and exact
+archive/member names, byte sizes and SHA-256, but not the source identity,
+configuration or freshness required below. Desktop stages both files and publishes
+in order without replacing an existing sidecar; the pair is not atomic and is
+not protected against competing ZIP writers. Browser download requests and MCP
+metadata are not desktop publication. This does not implement export-history
+discovery, validated release packaging or the synchronized-release contract.
 
 Each export run should include a small record naming its board or project scope,
 source capture ID and content digest, projected input digest, selected variant or
