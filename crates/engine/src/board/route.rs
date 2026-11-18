@@ -40,6 +40,9 @@ pub struct Request {
     pub head: Point,
     pub target: Point,
     pub layer: Uuid,
+    /// Original gesture contact and copper layer when `head` has advanced to a fixed vertex.
+    /// None derives membership from `head`; contact unions never replace this starting intent.
+    pub origin: Option<(Point, Uuid)>,
     pub width_nm: i64,
     pub posture: Posture,
     /// Start with the elbow's other leg first.
@@ -87,7 +90,10 @@ pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, canc
 
 /// Reject malformed requests before any search work or asynchronous capture.
 fn validate(query: &ClearanceQuery, request: &Request, budget: usize) -> Result<(), CommandError> {
-    if !crate::wire::valid_point(&request.head) || !crate::wire::valid_point(&request.target) {
+    if !crate::wire::valid_point(&request.head)
+        || !crate::wire::valid_point(&request.target)
+        || request.origin.is_some_and(|(point, _)| !crate::wire::valid_point(&point))
+    {
         return Err(CommandError::InvalidParams("Route points must be bounded board coordinates.".into()));
     }
     if request.previous.len() > super::track::MAX_PATH_POINTS || request.previous.iter().any(|point| !crate::wire::valid_point(point)) {
@@ -132,7 +138,7 @@ impl Session {
         let flipped = params.get("flipped").and_then(Value::as_bool).unwrap_or(false);
         let previous: Vec<Point> = params.get("previous").map(|_| field(params, "previous")).transpose()?.unwrap_or_default();
         let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or(DEFAULT_BUDGET);
-        let request = Request { head, target: goal, layer, width_nm, posture, flipped, previous };
+        let request = Request { head, target: goal, layer, origin: None, width_nm, posture, flipped, previous };
         let stale = params.get("expected_revision").is_some_and(|revision| revision.as_u64() != Some(self.revision()));
         let plan = if stale {
             Plan { points: Vec::new(), outcome: Outcome::Stale, blocker: None, probes: 0 }

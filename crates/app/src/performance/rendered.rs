@@ -149,7 +149,7 @@ impl RenderedApp {
             return Err("iterations must be 1..=10000 and screenshot timeout 1..=120 seconds".into());
         }
         let loaded = load_artifact(artifact)?;
-        if loaded.trace_id != super::replay::STANDARD_TRACE_ID {
+        if !matches!(loaded.trace_id.as_str(), super::replay::STANDARD_TRACE_ID | super::replay::COMMIT_TRACE_ID) {
             return Err("rendered replay requires the versioned standard trace".into());
         }
         if !loaded.trace.last().is_some_and(|step| step.capture_after()) {
@@ -368,7 +368,12 @@ impl RenderedApp {
                     trace_id: self.artifact.trace_id.clone(),
                     input_policy:
                         "atomic press/release pairs; retained until UI acceptance; validated layer completion; at most 60 Hz; real framework clock"
-                            .into(),
+                            .to_owned()
+                            + if self.artifact.trace_id == super::replay::COMMIT_TRACE_ID {
+                                "; validated preview and changed-target route publication; history/reopen checks outside commit interval"
+                            } else {
+                                ""
+                            },
                     iterations: self.iterations,
                     warmup_frames: WARMUP,
                     idle_between_iterations_ms: self.idle_between_iterations_ms,
@@ -534,7 +539,7 @@ impl eframe::App for RenderedApp {
             self.active_ui_ms += after - before;
             if self.driver.pending(&self.app, &self.artifact, self.step) {
                 if after - start > self.deadline_ms {
-                    self.complete(&ctx, Err("layer validation did not complete before deadline".into()));
+                    self.complete(&ctx, Err("route validation did not complete before deadline".into()));
                 } else {
                     self.active = Some(start);
                     ctx.request_repaint();

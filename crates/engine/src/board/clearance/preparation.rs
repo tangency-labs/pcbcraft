@@ -18,6 +18,13 @@ pub(crate) struct Preparation {
     failed: Option<String>,
 }
 impl Preparation {
+    /// Read only an already prepared query; never project geometry or wait for another builder.
+    pub(crate) fn cached(&self) -> Result<Option<Arc<ClearanceQuery>>, CommandError> {
+        if let Some(error) = &self.failed {
+            return Err(CommandError::Unavailable(error.clone()));
+        }
+        Ok(self.ready.clone())
+    }
     /// Capture authority without projecting pads or constructing connectivity on the caller.
     pub(crate) fn new(source: Source) -> Self {
         Self {

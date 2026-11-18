@@ -1,0 +1,64 @@
+{
+  "base": "41575074829ae65dbba3f26a35d10a87c05b946d",
+  "before": {
+    "sha256": "a848adb83a1c9e9519dae54b0712de37ee6e93bbe44c34f86873dc1dcc7311e8",
+    "source_diff_sha256": "d9870bfccf733f6d2a945e9f566ff84885f4f562cb9cefd3a2f852358d9006eb"
+  },
+  "after": {
+    "sha256": "40071687544f0bfd276a2fdbd762ffb3caadb179860b9ce569ce6458a059ffc8",
+    "source_diff_sha256": "76bfd75320a4f7b1dd0cff1770ed3fe84a41a15d6c4d5691717ea8c2a6b6ce5d",
+    "pointer_instrumentation_sha256": "ca11560739c7a1bfc01dfc023886dc88c360e19a3c406eda425c91eb8067a3f9"
+  },
+  "final": {
+    "sha256": "09b41477d32d8f414ce8270cfdd0ac0a2b08e0a5651d5984bb024cacef64e02d",
+    "source_diff_sha256": "16f4accfe1b21a0a2504c78fb8c0dcfec281ce629cb84c182afa21c7cb93bd2f",
+    "pointer_instrumentation_sha256": "a4db01d6c48ab9ac9df044f38c17b93bfd55ee8efbaff471472b0907e64311d4"
+  },
+  "instrumentation_notes": "Before/after used the retained measured-pointer.rs. Final uses the checked-in runner; its sole instrumentation change replaces or_insert_with(Vec::new) with or_default(). CLI help also includes the new command. Neither changes the workload, observations, or samples. Before source is base plus the pointer runner/export/CLI instrumentation. The recorded tracked-diff hashes exclude the then-untracked pointer module. The intermediate overlay identifies the responsiveness runtime; the final overlay includes origin-intent preservation. No screenshot or native executable is bundled. The commit companion and legacy-marker assertions were added after the pointer measurements. Their files and overlay have separate fingerprints. Product routing code did not change during that addition.",
+  "user_observation": {
+    "by": "@travle1",
+    "date": "2026-11-17",
+    "statement": "huge performance uplift",
+    "scope": "Manual test of the responsive release before the separate origin-intent fix."
+  },
+  "pointer_measurement_files": {
+    "crates/engine/src/board/route.rs": "93630eac116b4b583a4edac687c95c9e35e4cced2961408827276ead00c0e0d8",
+    "crates/engine/src/board/clearance/preparation.rs": "c69dea1f08aa05cb5801215c08a57331e088b03fd0c2b4554f50dd054b2903ad",
+    "crates/engine/src/board/route/tests.rs": "3bb89a0dd53a955130494a075e1f2a2a434604849a1c1cabd5860ff5a82ab38b",
+    "crates/engine/src/board/route/walkaround.rs": "ff377ce16288a0c89bc09ba6c0e1a4d9bdc56b1d12faa9b6df9f86708070281f",
+    "crates/engine/src/board/route/preparation.rs": "ea4975da5e6b5bf6d54f860a553468516acd274aa1078989b2e74674f3dfb8de",
+    "crates/app/examples/board_perf.rs": "8a848a0986632a542320abfe20b5e3cd1aa549f7a792ae8418b5974c9ef12afe",
+    "crates/app/src/lib.rs": "fb013559e6bded4e105122907a9b756ca9a7623da52eb55bf36475541a933c0d",
+    "crates/app/src/performance.rs": "03dda29329367b0dbea1068aceac69e79518ce35db4849c81332427be5a50fad",
+    "crates/app/src/board_tracks/preparation.rs": "c07de6e9bd51d4eab1d2a1f3ad238f3a7eca28268f831d921422377af3d1e27b",
+    "crates/app/src/board_tracks/planning.rs": "6641429820b1352e37bc6cccc082e63e36322da14847b9774d729b4d3ad8fa15",
+    "crates/app/src/performance/walkaround.rs": "079fd8bd625d549316149ede73fa07d5cefecf6d107285537a7ad0dafa2180c2",
+    "crates/app/src/tests/board_tracks.rs": "e82f3a5bc2f823c780ac32556cc0709b32942448e1f65f737a3b6e26aaab2af2",
+    "crates/app/src/performance/pointer.rs": "a4db01d6c48ab9ac9df044f38c17b93bfd55ee8efbaff471472b0907e64311d4"
+  },
+  "commit_measurement_files": {
+    "crates/app/examples/board_perf.rs": "e1db2942e390ef2e89c5f2da356e14064f5b2cc960cb01fdbd6a814e77ed6aa0",
+    "crates/app/src/board_tracks/planning.rs": "6641429820b1352e37bc6cccc082e63e36322da14847b9774d729b4d3ad8fa15",
+    "crates/app/src/board_tracks/preparation.rs": "c07de6e9bd51d4eab1d2a1f3ad238f3a7eca28268f831d921422377af3d1e27b",
+    "crates/app/src/lib.rs": "fb013559e6bded4e105122907a9b756ca9a7623da52eb55bf36475541a933c0d",
+    "crates/app/src/performance.rs": "d67785a11788fe7a2d56d5c3bd0c35e22b3c88f5a5220c69b65e5a65e7daf65f",
+    "crates/app/src/performance/rendered.rs": "3f4edb5006fa1e9ec9869ccb3720e9ff555258382559c27532f702099324ac25",
+    "crates/app/src/performance/replay.rs": "e143864b685ffd6eb34bb6ddaf9a842028eaa1d8ac46515c8b076e5cf09943dc",
+    "crates/app/src/performance/walkaround.rs": "56b8fd788d7c38ae76602f52076c46947d9fbd8518f3715c0cfff98cbc436234",
+    "crates/app/src/tests/board_tracks.rs": "e82f3a5bc2f823c780ac32556cc0709b32942448e1f65f737a3b6e26aaab2af2",
+    "crates/engine/src/board/clearance/preparation.rs": "c69dea1f08aa05cb5801215c08a57331e088b03fd0c2b4554f50dd054b2903ad",
+    "crates/engine/src/board/route.rs": "93630eac116b4b583a4edac687c95c9e35e4cced2961408827276ead00c0e0d8",
+    "crates/engine/src/board/route/preparation.rs": "ea4975da5e6b5bf6d54f860a553468516acd274aa1078989b2e74674f3dfb8de",
+    "crates/engine/src/board/route/tests.rs": "3bb89a0dd53a955130494a075e1f2a2a434604849a1c1cabd5860ff5a82ab38b",
+    "crates/engine/src/board/route/walkaround.rs": "ff377ce16288a0c89bc09ba6c0e1a4d9bdc56b1d12faa9b6df9f86708070281f",
+    "crates/app/src/performance/pointer.rs": "a4db01d6c48ab9ac9df044f38c17b93bfd55ee8efbaff471472b0907e64311d4"
+  },
+  "commit_fixture": {
+    "parent_artifact_sha256": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+    "project_sha256": "b565598238d1ded3f37afcdfb03e104f057c1ee74b412196684886650b189b1f",
+    "artifact_sha256": "025f33a9b26e6cfa3cd49c8f9dffaac1a4c26cc8f9b30b7feba0edd1d0b48fe2",
+    "trace_id": "route-contact-commit-history-v1",
+    "project_bytes_unchanged": true,
+    "native_binary_sha256": "30e640b3cc8723d89a156f465f148787ecde36e671ca86e8c76b29521b6bdbc6"
+  }
+}

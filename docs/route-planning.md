@@ -111,6 +111,23 @@ The synchronous command and resumable editor search run the same solver; existin
 MCP clients can continue to plan and submit points with the captured revision.
 Neither the query nor a displayed ghost grants authority to bypass final validation.
 
+The route keeps its starting membership while the head advances through fixed
+vertices or vias. `Request::origin` carries that original contact and copper
+layer for editor requests; a standalone request uses its head. An unconnected
+pad has no resolved net to lend, so crossing named copper cannot silently assign
+it that net. Contact unions still govern whole-path short and class checks, but
+only the starting contact's single resolved net grants a same-net clearance
+exemption.
+
+Completed read-only plans are consumed before painting, while final actions stay
+after input so cancellation wins over publication. For an already prepared query,
+a new pointer request may advance at most eight search suspension units during
+its input frame. Cold projection and unfinished searches stay in the existing
+queue; a busy query lock yields without waiting. The same continuation moves to
+the worker without restarting its completed probes. The
+[responsiveness evidence](../tools/performance/baselines/issue246/responsiveness/README.md)
+separates frame feedback from CPU service cost and physical presentation latency.
+
 ## Limits
 
 The solver plans one copper layer at a time. The editor retains its existing through-via

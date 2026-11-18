@@ -1,0 +1,24 @@
+{
+  "files": {
+    "README.md": "e78cf687d9e98e1a01fa354f3e5c5842f7bc2ddb84c6f004d28c364fa94fae8a",
+    "after-channels.json.gz": "32901ccee41a03dd508f8d299f966b81fa283a53629e63bad7647072a41ce137",
+    "after-reference.json.gz": "13c43ffed8eb71efe1930ff7df085a23aed04e322fe61f3df197197352aad9c6",
+    "before-channels.json.gz": "94f6d8b982a478fdf8d77a1861a0f6b3136aabde10afb4bd18d92d3822a594e2",
+    "before-reference.json.gz": "ddf00af6fc7193f11b8ee497862011432136c66d01daaa8eb1271bf2174b5970",
+    "browser-rendered.json.gz": "0779e625501d36299bdce37272c2221fef82bd44963f02f427ea7272d7b30228",
+    "commit-browser-rendered.json.gz": "1873c35270d7f555850eacfed811f5bb50f720685944cd03efc57aeb1266590d",
+    "commit-comparison.json": "2ab4980690ababb98d24eea48ffc3297fd1963d288ebd96868473e780244b3c0",
+    "commit-fixture.json.gz": "d91d606944fa6206608d00ebaf7306783d21f034b92fd7ca78b6f8c4a2dfb1da",
+    "commit-native-rendered.json.gz": "d4e42719931f8512a361b303359fed066053f9e34a68c2cfe2da22a7b90fd5e9",
+    "commit-overlay.patch.gz": "4c6783032925419e9ea088187185b265a5c37623ea2762ac9229e36ba1e620d1",
+    "commit-wayland-rendered.json.gz": "c1c83b114df0e6d5622096d1744a59ab4e2e42e073afc5564e07f9ff2417d387",
+    "comparison.json": "530492ea248aba6d38500793b10555739f4819401529e024751bc42e58daef1b",
+    "final-channels.json.gz": "0b743f7681ce9279bffa0ea22ec4fd5a2eb1624a9e774f3c3ef2379619072b63",
+    "final-overlay.patch.gz": "cc8d65ec53b9f519f6f640571096b1a366eee3b82537ce4c55ad1b8bbe8ba1ea",
+    "final-reference.json.gz": "c6e47283a07c045f78b3bb7427902383f2631667b34b884defdfd88afd8fe3ea",
+    "measured-pointer.rs.gz": "f11b4319906ec877a678128a7e3288c31cd64eeb1ed66c43ed84eedf10e36dcb",
+    "native-rendered.json.gz": "c65b0bb6cec4baafa37b49abbf9a1067f13c3615ec9b544cf08b69faf8c0d192",
+    "responsiveness-overlay.patch.gz": "80d2faba5d6971ec57e0f852532f7729ef70bc197abbefeed5ea56c43f746472",
+    "source.json": "ffdefdb7e5aa48a94898fcb7d8f59a7ee4cdeafb92b80754a960b372506987c6"
+  }
+}

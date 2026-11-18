@@ -82,11 +82,11 @@ pub(super) struct Walker<'a> {
     posture: Posture,
     head: Point,
     target: Point,
-    /// A head contact with resolved membership, lending it to every probe.
+    /// An original gesture contact with resolved membership, lending it to every probe.
     intended_from: Option<usize>,
     /// Islands the head touches; the new copper joins them, so DRC exempts their clearance.
     own_islands: BTreeSet<usize>,
-    /// Resolved membership of the head's copper (empty for free space).
+    /// Resolved membership of the original contact (empty for unassigned/free copper).
     route_nets: Vec<usize>,
     /// Complete net membership during final connected-path validation only. Search probes
     /// must not inherit contacts from speculative detours, retries or discarded previous plans.
@@ -114,7 +114,12 @@ impl<'a> Walker<'a> {
         let half = request.width_nm as f64 / 2.;
         let at_head = Contour::capsule(request.head, request.head, half);
         let objects = query.objects();
-        let contacts: Vec<usize> = query.candidates(&at_head, &layers)?.into_iter().filter(|i| objects[*i].contour.gap(&at_head) <= 0.).collect();
+        let head_candidates = query.candidates(&at_head, &layers)?;
+        let (origin, origin_layer) = request.origin.unwrap_or((request.head, request.layer));
+        let at_origin = Contour::capsule(origin, origin, half);
+        let candidates =
+            if (origin, origin_layer) == (request.head, request.layer) { head_candidates } else { query.candidates(&at_origin, &[origin_layer])? };
+        let contacts: Vec<usize> = candidates.into_iter().filter(|i| objects[*i].contour.gap(&at_origin) <= 0.).collect();
         let route_nets: Vec<usize> =
             contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
         let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("The captured board is no longer available.".into()))?;
@@ -208,17 +213,24 @@ impl<'a> Walker<'a> {
             None => self.query.probe(&contour, &self.layers, self.intended_from),
         }
         .map_err(Stop::Failed)?;
-        let route_nets = self.path_membership.as_ref().unwrap_or(&self.route_nets);
         let objects = self.query.objects();
         let mut legal = true;
         let mut blockers = Vec::new();
-        for decision in results.decisions.iter().filter(|d| d.clearance_violation || d.conflicting_nets) {
+        for decision in &results.decisions {
             let object = &objects[decision.second];
+            // Only the starting contact's resolved net grants a clearance exemption. A probe combines
+            // contacted nets for short/class checks; that union cannot assign this route a
+            // foreign net merely by crossing it, including during previous-path confirmation.
+            let same_net = self.route_nets.len() == 1 && object.intended_nets == self.route_nets;
+            let clearance_violation = !same_net && decision.gap_nm < decision.clearance_nm as f64;
+            if !clearance_violation && !decision.conflicting_nets {
+                continue;
+            }
             if !decision.conflicting_nets && self.own_islands.contains(&object.island) {
                 continue;
             }
             legal = false;
-            if !(route_nets.len() == 1 && &object.intended_nets == route_nets) {
+            if !same_net {
                 blockers.push((decision.second, decision.clearance_nm));
             }
         }

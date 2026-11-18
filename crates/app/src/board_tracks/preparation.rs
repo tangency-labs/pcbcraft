@@ -205,6 +205,22 @@ impl Preparation {
     }
 }
 impl PcbApp {
+    /// Consume completed read-only plans before a new pointer target can supersede them.
+    /// Final action adoption/publication stays after input so Escape and focus loss win.
+    pub(crate) fn poll_route_previews(&mut self) {
+        let blocked = !matches!(self.dialog, crate::Dialog::None) || self.files.busy() || self.project_action_pending() || self.parts.is_modal();
+        for view in self.views.all_mut() {
+            let source = view.input(&self.session);
+            let layer = view.board.active_layer.clone();
+            let hidden = layer.as_ref().is_some_and(|layer| view.board.hidden_layers.contains(layer));
+            let tracks = &mut view.board.tracks;
+            if blocked || hidden {
+                tracks.planning.cancel();
+            } else {
+                tracks.planning.poll_preview(&self.session, source, layer.as_deref(), (tracks.width_nm, tracks.via_diameter_nm, tracks.via_drill_nm));
+            }
+        }
+    }
     /// Route canvas commands through preparation after releasing the immutable painting borrow.
     pub(crate) fn prepare_canvas_copper(&mut self, edit: Command) {
         let tracks = &mut self.views.active.board.tracks;

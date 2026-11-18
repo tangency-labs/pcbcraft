@@ -194,7 +194,10 @@ fn requests(view: pcbcraft_engine::board::view::BoardView<'_>) -> Result<Vec<(St
             Some(policy) => policy.track_width(None).map_err(|e| e.to_string())?,
             None => view.effective_rules().values.preferred_track_width_nm,
         };
-        requests.push((id, Request { head, target, layer: front, width_nm, posture: Posture::Diagonal, flipped: false, previous: Vec::new() }));
+        requests.push((
+            id,
+            Request { head, target, layer: front, origin: None, width_nm, posture: Posture::Diagonal, flipped: false, previous: Vec::new() },
+        ));
     }
     Ok(requests)
 }
@@ -249,6 +252,6 @@ mod tests {
         let report = jobs(include_str!("../../../../tools/performance/fixtures/reference-v1.json"), environment, 1).unwrap();
         assert_eq!(report["queues"][0]["pending_capacity"], 1);
         assert_eq!(report["queues"][0]["replaced"], 30);
-        assert!(report["metrics"].as_array().unwrap().iter().any(|metric| metric["id"] == "planning.atomic_publish.airwire.0"));
+        assert!(report["metrics"].as_array().unwrap().iter().any(|metric| metric["id"] == "planning.atomic_publish.airwire.1"));
     }
 }

@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 pub(super) const WARMUP: usize = 8;
 /// Stable identity for the exact versioned route, reversal, layer, cancellation and edit steps.
 pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
+pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
 #[derive(Serialize, Deserialize)]
@@ -32,6 +33,9 @@ enum Action {
     Key { key: ReplayKey, pressed: bool },
     Pointer { at: Point, pressed: Option<bool> },
     SharedEdit,
+    Contact { target: bool, pressed: Option<bool> },
+    ContactPreview,
+    HistoryCheck,
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,7 +58,47 @@ impl Step {
     /// Press/release pairs must not be stretched by GPU readback: a slow adapter could
     /// otherwise turn an ordinary click into a long press. Capture releases and moves.
     pub(super) fn capture_after(&self) -> bool {
-        !matches!(self.action, Action::Key { pressed: true, .. } | Action::Pointer { pressed: Some(true), .. })
+        !matches!(
+            self.action,
+            Action::Key { pressed: true, .. } | Action::Pointer { pressed: Some(true), .. } | Action::Contact { pressed: Some(true), .. }
+        )
+    }
+
+    /// Short companion trace: connect a saved airwire through real pointer input, then
+    /// check exact one-step undo/redo and reopen outside the commit timing boundary.
+    pub(super) fn commit() -> Vec<Self> {
+        let mut steps = Vec::new();
+        for pressed in [true, false] {
+            steps.push(Self {
+                id: format!("arm.{}", if pressed { "down" } else { "up" }),
+                action: Action::Key { key: ReplayKey::Route, pressed },
+                routing_after: false,
+            });
+        }
+        for pressed in [true, false] {
+            steps.push(Self {
+                id: format!("contact.start.{}", if pressed { "down" } else { "up" }),
+                action: Action::Contact { target: false, pressed: Some(pressed) },
+                routing_after: !pressed,
+            });
+        }
+        steps.push(Self { id: "contact.preview".into(), action: Action::ContactPreview, routing_after: true });
+        for pressed in [true, false] {
+            steps.push(Self {
+                id: format!("contact.commit.{}", if pressed { "down" } else { "up" }),
+                action: Action::Contact { target: true, pressed: Some(pressed) },
+                routing_after: pressed,
+            });
+        }
+        steps.push(Self { id: "commit.history".into(), action: Action::HistoryCheck, routing_after: false });
+        for pressed in [true, false] {
+            steps.push(Self {
+                id: format!("exit.{}", if pressed { "down" } else { "up" }),
+                action: Action::Key { key: ReplayKey::Cancel, pressed },
+                routing_after: false,
+            });
+        }
+        steps
     }
 
     /// Versioned reversal, layer-transition, cancellation and concurrent-edit authority trace.
@@ -112,6 +156,9 @@ pub(super) struct Driver {
     edits: u64,
     track: uuid::Uuid,
     top: String,
+    contacts: [Point; 2],
+    airwires: usize,
+    original_tracks: std::collections::BTreeSet<uuid::Uuid>,
 }
 
 impl Driver {
@@ -133,9 +180,20 @@ impl Driver {
         app.views.active.board.active_layer = Some(top.clone());
         app.views.active.filters_open = false;
         app.views.active.camera.center_on(Point { x_nm: 10_160_000, y_nm: 0 });
+        let lines = board.ratsnest().ok_or("missing replay airwires")?.lines;
+        // Legacy center-only pad markers are not conductive copper. Choose the first saved
+        // airwire with supported physical copper at both ends, without consulting solve results.
+        let physical: Vec<_> = board.footprints().flat_map(|f| f.pads).filter(|p| p.copper.is_some()).map(|p| p.center).collect();
+        let first = lines
+            .iter()
+            .find(|line| physical.contains(&line.from.position) && physical.contains(&line.to.position))
+            .ok_or("missing supported replay connection")?;
+        let contacts = [first.from.position, first.to.position];
+        let original_tracks = board.tracks().iter().map(|track| track.id).collect();
+        let airwires = lines.len();
         let original = encode_packed(source)?;
         let revision = app.session.revision();
-        Ok((app, Self { original, revision, edits: 0, track, top }))
+        Ok((app, Self { original, revision, edits: 0, track, top, contacts, airwires, original_tracks }))
     }
 
     /// Translate one addressed trace action; shared edits use the revision-checked command path.
@@ -152,16 +210,51 @@ impl Driver {
             Action::Key { key, pressed } => {
                 events.push(Event::Key { key: key.egui(), physical_key: None, pressed: *pressed, repeat: false, modifiers: Modifiers::NONE })
             }
-            Action::Pointer { at, pressed } => {
-                let rect = app.views.active.camera.performance_rect.ok_or("board canvas was not painted")?;
-                let pos = app.views.active.camera.screen(*at, rect);
-                if !rect.contains(pos) {
-                    return Err(format!("{}: trace point is outside canvas", step.id));
+            Action::Pointer { at, pressed } => events = Self::pointer(app, *at, *pressed)?,
+            Action::Contact { target, pressed } => {
+                events = Self::pointer(app, self.contacts[usize::from(*target)], *pressed)?;
+                if *target && *pressed == Some(false) {
+                    self.edits += 1;
                 }
-                events.push(Event::PointerMoved(pos));
-                if let Some(pressed) = pressed {
-                    events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: *pressed, modifiers: Modifiers::NONE });
+            }
+            Action::ContactPreview => {
+                let [from, to] = self.contacts;
+                events = Self::pointer(app, Point { x_nm: (from.x_nm + to.x_nm) / 2, y_nm: (from.y_nm + to.y_nm) / 2 - 1_270_000 }, None)?;
+            }
+            Action::HistoryCheck => {
+                let source = app.session.snapshot().ok_or("missing committed project")?;
+                let board = source.board_view(artifact.board).ok_or("missing committed board")?;
+                let added: std::collections::BTreeSet<_> =
+                    board.tracks().iter().filter(|t| !self.original_tracks.contains(&t.id)).map(|t| t.id.to_string()).collect();
+                if added.is_empty() || board.ratsnest().ok_or("missing routed airwires")?.lines.len() >= self.airwires {
+                    return Err("commit did not connect the saved airwire".into());
                 }
+                let report = board.check_design(board.effective_rules().values);
+                if report.violations.iter().any(|v| {
+                    matches!(
+                        v.kind,
+                        pcbcraft_engine::board::drc::Kind::Clearance
+                            | pcbcraft_engine::board::drc::Kind::Short
+                            | pcbcraft_engine::board::drc::Kind::TrackWidth
+                            | pcbcraft_engine::board::drc::Kind::EdgeClearance
+                            | pcbcraft_engine::board::drc::Kind::OutsideBoard
+                    ) && v.items.iter().any(|id| added.contains(id))
+                }) {
+                    return Err("committed route fails full physical DRC".into());
+                }
+                let committed = encode_packed(source)?;
+                if encode_packed(decode_packed(&committed)?.project)? != committed {
+                    return Err("committed route did not reopen exactly".into());
+                }
+                app.session.apply("edit.undo", &json!({})).map_err(|e| e.to_string())?;
+                if encode_packed(app.session.snapshot().ok_or("missing undo project")?)? != self.original {
+                    return Err("one undo did not restore the original project".into());
+                }
+                app.session.apply("edit.redo", &json!({})).map_err(|e| e.to_string())?;
+                if encode_packed(app.session.snapshot().ok_or("missing redo project")?)? != committed {
+                    return Err("redo did not restore committed bytes".into());
+                }
+                self.edits += 2;
             }
             Action::SharedEdit => {
                 if !app.views.active.board.tracks.routing() {
@@ -176,6 +269,20 @@ impl Driver {
                 })?;
                 self.edits += 1;
             }
+        }
+        Ok(events)
+    }
+
+    /// Resolve a board point through the real canvas, refusing clipped diagnostic input.
+    fn pointer(app: &PcbApp, at: Point, pressed: Option<bool>) -> Result<Vec<Event>> {
+        let rect = app.views.active.camera.performance_rect.ok_or("board canvas was not painted")?;
+        let pos = app.views.active.camera.screen(at, rect);
+        if !rect.contains(pos) {
+            return Err("trace point is outside canvas".into());
+        }
+        let mut events = vec![Event::PointerMoved(pos)];
+        if let Some(pressed) = pressed {
+            events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
         }
         Ok(events)
     }
@@ -195,13 +302,18 @@ impl Driver {
             "params":{"board":artifact.board.board,"tracks":[self.track],"dx_nm":0,"dy_nm":100_000,"expected_revision":app.session.revision()}}})))
     }
 
-    /// Layer input now awaits its full-path/via validation before the active layer changes.
-    /// Other actions still assert their state on the first accepted pass.
+    /// Wait for validated layer/preview results and committed revision in their respective
+    /// trace steps. Other actions assert state on the first accepted pass.
     pub(super) fn pending(&self, app: &PcbApp, artifact: &Artifact, index: usize) -> bool {
-        matches!(artifact.trace[index].id.as_str(), "layer.down" | "layer.up") && app.views.active.board.tracks.committing()
+        match artifact.trace[index].id.as_str() {
+            "layer.down" | "layer.up" => app.views.active.board.tracks.committing(),
+            "contact.preview" => app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared"),
+            "contact.commit.up" => app.message.is_none() && app.session.revision() < self.revision + self.edits,
+            _ => false,
+        }
     }
 
-    /// Drive only a pending validated layer transition, with a wall-clock and frame bound.
+    /// Drive a pending validation/publication step with a wall-clock and frame bound.
     /// No input is repeated, and the normal final layer/cancellation assertions still apply.
     fn settle(
         &self,
@@ -213,7 +325,7 @@ impl Driver {
         samples: &mut BTreeMap<String, Vec<f64>>,
     ) -> Result<()> {
         let id = &artifact.trace[index].id;
-        if !matches!(id.as_str(), "layer.down" | "layer.up") {
+        if !matches!(id.as_str(), "layer.down" | "layer.up" | "contact.preview" | "contact.commit.up") {
             return Ok(());
         }
         let started = super::clock_ms();
@@ -223,7 +335,7 @@ impl Driver {
                 break;
             }
             if super::clock_ms() - started > 5_000. {
-                return Err("layer validation did not settle within five seconds".into());
+                return Err("route validation did not settle within five seconds".into());
             }
             frame(app, ctx, Vec::new(), *frame_id, &mut settling, &format!("settle.{id}"));
             *frame_id += 1;
@@ -231,7 +343,7 @@ impl Driver {
             std::thread::yield_now();
         }
         if self.pending(app, artifact, index) {
-            return Err("layer validation exceeded its frame bound".into());
+            return Err("route validation exceeded its frame bound".into());
         }
         for suffix in ["ui", "tessellate"] {
             let key = format!("replay.settle.{id}.{suffix}");
@@ -252,6 +364,12 @@ impl Driver {
         }
         if matches!(step.id.as_str(), "layer.down" | "layer.up") && app.views.active.board.active_layer.as_deref() == Some(&self.top) {
             return Err("layer key did not change the route layer".into());
+        }
+        if step.id == "contact.preview" && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
+            return Err("preview did not finish validated preparation".into());
+        }
+        if step.id == "contact.commit.up" && app.session.revision() != self.revision + self.edits {
+            return Err("route did not publish exactly one revision".into());
         }
         if step.id == "cancel.up" && encode_packed(app.session.snapshot().ok_or("missing project after cancel")?)? != self.original {
             return Err("cancel published authored changes".into());
@@ -296,30 +414,36 @@ mod tests {
     /// Real renderers can take longer than a click threshold between passes. Deliver paired
     /// press/release events together and still require route, layer, cancel and shared-edit checks.
     #[test]
-    fn atomic_input_pairs_keep_the_standard_trace_correct() {
-        let artifact = super::super::load_artifact(&super::super::generate("reference-v1", "test").unwrap()).unwrap();
-        let (mut app, mut driver) = Driver::prepare(&artifact).unwrap();
-        let ctx = egui::Context::default();
-        ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
-        pcbcraft_chrome::install(&ctx);
-        let mut samples = BTreeMap::new();
-        for i in 0..WARMUP {
-            frame(&mut app, &ctx, Vec::new(), i, &mut samples, "warmup");
-        }
-        let mut index = 0;
-        let mut frame_id = WARMUP;
-        while index < artifact.trace.len() {
-            let mut events = driver.input(&mut app, &artifact, index, &mut samples).unwrap();
-            if !artifact.trace[index].capture_after() {
-                index += 1;
-                events.extend(driver.input(&mut app, &artifact, index, &mut samples).unwrap());
+    fn atomic_input_pairs_keep_route_and_commit_traces_correct() {
+        for commit in [false, true] {
+            let mut artifact = super::super::load_artifact(&super::super::generate("reference-v1", "test").unwrap()).unwrap();
+            if commit {
+                artifact.trace_id = COMMIT_TRACE_ID.into();
+                artifact.trace = Step::commit();
             }
-            frame(&mut app, &ctx, events, frame_id, &mut samples, &artifact.trace[index].id);
-            frame_id += 1;
-            driver.settle(&mut app, &ctx, &artifact, index, &mut frame_id, &mut samples).unwrap();
-            driver.verify(&app, &artifact, index).unwrap();
-            index += 1;
+            let (mut app, mut driver) = Driver::prepare(&artifact).unwrap();
+            let ctx = egui::Context::default();
+            ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+            pcbcraft_chrome::install(&ctx);
+            let mut samples = BTreeMap::new();
+            for i in 0..WARMUP {
+                frame(&mut app, &ctx, Vec::new(), i, &mut samples, "warmup");
+            }
+            let mut index = 0;
+            let mut frame_id = WARMUP;
+            while index < artifact.trace.len() {
+                let mut events = driver.input(&mut app, &artifact, index, &mut samples).unwrap();
+                if !artifact.trace[index].capture_after() {
+                    index += 1;
+                    events.extend(driver.input(&mut app, &artifact, index, &mut samples).unwrap());
+                }
+                frame(&mut app, &ctx, events, frame_id, &mut samples, &artifact.trace[index].id);
+                frame_id += 1;
+                driver.settle(&mut app, &ctx, &artifact, index, &mut frame_id, &mut samples).unwrap();
+                driver.verify(&app, &artifact, index).unwrap();
+                index += 1;
+            }
+            driver.finish(&app).unwrap();
         }
-        driver.finish(&app).unwrap();
     }
 }

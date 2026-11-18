@@ -18,6 +18,29 @@ impl PlanningContext {
     pub fn source(&self) -> &Source {
         &self.source
     }
+
+    /// Capture read-only work only when the obstacle query is already prepared. A busy/cold
+    /// context returns None without building or waiting. The owner must check source authority
+    /// before displaying/adopting results; this capture grants no document edit authority.
+    pub fn try_prepare_cached(&self, request: Request, budget: usize) -> Result<Option<PlanningJob>, CommandError> {
+        let query = match self.preparation.try_lock() {
+            Ok(preparation) => preparation.cached()?,
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Poisoned(_)) => return Err(CommandError::Unavailable("Route obstacle preparation failed".into())),
+        };
+        let Some(query) = query else {
+            return Ok(None);
+        };
+        super::validate(&query, &request, budget)?;
+        Ok(Some(PlanningJob {
+            context: self.clone(),
+            search: Some(search::Search::new(query, request.clone(), budget)),
+            request,
+            budget,
+            result: None,
+            done: false,
+        }))
+    }
 }
 
 /// A resumable search. Dropping it cancels private work without publishing any copper.

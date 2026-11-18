@@ -37,6 +37,8 @@ struct Ready {
 #[derive(Default)]
 pub(super) struct Planning {
     context: Option<PlanningContext>,
+    /// Input owner whose context was checked by the current frame before any inline work.
+    inline_source: Option<ViewInput>,
     queue: Queue<PlanningJob>,
     wanted: Option<Wanted>,
     /// Latest completion owns placement eligibility, even when it contains no path.
@@ -58,6 +60,7 @@ impl Planning {
     /// Cancel adoption immediately, independently of when the worker acknowledges cancellation.
     pub(super) fn cancel(&mut self) {
         self.queue.cancel();
+        self.inline_source = None;
         self.wanted = None;
         self.ready = None;
         self.visible = None;
@@ -71,12 +74,21 @@ impl Planning {
         if self.committing() {
             return;
         }
-        let Ok(layer) = Uuid::parse_str(&draft.layer) else {
+        let (Ok(layer), Ok(start_layer)) = (Uuid::parse_str(&draft.layer), Uuid::parse_str(&draft.start)) else {
             self.cancel();
             return;
         };
         let head = draft.points.last().copied().unwrap_or(at);
-        let request = Request { head, target: at, layer, width_nm: sizes.0, posture: Posture::Diagonal, flipped, previous: Vec::new() };
+        let request = Request {
+            head,
+            target: at,
+            layer,
+            origin: draft.points.first().copied().map(|point| (point, start_layer)),
+            width_nm: sizes.0,
+            posture: Posture::Diagonal,
+            flipped,
+            previous: Vec::new(),
+        };
         let mut key = Key { source: draft.source, board, request, prefix: draft.points.clone(), changes: draft.changes.clone(), sizes };
         // Hints are semantic continuity, not another input generation. Reuse them only from
         // this exact head/layer/size/posture and source, never across a vertex or via.
@@ -110,6 +122,30 @@ impl Planning {
         self.submitted = false;
         self.error = None;
         self.retryable = false;
+        // Cold geometry stays on the worker. A warm query may advance a maximum of eight
+        // suspension units here; unfinished search state is handed off without replay.
+        if let (Some(context), Some(wanted)) = (&self.context, &self.wanted)
+            && self.inline_source == Some(wanted.key.source)
+            && context.source().target() == wanted.key.board
+            && context.source().revision() == wanted.key.source.revision
+        {
+            match context.try_prepare_cached(wanted.key.request.clone(), DEFAULT_BUDGET) {
+                Ok(Some(mut job)) => {
+                    self.submitted = true;
+                    if job.step(8) {
+                        let key = wanted.key.clone();
+                        self.accept(key, job.take_result().map_err(|e| e.to_string()));
+                    } else {
+                        self.queue.submit(Queued { id: wanted.generation, job });
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.error = Some(error.to_string());
+                    self.submitted = true;
+                }
+            }
+        }
     }
     /// A final click owns its target; Escape and view invalidation still cancel it.
     pub(super) fn committing(&self) -> bool {
@@ -150,15 +186,9 @@ impl Planning {
         }
         path
     }
-    /// Poll without waiting; reject stale source/layer/size before consuming any completion.
-    pub(super) fn poll(
-        &mut self,
-        session: &Session,
-        source: Option<ViewInput>,
-        layer: Option<&str>,
-        sizes: (i64, i64, i64),
-        validation: Option<Result<(), String>>,
-    ) -> Option<Result<(Vec<Point>, Action), String>> {
+    /// Consume only completed read-only results before paint, preserving input cancellation
+    /// priority over placement. No candidate is adopted and no project mutation occurs here.
+    pub(super) fn poll_preview(&mut self, session: &Session, source: Option<ViewInput>, layer: Option<&str>, sizes: (i64, i64, i64)) {
         if self
             .wanted
             .as_ref()
@@ -176,21 +206,36 @@ impl Planning {
             && wanted.generation == completion.id
             && completion.source.is_current(session)
         {
-            match completion.report {
-                Ok(Some(plan)) => {
-                    let ready = Ready { key: wanted.key.clone(), plan };
-                    if ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. }) {
-                        self.visible = Some(ready.clone());
-                    }
-                    self.ready = Some(ready);
-                }
-                Ok(None) => self.error = Some("Route canceled".into()),
-                Err(error) => {
-                    self.error = Some(error);
-                    self.retryable = completion.retryable;
-                }
-            }
+            let key = wanted.key.clone();
+            self.retryable = completion.retryable;
+            self.accept(key, completion.report);
         }
+        self.inline_source = self.context.as_ref().filter(|context| context.source().is_current(session)).and(source);
+    }
+    /// Keep the current verdict distinct from display-only fallback geometry on every path.
+    fn accept(&mut self, key: Key, result: Result<Option<Plan>, String>) {
+        match result {
+            Ok(Some(plan)) => {
+                let ready = Ready { key, plan };
+                if ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. }) {
+                    self.visible = Some(ready.clone());
+                }
+                self.ready = Some(ready);
+            }
+            Ok(None) => self.error = Some("Route canceled".into()),
+            Err(error) => self.error = Some(error),
+        }
+    }
+    /// Poll without waiting; reject stale source/layer/size before consuming any completion.
+    pub(super) fn poll(
+        &mut self,
+        session: &Session,
+        source: Option<ViewInput>,
+        layer: Option<&str>,
+        sizes: (i64, i64, i64),
+        validation: Option<Result<(), String>>,
+    ) -> Option<Result<(Vec<Point>, Action), String>> {
+        self.poll_preview(session, source, layer, sizes);
         let wanted = self.wanted.as_mut()?;
         if let Some(error) = &self.error {
             return wanted.action.take().map(|_| Err(error.clone()));
@@ -227,6 +272,7 @@ impl Planning {
             let result = (|| {
                 if self.context.is_none() {
                     self.context = Some(session.route_planning(wanted.key.board).map_err(|e| e.to_string())?);
+                    self.inline_source = Some(wanted.key.source);
                 }
                 let context = self.context.as_ref().ok_or("Route source unavailable")?;
                 session.prepare_route_plan(context, wanted.key.request.clone(), DEFAULT_BUDGET).map_err(|e| e.to_string())
@@ -309,6 +355,8 @@ mod tests {
         }
         assert!(p.current_ready());
         assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
+        // Exercise the deferred branch even when this clear target could finish inline.
+        p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), b, false, sizes, Some(Action::Vertex { finish: true }));
         assert!(!p.current_ready());
         assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
@@ -329,12 +377,23 @@ mod tests {
     /// Cancel, view release, layer/size changes, shared edits and reopen revoke final clicks.
     #[test]
     fn canceled_and_obsolete_searches_never_adopt_their_click() {
-        for mode in 0..6 {
+        for (mode, warm) in (0..6).flat_map(|mode| [(mode, false), (mode, true)]) {
             let (mut s, mut view, draft) = fixture();
             let mut p = Planning::default();
             let sizes = (250_000, 600_000, 300_000);
+            if warm {
+                p.request(&draft, view.board.target.unwrap(), Point { x_nm: 1_000_000, y_nm: 0 }, false, sizes, None);
+                for _ in 0..100 {
+                    p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None);
+                    if p.current_ready() {
+                        break;
+                    }
+                }
+                assert!(p.current_ready());
+            }
             p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, Some(Action::Vertex { finish: true }));
-            p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(())));
+            // Warm planning may finish inline, but still cannot adopt before validation.
+            assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None).is_none());
             match mode {
                 0 => p.cancel(),
                 1 => view.release_input(),
@@ -401,6 +460,8 @@ mod tests {
         assert!(p.current_ready());
         let visible = p.preview(&draft, sizes.0);
         assert_eq!(visible.last(), Some(&good));
+        // Retain the old display while the deliberately exhausted replacement is deferred.
+        p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, None);
         // Use an actual exhausted engine job; only its caller-supplied budget differs.
         let wanted = p.wanted.as_ref().unwrap();

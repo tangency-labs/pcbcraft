@@ -54,6 +54,31 @@ fn captured_planning_yields_and_matches_the_shared_solver() {
     assert!(s.prepare_route_plan(&context, request, DEFAULT_BUDGET).is_err());
 }
 
+/// Warm capture does not start cold projection; its continuation
+/// retains exact search progress and still carries revocable source authority.
+#[test]
+fn cached_planning_skips_cold_queries_and_resumes_exactly() {
+    let mut s = board();
+    add(&mut s, ADD_VIA, json!({"at":p(4_000_000,10_000_000),"via_diameter_nm":600_000,"via_drill_nm":300_000}));
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let request = request(&s, p(1_000_000, 10_000_000), p(7_000_000, 11_000_000));
+    let context = s.route_planning(view(&s).target).unwrap();
+    assert!(context.try_prepare_cached(request.clone(), DEFAULT_BUDGET).unwrap().is_none());
+    let mut cold = s.prepare_route_plan(&context, request.clone(), DEFAULT_BUDGET).unwrap();
+    while !cold.step(8) {}
+    let expected = cold.take_result().unwrap().unwrap();
+    let mut warm = context.try_prepare_cached(request.clone(), DEFAULT_BUDGET).unwrap().unwrap();
+    assert!(!warm.step(1), "the detour must yield before finishing");
+    let progress = warm.progress().completed;
+    while !warm.step(8) {}
+    assert!(warm.progress().completed >= progress);
+    assert_eq!(warm.take_result().unwrap().unwrap(), expected);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("project.rename", &json!({"name":"Changed while planning"})).unwrap();
+    assert!(!warm.source().is_current(&s));
+    assert!(s.prepare_route_plan(&context, request, DEFAULT_BUDGET).is_err());
+}
+
 fn p(x_nm: i64, y_nm: i64) -> Point {
     Point { x_nm, y_nm }
 }
@@ -63,7 +88,16 @@ fn query(s: &Session) -> ClearanceQuery {
 }
 
 fn request(s: &Session, head: Point, target: Point) -> Request {
-    Request { head, target, layer: copper_layers(s)[0], width_nm: WIDTH, posture: Posture::Diagonal, flipped: false, previous: Vec::new() }
+    Request {
+        head,
+        target,
+        layer: copper_layers(s)[0],
+        origin: None,
+        width_nm: WIDTH,
+        posture: Posture::Diagonal,
+        flipped: false,
+        previous: Vec::new(),
+    }
 }
 
 fn plan(s: &Session, request: &Request) -> Plan {
@@ -145,6 +179,31 @@ fn a_route_hugs_a_pad_at_the_clearance_rule_and_agrees_with_drc() {
     let layer = copper_layers(&s)[0];
     commit_and_agree(&mut s, &plan, layer, WIDTH);
     assert_eq!(view(&s).ratsnest().unwrap().lines.len(), ratsnest - 1, "the route makes its connection");
+}
+
+/// An unconnected physical terminal must not acquire another pad's net just because
+/// a speculative route overlaps it. The same obstacle rule applies in either direction.
+#[test]
+fn an_unconnected_pad_cannot_route_into_a_named_pad() {
+    let mut s = board();
+    let footprint = view(&s).footprints().find(|f| f.pads.iter().any(|p| p.net.is_some()) && f.pads.iter().any(|p| p.net.is_none())).unwrap();
+    let named = footprint.pads.iter().find(|p| p.net.is_some()).unwrap().center;
+    let unconnected = footprint.pads.iter().find(|p| p.net.is_none()).unwrap().center;
+    for (head, target) in [(unconnected, named), (named, unconnected)] {
+        let request = request(&s, head, target);
+        let result = plan(&s, &request);
+        assert_ne!(result.outcome, Outcome::Reached, "a route must not silently assign the other terminal: {result:?}");
+        // Even a caller-supplied previous crossing cannot grant that exemption in confirmation.
+        let reused = plan(&s, &Request { previous: vec![head, target], ..request });
+        assert_ne!(reused.outcome, Outcome::Reached);
+    }
+    let layer = copper_layers(&s)[0];
+    let end = p(named.x_nm, named.y_nm + 5_000_000);
+    add(&mut s, ADD_TRACKS, json!({"layer":layer,"width_nm":WIDTH,"points":[named,end]}));
+    let obstacle = view(&s).tracks().last().unwrap().id.to_string();
+    let result = plan(&s, &request(&s, unconnected, p(named.x_nm + 2_000_000, named.y_nm + 4_000_000)));
+    assert_eq!(result.outcome, Outcome::Reached, "{result:?}");
+    assert!(gap_to(&s, &result, &obstacle) >= 200_000., "the unnamed route must go around the named track");
 }
 
 /// A free-space route goes round a standalone via in either posture and agrees with DRC.

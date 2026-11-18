@@ -99,6 +99,44 @@ fn walkaround_refuses_an_impossible_pad_escape_without_publishing() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// A route from an unconnected pad cannot acquire a named net through overlap, either
+/// directly or after fixing a free vertex. Rejected clicks leave copper and history intact.
+#[test]
+fn an_unconnected_pad_route_cannot_join_a_named_terminal() {
+    for vertex in [false, true] {
+        let mut h = routable();
+        let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap();
+        let unknown = footprint.pads.iter().find(|pad| pad.net.is_none()).unwrap().center;
+        let named = footprint.pads.iter().find(|pad| pad.net.is_some()).unwrap().center;
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.key_press(Key::X);
+        h.run();
+        click_route(&mut h, unknown);
+        if vertex {
+            click_route(&mut h, Point { x_nm: unknown.x_nm, y_nm: unknown.y_nm - 2_540_000 });
+            assert_eq!(h.state().message, None);
+        }
+        click_route(&mut h, named);
+        assert!(h.state().message.as_deref().is_some_and(|message| message.contains("blocked")));
+        assert_eq!(h.state().session.revision(), revision);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        h.key_press(Key::Enter);
+        h.run_steps(30);
+        // Enter may finish the already fixed, legal prefix, never the rejected connection.
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().copper_nets().is_empty());
+        assert_eq!(h.state().session.revision(), revision + u64::from(vertex));
+        if vertex {
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(tracks(&h).is_empty());
+    }
+}
+
 /// Two 0402 resistors whose first terminals share an accepted net, on a two-layer board,
 /// opened in the PCB layout with the Top copper layer active.
 pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
@@ -149,6 +187,25 @@ fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos
         matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
         if stroke.color == tint && points[1].distance(end) < 0.001)
     })
+}
+
+/// Warm, clear pointer targets must paint in their input frame while authored copper stays fixed.
+#[test]
+fn warm_walkaround_preview_follows_continuous_pointer_input() {
+    let mut h = routable();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, Point { x_nm: 0, y_nm: -5_080_000 });
+    h.hover_at(at(&h, Point { x_nm: 1_270_000, y_nm: -5_080_000 }));
+    h.run_steps(30);
+    for x_nm in [2_540_000, 3_810_000, 5_080_000, 6_350_000, 7_620_000] {
+        let end = at(&h, Point { x_nm, y_nm: -5_080_000 });
+        h.hover_at(end);
+        h.step();
+        assert!(preview_ends_at(&h, pcbcraft_chrome::Tokens::get().board_front, end), "warm preview trails pointer at x={x_nm}");
+    }
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
 /// Pointer changes invalidate prepared candidates, but the draft keeps its copper color both
@@ -2240,6 +2297,13 @@ fn checker_escape_respects_popup_text_and_assistant_keyboard_ownership() {
 #[test]
 fn escape_revokes_a_pending_final_route_before_publication() {
     let mut h = routable();
+    // A detour exceeds the warm inline allowance, keeping a real final request pending.
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":2_540_000,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
     h.key_press(Key::X);
     h.run();
     click_route(&mut h, Point { x_nm: 0, y_nm: -5_080_000 });
