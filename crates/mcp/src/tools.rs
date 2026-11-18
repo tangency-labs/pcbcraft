@@ -61,6 +61,14 @@ pub fn tool_definitions() -> Vec<Value> {
             &[],
             Effect::ReadOnly,
         ),
+        tool(
+            "resolve_counterparts",
+            "Resolve all linked pins and pads",
+            "Read complete accepted pin/pad correspondence or an explicit unavailable status at expected_revision. Source is a terminal with project/sheet/symbol/terminal, or a pad with project/board/footprint/pad; include kind: terminal or pad. Does not apply pending board updates.",
+            json!({"source":pcbcraft_engine::board::correspondence::Source::schema(),"expected_revision":{"type":"integer","minimum":0}}),
+            &["source", "expected_revision"],
+            Effect::ReadOnly,
+        ),
         tool("inspect_project", "Inspect the project", "The open project and whether undo and redo can run.", json!({}), &[], Effect::ReadOnly),
         tool(
             "inspect_editor",
@@ -85,6 +93,7 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
             "string" => value.is_string(),
             "object" => value.is_object(),
             "boolean" => value.is_boolean(),
+            "integer" => value.is_i64() || value.is_u64(),
             _ => false,
         };
         if !fits {
@@ -150,6 +159,7 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
         "describe_command" => describe_command(backend, args["command"].as_str().unwrap_or_default()),
         "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]})),
         "cross_probe" => backend.call("project.cross_probe", args.clone()),
+        "resolve_counterparts" => backend.call("project.resolve_counterparts", args.clone()),
         "inspect_project" => backend.call("project.inspect", json!({})),
         "inspect_editor" => backend.call("editor.inspect", json!({})),
         _ => Err(format!("unknown tool `{name}`")),

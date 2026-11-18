@@ -2,6 +2,8 @@
 
 ## 0.1.0 (unreleased)
 
+- Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; individual pin/pad selection and highlighting remain follow-ups.
+
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery

@@ -425,7 +425,11 @@ at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to return just the resulting revision. Use `inspect_project` to read
-the project, or `cross_probe` to look up a linked terminal or pad.
+the project, or `cross_probe` to look up a linked terminal or pad. The additive
+read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
+unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)
+for qualified addresses and the versioned response. `cross_probe` retains its
+singular compatibility response.
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current
