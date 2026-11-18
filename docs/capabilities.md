@@ -72,7 +72,10 @@ The engine [persistent net registry](net-registry-storage.md) preserves independ
 UUIDs and neutral numbers for meaningful nets, with bounded anchors, split/merge
 lineage and explicit ambiguity resolution through shared headless/live MCP
 commands. It survives undo, save/reopen and first-board creation without storing
-a second connectivity graph. [Net-class assignments](net-class-assignments.md)
+a second connectivity graph. [Differential pair records](net-registry-storage.md#differential-pair-records)
+retain explicit positive and negative net UUIDs and stored review intent. This
+is storage and inspection only, not pair authoring or routing.
+[Net-class assignments](net-class-assignments.md)
 can be authored through shared commands, with retained origins, split inheritance,
 merge conflicts and protected class removal. [Class-aware routing, clearance
 queries and DRC](net-class-consumers.md) consume those bindings with effective

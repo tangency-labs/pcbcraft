@@ -105,9 +105,12 @@ impl Project {
     /// by class and origin. Inherited classes must exist in the catalog, and meaningful splits
     /// require every inherited property to be shareable. Missing classes, unsupported split
     /// inheritance or a union above `MAX_BINDINGS` refuse the edit before session publication.
+    /// Stored pair members and review intent are preserved, not retargeted or evaluated here.
+    /// Newly adopted registries and changed registries on unchanged topology also validate,
+    /// even when they contain pairs but no net records.
     pub(crate) fn reconcile_nets(&mut self, before: Option<&Project>) -> Result<(), CommandError> {
         let Some(before) = before.filter(|before| before.same_document(self)) else {
-            return Ok(());
+            return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
         };
         let old_scope = before.net_scope();
         let scope = self.net_scope();
@@ -142,9 +145,7 @@ impl Project {
             if identity_changed {
                 self.invalidate_net_presentation();
             }
-            if !self.net_registry.records.is_empty() {
-                self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
-            }
+            self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
             return Ok(());
         }
         before.net_registry.validate(before).map_err(CommandError::InvalidParams)?;
@@ -182,7 +183,7 @@ impl Project {
         }
         let chosen: BTreeMap<_, _> = by_source.iter().map(|(index, r)| (r.id, continuation(r, &targets[*index], &after))).collect();
         let mut result: BTreeMap<_, _> = registry.records.iter().map(|r| (r.id, r.clone())).collect();
-        let mut ids = result.keys().copied().collect();
+        let mut ids = result.keys().copied().chain(registry.pairs.iter().map(|pair| pair.id)).collect();
         let mut assigned = vec![None; after.networks.len()];
         let mut capture = None;
         let mut last_number = registry.records.iter().filter_map(|record| record.generated_number).max().unwrap_or(0);
@@ -272,7 +273,7 @@ impl Project {
                 result.insert(record.id, next);
             }
         }
-        let next = Registry { records: result.into_values().collect() };
+        let next = Registry { records: result.into_values().collect(), pairs: registry.pairs };
         if next == *self.net_registry {
             return Ok(());
         }

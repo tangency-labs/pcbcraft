@@ -8,6 +8,8 @@ pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, N
 pub mod display;
 mod graph;
 mod numbering;
+mod pairs;
+pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
 mod reconcile;
 mod selection;
 mod validation;
@@ -114,6 +116,14 @@ impl Record {
 pub struct Registry {
     /// Active records and retained ambiguous/retired identities in canonical UUID order.
     pub records: Vec<Record>,
+    /// UUID-sorted relationships share their list and individual records across history snapshots.
+    #[serde(default, skip_serializing_if = "pair_list_empty", deserialize_with = "pairs::stored_pairs")]
+    pub pairs: std::sync::Arc<Vec<std::sync::Arc<Pair>>>,
+}
+
+/// Keep registries without relationship intent byte-compatible with the earlier vocabulary.
+fn pair_list_empty(pairs: &std::sync::Arc<Vec<std::sync::Arc<Pair>>>) -> bool {
+    pairs.is_empty()
 }
 
 impl Registry {

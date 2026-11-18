@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod codec;
 mod numbering;
+mod pairs;
 mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
@@ -271,6 +272,7 @@ fn exhausted_registry_preserves_the_project_revision_history_and_update_preview(
         records: (1..=MAX_RECORDS as u128)
             .map(|id| Record { id: Uuid::from_u128(id), generated_number: Some(id as u32), ..template.clone() })
             .collect(),
+        ..Registry::default()
     });
     project.net_registry.validate(&project).unwrap();
     session.open_snapshot(Arc::new(project));

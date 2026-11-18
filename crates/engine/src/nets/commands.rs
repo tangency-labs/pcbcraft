@@ -82,7 +82,7 @@ impl Session {
         if records.len() > MAX_RECORDS {
             return Err(CommandError::Unavailable("Net identity registry is full.".into()));
         }
-        project.net_registry = Arc::new(Registry { records: records.into_values().collect() });
+        project.net_registry = Arc::new(Registry { records: records.into_values().collect(), pairs: original.net_registry.pairs.clone() });
         project.net_registry.validate(&project).map_err(CommandError::InvalidParams)?;
         self.change(project)
     }
@@ -126,7 +126,7 @@ fn promoted(original: &Project, graph: &Graph, anchor: &super::Anchor, index: us
         project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
     }
     let mut registry = (*project.net_registry).clone();
-    let mut ids = registry.records.iter().map(|r| r.id).collect();
+    let mut ids = registry.records.iter().map(|r| r.id).chain(registry.pairs.iter().map(|pair| pair.id)).collect();
     let record = graph.networks[index].record(allocate(&mut ids)?, Some(anchor)).map_err(CommandError::InvalidParams)?;
     registry.records.push(record);
     registry.records.sort_by_key(|r| r.id);
