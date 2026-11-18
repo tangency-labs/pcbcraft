@@ -101,6 +101,10 @@ pub struct GraphicView {
     pub points: Vec<Point>,
     pub stroke_nm: Option<i64>,
     pub closed: bool,
+    /// The closed points trace straight-edged authored geometry (a rectangle or closed polyline)
+    /// up to nearest-nanometer rotation, rather than a polygonized curve, an open path or text.
+    /// Area checks may decide exactly only from such paths and must treat others conservatively.
+    pub exact: bool,
     /// This path belongs to the generated reference text rather than fixed footprint artwork.
     pub reference: bool,
 }
@@ -504,6 +508,7 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
             points: rectangle_points(footprint, g.center, g.width_nm, g.height_nm, g.rotation).to_vec(),
             stroke_nm: None,
             closed: true,
+            exact: true,
             reference: false,
         })
         .collect();
@@ -523,6 +528,7 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
                     points: path.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: false,
+                    exact: false,
                     reference: false,
                 }));
             } else {
@@ -532,6 +538,10 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
                     points: points.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: artwork.graphic.closed(),
+                    exact: matches!(
+                        artwork.graphic.geometry,
+                        crate::library_graphics::Geometry::Rectangle { .. } | crate::library_graphics::Geometry::Polyline { closed: true, .. }
+                    ),
                     reference: false,
                 });
             }
@@ -554,6 +564,7 @@ fn build_graphics(project: &Project, footprint: &super::Footprint, reference: &s
         points: path.into_iter().map(|point| footprint.point(point)).collect(),
         stroke_nm: Some(style.stroke_width_nm),
         closed: false,
+        exact: false,
         reference: false,
     }));
     result.extend(reference_graphics(project, footprint, reference, footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET)));
@@ -576,6 +587,7 @@ fn reference_graphics(project: &Project, footprint: &super::Footprint, reference
             points: path.into_iter().map(|point| footprint.point(point)).collect(),
             stroke_nm: Some(stroke_nm),
             closed: false,
+            exact: false,
             reference: true,
         })
         .collect()
